@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Veritate — multimind</title>
+<style>
+  :root {
+    --bg: #07090d; --panel: #0d1017; --line: #1a1f2a; --text: #d8dee9;
+    --dim: #6b7280; --warm: #f0b54a; --hot: #ff6b6b; --data-pos: #6cd394;
+    --blue: #6aa9ff; --purple: #b58aff;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--text); margin: 0; font: 12px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace; }
+  .topbar { display: flex; justify-content: space-between; align-items: baseline; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+  .topbar h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.5px; }
+  .topbar .right { display: flex; align-items: baseline; gap: 14px; }
+  .topbar a { color: var(--dim); font-size: 11px; text-decoration: none; border-bottom: 1px dashed var(--dim); }
+  .wrap { padding: 20px; max-width: 1400px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; margin-bottom: 14px; }
+  .panel h2 { margin: 0; padding: 10px 14px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--line); color: var(--text); display:flex;align-items:center;justify-content:space-between }
+  .panel h2 em { font-style: normal; color: var(--dim); font-weight: 400; margin-left: 10px; }
+  .badge { font-size: 10px; padding: 2px 8px; border-radius: 2px; font-weight: 500; }
+  .badge-alive { background: rgba(108,211,148,0.15); color: var(--data-pos); border: 1px solid rgba(108,211,148,0.4); }
+  .badge-dead  { background: rgba(255,107,107,0.15); color: var(--hot);      border: 1px solid rgba(255,107,107,0.4); }
+  .badge-warn  { background: rgba(240,181,74,0.15);  color: var(--warm);     border: 1px solid rgba(240,181,74,0.4); }
+  .badge-dim   { background: rgba(107,114,128,0.15); color: var(--dim);      border: 1px solid rgba(107,114,128,0.4); }
+  .panel .body { padding: 14px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .stat { color: var(--dim); font-size: 11px; }
+  .placeholder { color: var(--dim); font-style: italic; padding: 24px; text-align: center; border: 1px dashed var(--line); border-radius: 3px; }
+  code { background: #0a0c12; padding: 1px 5px; border-radius: 2px; color: var(--blue); }
+  table.kv { border-collapse: collapse; font-size: 11.5px; }
+  table.kv td { padding: 3px 12px 3px 0; vertical-align: top; }
+  table.kv td.k { color: var(--dim); white-space: nowrap; }
+  table.kv td.v { color: var(--text); font-weight: 500; }
+  canvas.loss { display:block; width: 100%; height: 140px; background: #0a0c12; border-radius: 3px; }
+  .ev-row { display: flex; gap: 14px; align-items: baseline; padding: 4px 0; }
+  .ev-row b { color: var(--text); }
+  .ev-row span { color: var(--dim); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div>
+    <h1>Veritate <span style="color:var(--dim);font-weight:400;font-size:12px;margin-left:10px">project multimind</span></h1>
+  </div>
+  <div class="right">
+    <span class="stat" id="lastLoaded"></span>
+    <a href="/">← mri</a>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="panel">
+    <h2>multi-mind memory <em>biological context without a context window</em></h2>
+    <div class="body">
+      <p style="color:var(--dim);margin:0">
+        Four mechanisms running in parallel, composed under MoR. Each maps to a piece
+        of how human memory actually works. Spec:
+        <code>docs/notes/multimind_memory.md</code>.
+        Auto-refreshes every 10s from <code>/multimind/results</code>.
+      </p>
+    </div>
+  </div>
+
+  <div class="grid">
+
+    <div class="panel" id="m1Panel">
+      <h2>M1 — schema state <em>symbolic frame · slot table</em><span class="badge badge-dim" id="m1Badge">no data</span></h2>
+      <div class="body" id="m1Body">
+        <div class="placeholder">awaiting m1_run.json + m1_eval.json</div>
+      </div>
+    </div>
+
+    <div class="panel" id="m2Panel">
+      <h2>M2 — dreamcache <em>sleep consolidation · sidecar traces</em><span class="badge badge-dim" id="m2Badge">no data</span></h2>
+      <div class="body" id="m2Body">
+        <div class="placeholder">awaiting m2_run.json</div>
+      </div>
+    </div>
+
+    <div class="panel" id="m3Panel">
+      <h2>M3 — holographic weights <em>the model is the memory</em><span class="badge badge-dim" id="m3Badge">no data</span></h2>
+      <div class="body" id="m3Body">
+        <div class="placeholder">awaiting m0_gate.json (kill-switch) + m3_run.json</div>
+      </div>
+    </div>
+
+    <div class="panel" id="m4Panel">
+      <h2>M4 — Shannon compression <em>context as a single number</em><span class="badge badge-dim" id="m4Badge">no data</span></h2>
+      <div class="body" id="m4Body">
+        <div class="placeholder">awaiting m4_compress.json</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="panel" id="poisonPanel">
+    <h2>poison panel <em>adversarial drift per mechanism</em><span class="badge badge-dim">manual eval</span></h2>
+    <div class="body">
+      <p style="color:var(--dim);margin:0;font-size:11px">
+        Per-mechanism poison threat assessment from the spec:<br>
+        M1 schema — <b style="color:var(--data-pos)">low risk</b> (symbolic; wipe slots on session end).
+        M2 dreamcache — <b style="color:var(--warm)">medium</b> (defended via decay + confidence-weighted writes).
+        M3 holographic — <b style="color:var(--hot)">high</b> (per-session by default; decay-to-base; confidence-gated writes).
+        M4 compression — <b style="color:var(--data-pos)">none</b> (lossless; doesn't learn).
+      </p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function fmtNum(x, d = 4) {
+  if (x === null || x === undefined) return "—";
+  if (typeof x !== "number") return String(x);
+  return x.toFixed(d);
+}
+
+function drawLossCurve(canvas, history) {
+  if (!history || !history.length) return;
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width  = canvas.clientWidth  * window.devicePixelRatio;
+  const H = canvas.height = canvas.clientHeight * window.devicePixelRatio;
+  ctx.fillStyle = "#0a0c12"; ctx.fillRect(0, 0, W, H);
+  const losses = history.map(h => h.loss).filter(x => isFinite(x));
+  if (!losses.length) return;
+  const minL = Math.min(...losses), maxL = Math.max(...losses);
+  const N = losses.length;
+  const baseline = Math.log(256);
+
+  // baseline line
+  if (baseline >= minL && baseline <= maxL) {
+    const y = H - (baseline - minL) / (maxL - minL) * H;
+    ctx.strokeStyle = "rgba(240,181,74,0.4)"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "var(--warm)"; ctx.font = `${10 * window.devicePixelRatio}px ui-monospace`;
+    ctx.fillText("random baseline", 6 * window.devicePixelRatio, y - 4 * window.devicePixelRatio);
+  }
+
+  ctx.strokeStyle = "#6aa9ff"; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < N; i++) {
+    const x = (i / (N - 1 || 1)) * W;
+    const y = H - (losses[i] - minL) / ((maxL - minL) || 1) * H;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = "#6b7280"; ctx.font = `${10 * window.devicePixelRatio}px ui-monospace`;
+  ctx.fillText(`loss ${minL.toFixed(2)}–${maxL.toFixed(2)}  ·  ${N} steps`, 6 * window.devicePixelRatio, H - 6 * window.devicePixelRatio);
+}
+
+function renderM1(files) {
+  const run  = files["m1_run.json"];
+  const eval_ = files["m1_eval.json"];
+  const body = $("m1Body"), badge = $("m1Badge");
+  if (!run) return;
+  const final = run.history && run.history.length
+    ? run.history.slice(-50).reduce((s, h) => s + h.loss, 0) / Math.min(50, run.history.length) : null;
+  const baseline = Math.log(256);
+  const status = final == null ? "no data" : final < baseline - 0.5 ? "loss converged" : "no convergence";
+  badge.textContent = status;
+  badge.className = "badge " + (final != null && final < baseline - 0.5 ? "badge-alive" : "badge-warn");
+
+  let html = `<canvas class="loss" id="m1Canvas"></canvas>`;
+  html += `<table class="kv" style="margin-top:10px">
+    <tr><td class="k">final mean loss (last 50)</td><td class="v">${fmtNum(final)}  <span class="stat">vs baseline ${baseline.toFixed(2)}</span></td></tr>
+    <tr><td class="k">total steps</td><td class="v">${run.history ? run.history.length : 0}</td></tr>`;
+  if (run.args) {
+    html += `<tr><td class="k">config</td><td class="v stat">hidden=${run.args.hidden} layers=${run.args.layers} num_slots=${run.args.num_slots} filler=${run.args.filler}</td></tr>`;
+  }
+  html += `</table>`;
+  if (eval_) {
+    html += `<div style="margin-top:14px;color:var(--dim);font-size:11px">needle-distance eval — schema_on vs schema_off lift:</div>`;
+    html += `<table class="kv" style="margin-top:6px"><tr><td class="k">filler</td><td class="k">on</td><td class="k">off</td><td class="k">lift</td></tr>`;
+    for (const r of eval_.results || []) {
+      const liftCol = r.lift > 0.05 ? "var(--data-pos)" : r.lift < -0.05 ? "var(--hot)" : "var(--dim)";
+      html += `<tr><td class="v">${r.filler_bytes}</td><td class="v">${fmtNum(r.schema_on_acc, 3)}</td><td class="v">${fmtNum(r.schema_off_acc, 3)}</td><td class="v" style="color:${liftCol}">${r.lift >= 0 ? "+" : ""}${fmtNum(r.lift, 3)}</td></tr>`;
+    }
+    html += `</table>`;
+  }
+  body.innerHTML = html;
+  if (run.history) drawLossCurve($("m1Canvas"), run.history);
+}
+
+function renderM2(files) {
+  const run = files["m2_run.json"];
+  const body = $("m2Body"), badge = $("m2Badge");
+  if (!run) return;
+  const final = run.final_mean_loss;
+  const baseline = run.random_baseline_nats || Math.log(256);
+  badge.textContent = final < baseline - 0.5 ? "loss converged" : "no convergence";
+  badge.className = "badge " + (final < baseline - 0.5 ? "badge-alive" : "badge-warn");
+  let html = `<canvas class="loss" id="m2Canvas"></canvas>`;
+  html += `<table class="kv" style="margin-top:10px">
+    <tr><td class="k">final mean loss</td><td class="v">${fmtNum(final)}  <span class="stat">vs baseline ${fmtNum(baseline, 2)}</span></td></tr>
+    <tr><td class="k">total steps</td><td class="v">${run.history ? run.history.length : 0}</td></tr>`;
+  if (run.args) {
+    html += `<tr><td class="k">sidecar</td><td class="v">${run.args.num_slots} slots × ${run.args.slot_dim} dim  <span class="stat">(decay=${run.args.decay}, consolidate every ${run.args.consolidate})</span></td></tr>`;
+    html += `<tr><td class="k">config</td><td class="v stat">hidden=${run.args.hidden} layers=${run.args.layers} filler=${run.args.filler}</td></tr>`;
+  }
+  html += `</table>`;
+  body.innerHTML = html;
+  if (run.history) drawLossCurve($("m2Canvas"), run.history);
+}
+
+function renderM3(files) {
+  const gate = files["m0_gate.json"];
+  const run  = files["m3_run.json"];
+  const body = $("m3Body"), badge = $("m3Badge");
+  let html = "";
+  if (gate) {
+    const decision = gate.m3_decision || "?";
+    badge.textContent = `gate: ${decision}`;
+    badge.className = "badge " + (decision === "ALIVE" ? "badge-alive" : "badge-dead");
+    html += `<table class="kv">
+      <tr><td class="k">M0 gating run (closed-form Hebbian)</td><td class="v"></td></tr>
+      <tr><td class="k">final mean loss</td><td class="v">${fmtNum(gate.final_mean_loss)}  <span class="stat">vs baseline ${fmtNum(gate.random_baseline_nats, 2)}</span></td></tr>
+      <tr><td class="k">decision</td><td class="v" style="color:${decision === "ALIVE" ? "var(--data-pos)" : "var(--hot)"}">${decision}</td></tr>
+      <tr><td class="k">implication</td><td class="v stat">${decision === "ALIVE" ? "Hebbian rule carries context with no autograd. Engine-compatible." : "Closed-form rule cannot learn the task. Engine has no autograd → M3 dead."}</td></tr>
+    </table>`;
+  }
+  if (run) {
+    html += `<div style="margin-top:14px"><canvas class="loss" id="m3Canvas"></canvas></div>`;
+    html += `<table class="kv" style="margin-top:10px">
+      <tr><td class="k">M3 full training</td><td class="v"></td></tr>
+      <tr><td class="k">final mean loss</td><td class="v">${fmtNum(run.final_mean_loss)}</td></tr>
+      <tr><td class="k">total steps</td><td class="v">${run.history ? run.history.length : 0}</td></tr></table>`;
+  }
+  if (!gate && !run) return;
+  body.innerHTML = html;
+  if (run && run.history) drawLossCurve($("m3Canvas"), run.history);
+}
+
+function renderM4(files) {
+  const c = files["m4_compress.json"];
+  const body = $("m4Body"), badge = $("m4Badge");
+  if (!c) return;
+  const bpb = c.bpb || {};
+  const ratio = bpb.compression_ratio_vs_8bpb;
+  badge.textContent = `${ratio ? ratio.toFixed(2) + "× compression" : "measured"}`;
+  badge.className = "badge badge-alive";
+  let html = `<table class="kv">
+    <tr><td class="k">model</td><td class="v stat">${c.model_params ? c.model_params.toLocaleString() : "?"} params</td></tr>
+    <tr><td class="k">corpus</td><td class="v stat">${c.corpus ? c.corpus.split(/[\\\/]/).pop() : "?"}</td></tr>
+    <tr><td class="k">bytes measured</td><td class="v">${(bpb.bytes_measured || 0).toLocaleString()}</td></tr>
+    <tr><td class="k">bits per byte</td><td class="v" style="color:var(--data-pos);font-weight:600">${fmtNum(bpb.bits_per_byte, 4)}</td></tr>
+    <tr><td class="k">compression vs 8 bpb</td><td class="v" style="color:var(--data-pos)">${ratio ? ratio.toFixed(2) + "×" : "—"}</td></tr>
+    <tr><td class="k">raw → compressed</td><td class="v">${(bpb.raw_bytes||0).toLocaleString()} → ${(bpb.compressed_bytes||0).toLocaleString()} bytes</td></tr>
+    <tr><td class="k">coder state size</td><td class="v">${c.coder_state_bits || "?"} bits  <span class="stat">(constant regardless of context length)</span></td></tr>`;
+  if (c.round_trip) {
+    const rt = c.round_trip;
+    html += `<tr><td class="k">arithmetic round-trip</td><td class="v stat">${rt.input_bytes}B → ${rt.encoded_bytes}B; decode_matches=${rt.decode_matches}</td></tr>`;
+    if (!rt.decode_matches) {
+      html += `<tr><td class="k"></td><td class="v" style="color:var(--warm)">round-trip implementation has a bug; bpb math is independent and valid</td></tr>`;
+    }
+  }
+  html += `</table>`;
+  body.innerHTML = html;
+}
+
+function refresh() {
+  fetch("/multimind/results").then(r => r.json()).then(d => {
+    const f = d.files || {};
+    renderM1(f); renderM2(f); renderM3(f); renderM4(f);
+    const ts = new Date().toLocaleTimeString();
+    $("lastLoaded").textContent = `loaded ${ts}`;
+  }).catch(e => {
+    $("lastLoaded").textContent = `error: ${e}`;
+  });
+}
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+
+</body>
+</html>

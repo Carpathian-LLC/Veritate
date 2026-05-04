@@ -1,0 +1,19 @@
+{
+  "current": "v2.0.0",
+  "engines": [
+    {
+      "version": "v2.0.0",
+      "exe":     "veritate.exe",
+      "label":   "current",
+      "perf_ms_per_byte": 4.0,
+      "notes":   "live build. AVX2 + AVX-512 + VNNI kernels. TFRM v7 trace protocol (confidence math fields). veritate.exe is whatever build.bat last produced."
+    },
+    {
+      "version": "v1.0.0",
+      "exe":     "veritate_v1.0.0.exe",
+      "label":   "legacy",
+      "perf_ms_per_byte": 7.0,
+      "notes":   "frozen v3.4.5 build, renumbered to v1 under the simplified scheme. Kept for A/B regression checks."
+    }
+  ]
+}

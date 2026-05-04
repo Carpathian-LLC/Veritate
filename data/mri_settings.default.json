@@ -1,0 +1,7 @@
+{
+  "pytorch_load_mode": "always",
+  "pytorch_idle_unload_secs": 600,
+  "hud_enabled": true,
+  "hud_position": "top",
+  "hud_detailed": true
+}
