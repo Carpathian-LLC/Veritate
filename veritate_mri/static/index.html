@@ -1566,10 +1566,10 @@
 
       <div class="settings-row">
         <div class="label">Plugins source</div>
-        <div class="desc">The <code>plugins/</code> folder is its own git repo, separate from this one. Sync pulls the latest plugins (trainers, experiments) from the remote. Refuses to overwrite local changes or pull while a plugin is running.</div>
+        <div class="desc">The <code>plugins/</code> folder is its own git repo, separate from this one. Sync fast-forwards the latest plugins (trainers, experiments) from the remote. Refuses to pull while a plugin is running.</div>
         <div class="inline" id="pluginsSyncRow" style="flex-direction:column;align-items:flex-start;gap:6px">
           <div id="pluginsRemoteLine" class="meta">remote: <span id="pluginsRemote">—</span></div>
-          <div id="pluginsHeadLine" class="meta">commit: <span id="pluginsHead">—</span> <span id="pluginsBranch"></span> <span id="pluginsDirty"></span></div>
+          <div id="pluginsHeadLine" class="meta">commit: <span id="pluginsHead">—</span> <span id="pluginsBranch"></span></div>
           <div id="pluginsAheadBehindLine" class="meta" style="display:none">local: <span id="pluginsAheadBehind"></span></div>
           <div class="inline" style="gap:8px;margin-top:4px">
             <button id="pluginsSyncBtn" class="action" type="button">sync from git</button>
@@ -7104,7 +7104,6 @@ function _pluginsApplyStatus(s) {
   const remote = $("pluginsRemote");
   const head   = $("pluginsHead");
   const branch = $("pluginsBranch");
-  const dirty  = $("pluginsDirty");
   const ahead  = $("pluginsAheadBehind");
   const aheadL = $("pluginsAheadBehindLine");
   if (!remote) return;
@@ -7112,7 +7111,6 @@ function _pluginsApplyStatus(s) {
     remote.textContent = s.default_remote_url || "—";
     head.textContent = "(plugins/ does not exist — sync to clone)";
     branch.textContent = "";
-    dirty.textContent = "";
     aheadL.style.display = "none";
     return;
   }
@@ -7120,15 +7118,12 @@ function _pluginsApplyStatus(s) {
     remote.textContent = s.default_remote_url || "—";
     head.textContent = "(plugins/ exists but is not a git repo)";
     branch.textContent = "";
-    dirty.textContent = "";
     aheadL.style.display = "none";
     return;
   }
   remote.textContent = s.remote_url || "(no origin remote)";
   head.textContent = s.head_short ? s.head_short : "(no commits yet)";
   branch.textContent = s.branch ? `· ${s.branch}` : "";
-  dirty.textContent = s.dirty ? "· uncommitted changes" : "";
-  dirty.style.color = s.dirty ? "var(--warm)" : "";
   if (s.ahead != null && s.behind != null && (s.ahead || s.behind)) {
     aheadL.style.display = "";
     ahead.textContent = `${s.ahead} ahead, ${s.behind} behind origin/${s.branch || "?"}`;

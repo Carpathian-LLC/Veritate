@@ -6,8 +6,10 @@
 # Notes:
 # - sync the plugins/ folder against its remote git repo. plugins/ is its own
 #   self-contained git repo, separate from the parent Veritate repo.
-# - status() reports what the dashboard shows. sync() does fetch + ff-only pull,
-#   or clones if plugins/ is missing / not a repo.
+# - status() reports remote, branch, head, and ahead/behind. local dirty state
+#   is not surfaced: pull is fast-forward-only, so git itself rejects pulls
+#   that would overwrite tracked edits, and untracked files are expected.
+# - sync() does fetch + ff-only pull, or clones if plugins/ is missing.
 # - never destructive: refuses to clone over a non-empty non-repo dir, refuses
 #   to pull if a plugin is currently running, refuses non-fast-forward merges.
 # veritate_mri/plugins_sync.py
@@ -92,7 +94,6 @@ def status():
         "branch":     None,
         "head_sha":   None,
         "head_short": None,
-        "dirty":      False,
         "behind":     None,
         "ahead":      None,
         "default_remote_url": DEFAULT_REMOTE_URL,
@@ -117,10 +118,6 @@ def status():
     if code == 0 and so:
         out["head_sha"]   = so
         out["head_short"] = so[:8]
-
-    code, so, _ = _run_git(["status", "--porcelain"], PLUGINS_DIR, timeout=10)
-    if code == 0:
-        out["dirty"] = bool(so)
 
     if out["branch"] and out["remote_url"]:
         code, so, _ = _run_git(
@@ -212,13 +209,6 @@ def sync():
             msg = (f"origin remote is {current_remote!r}, refusing to pull from {remote_url!r}. "
                    f"reconfigure the remote manually if intentional.")
             logmod.error("plugins-sync", msg)
-            _record("pull", False, msg)
-            return {"ok": False, "error": msg}
-
-        code_st, so_st, _ = _run_git(["status", "--porcelain"], PLUGINS_DIR, timeout=10)
-        if code_st == 0 and so_st:
-            msg = "plugins/ has uncommitted changes. commit or stash them first."
-            logmod.warn("plugins-sync", msg)
             _record("pull", False, msg)
             return {"ok": False, "error": msg}
 

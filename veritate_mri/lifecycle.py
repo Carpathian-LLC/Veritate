@@ -31,10 +31,25 @@ import plugin_runner
 # Constants
 
 DELAY_SECS = 0.4
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 # ------------------------------------------------------------------------------------
 # Functions
+
+def _detached_popen_kwargs():
+    kwargs = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "stdin":  subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = (
+            subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        kwargs["start_new_session"] = True
+    return kwargs
 
 def _cleanup(app_config, stop_plugin=False):
     if stop_plugin:
@@ -70,21 +85,7 @@ def _do_restart(app_config, launch_cmd):
     time.sleep(0.5)
     logmod.warn("lifecycle", f"detached relaunch (training preserved): {' '.join(launch_cmd)}")
     try:
-        kwargs = {
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-            "stdin":  subprocess.DEVNULL,
-            "close_fds": True,
-        }
-        if os.name == "nt":
-            kwargs["creationflags"] = (
-                subprocess.DETACHED_PROCESS
-                | subprocess.CREATE_NEW_PROCESS_GROUP
-                | _NO_WINDOW
-            )
-        else:
-            kwargs["start_new_session"] = True
-        subprocess.Popen(launch_cmd, **kwargs)
+        subprocess.Popen(launch_cmd, **_detached_popen_kwargs())
     except Exception as e:
         logmod.error("lifecycle", f"detached relaunch failed: {e}")
         os._exit(4)
@@ -115,21 +116,7 @@ def _do_soft_reload(app_config, launch_cmd):
     time.sleep(0.5)
     logmod.warn("lifecycle", f"soft reload (training preserved): {' '.join(launch_cmd)}")
     try:
-        kwargs = {
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-            "stdin":  subprocess.DEVNULL,
-            "close_fds": True,
-        }
-        if os.name == "nt":
-            kwargs["creationflags"] = (
-                subprocess.DETACHED_PROCESS
-                | subprocess.CREATE_NEW_PROCESS_GROUP
-                | _NO_WINDOW
-            )
-        else:
-            kwargs["start_new_session"] = True
-        subprocess.Popen(launch_cmd, **kwargs)
+        subprocess.Popen(launch_cmd, **_detached_popen_kwargs())
     except Exception as e:
         logmod.error("lifecycle", f"soft reload failed: {e}")
         os._exit(4)
