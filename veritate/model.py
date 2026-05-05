@@ -138,6 +138,12 @@ class Veritate(nn.Module):
     def set_qat(self, value):
         return _qat.set_qat(self, value)
 
+    def hook_spec(self):
+        # Canonical model is its own dumper view. Non-canonical models (MoE,
+        # workspace, etc.) override this to return an adapter that quacks
+        # like a canonical Veritate so the dumper walks one shape.
+        return self
+
     def embed(self, tokens):
         B, T = tokens.shape
         if T > self.seq:

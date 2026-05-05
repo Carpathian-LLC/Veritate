@@ -223,6 +223,13 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     torch.save(state, ckpt_path)
     logmod.info("save", f"wrote checkpoint: {ckpt_path}")
 
+    # The dump suite walks a canonical Veritate. Non-canonical models (MoE,
+    # multimind sidecars) expose a hook_spec() that returns a canonical-shaped
+    # adapter; canonical models return self. Plain nn.Modules that haven't
+    # opted in fall back to themselves and may fail mid-dump — that's fine,
+    # the per-dump try/except below logs and continues.
+    view = model.hook_spec() if hasattr(model, "hook_spec") else model
+
     step_dir = paths.hook_step_dir(name, step)
     os.makedirs(step_dir, exist_ok=True)
 
@@ -255,13 +262,13 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
             ))
             skip.add("generation")
     dumps = [
-        ("probe",      lambda: dump_probe     (model, prompt, step_dir, step)),
-        ("classroom",  lambda: dump_classroom (model,         step_dir, step)),
-        ("grades",     lambda: dump_grades    (model,         step_dir, step)),
-        ("concepts",   lambda: dump_concepts  (model,         step_dir, step)),
-        ("surprise",   lambda: dump_surprise  (model, prompt, step_dir, step)),
-        ("quant_kl",   lambda: dump_quant_kl  (model, prompt, step_dir, step)),
-        ("generation", lambda: dump_generation(model, prompt, step_dir, step, corpus_path=corpus_path)),
+        ("probe",      lambda: dump_probe     (view, prompt, step_dir, step)),
+        ("classroom",  lambda: dump_classroom (view,         step_dir, step)),
+        ("grades",     lambda: dump_grades    (view,         step_dir, step)),
+        ("concepts",   lambda: dump_concepts  (view,         step_dir, step)),
+        ("surprise",   lambda: dump_surprise  (view, prompt, step_dir, step)),
+        ("quant_kl",   lambda: dump_quant_kl  (view, prompt, step_dir, step)),
+        ("generation", lambda: dump_generation(view, prompt, step_dir, step, corpus_path=corpus_path)),
     ]
     cuda_avail = torch.cuda.is_available()
     for label, fn in dumps:

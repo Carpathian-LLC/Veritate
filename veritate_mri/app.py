@@ -899,18 +899,31 @@ def run_surprise(name):
 
 @app.route("/timelines")
 def timelines_compat():
+    # List every model with a config + at least one .pt checkpoint, even if
+    # no hook artifacts exist yet. Hooks are surfaced via has_hooks /
+    # n_checkpoints so the frontend can render an inline warning when a
+    # timeline has training rows but no per-step hook dumps (e.g. mid-
+    # training before the first save, or a trainer that has not yet been
+    # ported to the hook_spec contract).
     out = []
     for name in models.list_models():
-        steps = hooks.list_steps(name)
-        if not steps: continue
-        try: mtime = os.path.getmtime(paths.hooks_dir(name))
-        except OSError: mtime = 0
+        hook_steps = hooks.list_steps(name)
+        ckpt_steps = checkpoints.list_steps(name)
+        if not ckpt_steps and not hook_steps:
+            continue
+        try: hooks_mtime = os.path.getmtime(paths.hooks_dir(name))
+        except OSError: hooks_mtime = 0
+        try: ckpts_mtime = os.path.getmtime(paths.checkpoints_dir(name))
+        except OSError: ckpts_mtime = 0
+        mtime = max(hooks_mtime, ckpts_mtime)
         out.append({
             "name": name,
             "mtime": mtime,
-            "n_checkpoints": len(steps),
+            "n_checkpoints": len(hook_steps),
+            "n_pt_checkpoints": len(ckpt_steps),
+            "has_hooks": bool(hook_steps),
             "prompt": (cfg_reader.load(name) or {}).get("training_args", {}).get("prompt", ""),
-            "source": "hooks",
+            "source": "hooks" if hook_steps else "checkpoints",
         })
     out.sort(key=lambda r: -r["mtime"])
     return {"timelines": out}
