@@ -4,6 +4,7 @@ veritate_engine/bin/
 *.exe
 *.pdb
 *.lib
+*.log
 .vscode/
 .claude/
 .venv/

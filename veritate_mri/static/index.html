@@ -7145,6 +7145,13 @@ let updateState = { current: null };
 function _renderUpdateStatus(st) {
   if (!st) return;
   updateState.current = st;
+  if (st.channel) {
+    document.querySelectorAll('input[name="updateChannel"]').forEach(r => {
+      r.checked = (r.value === st.channel);
+      const wrap = r.closest("label.opt");
+      if (wrap) wrap.classList.toggle("checked", r.checked);
+    });
+  }
   const br = $("updateBranch"); if (br) br.textContent = st.branch || "(none)";
   const hd = $("updateHead");   if (hd) hd.textContent = st.head_short || ".";
   const bh = $("updateBehind");
@@ -7156,7 +7163,14 @@ function _renderUpdateStatus(st) {
   const lc = $("updateLastCheck");
   if (lc) {
     const ts = (st.last && st.last.last_check_ts) || 0;
+    const msg = (st.last && st.last.last_check_msg) || "";
     lc.textContent = ts ? _fmtAgo(ts) : "never";
+    if (msg) {
+      lc.textContent += ` · ${msg}`;
+      lc.style.color = "var(--warm)";
+    } else {
+      lc.style.color = "";
+    }
   }
   const pull = $("updatePullBtn");
   if (pull) pull.disabled = !(st.update_available && !st.dirty);
