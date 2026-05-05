@@ -7,10 +7,10 @@ veritate_engine/bin/
 .vscode/
 .claude/
 .venv/
+..venv/
 venv/
 __pycache__/
 models/
-docs/
 build_out.txt
 chat_err.log
 c_trace_*.bin
@@ -23,3 +23,4 @@ data/*
 /*de.md
 plugins
 models
+.DS_Store

@@ -374,15 +374,67 @@ void matmul_int8_vnni_mt_prep(
 }
 
 // ------------------------------------------------------------------------------------
-// sparse decode + ffn_down_decode — v1 ARM port routes both to the dense path.
-// the x86 sparse fast path exploits 50-90% near-zero post-GELU activations on
-// the 9800X3D's L3-resident weights; on M-series UMA the sparse-vs-dense
-// crossover sits much higher because the b_rowmaj scan is bandwidth-bound.
-// adding a NEON sparse path is a v2 follow-up; for now correctness > clever.
+// sparse decode + ffn_down_decode — NEON port of the x86 sparse fast path.
+// post-GELU activations are 50-90% zero (zero-clamp threshold=4 on by default).
+// prescan a, then for each non-zero entry, multiply-add a broadcast of val[i]
+// into c across w_row. b_rowmaj must be non-null. bit-equivalent to the dense
+// path on int32 output (integer addition is associative).
+// scan buffers sized V_MAX_FFN; model_load rejects shapes with ffn > V_MAX_FFN.
 // ------------------------------------------------------------------------------------
 
+static int32_t s_nz_idx[V_MAX_FFN];
+static int32_t s_nz_val[V_MAX_FFN];
+
+static int32_t prescan_nonzero(const int8_t* a, int32_t k_dim,
+                               int32_t* idx_out, int32_t* val_out) {
+    int32_t n_nz = 0;
+    for (int32_t k = 0; k < k_dim; k++) {
+        int32_t v = a[k];
+        if (v != 0) { idx_out[n_nz] = k; val_out[n_nz] = v; n_nz++; }
+    }
+    return n_nz;
+}
+
+static void sparse_accumulate(const prepped_b_t* p, int32_t n_nz,
+                              const int32_t* idx, const int32_t* val, int32_t* c) {
+    const int32_t N = p->n;
+    const int8_t* B = p->b_rowmaj;
+    memset(c, 0, (size_t)N * sizeof(int32_t));
+    for (int32_t i = 0; i < n_nz; i++) {
+        const int8_t* w_row = B + (size_t)idx[i] * N;
+        int32x4_t av = vdupq_n_s32(val[i]);
+        int32_t j = 0;
+        for (; j + 16 <= N; j += 16) {
+            int32x4_t o0 = vld1q_s32(c + j +  0);
+            int32x4_t o1 = vld1q_s32(c + j +  4);
+            int32x4_t o2 = vld1q_s32(c + j +  8);
+            int32x4_t o3 = vld1q_s32(c + j + 12);
+
+            int8x16_t w8     = vld1q_s8(w_row + j);
+            int16x8_t w16_lo = vmovl_s8(vget_low_s8 (w8));
+            int16x8_t w16_hi = vmovl_s8(vget_high_s8(w8));
+            int32x4_t w0     = vmovl_s16     (vget_low_s16 (w16_lo));
+            int32x4_t w1     = vmovl_high_s16(w16_lo);
+            int32x4_t w2     = vmovl_s16     (vget_low_s16 (w16_hi));
+            int32x4_t w3     = vmovl_high_s16(w16_hi);
+
+            o0 = vmlaq_s32(o0, av, w0);
+            o1 = vmlaq_s32(o1, av, w1);
+            o2 = vmlaq_s32(o2, av, w2);
+            o3 = vmlaq_s32(o3, av, w3);
+
+            vst1q_s32(c + j +  0, o0);
+            vst1q_s32(c + j +  4, o1);
+            vst1q_s32(c + j +  8, o2);
+            vst1q_s32(c + j + 12, o3);
+        }
+        for (; j < N; j++) c[j] += val[i] * (int32_t)w_row[j];
+    }
+}
+
 void matmul_int8_sparse_decode(const int8_t* a, const prepped_b_t* p, int32_t* c) {
-    matmul_int8_vnni_prep(a, p, c, 1);
+    int32_t n_nz = prescan_nonzero(a, p->k, s_nz_idx, s_nz_val);
+    sparse_accumulate(p, n_nz, s_nz_idx, s_nz_val, c);
 }
 
 // ffn_down sparsity counters. process-global, mirrored from the x86 path so
@@ -392,10 +444,14 @@ int64_t g_ffn_down_nz_sum       = 0;
 int32_t g_ffn_down_sparse_calls = 0;
 
 void ffn_down_decode(const int8_t* a, const prepped_b_t* p, int32_t* c) {
-    int32_t n_nz = 0;
-    for (int32_t i = 0; i < p->k; i++) if (a[i] != 0) n_nz++;
+    int32_t n_nz = prescan_nonzero(a, p->k, s_nz_idx, s_nz_val);
     g_ffn_down_calls++;
     g_ffn_down_nz_sum += n_nz;
-    matmul_int8_vnni_prep(a, p, c, 1);
+    if (p->b_rowmaj && n_nz * 2 < p->k) {
+        g_ffn_down_sparse_calls++;
+        sparse_accumulate(p, n_nz, s_nz_idx, s_nz_val, c);
+    } else {
+        matmul_int8_vnni_prep(a, p, c, 1);
+    }
 }
 

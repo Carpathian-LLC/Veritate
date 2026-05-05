@@ -80,7 +80,7 @@ Training is plugin-driven. Open the Training tab in the dashboard, pick a plugin
 | Hardware | Training (PyTorch) | Inference (C engine) |
 |---|---|---|
 | NVIDIA GPU (CUDA) | yes — CUDA + bfloat16 AMP | N/A (CPU engine) |
-| Apple M-series (MPS) | yes — fp32 only, MPS backend, no AMP | ARM64 NEON SDOT (M1+); AMX empty |
+| Apple M-series (MPS) | yes — bf16 AMP (M1+) | ARM64 NEON SDOT (M1+); AMX empty |
 | x86_64 CPU (AVX-512 + VNNI) | yes — CPU fallback | primary target (Zen 4+, Sapphire Rapids+) |
 | x86_64 CPU (AVX2) | yes — CPU fallback | matmul done; transformer hot-path in progress |
 | ARM64 CPU (NEON only) | yes — CPU fallback | matmul only |

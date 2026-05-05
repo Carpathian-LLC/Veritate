@@ -10,9 +10,10 @@
 //     layernorm_i16_to_i8_neon — int16 residual to int8 layernormed row.
 // - matched 1:1 to the avx-512 path's numerics. correctness oracle is
 //   kernels/scalar/transformer_scalar.c; this TU must produce within 1 LSB.
-// - softmax exp uses libm expf per element; the fp loop is small relative to
-//   matmul on the M-series and isn't the bottleneck. micro-optimization
-//   (poly5 + scalef analogue) is a v2 move.
+// - softmax fp inner loop uses 4-wide poly5 of e^r with range reduction
+//   r = x - n*ln2, then 2^n via integer exponent-bias (no scalef on NEON).
+// - layernorm post-RMS weight×scale loop is fully vectorized over 16
+//   elements/iter; sumsq pass also vectorized.
 // veritate_engine/kernels/arm64/transformer_neon.c
 // ------------------------------------------------------------------------------------
 // Imports:
@@ -41,7 +42,6 @@
 #define LN_HALF_PRESCALE   0.5f
 #define LN_INT8_MAX        127
 #define LN_INT8_MIN       (-128)
-#define LN_NEON_LANE       4
 
 // ------------------------------------------------------------------------------------
 // Functions
@@ -137,29 +137,85 @@ void score_dot_v_neon(const int16_t* scores, const int8_t* v_base,
 }
 
 // ------------------------------------------------------------------------------------
-// softmax_rows_neon — bit-equivalent to the scalar oracle within 1 LSB on
-// int16 q15 output. fp inner loop uses scalar expf for portability; the cost
-// is dominated by matmul elsewhere in the forward pass (rule 18).
+// neon_exp_ps — 4-wide poly5 e^x. range-reduce x = n*ln2 + r, evaluate poly5
+// of e^r in [-ln2/2, ln2/2], reconstruct e^x = poly5(r) * 2^n. 2^n built from
+// the IEEE754 exponent field directly (NEON has no scalef). matches the
+// avx-512 sequence (1/120 → 1/24 → 1/6 → 1/2 → 1 → 1) under fma reassoc.
+// ------------------------------------------------------------------------------------
+
+static inline float32x4_t neon_exp_ps(float32x4_t x) {
+    const float32x4_t inv_ln2 = vdupq_n_f32(1.4426950408889634f);
+    const float32x4_t ln2     = vdupq_n_f32(0.6931471805599453f);
+
+    float32x4_t n = vrndnq_f32(vmulq_f32(x, inv_ln2));
+    float32x4_t r = vfmsq_f32(x, n, ln2);
+
+    float32x4_t e = vdupq_n_f32(1.0f / 120.0f);
+    e = vfmaq_f32(vdupq_n_f32(1.0f / 24.0f), e, r);
+    e = vfmaq_f32(vdupq_n_f32(1.0f / 6.0f),  e, r);
+    e = vfmaq_f32(vdupq_n_f32(0.5f),         e, r);
+    e = vfmaq_f32(vdupq_n_f32(1.0f),         e, r);
+    e = vfmaq_f32(vdupq_n_f32(1.0f),         e, r);
+
+    int32x4_t n_int    = vcvtq_s32_f32(n);
+    int32x4_t exp_bits = vshlq_n_s32(vaddq_s32(n_int, vdupq_n_s32(127)), 23);
+    float32x4_t two_n  = vreinterpretq_f32_s32(exp_bits);
+
+    return vmulq_f32(e, two_n);
+}
+
+// ------------------------------------------------------------------------------------
+// softmax_rows_neon — vectorized row-softmax. matches the avx-512 algorithm:
+// max-subtract, clamp to -87, poly5 exp, sum, qinv = 32768/sum, requantize to
+// int16. tail (cols % 4) uses libm expf to keep within 1 LSB of scalar.
 // ------------------------------------------------------------------------------------
 
 void softmax_rows_neon(float* x, int16_t* out_q, int32_t rows, int32_t cols) {
+    const float32x4_t clamp = vdupq_n_f32(SOFTMAX_EXP_CLAMP);
+
     for (int32_t r = 0; r < rows; r++) {
         float*   row    = x     + (size_t)r * cols;
         int16_t* row_q  = out_q + (size_t)r * cols;
 
-        float vmax = row[0];
-        for (int32_t c = 1; c < cols; c++) if (row[c] > vmax) vmax = row[c];
+        // pass 1: vmax
+        float32x4_t vmax = vdupq_n_f32(-1e38f);
+        int32_t c = 0;
+        for (; c + 4 <= cols; c += 4) {
+            vmax = vmaxq_f32(vmax, vld1q_f32(row + c));
+        }
+        float vmax_s = vmaxvq_f32(vmax);
+        for (; c < cols; c++) if (row[c] > vmax_s) vmax_s = row[c];
+        float32x4_t vmaxb = vdupq_n_f32(vmax_s);
 
-        double sum = 0.0;
-        for (int32_t c = 0; c < cols; c++) {
-            float d = row[c] - vmax;
+        // pass 2: e^(x - max), accumulate sum, store back in row
+        float32x4_t vsum = vdupq_n_f32(0.0f);
+        c = 0;
+        for (; c + 4 <= cols; c += 4) {
+            float32x4_t v = vmaxq_f32(vsubq_f32(vld1q_f32(row + c), vmaxb), clamp);
+            v = neon_exp_ps(v);
+            vsum = vaddq_f32(vsum, v);
+            vst1q_f32(row + c, v);
+        }
+        float sum_s = vaddvq_f32(vsum);
+        for (; c < cols; c++) {
+            float d = row[c] - vmax_s;
             if (d < SOFTMAX_EXP_CLAMP) d = SOFTMAX_EXP_CLAMP;
             float e = expf(d);
             row[c] = e;
-            sum += (double)e;
+            sum_s += e;
         }
-        float qinv = (float)(SOFTMAX_Q15_SCALE / (sum > 0.0 ? sum : 1.0));
-        for (int32_t c = 0; c < cols; c++) {
+
+        // pass 3: quantize to int16 q15
+        float qinv = SOFTMAX_Q15_SCALE / (sum_s > 0.0f ? sum_s : 1.0f);
+        float32x4_t vqinv = vdupq_n_f32(qinv);
+        c = 0;
+        for (; c + 4 <= cols; c += 4) {
+            float32x4_t fq = vmulq_f32(vld1q_f32(row + c), vqinv);
+            int32x4_t qi   = vcvtnq_s32_f32(fq);
+            int16x4_t q16  = vqmovn_s32(qi);
+            vst1_s16(row_q + c, q16);
+        }
+        for (; c < cols; c++) {
             float fq = row[c] * qinv;
             int32_t q = (int32_t)lrintf(fq);
             if (q > SOFTMAX_Q15_MAX) q = SOFTMAX_Q15_MAX;
@@ -172,6 +228,8 @@ void softmax_rows_neon(float* x, int16_t* out_q, int32_t rows, int32_t cols) {
 // ------------------------------------------------------------------------------------
 // layernorm_i16_to_i8_neon — RMSNorm: x * w * 0.5 / sqrt(mean(x^2) + eps),
 // saturated to int8. matches PyTorch RMSNorm (no mean subtraction).
+// pass 1 (sumsq) and pass 2 (weight×scale) both vectorized; tail handles cols
+// not divisible by 16 with the scalar oracle path.
 // ------------------------------------------------------------------------------------
 
 void layernorm_i16_to_i8_neon(const int16_t* x, int8_t* out, const int8_t* w,
@@ -181,17 +239,52 @@ void layernorm_i16_to_i8_neon(const int16_t* x, int8_t* out, const int8_t* w,
         int8_t*        row_out = out + (size_t)r * cols;
 
         float32x4_t vsumsq = vdupq_n_f32(0.0f);
-        for (int32_t c = 0; c < cols; c += 8) {
-            int16x8_t v16 = vld1q_s16(row_in + c);
+        int32_t cs = 0;
+        for (; cs + 8 <= cols; cs += 8) {
+            int16x8_t v16 = vld1q_s16(row_in + cs);
             float32x4_t lo = vcvtq_f32_s32(vmovl_s16(vget_low_s16 (v16)));
             float32x4_t hi = vcvtq_f32_s32(vmovl_s16(vget_high_s16(v16)));
             vsumsq = vfmaq_f32(vsumsq, lo, lo);
             vsumsq = vfmaq_f32(vsumsq, hi, hi);
         }
-        float ms = vaddvq_f32(vsumsq) / (float)cols;
+        float sumsq_s = vaddvq_f32(vsumsq);
+        for (; cs < cols; cs++) {
+            float v = (float)row_in[cs];
+            sumsq_s += v * v;
+        }
+        float ms = sumsq_s / (float)cols;
         float scale = LN_HALF_PRESCALE / sqrtf(ms + LN_EPS);
+        float32x4_t vscale = vdupq_n_f32(scale);
 
-        for (int32_t c = 0; c < cols; c++) {
+        int32_t c = 0;
+        for (; c + 16 <= cols; c += 16) {
+            int16x8_t v16_lo = vld1q_s16(row_in + c);
+            int16x8_t v16_hi = vld1q_s16(row_in + c + 8);
+            int8x16_t w8     = vld1q_s8 (w + c);
+            int16x8_t w16_lo = vmovl_s8(vget_low_s8 (w8));
+            int16x8_t w16_hi = vmovl_s8(vget_high_s8(w8));
+
+            int32x4_t p0 = vmull_s16     (vget_low_s16 (v16_lo), vget_low_s16 (w16_lo));
+            int32x4_t p1 = vmull_high_s16(v16_lo, w16_lo);
+            int32x4_t p2 = vmull_s16     (vget_low_s16 (v16_hi), vget_low_s16 (w16_hi));
+            int32x4_t p3 = vmull_high_s16(v16_hi, w16_hi);
+
+            float32x4_t f0 = vmulq_f32(vcvtq_f32_s32(p0), vscale);
+            float32x4_t f1 = vmulq_f32(vcvtq_f32_s32(p1), vscale);
+            float32x4_t f2 = vmulq_f32(vcvtq_f32_s32(p2), vscale);
+            float32x4_t f3 = vmulq_f32(vcvtq_f32_s32(p3), vscale);
+
+            int32x4_t i0 = vcvtnq_s32_f32(f0);
+            int32x4_t i1 = vcvtnq_s32_f32(f1);
+            int32x4_t i2 = vcvtnq_s32_f32(f2);
+            int32x4_t i3 = vcvtnq_s32_f32(f3);
+
+            int16x8_t s01 = vqmovn_high_s32(vqmovn_s32(i0), i1);
+            int16x8_t s23 = vqmovn_high_s32(vqmovn_s32(i2), i3);
+            int8x16_t b   = vqmovn_high_s16(vqmovn_s16(s01), s23);
+            vst1q_s8(row_out + c, b);
+        }
+        for (; c < cols; c++) {
             float v = (float)row_in[c] * (float)w[c] * scale;
             int32_t q = (int32_t)lrintf(v);
             if (q > LN_INT8_MAX) q = LN_INT8_MAX;
