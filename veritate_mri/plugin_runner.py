@@ -33,6 +33,9 @@ STATUS_STOPPED = "stopped"
 PID_FILE = os.path.join(paths.REPO_ROOT, ".plugin_pid.json")
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
+PYTORCH_ALLOC_ENV_KEY     = "PYTORCH_CUDA_ALLOC_CONF"
+PYTORCH_ALLOC_ENV_DEFAULT = "expandable_segments:True"
+
 _LOCK = threading.Lock()
 _STATE = {
     "status":      STATUS_IDLE,
@@ -192,11 +195,14 @@ def _run(plugin, args):
     logmod.info("plugin", f"start {plugin['id']}: {' '.join(argv[1:])}")
     _set(status=STATUS_RUNNING, plugin_id=plugin["id"], args=args,
          started_at=time.time(), finished_at=None, exit_code=None)
+    env = os.environ.copy()
+    env.setdefault(PYTORCH_ALLOC_ENV_KEY, PYTORCH_ALLOC_ENV_DEFAULT)
     try:
         proc = subprocess.Popen(argv, cwd=paths.REPO_ROOT,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1,
-                                creationflags=_NO_WINDOW)
+                                creationflags=_NO_WINDOW,
+                                env=env)
     except Exception as e:
         logmod.error("plugin", f"spawn failed: {e}")
         _set(status=STATUS_FAILED, finished_at=time.time(), exit_code=None)

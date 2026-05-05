@@ -263,6 +263,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         ("quant_kl",   lambda: dump_quant_kl  (model, prompt, step_dir, step)),
         ("generation", lambda: dump_generation(model, prompt, step_dir, step, corpus_path=corpus_path)),
     ]
+    cuda_avail = torch.cuda.is_available()
     for label, fn in dumps:
         if label in skip:
             logmod.info("save", f"skip dump: {label}")
@@ -271,6 +272,9 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
             fn()
         except Exception as e:
             logmod.error("save", f"dump {label} failed: {e}")
+        finally:
+            if cuda_avail:
+                torch.cuda.empty_cache()
     _rename_dumps(step_dir, step)
 
     logmod.ok("save", f"done: {name} step {step} ({time.time() - t0:.1f}s)")

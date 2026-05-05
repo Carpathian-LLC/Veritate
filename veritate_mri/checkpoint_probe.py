@@ -704,12 +704,13 @@ def dump_classroom(model, out_dir: str, step: int):
     params = sum(p.numel() for p in model.parameters())
 
     # cheap summaries on-device. l2 norm per named tensor; per-row l2 for ffn_up.
-    cur_norms = {name: float(p.detach().float().norm().item())
+    # norm() accumulates in fp32 internally; avoid full GPU fp32 cast of weights.
+    cur_norms = {name: float(p.detach().norm().item())
                  for name, p in model.named_parameters()}
 
     cur_ffn_rows = {}  # f"layer_{L}" -> [N] row L2 norms (float32)
     for L, up_w, _down_w in _ffn_layer_weights(model):
-        cur_ffn_rows[f"layer_{L}"] = up_w.float().norm(dim=1).cpu().numpy().astype(np.float32)
+        cur_ffn_rows[f"layer_{L}"] = up_w.norm(dim=1).float().cpu().numpy().astype(np.float32)
 
     prev_path = _prev_state_path(out_dir)
     have_prev = os.path.isfile(prev_path)
@@ -1023,16 +1024,16 @@ def dump_quant_kl(model, prompt: str, out_dir: str, step: int, n_levels: int = 1
     backup = {}
     for name, p in model.named_parameters():
         if p.dim() < 2: continue
-        backup[name] = p.data.clone()
+        backup[name] = p.data.detach().to("cpu", copy=True)
         max_abs = p.data.abs().max().clamp(min=1e-8)
         scale = max_abs / n_levels
-        p.data = torch.clamp(torch.round(p.data / scale), -n_levels, n_levels) * scale
+        p.data.copy_(torch.clamp(torch.round(p.data / scale), -n_levels, n_levels) * scale)
     try:
         logits_q, _ = model(ids)
         p_q = F.softmax(logits_q[0, -1].float(), dim=-1)
     finally:
         for name, p in model.named_parameters():
-            if name in backup: p.data = backup[name]
+            if name in backup: p.data.copy_(backup[name].to(p.device, non_blocking=True))
         if was_training: model.train()
     kl_bits = float((p_fp * ((p_fp + 1e-12).log2() - (p_q + 1e-12).log2())).sum())
     out = {

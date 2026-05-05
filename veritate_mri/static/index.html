@@ -6134,11 +6134,14 @@ function _trUpdateComposedName() {
 
 // VRAM estimator for the train form. Computed from form values only.
 //   static = params × bytes-per-param (weights + grads + AdamW state)
-//   acts   = batch × seq × hidden × layers × 13 × bytes × n_chunks
+//   acts   = batch × seq × hidden × layers × 13 × bytes × bptt_window
 // Activation multiplier 13 is the per-layer slot count for stored residual,
 // qkv, and ffn intermediate tensors. No quadratic-in-seq attention term —
 // scaled_dot_product_attention uses FlashAttention which does not materialize
-// the score matrix.
+// the score matrix. n_chunks sets the runtime memory horizon but not VRAM;
+// bptt_window controls how many chunks of activation graph stay live for
+// backward (1 = lowest VRAM but write-path frozen, 4 = balanced, n_chunks =
+// full BPTT and max VRAM). Falls back to 1 when bptt_window unset.
 const _TR_SIZE_PRESETS = {
   // multimind_m3 sizes
   "30m":  { layers: 10, hidden: 512,  ffn: 2048, heads: 8,  params: 31e6  },
@@ -6172,7 +6175,8 @@ const TRAINER_SCHEMA = {
     { name: "total_steps",  type: "int",                     label: "total training steps",    help: "more = longer training, more learned." },
     { name: "batch_size",   type: "int",                     label: "batch size",              help: "higher = faster, more VRAM." },
     { name: "seq",          type: "int",                     label: "sequence length",         help: "higher = wider per-step view, more VRAM." },
-    { name: "n_chunks",     type: "int",                     label: "TBPTT chunks per step",   help: "higher = longer M3 memory horizon, more VRAM." },
+    { name: "n_chunks",     type: "int",                     label: "TBPTT chunks per step",   help: "higher = longer M3 memory horizon at runtime; activation VRAM scales with bptt_window, not n_chunks. More chunks = more compute per step." },
+    { name: "bptt_window",  type: "int", advanced: true,     label: "BPTT window (chunks)",    help: "Only matters for adapters with cross-chunk recurrent memory like Multimind M3 (holographic memory). BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
     { name: "base_lr",      type: "float",                   label: "peak learning rate",      help: "higher = bigger weight updates (risk: divergence). type 0.0001 or 1e-4." },
     { name: "min_lr",       type: "float",                   label: "minimum learning rate",   help: "where the LR settles at the end. type 0.00001 or 1e-5." },
     { name: "warmup_steps", type: "int",                     label: "warmup steps",            help: "more = slower ramp from 0 to peak LR." },
@@ -6187,15 +6191,15 @@ const TRAINER_SCHEMA = {
     { name: "eval_every",   type: "int",                     label: "eval every",              help: "lower = more frequent validation runs." },
     { name: "eval_iters",   type: "int",                     label: "eval batches",            help: "higher = more accurate validation loss." },
     { name: "seed",         type: "int",                     label: "random seed",             help: "different seed = different random run." },
-    { name: "use_act_ckpt", type: "bool",                    label: "activation checkpointing (saves vram)", help: "trades ~30% slower compute for ~50% less VRAM." },
+    { name: "use_act_ckpt", type: "bool", featured: true,    label: "activation checkpointing", help: "trades ~30% slower compute for ~50% less activation VRAM. Recommended on tight VRAM budgets." },
     { name: "qat_enabled",  type: "bool", featured: true,    label: "INT8 QAT", help: "train with quantization-aware fake-quant in the forward pass. Result exports to a v9 binary that runs cleanly on the C engine. Adds _qat to the model version." },
   ],
   continue: [
     { name: "resume",       type: "model_name", required: true, label: "model to continue", help: "pick a previously-trained model. its config decides shape, corpus, and m3 settings." },
     { name: "total_steps",  type: "int",                        label: "total training steps", help: "extend or shorten the run. existing value comes from the model's config." },
-    { name: "n_chunks",     type: "int",                        label: "TBPTT chunks per step", help: "higher = longer M3 memory horizon, more VRAM." },
+    { name: "n_chunks",     type: "int",                        label: "TBPTT chunks per step", help: "higher = longer M3 memory horizon at runtime; activation VRAM scales with bptt_window, not n_chunks. More chunks = more compute per step." },
+    { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "Only matters for adapters with cross-chunk recurrent memory like Multimind M3 (holographic memory). BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
     { name: "batch_size",   type: "int",                        label: "batch size", help: "higher = faster, more VRAM." },
-    { name: "use_act_ckpt", type: "bool",                       label: "activation checkpointing (saves vram)", help: "trades ~30% slower compute for ~50% less VRAM." },
     { name: "base_lr",      type: "float",                      label: "peak learning rate", help: "higher = bigger weight updates. lower this for fine-tuning. type 0.0001 or 1e-4." },
     { name: "min_lr",       type: "float",                      label: "minimum learning rate", help: "where the LR settles at the end. type 0.00001 or 1e-5." },
     { name: "warmup_steps", type: "int",                        label: "warmup steps", help: "more = slower ramp from 0 to peak LR. usually irrelevant on resume since you start above 0." },
@@ -6209,6 +6213,7 @@ const TRAINER_SCHEMA = {
     { name: "log_every",    type: "int",                        label: "log every", help: "lower = denser train.csv (busier chart)." },
     { name: "eval_every",   type: "int",                        label: "eval every", help: "lower = more frequent validation runs." },
     { name: "eval_iters",   type: "int",                        label: "eval batches", help: "higher = more accurate validation loss, slower eval." },
+    { name: "use_act_ckpt", type: "bool", featured: true,       label: "activation checkpointing", help: "trades ~30% slower compute for ~50% less activation VRAM. Recommended on tight VRAM budgets." },
     { name: "qat_enabled",  type: "bool", featured: true,       label: "INT8 QAT", help: "fine-tune the source model into a new <source>_qat model with quantization-aware training. Use a low lr (1e-5). Result exports cleanly to the C engine." },
   ],
 };
@@ -6247,7 +6252,7 @@ function _trUpdateVramEstimate() {
   let precision   = _trArgVal("precision");
   let seq         = parseInt(_trArgVal("seq"), 10);
   const batch     = parseInt(_trArgVal("batch_size"), 10);
-  const chunks    = parseInt(_trArgVal("n_chunks"),   10);
+  const bpttRaw   = parseInt(_trArgVal("bptt_window"), 10);
   const ckpt      = _trArgEl("use_act_ckpt");
   const ckptOn    = ckpt && ckpt.type === "checkbox" && ckpt.checked;
 
@@ -6270,16 +6275,17 @@ function _trUpdateVramEstimate() {
 
   const bpv = precision === "bf16" ? 2 : 4;
   const bytesPerParam = precision === "bf16" ? 14 : 16;
-  const nChunks = Math.max(1, chunks || 1);
+  const bpttWindow = Math.max(1, isNaN(bpttRaw) ? 1 : bpttRaw);
 
   const staticBytes = sz.params * bytesPerParam;
-  let actBytes = batch * seq * sz.hidden * sz.layers * 13 * bpv * nChunks;
+  let actBytes = batch * seq * sz.hidden * sz.layers * 13 * bpv * bpttWindow;
   if (ckptOn) actBytes *= 0.5;
   const total = staticBytes + actBytes;
 
   const fmt = (b) => b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : (b / 1e6).toFixed(0) + " MB";
   out.innerHTML =
-    `<b style="color:var(--text)">≈ ${fmt(total)} VRAM</b>` +
+    `<b style="color:var(--warm)">estimated</b>` +
+    ` <b style="color:var(--text)">≈ ${fmt(total)} VRAM</b>` +
     ` <span style="color:var(--dim)">(static ${fmt(staticBytes)} + activations ${fmt(actBytes)}` +
     `${ckptOn ? ", act-ckpt on" : ""})</span>`;
 }
@@ -6434,15 +6440,16 @@ function _trRenderForm() {
     .trArgsGrid .cell textarea { width: 100%; min-width: 0; box-sizing: border-box; }
     .trArgsGrid .cell.bool { flex-direction: row; align-items: center; gap: 6px; }
     .trArgsGrid .cell.bool label { font-size: 11px; }
-    .trArgsGrid .cell.featured { border: 1px solid var(--accent); background: rgba(106, 166, 255, 0.08); border-radius: 4px; padding: 6px 10px; }
-    .trArgsGrid .cell.featured label { color: var(--accent); font-weight: 600; }
-    .trArgsGrid .cell.featured .help { color: var(--soft); }
+    .trArgsGrid .cell.featured { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+    .trArgsGrid .cell.featured label { color: var(--text); font-weight: 600; }
+    .trArgsGrid .cell.featured .help { color: var(--dim); }
   </style>
   <div class="trArgsGrid">`;
   for (const a of _trArgsForPlugin(p)) {
     const req   = a.required ? '<span style="color:var(--hot)"> *</span>' : "";
     const label = a.label ? _trEsc(a.label) : _trEsc(a.name);
-    const help  = a.help ? `<div class="help">${_trEsc(a.help)}</div>` : "";
+    const advBadge = a.advanced ? `<span style="color:var(--warm);font-weight:600">ADVANCED</span> · ` : "";
+    const help  = a.help ? `<div class="help">${advBadge}${_trEsc(a.help)}</div>` : "";
     const wide  = (a.type === "text" || a.type === "path") ? " wide" : "";
     const featured = a.featured ? " featured" : "";
     if (a.type === "bool") {
