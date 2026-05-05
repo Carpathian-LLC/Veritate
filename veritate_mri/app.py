@@ -27,7 +27,7 @@ sys.path.insert(0, HERE)
 
 from backends.pytorch import Brain, load_memory
 from backends.c_engine import CTracedSubprocess
-from readers import paths, models, hooks, train_csv, config as cfg_reader, checkpoints, engine, bin as binr, plugins as plugins_reader, corpus as corpus_reader
+from readers import paths, models, hooks, train_csv, config as cfg_reader, checkpoints, engine, bin as binr, plugins as plugins_reader, corpus as corpus_reader, wiki as wiki_reader
 import atlas as atlas_mod
 import train_stream as train_stream_mod
 import logs as logmod
@@ -38,12 +38,15 @@ import plugins_sync
 import models_sync
 import sys_metrics
 import settings as settings_mod
+import heartbeat as heartbeat_mod
+import app_sync as app_sync_mod
 import threading
 
 # ------------------------------------------------------------------------------------
 # Constants
 
 STATIC_DIR = os.path.join(HERE, "static")
+VERSIONS_PATH = os.path.normpath(os.path.join(HERE, "..", "versions.json"))
 
 NEURON_TOP_K = 8
 C_ACT_SCALE = 32.0
@@ -383,6 +386,75 @@ def multimind_results():
 @app.route("/sys_metrics")
 def sys_metrics_route():
     return sys_metrics.snapshot()
+
+
+@app.route("/heartbeat/status")
+def heartbeat_status_route():
+    return heartbeat_mod.status()
+
+
+@app.route("/heartbeat/send", methods=["POST"])
+def heartbeat_send_route():
+    ok_send = heartbeat_mod.send_now()
+    return {"ok": bool(ok_send), **heartbeat_mod.status()}
+
+
+@app.route("/app/update_status")
+def app_update_status_route():
+    return app_sync_mod.status()
+
+
+@app.route("/app/update_check", methods=["POST"])
+def app_update_check_route():
+    return app_sync_mod.check()
+
+
+@app.route("/app/update_pull", methods=["POST"])
+def app_update_pull_route():
+    body = request.get_json(silent=True) or {}
+    res = app_sync_mod.pull()
+    if res.get("ok") and body.get("reload"):
+        try:
+            lifecycle.soft_reload(app.config)
+        except Exception as e:
+            res["reload_error"] = f"{type(e).__name__}: {e}"
+    return res
+
+
+@app.route("/app/update_channel", methods=["POST"])
+def app_update_channel_route():
+    body = request.get_json(silent=True) or {}
+    channel = (body.get("channel") or "").lower()
+    return app_sync_mod.switch_channel(channel)
+
+
+@app.route("/versions")
+def versions_route():
+    if not os.path.isfile(VERSIONS_PATH):
+        return ({"error": f"versions file not found: {VERSIONS_PATH}"}, 404)
+    with open(VERSIONS_PATH, "r", encoding="utf-8") as f:
+        return Response(f.read(), mimetype="application/json")
+
+
+@app.route("/wiki")
+def wiki_index():
+    return {"categories": wiki_reader.list_categories()}
+
+
+@app.route("/wiki/<category>")
+def wiki_category(category):
+    entries = wiki_reader.list_entries(category)
+    if entries is None:
+        return ({"error": f"category not found: {category}"}, 404)
+    return {"category": category, "entries": entries}
+
+
+@app.route("/wiki/<category>/<slug>")
+def wiki_entry(category, slug):
+    entry = wiki_reader.load_entry(category, slug)
+    if entry is None:
+        return ({"error": f"entry not found: {category}/{slug}"}, 404)
+    return entry
 
 
 @app.route("/settings", methods=["GET", "POST"])
@@ -1455,6 +1527,22 @@ def main():
 
     threading.Thread(target=_pytorch_idle_watcher, name="pytorch-idle-watcher", daemon=True).start()
     sys_metrics.warm()
+
+    def _heartbeat_training():
+        st = plugin_runner.state()
+        if not st or st.get("status") != plugin_runner.STATUS_RUNNING:
+            return None
+        return {
+            "plugin_id": st.get("plugin_id"),
+            "started_at": st.get("started_at"),
+        }
+    heartbeat_mod.set_training_provider(_heartbeat_training)
+    heartbeat_mod.start()
+
+    def _app_sync_reload():
+        lifecycle.soft_reload(app.config)
+    app_sync_mod.set_reload_hook(_app_sync_reload)
+    app_sync_mod.start()
 
     try:
         s = settings_mod.get()

@@ -24,6 +24,7 @@ PLUGINS_ROOT    = os.path.join(REPO_ROOT, "plugins")
 CORPUS_ROOT     = os.path.join(PLUGINS_ROOT, "corpus")
 MRI_ROOT        = os.path.join(REPO_ROOT, "veritate_mri")
 GRADE_EVAL_ROOT = os.path.join(MRI_ROOT, "grade_eval")
+WIKI_ROOT       = os.path.join(MRI_ROOT, "wiki")
 ENGINE_ROOT     = os.path.join(REPO_ROOT, "veritate_engine")
 ENGINE_BIN      = os.path.join(ENGINE_ROOT, "bin")
 ENGINE_BUILD    = os.path.join(ENGINE_ROOT, "build")
@@ -53,6 +54,8 @@ TRAIN_CSV_NAME    = "train.csv"
 BIN_NAME          = "veritate.bin"
 CHECKPOINTS_DIR   = "checkpoints"
 HOOKS_DIR         = "hooks"
+
+WIKI_ENTRY_SUFFIX = ".md"
 
 CORPUS_TRAIN_SUFFIX = "_train.bin"
 CORPUS_VAL_SUFFIX   = "_val.bin"
@@ -135,6 +138,18 @@ def hook_step_dir(name, step):
 def hook_artifact_path(name, step, artifact):
     fname = HOOK_ARTIFACTS[artifact][0]
     return os.path.join(hook_step_dir(name, step), fname)
+
+
+def wiki_root():
+    return WIKI_ROOT
+
+
+def wiki_category_dir(category):
+    return os.path.join(WIKI_ROOT, category)
+
+
+def wiki_entry_path(category, slug):
+    return os.path.join(WIKI_ROOT, category, f"{slug}{WIKI_ENTRY_SUFFIX}")
 
 
 def current_os():

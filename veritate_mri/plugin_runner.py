@@ -31,6 +31,9 @@ STATUS_FAILED  = "failed"
 STATUS_STOPPED = "stopped"
 
 PID_FILE = os.path.join(paths.REPO_ROOT, ".plugin_pid.json")
+RUN_LOG_FILE = os.path.join(paths.REPO_ROOT, ".plugin_run.log")
+TAIL_POLL_SECS = 0.25
+WATCH_POLL_SECS = 2.0
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 PYTORCH_ALLOC_ENV_KEY     = "PYTORCH_CUDA_ALLOC_CONF"
@@ -135,6 +138,55 @@ def _process_terminate(pid):
         logmod.warn("plugin", f"terminate pid {pid} failed: {e}")
 
 
+def _tail_run_log(plugin_id, start_pos, stop_event):
+    """Stream new lines from RUN_LOG_FILE into the in-memory log ring.
+    Decouples the dashboard log view from the subprocess stdout pipe so the
+    plugin survives a parent restart."""
+    pos = int(start_pos)
+    src = f"plugin:{plugin_id}"
+    leftover = ""
+    while not stop_event.is_set():
+        try:
+            if os.path.isfile(RUN_LOG_FILE):
+                with open(RUN_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(pos)
+                    chunk = f.read()
+                    pos = f.tell()
+                if chunk:
+                    data = leftover + chunk
+                    lines = data.split("\n")
+                    leftover = lines.pop()
+                    for line in lines:
+                        line = line.rstrip("\r")
+                        if line:
+                            logmod.info(src, line)
+        except Exception:
+            pass
+        if stop_event.wait(TAIL_POLL_SECS):
+            return
+
+
+def _watch_recovered(pid, plugin_id, cmd_marker, stop_event):
+    """Mark a recovered run as finished when its OS process exits.
+    Runs only when the dashboard reattached to a still-live PID after restart."""
+    global _RECOVERED_PID
+    while not stop_event.is_set():
+        if not _process_alive(pid, cmd_marker=cmd_marker):
+            _clear_pid_file()
+            with _LOCK:
+                if _STATE.get("status") == STATUS_RUNNING:
+                    _STATE.update({
+                        "status":      STATUS_OK,
+                        "finished_at": time.time(),
+                        "exit_code":   None,
+                    })
+                _RECOVERED_PID = None
+            logmod.ok("plugin", f"recovered run finished (pid={pid}, {plugin_id})")
+            return
+        if stop_event.wait(WATCH_POLL_SECS):
+            return
+
+
 def _recover_from_disk():
     """Called once at module load. If PID_FILE exists and the process is still
     alive, restore _STATE so the dashboard sees the run. The Popen handle is
@@ -158,6 +210,19 @@ def _recover_from_disk():
             "exit_code":   None,
         })
     logmod.ok("plugin", f"recovered in-flight run: {rec.get('plugin_id')} pid={pid}")
+    start_pos = 0
+    try:
+        if os.path.isfile(RUN_LOG_FILE):
+            start_pos = os.path.getsize(RUN_LOG_FILE)
+    except Exception:
+        start_pos = 0
+    stop_event = threading.Event()
+    threading.Thread(target=_tail_run_log,
+                     args=(rec.get("plugin_id"), start_pos, stop_event),
+                     name="plugin-tailer-recovered", daemon=True).start()
+    threading.Thread(target=_watch_recovered,
+                     args=(int(pid), rec.get("plugin_id"), rec.get("cmd_marker"), stop_event),
+                     name="plugin-watch-recovered", daemon=True).start()
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -178,7 +243,7 @@ def _set(**kw):
 
 
 def _build_argv(plugin, args):
-    out = [sys.executable, plugin["path"]]
+    out = [sys.executable, "-u", plugin["path"]]
     for k, v in (args or {}).items():
         if v is None or v == "":
             continue
@@ -198,25 +263,36 @@ def _run(plugin, args):
     env = os.environ.copy()
     env.setdefault(PYTORCH_ALLOC_ENV_KEY, PYTORCH_ALLOC_ENV_DEFAULT)
     try:
+        log_fp = open(RUN_LOG_FILE, "w", encoding="utf-8", buffering=1)
+    except Exception as e:
+        logmod.error("plugin", f"open run log failed: {e}")
+        _set(status=STATUS_FAILED, finished_at=time.time(), exit_code=None)
+        return
+    try:
         proc = subprocess.Popen(argv, cwd=paths.REPO_ROOT,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1,
+                                stdout=log_fp, stderr=subprocess.STDOUT,
                                 creationflags=_NO_WINDOW,
                                 env=env)
     except Exception as e:
         logmod.error("plugin", f"spawn failed: {e}")
+        try: log_fp.close()
+        except Exception: pass
         _set(status=STATUS_FAILED, finished_at=time.time(), exit_code=None)
         return
     with _LOCK:
         _PROC = proc
     _write_pid_file(plugin["id"], proc.pid, args, plugin["path"])
+    stop_event = threading.Event()
+    tailer = threading.Thread(target=_tail_run_log,
+                              args=(plugin["id"], 0, stop_event),
+                              name=f"plugin-tailer:{plugin['id']}", daemon=True)
+    tailer.start()
     try:
-        for line in proc.stdout:
-            line = line.rstrip()
-            if line:
-                logmod.info(f"plugin:{plugin['id']}", line)
         proc.wait()
     finally:
+        stop_event.set()
+        try: log_fp.close()
+        except Exception: pass
         with _LOCK:
             _PROC = None
         _clear_pid_file()

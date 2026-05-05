@@ -1,0 +1,33 @@
+model name: tinystories_1b_bf16_v1_mega
+corpus train: C:\GitHub\Veritate\plugins\corpus\tinystories_train.bin
+corpus val:   C:\GitHub\Veritate\plugins\corpus\tinystories_val.bin
+QAT: enabled (weight quant_mode=ternary, act/RMSNorm INT8)
+activation checkpointing: ENABLED
+C:\GitHub\Veritate\venv\Lib\site-packages\torch\nn\modules\module.py:1370: UserWarning: expandable_segments not supported on this platform (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\c10/cuda/CUDAAllocatorConfig.h:39.)
+  return t.to(
+device: cuda  precision: bf16
+params: total=1023M  active(top1)=197M
+L3:     active=37.6 MB  total=195.2 MB  (target L3 = 96 MB)
+shape:  hidden=1280 layers=12 ffn=3840 heads=16 seq=256
+MoE:    n_experts=8 topk=1 aux_loss_w=0.01
+resume: tinystories_1b_bf16_v1_mega  from step 500
+train corpus bytes: 2188612746  per-step chunk: 3072  batch: 2
+W0505 11:16:53.340000 31472 venv\Lib\site-packages\torch\utils\flop_counter.py:29] triton not found; flop counting will not work for triton kernels
+optimizer: 8-bit AdamW (bitsandbytes) -- m+v in INT8, master fp32, ~1B-class fits 12 GB
+optimizer state restored
+step 520  loss 1.9772  lr 9.90e-05  gn 1.543  tok/s 247  elapsed 497s
+step 540  loss 1.9294  lr 9.89e-05  gn 1.167  tok/s 246  elapsed 997s
+step 560  loss 1.8359  lr 9.88e-05  gn 1.099  tok/s 244  elapsed 1500s
+step 580  loss 1.9222  lr 9.86e-05  gn 1.205  tok/s 244  elapsed 2003s
+step 600  loss 1.8664  lr 9.85e-05  gn 1.488  tok/s 250  elapsed 2495s
+checkpoint: C:\GitHub\Veritate\models\tinystories_1b_bf16_v1_mega\checkpoints\step_600.pt
+step 620  loss 1.7797  lr 9.83e-05  gn 1.068  tok/s 246  elapsed 2995s
+step 640  loss 1.7379  lr 9.81e-05  gn 1.278  tok/s 248  elapsed 3491s
+step 660  loss 1.7118  lr 9.80e-05  gn 1.122  tok/s 248  elapsed 3986s
+step 680  loss 1.6998  lr 9.78e-05  gn 1.095  tok/s 243  elapsed 4492s
+step 700  loss 1.6156  lr 9.76e-05  gn 0.896  tok/s 249  elapsed 4985s
+step 720  loss 1.5814  lr 9.74e-05  gn 1.050  tok/s 243  elapsed 5490s
+step 740  loss 1.5499  lr 9.72e-05  gn 0.871  tok/s 243  elapsed 5996s
+step 750  val_loss 1.5887
+step 760  loss 1.5766  lr 9.70e-05  gn 1.057  tok/s 245  elapsed 6497s
+step 780  loss 1.6638  lr 9.68e-05  gn 1.010  tok/s 244  elapsed 7001s

@@ -25,6 +25,9 @@ DEFAULTS = {
     "hud_enabled": False,
     "hud_position": "top",
     "hud_detailed": False,
+    "heartbeat_enabled": True,
+    "update_channel": "stable",
+    "auto_reload_on_update": False,
 }
 
 _LOCK = threading.Lock()

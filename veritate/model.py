@@ -47,12 +47,13 @@ class RMSNorm(nn.Module):
 class QuantLinear(nn.Linear):
     def __init__(self, in_features, out_features, bias=False):
         super().__init__(in_features, out_features, bias=bias)
-        self.qat = False
+        self.qat        = False
+        self.quant_mode = _qat.QUANT_MODE_INT8
 
     def forward(self, x):
         if self.qat:
             return F.linear(_qat.fake_quant_act(x),
-                            _qat.fake_quant_weight(self.weight),
+                            _qat.fake_quant_weight_mode(self.weight, self.quant_mode),
                             self.bias)
         return super().forward(x)
 

@@ -3,5 +3,8 @@
   "pytorch_idle_unload_secs": 600,
   "hud_enabled": true,
   "hud_position": "top",
-  "hud_detailed": true
+  "hud_detailed": true,
+  "heartbeat_enabled": true,
+  "update_channel": "stable",
+  "auto_reload_on_update": false
 }

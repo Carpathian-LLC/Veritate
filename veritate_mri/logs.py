@@ -26,6 +26,7 @@ _LOCK = threading.Lock()
 _BUFFER = deque(maxlen=RING_CAPACITY)
 _SEQ = 0
 _SUBSCRIBERS = set()
+_ERROR_HOOK = None
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -46,12 +47,22 @@ def emit(level, source, msg):
         entry["seq"] = _SEQ
         _BUFFER.append(entry)
         targets = list(_SUBSCRIBERS)
+    if level == "error" and _ERROR_HOOK is not None:
+        try:
+            _ERROR_HOOK()
+        except Exception:
+            pass
     for q in targets:
         try:
             q.put_nowait(entry)
         except Exception:
             pass
     return entry
+
+
+def set_error_hook(fn):
+    global _ERROR_HOOK
+    _ERROR_HOOK = fn
 
 
 def info(source, msg):  return emit("info",  source, msg)

@@ -7,7 +7,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Veritate · Project MRI</title>
+<title>Veritate</title>
 <style>
   :root {
     --bg: #08090c;
@@ -49,9 +49,14 @@
   .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
 
   /* header band */
-  .topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 16px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 14px; flex-wrap: wrap; }
-  .topbar .right { display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; color: var(--dim); font-size: 11px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 14px; flex-wrap: wrap; }
+  .topbar .right { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; color: var(--dim); font-size: 11px; }
   .topbar .right b { color: var(--text); }
+  .current-model { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px 8px; min-width: 360px; }
+  .current-model-label { color: var(--dim); font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; margin-bottom: 4px; }
+  .current-model-meta { display: flex; flex-wrap: wrap; column-gap: 22px; row-gap: 4px; align-items: baseline; font-size: 11px; }
+  .current-model-meta .stat { color: var(--dim); white-space: nowrap; }
+  .current-model-meta .stat b { color: var(--text); margin-left: 6px; font-weight: 600; }
 
   /* tabs */
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
@@ -556,6 +561,45 @@
   .plan-table .chip.cool { background: rgba(93,200,255,0.12);  color: var(--cool); }
   .plan-table .chip.warm { background: rgba(255,174,93,0.12);  color: var(--warm); }
   .plan-table .chip.hot  { background: rgba(255,93,93,0.12);   color: var(--hot); }
+
+  /* wiki */
+  .wiki-subtabs { display: flex; gap: 4px; margin: 4px 0 14px; flex-wrap: wrap; }
+  .wiki-subtab { padding: 6px 14px; border: 1px solid var(--line); border-radius: 3px; cursor: pointer; color: var(--dim); font-size: 11px; letter-spacing: .04em; background: #0a0c12; }
+  .wiki-subtab:hover { color: var(--text); border-color: var(--accent); }
+  .wiki-subtab.active { color: #000; background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .wiki-subtab .count { color: inherit; opacity: .7; margin-left: 6px; font-size: 10px; }
+  .wiki-layout { display: grid; grid-template-columns: 280px 1fr; gap: 14px; min-height: 420px; }
+  @media (max-width: 1100px) { .wiki-layout { grid-template-columns: 1fr; } }
+  .wiki-list { background: #0a0c12; border: 1px solid var(--line); border-radius: 4px; padding: 6px; max-height: 640px; overflow-y: auto; }
+  .wiki-list-item { padding: 8px 10px; border-radius: 3px; cursor: pointer; border: 1px solid transparent; margin-bottom: 2px; }
+  .wiki-list-item:hover { background: #11141b; border-color: var(--line); }
+  .wiki-list-item.active { background: #11141b; border-color: var(--accent); }
+  .wiki-list-item .t { color: var(--text); font-size: 12px; font-weight: 600; line-height: 1.35; }
+  .wiki-list-item .d { color: var(--dim); font-size: 10.5px; margin-top: 2px; }
+  .wiki-list-item .s { color: var(--soft); font-size: 11px; margin-top: 4px; line-height: 1.4; }
+  .wiki-list-item .tags { margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .wiki-tag { display: inline-block; padding: 1px 7px; border-radius: 10px; background: rgba(106,166,255,0.10); color: var(--accent); font-size: 10px; }
+  .wiki-empty { padding: 30px; color: var(--dim); text-align: center; font-size: 12px; }
+  .wiki-entry { background: #0a0c12; border: 1px solid var(--line); border-radius: 4px; padding: 22px 26px; max-height: 720px; overflow-y: auto; }
+  .wiki-entry-meta { color: var(--dim); font-size: 11px; padding-bottom: 10px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+  .wiki-entry-meta .title { color: #fff; font-size: 18px; font-weight: 600; display: block; margin-bottom: 6px; letter-spacing: -0.01em; }
+  .wiki-body { color: var(--text); font-size: 13px; line-height: 1.65; }
+  .wiki-body h1, .wiki-body h2, .wiki-body h3, .wiki-body h4 { color: #fff; margin: 22px 0 8px; line-height: 1.3; letter-spacing: -0.01em; }
+  .wiki-body h1 { font-size: 16px; }
+  .wiki-body h2 { font-size: 14px; text-transform: none; letter-spacing: 0; color: var(--accent); }
+  .wiki-body h3 { font-size: 13px; }
+  .wiki-body h4 { font-size: 12px; color: var(--soft); }
+  .wiki-body p { margin: 8px 0; }
+  .wiki-body ul, .wiki-body ol { padding-left: 22px; margin: 8px 0; }
+  .wiki-body li { margin: 3px 0; }
+  .wiki-body code { background: #1a1f2b; padding: 1px 5px; border-radius: 2px; font-size: 12px; color: var(--warm); }
+  .wiki-body pre { background: #06070a; border: 1px solid var(--line); border-radius: 3px; padding: 10px 12px; overflow-x: auto; margin: 10px 0; }
+  .wiki-body pre code { background: transparent; padding: 0; color: var(--text); font-size: 12px; }
+  .wiki-body a { color: var(--accent); text-decoration: none; }
+  .wiki-body a:hover { text-decoration: underline; }
+  .wiki-body hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
+  .wiki-body strong { color: #fff; font-weight: 700; }
+  .wiki-body em { color: var(--soft); font-style: italic; }
 </style>
 </head>
 <body>
@@ -568,11 +612,15 @@
 
 <div class="topbar">
   <div>
-    <h1>Veritate <span style="color:var(--dim);font-weight:400;font-size:12px;margin-left:10px">project mri</span></h1>
+    <h1>Veritate</h1>
   </div>
-  <div class="right" style="display:flex;align-items:baseline;gap:14px">
+  <div class="right">
     <a href="/multimind" style="color:var(--dim);font-size:11px;text-decoration:none;border-bottom:1px dashed var(--dim);display:none">multimind →</a>
-    <span id="modelMeta"><span class="stat">loading model...</span></span>
+    <a id="updateBanner" style="display:none;color:var(--warm);font-size:11px;text-decoration:none;border:1px solid var(--warm);padding:4px 9px;border-radius:3px;cursor:pointer;letter-spacing:.02em">update available</a>
+    <div class="current-model">
+      <div class="current-model-label">Current model</div>
+      <div id="modelMeta" class="current-model-meta"><span class="stat">loading model...</span></div>
+    </div>
   </div>
 </div>
 
@@ -580,8 +628,9 @@
   <div class="tab active" data-tab="generation">Generation</div>
   <div class="tab" data-tab="learning">Models</div>
   <div class="tab" data-tab="training">Training</div>
+  <div class="tab" data-tab="wiki">Wiki</div>
   <div class="tab" data-tab="logs">Logs</div>
-  <div class="tab" data-tab="settings">Settings</div>
+  <div class="tab" data-tab="settings">Settings<span class="notify-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warm);margin-left:6px;vertical-align:middle"></span></div>
 </div>
 
 <!-- ============================ GENERATION TAB ============================ -->
@@ -1530,6 +1579,72 @@
     <div class="body">
 
       <div class="settings-row">
+        <div class="label">Sources &amp; updates</div>
+        <div class="desc">Three independent git remotes: the Veritate platform (this repo), the plugins repo, and the models repo. Each can be pulled on its own; platform pulls are fast-forward only and follow the selected release channel.</div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:8px">
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Platform</div>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <label class="opt" data-channel="stable" style="padding:6px 8px">
+                <input type="radio" name="updateChannel" value="stable">
+                <span><span class="opt-title" style="margin:0;font-size:11.5px">Stable <span style="color:var(--dim);font-weight:400">(main)</span></span></span>
+              </label>
+              <label class="opt" data-channel="experimental" style="padding:6px 8px">
+                <input type="radio" name="updateChannel" value="experimental">
+                <span><span class="opt-title" style="margin:0;font-size:11.5px">Experimental <span style="color:var(--dim);font-weight:400">(experimental)</span></span></span>
+              </label>
+              <label class="opt" data-channel="development" style="padding:6px 8px">
+                <input type="radio" name="updateChannel" value="development">
+                <span><span class="opt-title" style="margin:0;font-size:11.5px">Development <span style="color:var(--dim);font-weight:400">(dev)</span></span></span>
+              </label>
+            </div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">branch: <span id="updateBranch">.</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">head: <span id="updateHead">.</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="updateBehind">unknown</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">last check: <span id="updateLastCheck">never</span></div>
+            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button id="updateCheckBtn" class="action" type="button">check</button>
+              <button id="updatePullBtn"  class="action" type="button" disabled>pull</button>
+            </div>
+            <span id="updateActionStatus" class="meta" style="font-size:10.5px">idle</span>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="pluginsSyncRow">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Plugins</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="pluginsRemote">.</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">commit: <span id="pluginsHead">.</span> <span id="pluginsBranch"></span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim);display:none" id="pluginsAheadBehindLine">local: <span id="pluginsAheadBehind"></span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Self-contained git repo of trainers and experiments. Refuses to pull while a plugin is running.</div>
+            <div class="inline" style="gap:6px;margin-top:4px">
+              <button id="pluginsSyncBtn" class="action" type="button">sync</button>
+              <span id="pluginsSyncStatus" class="meta" style="font-size:10.5px">idle</span>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="modelsSyncRow">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Models</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="modelsRemote">.</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">commit: <span id="modelsHead">.</span> <span id="modelsBranch"></span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim);display:none" id="modelsAheadBehindLine">local: <span id="modelsAheadBehind"></span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Pulls untrained barebones models (config + manifest). Local checkpoints, hooks, and trained models are not touched.</div>
+            <div class="inline" style="gap:6px;margin-top:4px">
+              <button id="modelsSyncBtn" class="action" type="button">sync</button>
+              <span id="modelsSyncStatus" class="meta" style="font-size:10.5px">idle</span>
+            </div>
+          </div>
+
+        </div>
+        <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:10px;padding:8px 14px;margin-top:10px">
+          <input type="checkbox" id="updateAutoReload">
+          <span style="display:flex;flex-direction:column;gap:2px">
+            <span class="opt-title" style="margin:0">Auto soft-reload after platform update</span>
+            <span class="opt-sub">When a new commit is pulled, immediately soft-reload the dashboard. Active training keeps running (same path as the yellow "reload python" button).</span>
+          </span>
+        </label>
+      </div>
+
+      <div class="settings-row">
         <div class="label">PyTorch backend</div>
         <div class="desc">The PyTorch backend is what powers every live MRI panel (full activation capture). It also holds the model in memory. Switching to it from the Generation tab triggers a load.</div>
         <div class="opts" id="pytorchModeOpts">
@@ -1564,34 +1679,6 @@
         </div>
       </div>
 
-      <div class="settings-row">
-        <div class="label">Plugins source</div>
-        <div class="desc">The <code>plugins/</code> folder is its own git repo, separate from this one. Sync fast-forwards the latest plugins (trainers, experiments) from the remote. Refuses to pull while a plugin is running.</div>
-        <div class="inline" id="pluginsSyncRow" style="flex-direction:column;align-items:flex-start;gap:6px">
-          <div id="pluginsRemoteLine" class="meta">remote: <span id="pluginsRemote">—</span></div>
-          <div id="pluginsHeadLine" class="meta">commit: <span id="pluginsHead">—</span> <span id="pluginsBranch"></span></div>
-          <div id="pluginsAheadBehindLine" class="meta" style="display:none">local: <span id="pluginsAheadBehind"></span></div>
-          <div class="inline" style="gap:8px;margin-top:4px">
-            <button id="pluginsSyncBtn" class="action" type="button">sync from git</button>
-            <span id="pluginsSyncStatus" class="meta">idle</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-row">
-        <div class="label">Models source</div>
-        <div class="desc">The <code>models/</code> folder is its own git repo, separate from this one. Sync pulls untrained barebones models (config + manifest only) from the remote. Local checkpoints, hooks, and any models you train on top are not touched and are not reported as changes.</div>
-        <div class="inline" id="modelsSyncRow" style="flex-direction:column;align-items:flex-start;gap:6px">
-          <div id="modelsRemoteLine" class="meta">remote: <span id="modelsRemote">.</span></div>
-          <div id="modelsHeadLine" class="meta">commit: <span id="modelsHead">.</span> <span id="modelsBranch"></span></div>
-          <div id="modelsAheadBehindLine" class="meta" style="display:none">local: <span id="modelsAheadBehind"></span></div>
-          <div class="inline" style="gap:8px;margin-top:4px">
-            <button id="modelsSyncBtn" class="action" type="button">sync from git</button>
-            <span id="modelsSyncStatus" class="meta">idle</span>
-          </div>
-        </div>
-      </div>
-
       <div class="settings-row" style="border-top: 1px solid var(--hot); margin-top: 18px; padding-top: 18px">
         <div class="label" style="color: var(--hot)">Danger zone</div>
         <div class="desc">
@@ -1606,6 +1693,25 @@
           <button id="restartServerBtn" class="action" type="button" style="border-color: var(--warm); color: var(--warm)">reload python (keep training)</button>
           <button id="killServerBtn" class="action" type="button" style="border-color: var(--hot); color: var(--hot)">kill everything</button>
           <span id="lifecycleStatus" class="meta">idle</span>
+        </div>
+      </div>
+
+      <div class="settings-row">
+        <div class="label">Anonymous heartbeat</div>
+        <div class="desc">
+          Pings <code>api.carpathian.ai/webhook/veritate-heartbeat</code> every 6 hours with a tiny JSON envelope: machine id, OS/arch, uptime, total runtime, restart count, error count since last send, model count, and a hash of the model names. No prompts, no checkpoints, no source. Used to track install footprint and active training. Off-line machines just skip; missed pings are not retried.
+          <div style="margin-top:6px;font-size:11px">Aggregated counts (no machine ids, no IPs) appear at <a href="https://carpathian.ai/veritate" target="_blank" style="color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)">carpathian.ai/veritate</a>.</div>
+        </div>
+        <div class="inline" style="flex-direction:column;align-items:flex-start;gap:8px">
+          <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:10px;padding:8px 14px">
+            <input type="checkbox" id="heartbeatEnable">
+            <span class="opt-title" style="margin:0">Enable heartbeat</span>
+          </label>
+          <div class="meta" id="heartbeatStatusLine" style="font-size:11px;color:var(--dim)">machine id: <span id="heartbeatMachineId">.</span> &nbsp;·&nbsp; last send: <span id="heartbeatLastSend">never</span> &nbsp;·&nbsp; restarts: <span id="heartbeatRestarts">0</span> &nbsp;·&nbsp; total runtime: <span id="heartbeatRuntime">0s</span></div>
+          <div class="inline" style="gap:8px;margin-top:4px">
+            <button id="heartbeatSendBtn" class="action" type="button">send now</button>
+            <span id="heartbeatSendStatus" class="meta">idle</span>
+          </div>
         </div>
       </div>
 
@@ -1627,6 +1733,22 @@
         </div>
       </div>
 
+    </div>
+  </div>
+
+</div>
+
+<!-- ============================ WIKI TAB ============================ -->
+<div class="tab-body" data-tab="wiki">
+
+  <div class="panel">
+    <h2>wiki <em>build notes, experiments, and project log</em></h2>
+    <div class="body">
+      <div id="wikiSubtabs" class="wiki-subtabs"></div>
+      <div class="wiki-layout">
+        <div class="wiki-list" id="wikiList"></div>
+        <div class="wiki-entry" id="wikiEntry"><div class="wiki-empty">Pick an entry on the left.</div></div>
+      </div>
     </div>
   </div>
 
@@ -1760,8 +1882,7 @@
 </div>
 
 <footer>
-  capture cost: ~50 µs/token (memcpy on the c side, hooks on this pytorch side). all viz captured per-token from a single forward pass.
-  bertviz, transformerlens, neuronpedia all do post-hoc on saved traces. This is live and runs continuously.
+  <span id="versionList"></span>
 </footer>
 
 <script>
@@ -3038,7 +3159,7 @@ $("goLive").addEventListener("click", () => {
 
 // ---- tabs ----
 function activateTab(name) {
-  const valid = ["generation", "learning", "training", "logs", "settings"];
+  const valid = ["generation", "learning", "training", "wiki", "logs", "settings"];
   if (!valid.includes(name)) name = "generation";
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
   document.querySelectorAll(".tab-body").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
@@ -3072,6 +3193,10 @@ function activateTab(name) {
         render_reading_level(classroomRefsT, classroomState.run, classroomState.gradesSteps, classroomState.gradesByStep);
       }
     });
+  } else if (name === "wiki") {
+    stopTrainPolling();
+    trainStreamStop();
+    ensureWikiLoaded();
   } else {
     stopTrainPolling();
     trainStreamStop();
@@ -6143,13 +6268,17 @@ function _trUpdateComposedName() {
 // backward (1 = lowest VRAM but write-path frozen, 4 = balanced, n_chunks =
 // full BPTT and max VRAM). Falls back to 1 when bptt_window unset.
 const _TR_SIZE_PRESETS = {
-  // multimind_m3 sizes
+  // multimind_m3 / m1 sizes (dense)
   "30m":  { layers: 10, hidden: 512,  ffn: 2048, heads: 8,  params: 31e6  },
   "80m":  { layers: 12, hidden: 768,  ffn: 3072, heads: 12, params: 85e6  },
   "120m": { layers: 12, hidden: 896,  ffn: 3584, heads: 14, params: 115e6 },
   "200m": { layers: 16, hidden: 1024, ffn: 4096, heads: 16, params: 202e6 },
   "400m": { layers: 24, hidden: 1280, ffn: 5120, heads: 20, params: 472e6 },
   "800m": { layers: 28, hidden: 1536, ffn: 6144, heads: 24, params: 793e6 },
+  // multimind_mega sizes (MoE total params; per-byte active << total)
+  "850m": { layers: 12, hidden: 1024, ffn: 4096, heads: 16, params: 860e6  },
+  "1b":   { layers: 12, hidden: 1280, ffn: 3840, heads: 16, params: 1023e6 },
+  "1b5":  { layers: 14, hidden: 1408, ffn: 4224, heads: 16, params: 1500e6 },
   // scratch_transformer-style sizes (subset)
   "5m":   { layers: 6,  hidden: 256,  ffn: 1024, heads: 4,  params: 5e6   },
   "7m":   { layers: 8,  hidden: 256,  ffn: 1024, heads: 4,  params: 7e6   },
@@ -6164,19 +6293,17 @@ const _TR_SIZE_PRESETS = {
 // ---------------------------------------------------------------
 const TRAINER_SCHEMA = {
   scratch: [
+    // ---- required (every trainer) ----
     { name: "corpus",       type: "corpus", required: true,  label: "training data file",      help: "the file the model reads." },
-    { name: "size",         type: "str",    required: true,  label: "model size",              help: "bigger = smarter, slower, more VRAM.", choices: ["30m","80m","120m","200m","400m","800m"] },
+    { name: "size",         type: "str",    required: true,  label: "model size",              help: "bigger = smarter, slower, more VRAM. choices depend on plugin: m1/m3 use 30m..800m dense, mega uses 200m/850m/1b/1b5 MoE.", choices: ["30m","80m","120m","200m","400m","800m","850m","1b","1b5"] },
     { name: "precision",    type: "str",    required: true,  label: "number precision",        help: "bf16 = half memory. fp32 = double memory.", choices: ["bf16","fp32"] },
     { name: "version",      type: "str",    required: true,  label: "version tag",             help: "label for this run; v1, v1b, v2a..." },
     { name: "description",  type: "text",   required: true,  label: "what this model is for",  help: "saved into the model's config.json." },
-    { name: "rank",         type: "int",                     label: "adapter rank",            help: "higher = more memory capacity in the adapter." },
-    { name: "alpha",        type: "float",                   label: "adapter write alpha",     help: "higher = each token writes harder to memory." },
-    { name: "inject_layer", type: "int",                     label: "inject layer (-1=auto)",  help: "which layer the adapter attaches to. -1 = mid-stack." },
+    // ---- standard training loop ----
     { name: "total_steps",  type: "int",                     label: "total training steps",    help: "more = longer training, more learned." },
     { name: "batch_size",   type: "int",                     label: "batch size",              help: "higher = faster, more VRAM." },
     { name: "seq",          type: "int",                     label: "sequence length",         help: "higher = wider per-step view, more VRAM." },
     { name: "n_chunks",     type: "int",                     label: "TBPTT chunks per step",   help: "higher = longer M3 memory horizon at runtime; activation VRAM scales with bptt_window, not n_chunks. More chunks = more compute per step." },
-    { name: "bptt_window",  type: "int", advanced: true,     label: "BPTT window (chunks)",    help: "Only matters for adapters with cross-chunk recurrent memory like Multimind M3 (holographic memory). BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
     { name: "base_lr",      type: "float",                   label: "peak learning rate",      help: "higher = bigger weight updates (risk: divergence). type 0.0001 or 1e-4." },
     { name: "min_lr",       type: "float",                   label: "minimum learning rate",   help: "where the LR settles at the end. type 0.00001 or 1e-5." },
     { name: "warmup_steps", type: "int",                     label: "warmup steps",            help: "more = slower ramp from 0 to peak LR." },
@@ -6191,45 +6318,70 @@ const TRAINER_SCHEMA = {
     { name: "eval_every",   type: "int",                     label: "eval every",              help: "lower = more frequent validation runs." },
     { name: "eval_iters",   type: "int",                     label: "eval batches",            help: "higher = more accurate validation loss." },
     { name: "seed",         type: "int",                     label: "random seed",             help: "different seed = different random run." },
-    { name: "use_act_ckpt", type: "bool", featured: true,    label: "activation checkpointing", help: "trades ~30% slower compute for ~50% less activation VRAM. Recommended on tight VRAM budgets." },
-    { name: "qat_enabled",  type: "bool", featured: true,    label: "INT8 QAT", help: "train with quantization-aware fake-quant in the forward pass. Result exports to a v9 binary that runs cleanly on the C engine. Adds _qat to the model version." },
+    // ---- experimental / test-model clusters (all ADVANCED) ----
+    // Adapter cluster (M1 + M3)
+    { name: "rank",            type: "int",        advanced: true, label: "adapter rank",            help: "M3 only. higher = more memory capacity in the adapter." },
+    { name: "n_slots",         type: "int",        advanced: true, label: "schema slots",            help: "M1 only. number of named slot vectors in the working-memory table. 256 is the canonical doc value." },
+    { name: "alpha",           type: "float",      advanced: true, label: "adapter write alpha",     help: "M1/M3 only. higher = each token writes harder to memory." },
+    { name: "inject_layer",    type: "int",        advanced: true, label: "inject layer (-1=auto)",  help: "M1/M3 only. which layer the adapter attaches to. -1 = mid-stack." },
+    { name: "init_from",       type: "model_name", advanced: true, label: "init base from model",    help: "M1 only. load base weights from another model's latest checkpoint and train M1 adapter on top. New model named <init_from>_m1." },
+    { name: "bptt_window",     type: "int",        advanced: true, label: "BPTT window (chunks)",    help: "M1/M3 only. BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
+    // MEGA cluster (ternary + MoE moonshot)
+    { name: "quant_mode",      type: "str",        advanced: true, label: "weight quant mode",       help: "MEGA only. int8 (1 byte/param), int4 (0.5 bytes, 2x density), or ternary (BitNet b1.58, ~0.2 bytes, 5x density — fits 1B+ in 96 MB L3).", choices: ["int8","int4","ternary"] },
+    { name: "n_experts",       type: "int",        advanced: true, label: "MoE experts",             help: "MEGA only. number of FFN experts per block. Total params scale linearly. Only top-k of these fire per byte at decode time." },
+    { name: "router_topk",     type: "int",        advanced: true, label: "router top-k",            help: "MEGA only. experts that fire per token. 1 = sticky single expert (cheapest, L3-fittest). 2+ = soft mixture (better quality, more compute, more L3 pressure)." },
+    { name: "router_aux_loss", type: "float",      advanced: true, label: "router balance weight",   help: "MEGA only. Switch-Transformer load-balance auxiliary loss coefficient. Prevents router collapse onto one expert. 0.01 is the standard." },
+    // ---- checkboxes (all together at the end) ----
+    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "trades ~30% slower compute for ~50% less activation VRAM. Recommended on tight VRAM budgets." },
+    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "train with quantization-aware fake-quant in the forward pass. The quant scheme is INT8 by default; MEGA additionally honors quant_mode (int8/int4/ternary). Result exports to a v9 binary that runs on the C engine." },
+    { name: "freeze_base",   type: "bool", featured: true, advanced: true,  label: "freeze base",                help: "M1 only. if checked, only the adapter trains; base stays exactly as init_from. Cleanest when starting from a converged base." },
+    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "MEGA only. INT8 optimizer state via bitsandbytes. Cuts m+v memory ~75%. Required to fit 1B-class MoE on 12 GB VRAM." },
   ],
   continue: [
-    { name: "resume",       type: "model_name", required: true, label: "model to continue", help: "pick a previously-trained model. its config decides shape, corpus, and m3 settings." },
-    { name: "total_steps",  type: "int",                        label: "total training steps", help: "extend or shorten the run. existing value comes from the model's config." },
+    // ---- required ----
+    { name: "resume",       type: "model_name", required: true, label: "model to continue", help: "pick a previously-trained model. its config decides shape, corpus, and adapter settings." },
+    // ---- standard training loop ----
+    { name: "total_steps",  type: "int",                        label: "total training steps",  help: "extend or shorten the run. existing value comes from the model's config." },
+    { name: "batch_size",   type: "int",                        label: "batch size",            help: "higher = faster, more VRAM." },
     { name: "n_chunks",     type: "int",                        label: "TBPTT chunks per step", help: "higher = longer M3 memory horizon at runtime; activation VRAM scales with bptt_window, not n_chunks. More chunks = more compute per step." },
-    { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "Only matters for adapters with cross-chunk recurrent memory like Multimind M3 (holographic memory). BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
-    { name: "batch_size",   type: "int",                        label: "batch size", help: "higher = faster, more VRAM." },
-    { name: "base_lr",      type: "float",                      label: "peak learning rate", help: "higher = bigger weight updates. lower this for fine-tuning. type 0.0001 or 1e-4." },
+    { name: "base_lr",      type: "float",                      label: "peak learning rate",    help: "higher = bigger weight updates. lower this for fine-tuning. type 0.0001 or 1e-4." },
     { name: "min_lr",       type: "float",                      label: "minimum learning rate", help: "where the LR settles at the end. type 0.00001 or 1e-5." },
-    { name: "warmup_steps", type: "int",                        label: "warmup steps", help: "more = slower ramp from 0 to peak LR. usually irrelevant on resume since you start above 0." },
-    { name: "lr_schedule",  type: "str",                        label: "lr schedule", help: "shape of the LR curve after warmup. cosine = smooth decay, linear = straight decay, constant = stays at peak.", choices: ["cosine","linear","constant"] },
-    { name: "weight_decay", type: "float",                      label: "weight decay", help: "higher = stronger weight shrink (regularization)." },
-    { name: "beta1",        type: "float",                      label: "adamw beta1", help: "adamw first-moment decay. 0.9 is the default. lower = optimizer reacts faster to recent gradients." },
-    { name: "beta2",        type: "float",                      label: "adamw beta2", help: "adamw second-moment decay. 0.95 for LMs. 0.999 for general. lower = quicker variance estimate." },
-    { name: "label_smoothing", type: "float",                   label: "label smoothing", help: "0.0 = off. small values (0.05 to 0.1) discourage overconfidence on the target byte." },
-    { name: "grad_clip",    type: "float",                      label: "gradient clip", help: "lower = stricter cap on per-step gradient norm. raise if you see clipping kill the signal." },
-    { name: "ckpt_every",   type: "int",                        label: "checkpoint every", help: "lower = more frequent saves to disk." },
-    { name: "log_every",    type: "int",                        label: "log every", help: "lower = denser train.csv (busier chart)." },
-    { name: "eval_every",   type: "int",                        label: "eval every", help: "lower = more frequent validation runs." },
-    { name: "eval_iters",   type: "int",                        label: "eval batches", help: "higher = more accurate validation loss, slower eval." },
-    { name: "use_act_ckpt", type: "bool", featured: true,       label: "activation checkpointing", help: "trades ~30% slower compute for ~50% less activation VRAM. Recommended on tight VRAM budgets." },
-    { name: "qat_enabled",  type: "bool", featured: true,       label: "INT8 QAT", help: "fine-tune the source model into a new <source>_qat model with quantization-aware training. Use a low lr (1e-5). Result exports cleanly to the C engine." },
+    { name: "warmup_steps", type: "int",                        label: "warmup steps",          help: "more = slower ramp from 0 to peak LR. usually irrelevant on resume since you start above 0." },
+    { name: "lr_schedule",  type: "str",                        label: "lr schedule",           help: "shape of the LR curve after warmup. cosine = smooth decay, linear = straight decay, constant = stays at peak.", choices: ["cosine","linear","constant"] },
+    { name: "weight_decay", type: "float",                      label: "weight decay",          help: "higher = stronger weight shrink (regularization)." },
+    { name: "beta1",        type: "float",                      label: "adamw beta1",           help: "adamw first-moment decay. 0.9 is the default. lower = optimizer reacts faster to recent gradients." },
+    { name: "beta2",        type: "float",                      label: "adamw beta2",           help: "adamw second-moment decay. 0.95 for LMs. 0.999 for general. lower = quicker variance estimate." },
+    { name: "label_smoothing", type: "float",                   label: "label smoothing",       help: "0.0 = off. small values (0.05 to 0.1) discourage overconfidence on the target byte." },
+    { name: "grad_clip",    type: "float",                      label: "gradient clip",         help: "lower = stricter cap on per-step gradient norm. raise if you see clipping kill the signal." },
+    { name: "ckpt_every",   type: "int",                        label: "checkpoint every",      help: "lower = more frequent saves to disk." },
+    { name: "log_every",    type: "int",                        label: "log every",             help: "lower = denser train.csv (busier chart)." },
+    { name: "eval_every",   type: "int",                        label: "eval every",            help: "lower = more frequent validation runs." },
+    { name: "eval_iters",   type: "int",                        label: "eval batches",          help: "higher = more accurate validation loss, slower eval." },
+    // ---- experimental / test-model knobs (ADVANCED) ----
+    { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "M1/M3 only. BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
+    // ---- checkboxes (all together at the end) ----
+    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "trades ~30% slower compute for ~50% less activation VRAM. Recommended on tight VRAM budgets." },
+    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "fine-tune the source model into a new <source>_qat model with quantization-aware training. Use a low lr (1e-5). Result exports cleanly to the C engine." },
+    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "MEGA only. INT8 optimizer state via bitsandbytes. Required to fit 1B-class MoE on 12 GB VRAM. Set the same value as the original run." },
   ],
 };
 
-// Build the per-render arg list for a plugin: schema fields + the plugin's
-// preset values overlaid as `default`. Fields with no preset and no schema
-// default render empty (the user must fill them, e.g. corpus, description).
+// Build the per-render arg list for a plugin: schema fields, filtered to only
+// those the plugin's manifest declares (or that are required), with manifest
+// values overlaid as `default`. The filter keeps each plugin's form focused —
+// MEGA doesn't see M3's `rank` field, M3 doesn't see MEGA's `n_experts`, etc.
+// The schema is the catalog of known knobs; the manifest opts each plugin in.
 function _trArgsForPlugin(p) {
   if (!p || !p.manifest) return [];
   const sch  = TRAINER_SCHEMA[trainState.flow] || [];
   const defs = p.manifest.defaults || {};
-  return sch.map(a => {
-    const out = Object.assign({}, a);
-    if (defs[a.name] !== undefined) out.default = defs[a.name];
-    return out;
-  });
+  return sch
+    .filter(a => a.required || Object.prototype.hasOwnProperty.call(defs, a.name))
+    .map(a => {
+      const out = Object.assign({}, a);
+      if (defs[a.name] !== undefined) out.default = defs[a.name];
+      return out;
+    });
 }
 
 const _TR_CONTINUE_CFG_CACHE = {};
@@ -6940,6 +7092,89 @@ function _applySettingsToUI(s) {
   $("hudDetailed").checked = !!s.hud_detailed;
   $("hudDetailed").disabled = !s.hud_enabled;
   _applyHudVisibility(!!s.hud_enabled, !!s.hud_detailed);
+  const hb = $("heartbeatEnable");
+  if (hb) hb.checked = !!s.heartbeat_enabled;
+  const ch = s.update_channel || "stable";
+  document.querySelectorAll('input[name="updateChannel"]').forEach(r => {
+    r.checked = (r.value === ch);
+    const wrap = r.closest("label.opt");
+    if (wrap) wrap.classList.toggle("checked", r.checked);
+  });
+  const ar = $("updateAutoReload");
+  if (ar) ar.checked = !!s.auto_reload_on_update;
+}
+
+function _fmtRuntime(secs) {
+  secs = Math.max(0, Math.floor(secs || 0));
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+function _fmtAgo(ts) {
+  if (!ts) return "never";
+  const sec = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (sec < 60)    return `${sec}s ago`;
+  if (sec < 3600)  return `${Math.floor(sec/60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec/3600)}h ago`;
+  return `${Math.floor(sec/86400)}d ago`;
+}
+function _renderHeartbeatStatus(s) {
+  if (!s) return;
+  const mid = $("heartbeatMachineId"); if (mid) mid.textContent = s.machine_id || ".";
+  const ls  = $("heartbeatLastSend");
+  if (ls) {
+    if (!s.last_send_ts) { ls.textContent = "never"; ls.style.color = "var(--dim)"; }
+    else {
+      const okSend = (s.last_send_status >= 200 && s.last_send_status < 300);
+      ls.textContent = `${_fmtAgo(s.last_send_ts)} (${okSend ? "ok" : "fail"})`;
+      ls.style.color = okSend ? "var(--data-pos)" : "var(--hot)";
+    }
+  }
+  const rs = $("heartbeatRestarts"); if (rs) rs.textContent = String(s.restarts || 0);
+  const rt = $("heartbeatRuntime");  if (rt) rt.textContent = _fmtRuntime(s.total_runtime_secs);
+}
+function _refreshHeartbeatStatus() {
+  fetch("/heartbeat/status").then(r => r.json()).then(_renderHeartbeatStatus).catch(() => {});
+}
+
+let updateState = { current: null };
+
+function _renderUpdateStatus(st) {
+  if (!st) return;
+  updateState.current = st;
+  const br = $("updateBranch"); if (br) br.textContent = st.branch || "(none)";
+  const hd = $("updateHead");   if (hd) hd.textContent = st.head_short || ".";
+  const bh = $("updateBehind");
+  if (bh) {
+    if (st.behind == null) { bh.textContent = "unknown"; bh.style.color = "var(--dim)"; }
+    else if (st.behind === 0) { bh.textContent = "up to date"; bh.style.color = "var(--data-pos)"; }
+    else { bh.textContent = `${st.behind} behind`; bh.style.color = "var(--warm)"; }
+  }
+  const lc = $("updateLastCheck");
+  if (lc) {
+    const ts = (st.last && st.last.last_check_ts) || 0;
+    lc.textContent = ts ? _fmtAgo(ts) : "never";
+  }
+  const pull = $("updatePullBtn");
+  if (pull) pull.disabled = !(st.update_available && !st.dirty);
+  const banner = $("updateBanner");
+  if (banner) {
+    if (st.update_available) {
+      banner.style.display = "";
+      banner.textContent = `update available · ${st.behind} new commit${st.behind === 1 ? "" : "s"} on ${st.channel}`;
+    } else {
+      banner.style.display = "none";
+    }
+  }
+  const dot = document.querySelector('.tab[data-tab="settings"] .notify-dot');
+  if (dot) dot.style.display = st.update_available ? "" : "none";
+}
+
+function _refreshUpdateStatus() {
+  fetch("/app/update_status").then(r => r.json()).then(_renderUpdateStatus).catch(() => {});
 }
 
 function _saveSettings(patch) {
@@ -7293,6 +7528,112 @@ document.addEventListener("DOMContentLoaded", () => {
   if (hudDet) hudDet.addEventListener("change", () => {
     _saveSettings({ hud_detailed: hudDet.checked });
   });
+  const hb = $("heartbeatEnable");
+  if (hb) hb.addEventListener("change", () => {
+    _saveSettings({ heartbeat_enabled: hb.checked });
+  });
+  const hbBtn = $("heartbeatSendBtn");
+  if (hbBtn) hbBtn.addEventListener("click", () => {
+    const lab = $("heartbeatSendStatus");
+    if (lab) { lab.textContent = "sending..."; lab.style.color = "var(--warm)"; }
+    hbBtn.disabled = true;
+    fetch("/heartbeat/send", { method: "POST" })
+      .then(r => r.json())
+      .then(s => {
+        _renderHeartbeatStatus(s);
+        if (lab) {
+          lab.textContent = s.ok ? "sent" : "failed";
+          lab.style.color = s.ok ? "var(--data-pos)" : "var(--hot)";
+        }
+      })
+      .catch(e => { if (lab) { lab.textContent = `failed: ${e}`; lab.style.color = "var(--hot)"; } })
+      .finally(() => { hbBtn.disabled = false; });
+  });
+  _refreshHeartbeatStatus();
+  setInterval(_refreshHeartbeatStatus, 30000);
+
+  document.querySelectorAll('input[name="updateChannel"]').forEach(r => {
+    r.addEventListener("change", () => {
+      if (!r.checked) return;
+      document.querySelectorAll('input[name="updateChannel"]').forEach(other => {
+        const w = other.closest("label.opt");
+        if (w) w.classList.toggle("checked", other === r);
+      });
+      const lab = $("updateActionStatus");
+      if (lab) { lab.textContent = "switching channel..."; lab.style.color = "var(--warm)"; }
+      fetch("/app/update_channel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: r.value }),
+      }).then(x => x.json()).then(res => {
+        if (res && res.ok) {
+          if (lab) { lab.textContent = "channel switched"; lab.style.color = "var(--data-pos)"; }
+          if (res.status) _renderUpdateStatus(res.status);
+          _refreshUpdateStatus();
+        } else {
+          if (lab) { lab.textContent = `failed: ${res && res.error || "unknown"}`; lab.style.color = "var(--hot)"; }
+          _refreshUpdateStatus();
+        }
+      }).catch(e => { if (lab) { lab.textContent = `failed: ${e}`; lab.style.color = "var(--hot)"; } });
+    });
+  });
+  const ar = $("updateAutoReload");
+  if (ar) ar.addEventListener("change", () => {
+    _saveSettings({ auto_reload_on_update: ar.checked });
+  });
+  const ucb = $("updateCheckBtn");
+  if (ucb) ucb.addEventListener("click", () => {
+    const lab = $("updateActionStatus");
+    if (lab) { lab.textContent = "checking..."; lab.style.color = "var(--warm)"; }
+    ucb.disabled = true;
+    fetch("/app/update_check", { method: "POST" })
+      .then(r => r.json())
+      .then(res => {
+        if (res && res.status) _renderUpdateStatus(res.status);
+        if (lab) {
+          if (res && res.ok) { lab.textContent = "checked"; lab.style.color = "var(--data-pos)"; }
+          else { lab.textContent = `failed: ${res && res.error || "unknown"}`; lab.style.color = "var(--hot)"; }
+        }
+      })
+      .catch(e => { if (lab) { lab.textContent = `failed: ${e}`; lab.style.color = "var(--hot)"; } })
+      .finally(() => { ucb.disabled = false; });
+  });
+  const upb = $("updatePullBtn");
+  if (upb) upb.addEventListener("click", () => {
+    const lab = $("updateActionStatus");
+    const willReload = !!(updateState.current && updateState.current.last && false) ||
+                       !!($("updateAutoReload") && $("updateAutoReload").checked);
+    if (lab) { lab.textContent = willReload ? "pulling + reloading..." : "pulling..."; lab.style.color = "var(--warm)"; }
+    upb.disabled = true;
+    fetch("/app/update_pull", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reload: willReload }),
+    })
+      .then(r => r.json())
+      .then(res => {
+        if (res && res.status) _renderUpdateStatus(res.status);
+        if (lab) {
+          if (res && res.ok) {
+            lab.textContent = willReload ? "pulled, reloading..." : "pulled";
+            lab.style.color = "var(--data-pos)";
+            if (willReload) _lifecycleWaitForServer(lab);
+          } else {
+            lab.textContent = `failed: ${res && res.error || "unknown"}`;
+            lab.style.color = "var(--hot)";
+          }
+        }
+      })
+      .catch(e => { if (lab) { lab.textContent = `failed: ${e}`; lab.style.color = "var(--hot)"; } })
+      .finally(() => { upb.disabled = false; _refreshUpdateStatus(); });
+  });
+  const ub = $("updateBanner");
+  if (ub) ub.addEventListener("click", () => {
+    const tab = document.querySelector('.tab[data-tab="settings"]');
+    if (tab) tab.click();
+  });
+  _refreshUpdateStatus();
+  setInterval(_refreshUpdateStatus, 60000);
   const bb = $("settingsBuildBtn");
   if (bb) bb.addEventListener("click", () => {
     fetch("/engine/build", { method: "POST" }).catch(() => {});
@@ -7437,6 +7778,225 @@ function trainStreamStop() {
   const status = $("trainStreamStatus");
   if (status) status.textContent = "";
 }
+
+// ---- wiki ----
+const wikiState = {
+  loaded:   false,
+  loading:  false,
+  cats:     [],
+  current:  null,
+  entries:  {},
+  selected: {},
+};
+
+async function ensureWikiLoaded() {
+  if (wikiState.loaded || wikiState.loading) {
+    if (wikiState.loaded) renderWikiSubtabs();
+    return;
+  }
+  wikiState.loading = true;
+  try {
+    const r = await fetch("/wiki");
+    const d = await r.json();
+    wikiState.cats = d.categories || [];
+    if (wikiState.cats.length && !wikiState.current) {
+      wikiState.current = wikiState.cats[0].name;
+    }
+    wikiState.loaded = true;
+    renderWikiSubtabs();
+    if (wikiState.current) await loadWikiCategory(wikiState.current);
+  } catch (e) {
+    $("wikiList").innerHTML = `<div class="wiki-empty">failed to load wiki: ${escapeHtml(String(e))}</div>`;
+  } finally {
+    wikiState.loading = false;
+  }
+}
+
+function renderWikiSubtabs() {
+  const wrap = $("wikiSubtabs");
+  if (!wrap) return;
+  if (!wikiState.cats.length) {
+    wrap.innerHTML = `<div class="wiki-empty">No categories yet. Add a folder under <code>veritate_mri/wiki/</code>.</div>`;
+    return;
+  }
+  wrap.innerHTML = wikiState.cats.map(c => {
+    const active = c.name === wikiState.current ? " active" : "";
+    return `<div class="wiki-subtab${active}" data-cat="${escapeHtml(c.name)}">${escapeHtml(prettifyCat(c.name))}<span class="count">${c.n_entries}</span></div>`;
+  }).join("");
+  wrap.querySelectorAll(".wiki-subtab").forEach(el => {
+    el.addEventListener("click", () => {
+      const cat = el.dataset.cat;
+      if (cat === wikiState.current) return;
+      wikiState.current = cat;
+      renderWikiSubtabs();
+      loadWikiCategory(cat);
+    });
+  });
+}
+
+function prettifyCat(s) {
+  return s.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+async function loadWikiCategory(category) {
+  const list = $("wikiList");
+  list.innerHTML = `<div class="wiki-empty">loading…</div>`;
+  $("wikiEntry").innerHTML = `<div class="wiki-empty">Pick an entry on the left.</div>`;
+  try {
+    let entries = wikiState.entries[category];
+    if (!entries) {
+      const r = await fetch(`/wiki/${encodeURIComponent(category)}`);
+      const d = await r.json();
+      entries = d.entries || [];
+      wikiState.entries[category] = entries;
+    }
+    if (!entries.length) {
+      list.innerHTML = `<div class="wiki-empty">No entries yet in <code>${escapeHtml(category)}</code>.</div>`;
+      return;
+    }
+    list.innerHTML = entries.map(e => {
+      const tags = (e.tags || []).map(t =>
+        `<span class="wiki-tag">${escapeHtml(t)}</span>`).join("");
+      const summary = e.summary ? `<div class="s">${escapeHtml(e.summary)}</div>` : "";
+      const date = e.date ? `<div class="d">${escapeHtml(e.date)}</div>` : "";
+      return `<div class="wiki-list-item" data-slug="${escapeHtml(e.slug)}">
+        <div class="t">${escapeHtml(e.title || e.slug)}</div>
+        ${date}
+        ${summary}
+        ${tags ? `<div class="tags">${tags}</div>` : ""}
+      </div>`;
+    }).join("");
+    list.querySelectorAll(".wiki-list-item").forEach(el => {
+      el.addEventListener("click", () => loadWikiEntry(category, el.dataset.slug));
+    });
+    const selected = wikiState.selected[category];
+    const target = selected || entries[0].slug;
+    loadWikiEntry(category, target);
+  } catch (e) {
+    list.innerHTML = `<div class="wiki-empty">failed: ${escapeHtml(String(e))}</div>`;
+  }
+}
+
+async function loadWikiEntry(category, slug) {
+  wikiState.selected[category] = slug;
+  $("wikiList").querySelectorAll(".wiki-list-item").forEach(el => {
+    el.classList.toggle("active", el.dataset.slug === slug);
+  });
+  const view = $("wikiEntry");
+  view.innerHTML = `<div class="wiki-empty">loading…</div>`;
+  try {
+    const r = await fetch(`/wiki/${encodeURIComponent(category)}/${encodeURIComponent(slug)}`);
+    if (!r.ok) {
+      view.innerHTML = `<div class="wiki-empty">not found.</div>`;
+      return;
+    }
+    const d = await r.json();
+    const meta = [];
+    if (d.date) meta.push(escapeHtml(d.date));
+    if (d.tags && d.tags.length) meta.push(d.tags.map(t => escapeHtml(t)).join(", "));
+    view.innerHTML = `
+      <div class="wiki-entry-meta">
+        <span class="title">${escapeHtml(d.title || slug)}</span>
+        ${meta.join(" · ")}
+      </div>
+      <div class="wiki-body">${d.body_html || ""}</div>`;
+    view.scrollTop = 0;
+  } catch (e) {
+    view.innerHTML = `<div class="wiki-empty">failed: ${escapeHtml(String(e))}</div>`;
+  }
+}
+
+async function loadVersions() {
+  const el = document.getElementById("versionList");
+  if (!el) return;
+  const LABEL = {
+    build:   "Platform Build",
+    engine:  "Veritate Engine",
+    mri:     "MRI",
+    format:  "Model API",
+    plugins: "Plugin Engine",
+  };
+  const EXPLAIN = {
+    build: {
+      title: "Platform Build",
+      body:  "Build number for the dashboard, settings layout, JS, and Python glue around the engine. Bumps when the UI changes, when routes are added, or when packaging shifts. It does not imply the inference engine, model format, or plugin contract changed; those have their own versions."
+    },
+    engine: {
+      title: "Veritate Engine",
+      body:  "Version of the hand-written C inference engine that runs the byte-level model in INT8. Owns the kernels, the runtime shape, and the per-token decode budget. Bumps when kernels change, when the engine ABI changes, or when a new arch (AVX-512, NEON, etc.) ships. Same engine version across machines means bitwise-identical decode."
+    },
+    mri: {
+      title: "MRI",
+      body:  "Version of the live interpretability layer: hooks, dump artifacts (TFRM frames), and the on-disk format for per-step probes. Bumps when hook payloads gain or lose fields, or when frame field indices shift. Trainers, the engine, and the dashboard must agree on this number to render frames correctly."
+    },
+    format: {
+      title: "Model API",
+      body:  "Version of the on-disk model contract: the .bin layout the engine consumes, the checkpoint shape PyTorch saves, and the config.json keys readers expect. Bumps when a new field is added or an existing one changes meaning. Older models may still load, but only when the engine knows how to interpret the older revision."
+    },
+    plugins: {
+      title: "Plugin Engine",
+      body:  "Version of the plugin contract surfaced by veritate.plugin: manifest schema, lifecycle hooks, and the platform calls a plugin is allowed to make. Bumps when a hook is added, renamed, or removed. Plugins compiled against an older contract version may refuse to load."
+    },
+  };
+  const ORDER = ["build", "engine", "mri", "format", "plugins"];
+  const SEP = '<span style="color:var(--text);font-size:14px;font-weight:300;margin:0 4px">|</span>';
+  function chip(k, val) {
+    const label = LABEL[k] || k;
+    return `<a href="#" data-vkey="${escapeHtml(k)}" style="color:var(--soft);text-decoration:none;border-bottom:1px dotted var(--line);cursor:pointer">${escapeHtml(label)} <span style="color:var(--text)">${escapeHtml(String(val))}</span></a>`;
+  }
+  try {
+    const r = await fetch("/versions");
+    if (!r.ok) throw new Error(r.status);
+    const v = await r.json();
+    const parts = [];
+    for (const k of ORDER) {
+      if (v[k] === undefined) continue;
+      parts.push(chip(k, v[k]));
+    }
+    for (const [k, val] of Object.entries(v)) {
+      if (ORDER.includes(k)) continue;
+      parts.push(chip(k, val));
+    }
+    el.innerHTML = parts.join(SEP);
+    el.querySelectorAll("a[data-vkey]").forEach(a => {
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        const k = a.getAttribute("data-vkey");
+        const info = EXPLAIN[k] || { title: LABEL[k] || k, body: "No description available." };
+        const ver = v[k];
+        _showVersionModal(info.title, ver, info.body);
+      });
+    });
+  } catch (e) {
+    el.textContent = "versions unavailable";
+  }
+}
+
+function _showVersionModal(title, version, body) {
+  let backdrop = document.getElementById("versionInfoModal");
+  if (!backdrop) {
+    backdrop = document.createElement("div");
+    backdrop.id = "versionInfoModal";
+    backdrop.className = "modal-backdrop hidden";
+    backdrop.innerHTML = `
+      <div class="modal-box" style="max-width:520px">
+        <div class="modal-header">
+          <h3 id="versionInfoTitle"></h3>
+          <button type="button" id="versionInfoClose" style="background:transparent;border:none;color:var(--dim);font-size:18px;cursor:pointer;padding:0 4px">.</button>
+        </div>
+        <div id="versionInfoBody" style="color:var(--soft);font-size:12px;line-height:1.6"></div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) backdrop.classList.add("hidden"); });
+    document.getElementById("versionInfoClose").addEventListener("click", () => backdrop.classList.add("hidden"));
+  }
+  const titleEl = document.getElementById("versionInfoTitle");
+  titleEl.innerHTML = `${escapeHtml(title)} <span style="color:var(--accent);font-weight:500;margin-left:8px">${escapeHtml(String(version))}</span>`;
+  document.getElementById("versionInfoBody").textContent = body;
+  backdrop.classList.remove("hidden");
+}
+loadVersions();
+
 </script>
 </body>
 </html>
