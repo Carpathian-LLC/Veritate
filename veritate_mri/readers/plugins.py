@@ -114,3 +114,48 @@ def by_id(plugin_id):
         if p["id"] == plugin_id:
             return p
     return None
+
+
+def _manifest_path(plugin):
+    if plugin.get("bundle_dir"):
+        return os.path.join(plugin["bundle_dir"], BUNDLE_MANIFEST)
+    return plugin["path"][:-3] + ".json"
+
+
+def update_defaults(plugin_id, args):
+    """Merge submitted args into the plugin manifest's `defaults` block. Only
+    keys already present in defaults are overwritten so run-only fields
+    (corpus, model, description, step) do not pollute the schema."""
+    plugin = by_id(plugin_id)
+    if plugin is None or not isinstance(args, dict):
+        return False
+    mpath = _manifest_path(plugin)
+    if not os.path.isfile(mpath):
+        return False
+    try:
+        with open(mpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    defaults = data.get("defaults") or {}
+    if not isinstance(defaults, dict):
+        return False
+    changed = False
+    for k, v in args.items():
+        if k in defaults and defaults[k] != v:
+            defaults[k] = v
+            changed = True
+    if not changed:
+        return False
+    data["defaults"] = defaults
+    tmp = mpath + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, mpath)
+    except OSError:
+        try: os.remove(tmp)
+        except OSError: pass
+        return False
+    return True

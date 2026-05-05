@@ -231,6 +231,8 @@ def start(plugin_id, args=None):
     plugin = next((p for p in plugins if p["id"] == plugin_id), None)
     if plugin is None:
         return {"ok": False, "error": f"plugin not found: {plugin_id}"}
+    if plugins_reader.update_defaults(plugin_id, args or {}):
+        logmod.info("plugin", f"manifest defaults updated: {plugin_id}")
     t = threading.Thread(target=_run, args=(plugin, args or {}),
                          name=f"plugin:{plugin_id}", daemon=True)
     t.start()

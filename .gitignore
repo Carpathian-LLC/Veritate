@@ -22,3 +22,4 @@ data/*
 !data/mri_settings.default.json
 /*de.md
 plugins
+models

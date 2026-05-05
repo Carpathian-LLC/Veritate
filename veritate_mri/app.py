@@ -1474,8 +1474,8 @@ def main():
         app.config["BRAIN_LAST_ERROR"] = msg
         logmod.error("backends", f"pytorch eager load failed: {msg}")
 
-    print(f"http://localhost:{args.port}")
-    app.run(host="127.0.0.1", port=args.port, debug=False, threaded=True)
+    print(f"http://0.0.0.0:{args.port}")
+    app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
