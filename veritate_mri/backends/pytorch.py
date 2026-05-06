@@ -76,6 +76,15 @@ class Brain:
         cfg = s.get("args", {})
         self.checkpoint = os.path.basename(checkpoint)
         sd = s["model"]
+        if "tok_emb.weight" not in sd:
+            plugin_name = str(cfg.get("plugin") or "").strip()
+            tag = f" (plugin: {plugin_name})" if plugin_name else ""
+            raise RuntimeError(
+                "PyTorch inference is not enabled for this model" + tag + ". "
+                "The dashboard backend supports vanilla Veritate checkpoints; "
+                "non-vanilla architectures (Mixture-of-Experts, etc.) need their "
+                "own runtime."
+            )
         shape = _shape_from_state_dict(sd, cfg)
         self.model = Veritate(**shape)
         self.model.load_state_dict(sd, strict=True)

@@ -22,6 +22,7 @@ The Models tab used to silently hide any model that hadn't produced per-step hoo
 - **MoE FFN trace.** Each MoEFFN layer captures a routing-weighted `(B, T, ffn)` per-token activation under `last_ffn_act` so the per-layer "top neurons" probe sees a vanilla-shaped tensor. The down-projection weight surfaced to the dumper is expert 0's; per-expert traces are out of scope for now.
 - **Models tab no longer filters hookless models.** `/timelines` returns every model with a config + at least one `.pt` checkpoint, even if no hooks have been written yet. The dropdown labels hookless entries `no hooks yet`, and the panel renders an inline warning explaining that the per-step dumps were not written. Useful when training is mid-run before its first save_checkpoint, or when a custom trainer has not yet been ported to `hook_spec()`.
 - **Mega inline comment corrected.** The previous comment claimed save.save() could not run on mega and that the trainer saved manually. With hook_spec() the correct path is save.save(); the comment now reflects that, with a pointer to the multi-expert caveat.
+- **Ask AI buttons.** The dashboard can now call out to a configured chat endpoint to explain training metrics, the train health verdict, and the loss curve. Set the endpoint and key under settings, then use the inline "ask ai" buttons on those panels to get a short, numeric read on the data.
 
 ## what you need to do
 

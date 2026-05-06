@@ -39,6 +39,7 @@ import models_sync
 import sys_metrics
 import settings as settings_mod
 import heartbeat as heartbeat_mod
+import ai_assist as ai_assist_mod
 import app_sync as app_sync_mod
 import threading
 
@@ -491,6 +492,14 @@ def settings_route():
     return settings_mod.get()
 
 
+@app.route("/ai/ask", methods=["POST"])
+def ai_ask_route():
+    body = request.get_json(silent=True) or {}
+    kind = body.get("kind") or ""
+    payload = body.get("payload") or {}
+    return ai_assist_mod.ask(kind, payload)
+
+
 @app.route("/logs/snapshot")
 def logs_snapshot():
     after = int(request.args.get("after", "0"))
@@ -606,6 +615,14 @@ def pruning_report():
         s = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         cfg = s.get("args", {})
         sd = s["model"]
+        if "tok_emb.weight" not in sd:
+            plugin_name = str(cfg.get("plugin") or "").strip()
+            tag = f" (plugin: {plugin_name})" if plugin_name else ""
+            return ({"ok": False,
+                     "error": "pruning is not enabled for this model" + tag + ". "
+                              "Width-pruning targets dense FFN layers; this checkpoint "
+                              "uses a non-vanilla architecture (e.g., Mixture-of-Experts)."},
+                    400)
         layers = 1 + max(int(k.split(".")[1]) for k in sd if k.startswith("blocks."))
         ffn_per_layer = [sd[f"blocks.{L}.ff.up.weight"].shape[0] for L in range(layers)]
         vocab, hidden = sd["tok_emb.weight"].shape
@@ -690,6 +707,14 @@ def pruning_generate_plugin():
         s = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         cfg = s.get("args", {})
         sd = s["model"]
+        if "tok_emb.weight" not in sd:
+            plugin_name = str(cfg.get("plugin") or "").strip()
+            tag = f" (plugin: {plugin_name})" if plugin_name else ""
+            return ({"ok": False,
+                     "error": "pruning is not enabled for this model" + tag + ". "
+                              "Width-pruning targets dense FFN layers; this checkpoint "
+                              "uses a non-vanilla architecture (e.g., Mixture-of-Experts)."},
+                    400)
         layers = 1 + max(int(k.split(".")[1]) for k in sd if k.startswith("blocks."))
         ffn_per_layer = [sd[f"blocks.{L}.ff.up.weight"].shape[0] for L in range(layers)]
         vocab, hidden = sd["tok_emb.weight"].shape

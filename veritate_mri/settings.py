@@ -28,6 +28,11 @@ DEFAULTS = {
     "heartbeat_enabled": True,
     "update_channel": "stable",
     "auto_reload_on_update": False,
+    "ai_enabled": False,
+    "ai_endpoint": "https://api.carpathian.ai/ai/v1/chat/completions",
+    "ai_api_key": "cai_fnNpuo53DY8AMGqjuaRoYmpT8274cx6aYCuQR_w1F7w",
+    "ai_endpoint_user": "",
+    "ai_api_key_user": "",
 }
 
 _LOCK = threading.Lock()

@@ -1,43 +1,41 @@
 scratchpad
 
-
-- M3 BPTT window cap landed but the eval delta is noisier than expected. rerun on the longer corpus before deciding if 256 is the right ceiling
-- need to double check the TFRM v7 frame field index against what the dashboard actually reads. think there's a drift on field 14 (or 15?)
+-
+-
+-
 
 todo
-- finish the inline help text on the trainers tab
-- the quant mode dropdown still shows the old labels on first paint
-- look into why the dump artifact is ~8% bigger after the last hook change. probably padding but verify
+- next phase: 1b QAT MEGA is nearly done training but not fluent / coherent yet. find a creative no-retrain fix. constraints: cannot retrain, weights are ternary/INT4 QAT, 0.1 ms / byte budget, 96 MB L3, save_checkpoint untouched.
+- candidate angles to review (no retrain, sidecar-style, ride alongside the checkpoint):
+    - inference-time slot table: small fp side-memory that pins recent topical / entity bytes and biases logits at decode. catches partial-word cul-de-sacs and topic wander without touching QAT weights.
+    - logit-space adapters: tiny fp head trained on a frozen base that re-shapes the output distribution. adapter is the only thing that learns; base stays ternary.
+    - constrained / guided decoding: dictionary-trie + repetition penalty + n-gram block. cheap, deterministic, fixes spelling cul-de-sacs and loops at the sampler level.
+    - speculative byte-chunking: draft 4-8 bytes ahead, accept only if a coherence check (entropy floor, dictionary hit, slot-table agreement) passes. amortizes coherence over chunks instead of bytes.
+    - router temperature / top-k anneal at inference: MEGA already routes top-1 per block; loosening to top-2 with a small mix can break router collapse symptoms without retraining experts.
+    - aux expert sidecar: freeze the 8 trained experts, add a 9th tiny fp expert trained on a small high-quality slice, route to it only when uncertainty spikes. extends knowledge without rewriting the base.
+    - retrieval / corpus echo: at decode, look up the last N bytes in the training corpus index and softly bias toward its continuations. byte-level RAG, no embedding model needed.
+-
+-
 
 ideas
-- adapter sidecar idea - keep the slot table out of save_checkpoint (constraint #3) but expose it through the MRI server so the dashboard can show live confidence. would need a second file alongside the checkpoint, versioned independently
-- byte-level + small contextual reranker at decode? has to fit the 0.1ms/byte budget so probably no, but worth a back-of-envelope. honestly probably violates the spirit of constraint #2 even if it fits numerically
-- the multimind_m3 plugin has a weird interaction with the corpus plugin when both are loaded
-- adapter stack on a smaller trunk might be the actual play. train one byte-level trunk somewhere with a gpu (500M-1B range), then small per-domain adapters on this box. 10-50M params each, hours to train, stack 2-3 at inference. 
-sidecar already fits constraint #3 without a fight. byte level adapters are mostly uncharted, they end up tweaking the embedding delta rather than doing the token-aware thing subword adapters do. plugin = corpus + adapter + hint, the platform is most of the harness already
-- byte-level INT8 MoE, 10B total / 500M active per byte. 20x compute drop. routing on a 256 vocab is basically unexplored. long bet not next sprint.
+- multi-mind directions for after the fluency fix lands:
+    - more experts, smaller each: 16-32 experts at the same active budget pushes specialization further (spelling vs prose vs code vs numerics vs structure).
+    - hierarchical routing: per-block router picks a "domain", a second router picks the expert. lets the model carve coarse regions before fine ones.
+    - asymmetric experts: not all experts need the same shape. one wide-shallow expert for spelling, one narrow-deep for reasoning, one tiny one for punctuation/structure.
+    - cross-block expert sharing: tie a "spelling" expert across early blocks so orthography circuits don't get re-learned per layer.
+    - sidecar mind: a separate small model (not an expert, a peer) that runs alongside and votes on the next byte. cheap consistency check.
+-
+-
 
-Implement Carpathian's AI at some point? 
+
+- Implement Carpathian's AI at some point? 
+- maybe wire it into the MRI dashboard for the "explain this metric" tooltip. low priority tho
+
 curl https://api.carpathian.ai/ai/v1/chat/completions \
   -H "Authorization: Bearer cai_fnNpuo53DY8AMGqjuaRoYmpT8274cx6aYCuQR_w1F7w" \
   -H "Content-Type: application/json" \
   -d '{"model":"default","messages":[{"role":"user","content":"Hello"}]}'
 
 
-maybe wire it into the MRI dashboard for the "explain this metric" tooltip. low priority tho
-
 ---
 
-DONT FORGET
-- setup.ps1 is first-time-only, build.bat after that
-- docs/ is gitignored, documentation/ is not. dont put contract docs in docs/
-
----
-
-reminder: the 9800X3D has 96MB L3 - kernel tile sizes were picked for that, dont blindly port to other ryzens without re-tiling
-
----
-
-later
-- net2net style growing. start small, train to convergence, widen, train more. each stage is feasible on this box, the big model only exists at the end. slow but actually possible without ever touching a gpu
-- training int8 from step 0 instead of fp16 master + dequant. 4x cut on optimizer state. hard, not impossible. only worth it if the adapter trunk plan actually moves forward and we have a real target for it
