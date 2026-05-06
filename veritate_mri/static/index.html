@@ -3621,8 +3621,10 @@ async function ensureLearningLoaded() {
       ? `<div class="meta" style="margin-top:6px;color:var(--dim);font-size:11px">precision metadata not present for some checkpoints. Newer hook dumps include the precision tag automatically.</div>`
       : "";
     const tlEntry = learningTimelinesByName[learningTimelineName] || {};
-    const allEmpty = meta.checkpoints.length > 0 && meta.checkpoints.every(c => !c.n_frames);
-    const noHooksWarn = (tlEntry.has_hooks === false || allEmpty)
+    // Only fire the warning when the backend reports zero hook steps. A
+    // model with some hooks (e.g. probe + lens but no generation yet) is
+    // not "hookless" — those panels will still render.
+    const noHooksWarn = (tlEntry.has_hooks === false)
       ? `<div class="meta" style="margin-top:8px;padding:8px 10px;border:1px solid var(--warm);border-radius:3px;color:var(--warm);font-size:11.5px;line-height:1.45">
           <b>No hook artifacts for this model yet.</b> Checkpoints (.pt) are present but the per-step probe / lens / classroom / generation dumps were not written. Either training has not reached its first save_checkpoint yet, or this trainer has not been ported to the <code>hook_spec()</code> contract (see documentation/hooks/contract.md). Outputs / quant-KL / classroom panels will stay empty until hooks land.
         </div>`
