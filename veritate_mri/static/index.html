@@ -612,7 +612,7 @@
 
 <div class="topbar">
   <div>
-    <h1>Veritate<sup style="font-size:9px;color:var(--cool);font-weight:600;letter-spacing:.04em;margin-left:4px;vertical-align:super;text-transform:lowercase">experimental</sup></h1>
+    <h1>Veritate<sup id="channelBadge" style="font-size:9px;color:var(--cool);font-weight:600;letter-spacing:.04em;margin-left:4px;vertical-align:super;text-transform:lowercase;display:none"></sup></h1>
   </div>
   <div class="right">
     <a href="/multimind" style="color:var(--dim);font-size:11px;text-decoration:none;border-bottom:1px dashed var(--dim);display:none">multimind →</a>
@@ -631,6 +631,7 @@
   <div class="tab" data-tab="wiki">Wiki</div>
   <div class="tab" data-tab="logs">Logs</div>
   <div class="tab" data-tab="settings">Settings<span class="notify-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warm);margin-left:6px;vertical-align:middle"></span></div>
+  <span id="navChannelBadge" style="margin-left:auto;font-size:9px;color:var(--cool);font-weight:600;letter-spacing:.04em;text-transform:lowercase;align-self:center;padding:0 8px;display:none"></span>
 </div>
 
 <!-- ============================ GENERATION TAB ============================ -->
@@ -7910,6 +7911,7 @@ async function loadVersions() {
   const el = document.getElementById("versionList");
   if (!el) return;
   const LABEL = {
+    channel: "Channel",
     build:   "Platform Build",
     engine:  "Veritate Engine",
     mri:     "MRI",
@@ -7917,6 +7919,10 @@ async function loadVersions() {
     plugins: "Plugin Engine",
   };
   const EXPLAIN = {
+    channel: {
+      title: "Release Channel",
+      body:  "Which fork this build is on. `stable` is the canonical mainline. `experimental` is a fork — work-in-progress engine paths, formats, or plugins that may not survive into the next stable build. The header badge and the blue `experimental` chip below come from this single field; the rest of the version numbers are real semver and do not encode the channel."
+    },
     build: {
       title: "Platform Build",
       body:  "Build number for the dashboard, settings layout, JS, and Python glue around the engine. Bumps when the UI changes, when routes are added, or when packaging shifts. It does not imply the inference engine, model format, or plugin contract changed; those have their own versions."
@@ -7938,19 +7944,46 @@ async function loadVersions() {
       body:  "Version of the plugin contract surfaced by veritate.plugin: manifest schema, lifecycle hooks, and the platform calls a plugin is allowed to make. Bumps when a hook is added, renamed, or removed. Plugins compiled against an older contract version may refuse to load."
     },
   };
-  const ORDER = ["build", "engine", "mri", "format", "plugins"];
+  const ORDER = ["channel", "build", "engine", "mri", "format", "plugins"];
   const SEP = '<span style="color:var(--text);font-size:14px;font-weight:300;margin:0 4px">|</span>';
   function chip(k, val) {
     const label = LABEL[k] || k;
-    return `<a href="#" data-vkey="${escapeHtml(k)}" style="color:var(--soft);text-decoration:none;border-bottom:1px dotted var(--line);cursor:pointer">${escapeHtml(label)} <span style="color:var(--text)">${escapeHtml(String(val))}</span></a>`;
+    // Channel chip carries the fork marker — its value renders blue (and the
+    // header badge mirrors it). All other chips render plain.
+    const isChannel = (k === "channel");
+    const isNonStable = isChannel && String(val).toLowerCase() !== "stable";
+    const valStyle = isNonStable
+      ? "color:var(--cool);font-weight:600"
+      : "color:var(--text)";
+    return `<a href="#" data-vkey="${escapeHtml(k)}" style="color:var(--soft);text-decoration:none;border-bottom:1px dotted var(--line);cursor:pointer">${escapeHtml(label)} <span style="${valStyle}">${escapeHtml(String(val))}</span></a>`;
   }
   try {
     const r = await fetch("/versions");
     if (!r.ok) throw new Error(r.status);
     const v = await r.json();
+
+    // Mirror the channel marker into the header <sup> badge AND the nav
+    // tabs row so there is one source of truth: versions.json's `channel`
+    // field drives header, nav, and footer chip alike.
+    const channelStr = (v.channel || "").toString();
+    const showChannel = channelStr && channelStr.toLowerCase() !== "stable";
+    for (const id of ["channelBadge", "navChannelBadge"]) {
+      const node = document.getElementById(id);
+      if (!node) continue;
+      if (showChannel) {
+        node.textContent = channelStr;
+        node.style.display = "";
+      } else {
+        node.textContent = "";
+        node.style.display = "none";
+      }
+    }
+
     const parts = [];
     for (const k of ORDER) {
       if (v[k] === undefined) continue;
+      // Hide the channel chip when on the stable channel — no marker to show.
+      if (k === "channel" && String(v[k]).toLowerCase() === "stable") continue;
       parts.push(chip(k, v[k]));
     }
     for (const [k, val] of Object.entries(v)) {

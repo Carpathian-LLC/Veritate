@@ -1,7 +1,8 @@
 {
+  "channel": "experimental",
   "build": 2,
-  "engine": "v2.0.0",
+  "engine": "v2.1.0",
   "mri": "v0.1.0",
-  "format": "v0.1.0",
+  "format": "v0.2.0",
   "plugins": "v0.1.0"
 }

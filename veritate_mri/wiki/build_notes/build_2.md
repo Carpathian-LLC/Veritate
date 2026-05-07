@@ -7,10 +7,11 @@ summary: Experimental fork from build 1. Adds ARM64/Apple Silicon engine path, t
 
 ## versions
 
-- build: 2 (E — experimental fork)
-- engine: v2.0.0 (single binary; reads .bin v3..v10)
+- channel: experimental (the fork marker — single source of truth, drives both the header badge and the footer chip)
+- build: 2
+- engine: v2.1.0 — adds ARM64/NEON SDOT path and the `.bin` v10 ternary reader. Backward-compatible: still reads `.bin` v3..v9 unchanged.
 - mri: v0.1.0
-- format: v0.1.0 (.bin formats v3..v10 supported)
+- format: v0.2.0 — adds `.bin` v10 (BitNet b1.58 ternary, 5 trits/byte, decoded to INT8 at load).
 - plugins: v0.1.0
 
 ## what this build is
