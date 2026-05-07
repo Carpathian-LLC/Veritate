@@ -286,6 +286,7 @@ typedef struct {
 #define VERITATE_MODEL_VERSION_MOD 6
 #define VERITATE_MODEL_VERSION_NORM 8
 #define VERITATE_MODEL_VERSION_BOOST 9
+#define VERITATE_MODEL_VERSION_TERNARY 10
 
 // per-head sylvester hadamard, size 64 = V_HEAD_DIM, normalized 1/sqrt(64).
 // applies block-diagonally along the in-channel axis. cols must be a multiple of 64.

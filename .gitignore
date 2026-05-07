@@ -17,6 +17,7 @@ c_trace_*.bin
 *.tmp
 *.orig
 .plugin_pid.json
+.plugin_run.log
 plugins/
 data/*
 !data/mri_settings.default.json
@@ -24,3 +25,9 @@ data/*
 plugins
 models
 .DS_Store
+docs/
+experiments/
+veritate_trace.bin
+*.vrmr
+*.tern
+
