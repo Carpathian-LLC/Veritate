@@ -1,6 +1,6 @@
 # MoE block
 
-Mixture-of-Experts FFN for the C engine. Replaces the standard `ffn_up` / `ffn_down` pair with a per-block router and N independent expert FFNs. Top-1 routing in build 4: each token's hidden state is dot-producted against a `[n_experts x hidden]` router matrix; the argmax expert handles the FFN for that token. Top-K > 1 (weighted combine) is reserved for a follow-up.
+Mixture-of-Experts FFN for the C engine. Replaces the standard `ffn_up` / `ffn_down` pair with a per-block router and N independent expert FFNs. Top-1 routing only today: each token's hidden state is dot-producted against a `[n_experts x hidden]` router matrix; the argmax expert handles the FFN for that token. Top-K > 1 (weighted combine) is reserved for a follow-up.
 
 This is a versioned contract. Adding, removing, or changing the signature of any function or field below requires updating this file in the same commit.
 
@@ -30,7 +30,7 @@ When `n_experts == 1`, `experts_up` and `experts_down` are NULL and the standard
 When `n_experts > 1`, the per-expert pointers are populated and the router matrix is allocated. The standard `ffn_up` / `ffn_down` are unused.
 
 # ------------------------------------------------------------------------------------
-# v10 binary layout
+# v11 binary layout
 
 Per-block, after `ln2_w`:
 
@@ -46,12 +46,12 @@ when n_experts > 1:
     experts_down[e] [hidden x ffn]    (uniform per-tensor scale)
 ```
 
-Per-row scales are not used in v10 build 4 -- uniform per-tensor scale per weight block. The exporter writes the calibrated scale into the prepped block's `scale_q24` field; the loader's `load_b()` reads it.
+Per-row scales are not used in v11 -- uniform per-tensor scale per weight block. The exporter writes the calibrated scale into the prepped block's `scale_q24` field; the loader's `load_b()` reads it.
 
 # ------------------------------------------------------------------------------------
 # routing
 
-Top-1 routing is the only mode wired in build 4:
+Top-1 routing is the only mode wired today:
 
 ```c
 static int32_t route_token_top1(const block_t* blk, const int8_t* hidden_row,
@@ -60,7 +60,7 @@ static int32_t route_token_top1(const block_t* blk, const int8_t* hidden_row,
 
 Computes `router . hidden_row -> n_experts logits`, returns the argmax. The activation passed in is the post-`ln2` int8 buffer, the same input the standard `ffn_up` reads. Soft routing (full softmax + sampling) is not used; argmax suffices for top-1 because softmax-then-argmax is equivalent.
 
-Build 4 refuses to load a v10 binary with `router_topk > 1` -- the multi-expert weighted combine path is reserved.
+The loader refuses any v11 binary with `router_topk > 1` -- the multi-expert weighted combine path is reserved.
 
 # ------------------------------------------------------------------------------------
 # forward integration
@@ -78,24 +78,24 @@ Per claude_preflight rule 23: every kernel produces bitwise-identical output to 
 2. Per-expert FFN output (post-`ffn_down` int32) must match the corresponding PyTorch expert's output bit-for-bit, since the kernel is the same INT8 VNNI matmul.
 3. Block residual after the MoE FFN must match the PyTorch MEGA forward at every layer, on a representative checkpoint, with cosine distance < 0.01.
 
-Validation is gated on phase E in [docs/c_engine_ternary_moe_tracking.md] and on the export pipeline writing a v10 binary from a QAT'd MEGA checkpoint.
+Validation is gated on phase E in [docs/c_engine_ternary_moe_tracking.md] and on the export pipeline writing a v11 binary from a QAT'd MEGA checkpoint.
 
 # ------------------------------------------------------------------------------------
 # what this contract does NOT cover
 
-- Top-K > 1 weighted combine. Reserved for a follow-up; build 4 refuses any v10 with `router_topk > 1`.
-- Ternary expert weights. The kernel exists ([documentation/kernels/ternary.md](ternary.md)) but the forward path that calls it inside an MoE block is not yet wired. Build 4 refuses any v10 with `quant_mode != INT8`.
-- Batched MoE prefill (per-expert grouped matmul over the prefill rows that route to the same expert). Falls back to per-token decode in build 4.
+- Top-K > 1 weighted combine. Reserved for a follow-up; the loader refuses any v11 with `router_topk > 1`.
+- Ternary expert weights. The kernel exists ([documentation/kernels/ternary.md](ternary.md)) and is wired for the non-MoE FFN path (`load_b_ternary`), but the forward path that calls it inside an MoE block is not yet wired. The loader refuses any v11 MoE binary with `quant_mode != INT8`.
+- Batched MoE prefill (per-expert grouped matmul over the prefill rows that route to the same expert). Falls back to per-token decode today.
 - Per-expert load-balance auxiliary loss. Trainer-side concern; the engine does not see it.
-- Router weight per-row scales. v10 build 4 uses uniform per-tensor scale only.
+- Router weight per-row scales. v11 uses uniform per-tensor scale only.
 
 # ------------------------------------------------------------------------------------
 # update obligation
 
 Adding, removing, or renaming any field above requires:
 
-1. The implementation in `veritate_engine/src/model.c` (`route_token_top1`, the FFN dispatch in `forward_decode`, and the v10 load path) is updated.
-2. The block_t / model_t fields in `veritate_engine/src/veritate.h` are updated.
+1. The implementation in `veritate_engine/v1/src/model.c` (`route_token_top1`, the FFN dispatch in `forward_decode`, and the v11 load path) is updated.
+2. The block_t / model_t fields in `veritate_engine/v1/src/veritate.h` are updated.
 3. The export pipeline in `veritate_mri/export.py` is updated to match the on-disk layout.
 4. This file's tables and code samples are updated in the same commit.
-5. A build note ships the format change per claude_preflight rule 42.
+5. A build note ships the format change per claude_preflight rule 43.

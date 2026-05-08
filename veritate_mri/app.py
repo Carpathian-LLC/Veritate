@@ -819,6 +819,27 @@ def plugins_open_folder():
     return {"ok": True, "path": folder}
 
 
+@app.route("/models/bin_health")
+def models_bin_health():
+    """Per-model .bin header health for every model dir on disk. The dashboard
+    polls this and shows a banner when any model has stale=True (typically a
+    retired format version that the engine no longer loads). Re-export from
+    the model's most recent .pt checkpoint to clear the warning."""
+    out = []
+    for name in models.list_models():
+        h = binr.health(name)
+        out.append({
+            "name":    name,
+            "version": h["version"],
+            "label":   h["label"],
+            "present": h["present"],
+            "stale":   h["stale"],
+            "reason":  h["reason"],
+        })
+    stale_count = sum(1 for r in out if r["stale"])
+    return {"models": out, "stale_count": stale_count}
+
+
 @app.route("/models/git/status")
 def models_git_status():
     return models_sync.status()

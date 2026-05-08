@@ -336,9 +336,12 @@ typedef struct {
 #define VERITATE_MODEL_VERSION_MOD 6
 #define VERITATE_MODEL_VERSION_NORM 8
 #define VERITATE_MODEL_VERSION_BOOST 9
-#define VERITATE_MODEL_VERSION_MOE 10
+// v10 was assigned twice on different branches (MoE-on-dev vs ternary-on-experimental)
+// and was retired during the merge. v11 is the unified successor. v9 BOOST and earlier
+// load unchanged.
+#define VERITATE_MODEL_VERSION_QAT 11
 
-// quant_mode values stored in the v10+ header.
+// quant_mode values stored in the v11 header.
 #define VERITATE_QUANT_INT8    0
 #define VERITATE_QUANT_INT4    1
 #define VERITATE_QUANT_TERNARY 2

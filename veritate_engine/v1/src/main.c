@@ -1395,7 +1395,10 @@ int main(int argc, char** argv) {
     // ------------------------------------------------------------------------------
     // ternary kernel parity check (BitNet b1.58). trits in {-1, 0, +1} packed
     // 5-per-byte. scalar oracle vs vnni path; rule-23 contract.
+    // x86_64 only: matmul_ternary_vnni_prep is the only SIMD ternary kernel
+    // wired today. arm64 NEON ternary path lands in a follow-up.
     // ------------------------------------------------------------------------------
+#if defined(__x86_64__) || defined(_M_X64)
     {
         const int32_t TK = V_HIDDEN;   // 768
         const int32_t TN = V_FFN;      // 3072
@@ -1457,6 +1460,7 @@ int main(int argc, char** argv) {
         veritate_aligned_free(t_a); veritate_aligned_free(t_w);
         veritate_aligned_free(c_ref_t); veritate_aligned_free(c_simd_t);
     }
+#endif  // __x86_64__ || _M_X64
 
     // v3 — single transformer block forward pass
     static model_t model;

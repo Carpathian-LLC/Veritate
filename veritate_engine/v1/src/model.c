@@ -1112,7 +1112,7 @@ void forward_decode(const model_t* m, kv_cache_t* cache, int32_t token, int8_t* 
         } else {
             // MoE: ffn_down_block was selected by the router above; for non-MoE
             // it points at blk->ffn_down. ffn_down_decode requires b_rowmaj to
-            // exist on the prepped_b; the v10 expert load uses load_b which sets
+            // exist on the prepped_b; the v11 expert load uses load_b which sets
             // it, so this works for both paths.
             ffn_down_decode(d->ffn_up8, ffn_down_block, d->ffn_down32);
             for (int32_t i = 0; i < H; i++) {
@@ -1531,6 +1531,68 @@ static int load_b_percol(FILE* f, int32_t n, int32_t k, prepped_b_t* p, int keep
     return 0;
 }
 
+// v11 ternary load. .bin holds 5-trits-per-byte packed weights followed by a
+// per-tensor gamma_q24 (q24 of the mean-abs scale). decode trits to a
+// {-1, 0, +1}-valued int8 buffer of shape [k, n] and run the existing prep_b.
+// hot path stays int8; ternary win is the 5x smaller .bin on disk.
+//
+// file layout per ternary tensor:
+//   uint8  packed_bytes[n * ceil(k/5)]
+//   int32  gamma_q24                    = round(gamma * 2^24)
+
+#define VERITATE_TRITS_PER_BYTE 5
+#define VERITATE_TERNARY_PACK_STRIDE(k) (((k) + VERITATE_TRITS_PER_BYTE - 1) / VERITATE_TRITS_PER_BYTE)
+
+static int8_t  TERNARY_LUT_[256][8] __attribute__((aligned(16)));
+static int32_t TERNARY_LUT_INIT_ = 0;
+
+static void ternary_init_lut(void) {
+    if (TERNARY_LUT_INIT_) return;
+    for (int32_t b = 0; b < 256; b++) {
+        int32_t x = b;
+        for (int32_t p = 0; p < VERITATE_TRITS_PER_BYTE; p++) {
+            TERNARY_LUT_[b][p] = (int8_t)(x % 3) - 1;
+            x /= 3;
+        }
+        TERNARY_LUT_[b][5] = 0;
+        TERNARY_LUT_[b][6] = 0;
+        TERNARY_LUT_[b][7] = 0;
+    }
+    TERNARY_LUT_INIT_ = 1;
+}
+
+static int load_b_ternary(FILE* f, int32_t n, int32_t k, prepped_b_t* p) {
+    ternary_init_lut();
+    int32_t pack_stride  = VERITATE_TERNARY_PACK_STRIDE(k);
+    size_t  packed_bytes = (size_t)n * pack_stride;
+
+    uint8_t* packed = (uint8_t*)malloc(packed_bytes);
+    if (!packed) return -1;
+    if (fread(packed, packed_bytes, 1, f) != 1) { free(packed); return -1; }
+
+    int32_t gamma_q24 = 0;
+    if (fread(&gamma_q24, sizeof(int32_t), 1, f) != 1) { free(packed); return -1; }
+
+    int8_t* raw = (int8_t*)malloc((size_t)n * k);
+    if (!raw) { free(packed); return -1; }
+
+    for (int32_t j = 0; j < n; j++) {
+        const uint8_t* row = packed + (size_t)j * pack_stride;
+        for (int32_t pp = 0; pp < k; pp++) {
+            int32_t bidx = pp / VERITATE_TRITS_PER_BYTE;
+            int32_t bofs = pp % VERITATE_TRITS_PER_BYTE;
+            raw[(size_t)pp * n + j] = TERNARY_LUT_[row[bidx]][bofs];
+        }
+    }
+
+    prep_b(raw, n, k, p);
+    free(raw);
+    free(packed);
+
+    p->scale_q24 = gamma_q24;
+    return 0;
+}
+
 // load packed int4 block with per-row q24 multipliers. matches export_quarot_int4.py format.
 static int load_b_int4(FILE* f, int32_t n, int32_t k, prepped_b_int4_t* out) {
     out->n = n;
@@ -1616,19 +1678,19 @@ int model_load(model_t* m, const char* path) {
         hdr.version != VERITATE_MODEL_VERSION_MOD &&
         hdr.version != VERITATE_MODEL_VERSION_NORM &&
         hdr.version != VERITATE_MODEL_VERSION_BOOST &&
-        hdr.version != VERITATE_MODEL_VERSION_MOE) { fclose(f); return -1; }
+        hdr.version != VERITATE_MODEL_VERSION_QAT) { fclose(f); return -1; }
 
     const int32_t V = m->shape.vocab, H = m->shape.hidden, S = m->shape.seq;
     const int32_t F = m->shape.ffn, Ln = m->shape.layers;
 
     if (hdr.version == VERITATE_MODEL_VERSION_BOOST ||
-        hdr.version == VERITATE_MODEL_VERSION_MOE) {
+        hdr.version == VERITATE_MODEL_VERSION_QAT) {
         if (fread(&m->act_boost, sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
         if (m->act_boost < 1) m->act_boost = 1;
     }
 
-    if (hdr.version == VERITATE_MODEL_VERSION_MOE) {
-        // v10 header extension: quant_mode, n_experts, router_topk.
+    if (hdr.version == VERITATE_MODEL_VERSION_QAT) {
+        // v11 header extension: quant_mode, n_experts, router_topk.
         if (fread(&m->quant_mode,  sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
         if (fread(&m->n_experts,   sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
         if (fread(&m->router_topk, sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
@@ -1636,17 +1698,24 @@ int model_load(model_t* m, const char* path) {
         if (m->router_topk < 1) m->router_topk = 1;
         if (m->router_topk > 1) {
             fprintf(stderr,
-                "model_load: v10 binary requires top-k>1 routing (router_topk=%d), "
+                "model_load: v11 binary has top-k>1 routing (router_topk=%d), "
                 "only top-1 routing is wired today. retrain with router_topk=1 "
                 "or wait for the multi-expert combine path.\n", m->router_topk);
             fclose(f); model_free(m); return -1;
         }
-        if (m->quant_mode != VERITATE_QUANT_INT8) {
+        if (m->quant_mode != VERITATE_QUANT_INT8 &&
+            m->quant_mode != VERITATE_QUANT_TERNARY) {
             fprintf(stderr,
-                "model_load: v10 binary requires quant_mode=%d, only the "
-                "INT8 forward is wired today. ternary kernel exists "
-                "(matmul_ternary_*); the forward path that calls it lands "
-                "in a follow-up.\n", m->quant_mode);
+                "model_load: v11 binary has quant_mode=%d. only INT8 (0) and "
+                "TERNARY (2) are wired today; INT4 via the unified format is "
+                "reserved for a follow-up.\n", m->quant_mode);
+            fclose(f); model_free(m); return -1;
+        }
+        if (m->n_experts > 1 && m->quant_mode != VERITATE_QUANT_INT8) {
+            fprintf(stderr,
+                "model_load: v11 MoE (n_experts=%d) currently requires "
+                "quant_mode=INT8. ternary experts are reserved for a follow-up.\n",
+                m->n_experts);
             fclose(f); model_free(m); return -1;
         }
     }
@@ -1676,23 +1745,29 @@ int model_load(model_t* m, const char* path) {
     const int has_gate = (hdr.version == VERITATE_MODEL_VERSION_MOD);
     const int has_norm = (hdr.version == VERITATE_MODEL_VERSION_NORM ||
                          hdr.version == VERITATE_MODEL_VERSION_BOOST ||
-                         hdr.version == VERITATE_MODEL_VERSION_MOE);
-    const int has_moe  = (hdr.version == VERITATE_MODEL_VERSION_MOE && m->n_experts > 1);
+                         hdr.version == VERITATE_MODEL_VERSION_QAT);
+    const int has_moe  = (hdr.version == VERITATE_MODEL_VERSION_QAT && m->n_experts > 1);
+    const int ternary  = (hdr.version == VERITATE_MODEL_VERSION_QAT && m->quant_mode == VERITATE_QUANT_TERNARY);
     for (int32_t L = 0; L < Ln; L++) {
         block_t* blk = &m->blocks[L];
         blk->n_experts   = m->n_experts;
         blk->router_topk = m->router_topk;
         int rc = (fread(blk->ln1_w, (size_t)H, 1, f) != 1) ? -1 : 0;
-        if (rc == 0) rc = per_col
-            ? load_b_percol(f, 3 * H, H, &blk->qkv, 0)
-            : load_b       (f, 3 * H, H, &blk->qkv, 0);
-        if (rc == 0) rc = per_col
-            ? load_b_percol(f, H,     H, &blk->out_proj, 0)
-            : load_b       (f, H,     H, &blk->out_proj, 0);
+        if (rc == 0) rc = ternary
+            ? load_b_ternary(f, 3 * H, H, &blk->qkv)
+            : per_col
+                ? load_b_percol(f, 3 * H, H, &blk->qkv, 0)
+                : load_b       (f, 3 * H, H, &blk->qkv, 0);
+        if (rc == 0) rc = ternary
+            ? load_b_ternary(f, H, H, &blk->out_proj)
+            : per_col
+                ? load_b_percol(f, H, H, &blk->out_proj, 0)
+                : load_b       (f, H, H, &blk->out_proj, 0);
         if (rc == 0 && fread(blk->ln2_w, (size_t)H, 1, f) != 1) rc = -1;
         if (rc == 0 && has_moe) {
-            // v10 MoE: router (n_experts x H) then per-expert ffn_up + ffn_down.
-            // uniform per-tensor scale applies to both.
+            // v11 MoE: router (n_experts x H) then per-expert ffn_up + ffn_down.
+            // uniform per-tensor scale applies to both. MoE experts always load
+            // INT8; ternary experts are reserved for a follow-up.
             rc = load_b(f, m->n_experts, H, &blk->router, 0);
             if (rc == 0) {
                 blk->experts_up   = (prepped_b_t*)calloc((size_t)m->n_experts, sizeof(prepped_b_t));
@@ -1704,12 +1779,16 @@ int model_load(model_t* m, const char* path) {
                 if (rc == 0) rc = load_b(f, H, F, &blk->experts_down[e], 1);
             }
         } else if (rc == 0) {
-            if (rc == 0) rc = per_col
-                ? load_b_percol(f, F,     H, &blk->ffn_up, 0)
-                : load_b       (f, F,     H, &blk->ffn_up, 0);
-            if (rc == 0) rc = per_col
-                ? load_b_percol(f, H,     F, &blk->ffn_down, 1)
-                : load_b       (f, H,     F, &blk->ffn_down, 1);
+            if (rc == 0) rc = ternary
+                ? load_b_ternary(f, F, H, &blk->ffn_up)
+                : per_col
+                    ? load_b_percol(f, F, H, &blk->ffn_up, 0)
+                    : load_b       (f, F, H, &blk->ffn_up, 0);
+            if (rc == 0) rc = ternary
+                ? load_b_ternary(f, H, F, &blk->ffn_down)
+                : per_col
+                    ? load_b_percol(f, H, F, &blk->ffn_down, 1)
+                    : load_b       (f, H, F, &blk->ffn_down, 1);
         }
         if (rc == 0 && has_gate) {
             blk->gate_w = (int8_t*)xalloc64((size_t)H);

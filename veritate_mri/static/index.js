@@ -5958,6 +5958,35 @@ function _refreshUpdateStatus() {
   fetch("/app/update_status").then(r => r.json()).then(_renderUpdateStatus).catch(() => {});
 }
 
+// Stale-bin banner. /models/bin_health reports any .bin in models/<name>/
+// that the current engine refuses to load (e.g. retired format versions left
+// over from a merge). Hovering the banner shows which models are affected;
+// users re-export from the most recent .pt checkpoint to clear it.
+function _renderBinHealth(data) {
+  const el = $("staleBinBanner");
+  if (!el || !data) return;
+  const stale = (data.models || []).filter(m => m.stale);
+  if (stale.length === 0) {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "";
+  el.textContent = `${stale.length} stale .bin · re-export`;
+  el.title = stale
+    .map(m => `${m.name}  v${m.version} (${m.label}): ${m.reason || "stale"}`)
+    .join("\n");
+}
+
+function _refreshBinHealth() {
+  fetch("/models/bin_health").then(r => r.json()).then(_renderBinHealth).catch(() => {});
+}
+
+if (typeof window !== "undefined") {
+  // Poll once on load and every 30s; cheap header-only reads.
+  _refreshBinHealth();
+  setInterval(_refreshBinHealth, 30000);
+}
+
 function _saveSettings(patch) {
   if (settingsState.saving) return;
   settingsState.saving = true;
