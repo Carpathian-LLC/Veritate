@@ -892,7 +892,7 @@ def run_classroom(name):
         return ({"name": name, "model_dir": False, "items": []}, 404)
     items = []
     for s in hooks.list_steps(name):
-        for kind in ("classroom", "grades", "math", "grammar", "reasoning", "concepts"):
+        for kind in ("classroom", "grades", "math", "grammar", "reasoning", "concepts", "writing_health"):
             if hooks.artifact_exists(name, s, kind):
                 items.append({"kind": kind, "step": s, "file": f"{kind}_step_{s}.json"})
     items.sort(key=lambda r: (r["step"], r["kind"]))
@@ -968,7 +968,7 @@ def timeline_file_compat(name, fname):
     if fname == "timeline.json":
         return run_timeline(name)
     import re
-    m = re.match(r"^(probe|classroom|grades|math|grammar|reasoning|concepts|surprise|quant_kl)_step_(\d+)\.json$", fname)
+    m = re.match(r"^(probe|classroom|grades|math|grammar|reasoning|concepts|surprise|quant_kl|writing_health)_step_(\d+)\.json$", fname)
     if m:
         data = hooks.load_artifact(name, int(m.group(2)), m.group(1))
         if data is None: return ("artifact not found", 404)

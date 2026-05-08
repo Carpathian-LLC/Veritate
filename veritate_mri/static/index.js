@@ -2699,7 +2699,7 @@ function renderTrain(allRows) {
   ], { logY: true });
   plotTrainSeries(cLrT,   ctxLrT,   [{ points: lr,  color: "#5dc8ff", lw: 1.5 }]);
   plotTrainSeries(cTpsT,  ctxTpsT,  [{ points: tps, color: "#5dff9b", lw: 1.5 }]);
-  plotTrainSeries(cGnT,   ctxGnT,   [{ points: gn,  color: "#ff9a5d", lw: 1   }]);
+  plotTrainSeries(cGnT,   ctxGnT,   [{ points: gn,  color: "#ff9a5d", lw: 1   }], { logY: true });
 
   const valSeries = (qatVal.length > 0 ? qatVal : (val.length > 0 ? val : valQat));
   renderTrainPlateau(valSeries);
@@ -2812,6 +2812,7 @@ const classroomRefsT = {
   reasoningLevelId: "trainReasoningLevel",
   conceptsId:      "trainConcepts",
   conceptsHoverId: "trainConceptsHover",
+  writingHealthId: "trainWritingHealth",
 };
 const classroomRefsL = {
   sizeMeterId: "learnSizeMeter",
@@ -2830,6 +2831,7 @@ const classroomRefsL = {
   pruneBodyId:     "pruneBody",
   pruneTitleId:    "pruneTitle",
   pruneSubtitleId: "pruneSubtitle",
+  writingHealthId: "learnWritingHealth",
 };
 
 function makeClassroomState() {
@@ -2850,6 +2852,8 @@ function makeClassroomState() {
     reasoningByStep:{},            // step -> {tiers:{...}}
     conceptsSteps:  [],            // sorted ints, steps with concepts_step_*.json
     conceptsByStep: {},            // step -> {concepts:{name:{surprise_bits}}}
+    writingSteps:   [],            // sorted ints, steps with writing_health_step_*.json
+    writingByStep:  {},            // step -> writing_health record
     loaded:       false,
   };
 }
@@ -3320,20 +3324,37 @@ const GRADE_LABEL       = { prek: "Pre-K", k: "K", elem: "Elem", middle: "Middle
 const GRADE_AGE         = { prek: "ages 3-4", k: "ages 5-6", elem: "ages 7-9", middle: "ages 10-13", hs: "ages 14-17", college: "ages 18-22", phd: "ages 23+" };
 const GRADE_CORPUS      = { prek: "early reader", k: "primary narrative", elem: "chapter book", middle: "middle grade", hs: "literary novel", college: "academic essay", phd: "research abstract" };
 const GRADE_CORPUS_FULL = { prek: "early-reader narrative, ~5-word sentences", k: "primary narrative, ~8-word sentences", elem: "chapter-book narrative, ~12-word sentences", middle: "middle-grade narrative, ~16-word sentences", hs: "literary novel prose, ~20-word sentences", college: "academic essay, ~24-word sentences", phd: "research abstract, ~28-word sentences" };
-const GRADE_FLUENT_PPL  = 3.0;
-const GRADE_EMERGING_PPL = 4.5;
+const GRADE_SENT_LEN    = { prek: "~5w sent", k: "~8w sent", elem: "~12w sent", middle: "~16w sent", hs: "~20w sent", college: "~24w sent", phd: "~28w sent" };
+// Default thresholds used when a checkpoint lacks ppl_threshold (older grades_*.json
+// files written before the relative-threshold change). The probe now writes a
+// per-checkpoint floor + threshold derived from the model's best band, so each
+// checkpoint can supply its own number; these constants are only the fallback.
+const GRADE_FLUENT_PPL_DEFAULT  = 3.0;
+const GRADE_EMERGING_FACTOR     = 1.5;  // emerging band = within this factor above the fluent threshold
+const GRADE_PPL_CEILING         = 32.0; // matches checkpoint_probe.GRADE_PPL_CEILING
+
+// Effective fluent threshold for a given grades_*.json record. Falls back to
+// the constant when the per-checkpoint field is missing.
+function gradeFluentPpl(record) {
+  if (record && typeof record.ppl_threshold === "number") return record.ppl_threshold;
+  return GRADE_FLUENT_PPL_DEFAULT;
+}
+function gradeEmergingPpl(record) {
+  return gradeFluentPpl(record) * GRADE_EMERGING_FACTOR;
+}
 
 function gradeIndex(name) {
   const i = GRADE_ORDER.indexOf((name || "").toLowerCase());
   return i < 0 ? 0 : i;
 }
 
-// highest band the model is fluent at (ppl < threshold). null if no band passes.
-function highestPassingGrade(grades) {
+// highest band the model is fluent at (ppl < threshold and below sanity ceiling). null if no band passes.
+function highestPassingGrade(grades, record) {
+  const fluent = gradeFluentPpl(record);
   let best = null;
   for (const g of GRADE_ORDER) {
     const e = grades && grades[g];
-    if (e && typeof e.ppl === "number" && e.ppl < GRADE_FLUENT_PPL) best = g;
+    if (e && typeof e.ppl === "number" && e.ppl < fluent && e.ppl < GRADE_PPL_CEILING) best = g;
   }
   return best;
 }
@@ -3372,10 +3393,30 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   }
 
   let html = "";
+  // disclaimer: this metric measures vocabulary/prose-style familiarity, NOT
+  // comprehension or generation. byte-ppl over a passage tells you whether the
+  // model recognizes the words and local syntactic patterns of that register;
+  // it doesn't say the model can answer questions about the text, write at
+  // that level, or maintain long-range coherence. surface this up front so the
+  // label "reading level" isn't read as "intelligence level".
+  html += `<div class="desc" style="margin:0 0 10px;padding:8px 10px;border-left:3px solid var(--warm);background:rgba(255,170,80,0.06);font-size:11.5px;line-height:1.45">
+    <b style="color:var(--warm)">What this measures &mdash; and what it doesn't.</b>
+    This score reflects <b>which words and prose patterns the model knows</b>, not what it understands.
+    It's the model being <i>read to</i>: at each byte we measure how predictable the next byte is. Low ppl on a college passage means the model has seen text like that before, not that it grasps college-level concepts.
+    It does <b>not</b> measure: comprehension (the model is never asked a question about the passage), long-range coherence over paragraphs, or generation flow (writing at that level). It only measures local familiarity with the prose register.
+  </div>`;
   // ladder rows: every band, with state badge + ppl + gap-to-fluent. corpus
   // source is folded into the leftmost cell so the eval-text origin sits next
   // to its score — band labels alone don't explain ppl, the corpus does. A
   // colored swatch matches the band's trajectory line for quick eye linkage.
+  // Per-checkpoint fluent threshold: probe writes ppl_threshold = floor * 1.5
+  // where floor = best band ppl (clamped). Older checkpoints lacking the field
+  // fall back to the absolute 3.0 default.
+  const fluentPpl = gradeFluentPpl(latest);
+  const emergingPpl = gradeEmergingPpl(latest);
+  if (typeof latest.ppl_threshold === "number" && typeof latest.ppl_floor === "number") {
+    html += `<div class="desc" style="margin:0 0 10px;font-size:11px;color:var(--dim)">Threshold for this checkpoint: <b style="color:var(--text)">ppl &lt; ${fluentPpl.toFixed(2)}</b> (model floor ${latest.ppl_floor.toFixed(2)} &times; ${(latest.ppl_threshold_factor || GRADE_EMERGING_FACTOR).toFixed(2)}). Bands above ppl ${GRADE_PPL_CEILING} are blocked regardless &mdash; that's the random-output sanity ceiling.</div>`;
+  }
   html += `<div style="display:grid;grid-template-columns:150px minmax(120px, 280px) 110px 150px;gap:6px 12px;font-size:11.5px;align-items:center">`;
   for (const g of GRADE_ORDER) {
     const e = latest.grades[g];
@@ -3383,72 +3424,41 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
     const age = GRADE_AGE[g];
     const corpus = GRADE_CORPUS[g];
     const corpusFull = GRADE_CORPUS_FULL[g];
+    const sentLen = GRADE_SENT_LEN[g];
     const swatch = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${GRADE_BAND_COLOR[g]};margin-right:6px;vertical-align:middle"></span>`;
     const labelCell = `<div style="text-align:right" title="${escapeHtml(corpusFull)}">
       <b>${swatch}${lbl}</b>
       <div class="meta" style="font-size:10px">${age}</div>
-      <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(corpus)}</div>
+      <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(corpus)} &middot; ${sentLen}</div>
     </div>`;
     if (!e || typeof e.ppl !== "number") {
       html += `${labelCell}<div style="grid-column:span 3"><span class="meta">no data</span></div>`;
       continue;
     }
     const ppl = e.ppl;
-    const passed = ppl < GRADE_FLUENT_PPL;
-    const emerging = !passed && ppl < GRADE_EMERGING_PPL;
-    // bar: log-scale progress from random (ppl 256) to fluent (ppl 3.0).
-    // linear-from-threshold was useless during pre-fluent training (every
-    // pre-fluent band clamped to ~2%). this version animates the whole way.
-    const LOG_RANDOM = Math.log(256), LOG_FLUENT = Math.log(GRADE_FLUENT_PPL);
+    const passed = ppl < fluentPpl && ppl < GRADE_PPL_CEILING;
+    const emerging = !passed && ppl < emergingPpl && ppl < GRADE_PPL_CEILING;
+    // bar: log-scale progress from random (ppl 256) to fluent (per-checkpoint).
+    const LOG_RANDOM = Math.log(256), LOG_FLUENT = Math.log(fluentPpl);
     const fluencyPct = Math.max(2, Math.min(100, ((LOG_RANDOM - Math.log(Math.max(ppl, 1))) / (LOG_RANDOM - LOG_FLUENT)) * 100));
     const color = passed ? "#5dff9b" : (emerging ? "var(--warm)" : "var(--hot)");
+    const fluentTip   = `FLUENT: ppl < ${fluentPpl.toFixed(2)} (under ${(Math.log2(fluentPpl)).toFixed(1)} bits/byte uncertainty). ppl 1.0 = perfect, ppl 256 = random.`;
+    const emergingTip = `EMERGING: ppl ${fluentPpl.toFixed(2)} - ${emergingPpl.toFixed(2)}. Lower is better.`;
+    const notYetTip   = `NOT YET: ppl > ${emergingPpl.toFixed(2)}. Red bands = prose styles the model rarely sees in training, not harder content.`;
     const badge = passed
-      ? `<span class="case" style="background:#103025;color:#5dff9b">FLUENT</span>`
+      ? `<span class="case" style="background:#103025;color:#5dff9b" title="${fluentTip}">FLUENT</span>`
       : (emerging
-        ? `<span class="case b-mid">EMERGING</span>`
-        : `<span class="case" style="background:#330a0a;color:#ff7d5d">NOT YET</span>`);
+        ? `<span class="case b-mid" title="${emergingTip}">EMERGING</span>`
+        : `<span class="case" style="background:#330a0a;color:#ff7d5d" title="${notYetTip}">NOT YET</span>`);
     const gap = passed
-      ? `ppl <b style="color:#5dff9b">${ppl.toFixed(2)}</b> <span class="meta">&lt; ${GRADE_FLUENT_PPL}</span>`
-      : `ppl <b style="color:var(--hot)">${ppl.toFixed(2)}</b> <span class="meta">+${(ppl - GRADE_FLUENT_PPL).toFixed(2)} over</span>`;
+      ? `ppl <b style="color:#5dff9b">${ppl.toFixed(2)}</b> <span class="meta">&lt; ${fluentPpl.toFixed(2)}</span>`
+      : `ppl <b style="color:var(--hot)">${ppl.toFixed(2)}</b> <span class="meta">+${(ppl - fluentPpl).toFixed(2)} over</span>`;
     html += `${labelCell}
       ${renderProgressBar(fluencyPct, color, [{ pct: 91, opacity: 0.28 }])}
       <div style="text-align:left">${badge}</div>
       <div style="text-align:right">${gap}</div>`;
   }
   html += `</div>`;
-
-  // legend + style-outlier callout merged: explain the unit and colour-band
-  // thresholds, then list bands by actual ppl (easiest first) so the reader
-  // can see why grade-label order doesn't match difficulty. style mismatch
-  // reflects corpus prose, not the grade label.
-  const ppls = GRADE_ORDER
-    .map(g => ({ g, ppl: latest.grades[g] && typeof latest.grades[g].ppl === "number" ? latest.grades[g].ppl : null }))
-    .filter(x => x.ppl !== null && x.ppl > 0);
-  if (ppls.length >= 3) {
-    const orderedBands = ppls.slice();
-    html += `<div class="desc" style="margin-top:12px">
-      <p><b style="color:var(--text)">perplexity (ppl) = the effective number of bytes the model is choosing between at each step.</b>
-        <span style="color:#5dff9b">ppl 1.0</span> = perfect (always knows the next byte).
-        <span style="color:#5dff9b">ppl &lt; ${GRADE_FLUENT_PPL.toFixed(1)}</span> = <b style="color:#5dff9b">FLUENT</b> (under 1.6 bits of uncertainty per byte &mdash; prose feels coherent).
-        <span style="color:var(--warm)">ppl ${GRADE_FLUENT_PPL.toFixed(1)} - ${GRADE_EMERGING_PPL.toFixed(1)}</span> = <b style="color:var(--warm)">EMERGING</b>.
-        <span style="color:var(--hot)">ppl &gt; ${GRADE_EMERGING_PPL.toFixed(1)}</span> = <b style="color:var(--hot)">NOT YET</b>.
-        ppl 256 = uniform random over all bytes. <i>Lower is better.</i>
-        Each band's eval text is a different Gutenberg work, so prose style drives ppl, not grade label:</p>
-      <div style="display:grid;grid-template-columns:70px 1fr auto auto;gap:4px 14px;font-size:11.5px;align-items:baseline;margin:8px 0 10px">`;
-    for (const o of orderedBands) {
-      const ppl = o.ppl;
-      const passed = ppl < GRADE_FLUENT_PPL;
-      const emerging = !passed && ppl < GRADE_EMERGING_PPL;
-      const tone = passed ? "color:#5dff9b" : (emerging ? "color:var(--warm)" : "color:var(--hot)");
-      html += `<b>${GRADE_LABEL[o.g]}</b>
-        <i class="meta" style="font-style:italic">${escapeHtml(GRADE_CORPUS_FULL[o.g])}</i>
-        <span><span class="meta">current:</span> ppl <b style="${tone}">${ppl.toFixed(2)}</b></span>
-        <span class="meta">ideal: ppl &lt; ${GRADE_FLUENT_PPL.toFixed(1)}</span>`;
-    }
-    html += `</div>
-      <p>Red bands aren't harder content; they're prose styles the model rarely sees in training. Closing the gap means training on text in those styles, not on simpler text.</p>
-    </div>`;
-  }
 
   root.innerHTML = html;
 
@@ -3462,10 +3472,15 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   // checkpoints land at predictable positions rather than reshuffling the
   // axis each time. threshold lines at 91 (emerging) and 100 (fluent).
   const LOG_RANDOM_T = Math.log(256);
-  const LOG_FLUENT_T = Math.log(GRADE_FLUENT_PPL);
-  const fluencyOf = ppl => Math.max(0, Math.min(100,
-    ((LOG_RANDOM_T - Math.log(Math.max(ppl, 1))) / (LOG_RANDOM_T - LOG_FLUENT_T)) * 100
-  ));
+  // Trajectory uses each checkpoint's own fluent threshold so the y-axis
+  // 100%-line tracks the model's evolving "fluent" definition.
+  const fluencyOfRecord = (ppl, record) => {
+    const fluent = gradeFluentPpl(record);
+    const denom = LOG_RANDOM_T - Math.log(fluent);
+    return Math.max(0, Math.min(100,
+      ((LOG_RANDOM_T - Math.log(Math.max(ppl, 1))) / denom) * 100
+    ));
+  };
   const bandSeries = GRADE_ORDER.map(g => ({ g, points: [{ x: 0, y: 0 }] }));
   for (const step of gradesSteps) {
     const r = gradesByStep[step];
@@ -3473,7 +3488,7 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
     for (const s of bandSeries) {
       const e = r.grades[s.g];
       if (e && typeof e.ppl === "number" && e.ppl > 0) {
-        s.points.push({ x: step, y: fluencyOf(e.ppl) });
+        s.points.push({ x: step, y: fluencyOfRecord(e.ppl, r) });
       }
     }
   }
@@ -3931,6 +3946,188 @@ function render_concepts(refs, run, conceptsSteps, conceptsByStep, haveCheckpoin
   });
 }
 
+// ---------- writing health -------------------------------------------------
+//
+// Card surfaces the five mathematical proxies for writing structure produced
+// by checkpoint_probe.dump_writing_health: distinct-n, lexical chain density,
+// pronoun-unbacked rate, repeat rate, self-perplexity. We deliberately surface
+// the caveat *before* the numbers: these proxies catch mode collapse,
+// repetition, broken anaphora, and off-distribution drift, but cannot detect
+// narrative nonsense without an external judge with world knowledge. A user
+// reading "the volcano married a sandwich" should see good scores here, and
+// the caveat tells them why.
+
+// Each metric: id, label, blurb, "good" direction, soft target, formatter.
+const WRITING_METRICS = [
+  { id: "distinct_3",        label: "vocabulary variety",
+    blurb: "fraction of unique 3-word groups in the generation. low = the model is repeating phrases (mode collapse).",
+    higher: true,  target: 0.85, fmt: v => v.toFixed(3) },
+  { id: "lex_chain_density", label: "entity tracking",
+    blurb: "fraction of meaningful words (length ≥ 3, not stop-words) that recur. higher = the model keeps referring back to the same characters/objects, suggesting it's tracking entities through the story.",
+    higher: true,  target: 0.20, fmt: v => v.toFixed(3) },
+  { id: "pronoun_unbacked",  label: "broken pronouns",
+    blurb: "fraction of pronouns (he/she/it/they) without a candidate referent in the previous 50 bytes. high = the model uses pronouns without setting up who they refer to.",
+    higher: false, target: 0.30, fmt: v => v.toFixed(3) },
+  { id: "repeat_rate",       label: "duplicate words",
+    blurb: "fraction of consecutive duplicate words (the the). high = mode collapse into a single token.",
+    higher: false, target: 0.05, fmt: v => v.toFixed(3) },
+  { id: "pmi",               label: "word co-occurrence",
+    blurb: "Normalized PMI (NPMI, range -1..+1) of adjacent word pairs against the training corpus. +1 = pairs always co-occur in training, 0 = independent, -1 = unseen pairs. Catches diverse-but-gibberish output that vocabulary variety misses. Requires <stem>_bigrams.npz next to the corpus -- build with veritate_mri/tools/build_bigram_index.py.",
+    higher: true,  target: 0.10,  fmt: v => v == null ? "(no corpus index)" : v.toFixed(3) },
+  { id: "self_ppl",          label: "self-perplexity",
+    blurb: "model's perplexity on its own generation. low = the model 'stands behind' what it just wrote; rising over training would mean it's drifting off-distribution from itself.",
+    higher: false, target: 3.0,  fmt: v => v == null ? "—" : v.toFixed(2) },
+];
+
+function _whTone(metric, v) {
+  if (v == null || isNaN(v)) return "var(--dim)";
+  if (metric.higher) {
+    if (v >= metric.target) return "#5dff9b";
+    // PMI floor is -1, so "70% of target" doesn't work for negative-range metrics.
+    // Use an absolute warm threshold for PMI; default factor for everything else.
+    const warm = metric.id === "pmi" ? -0.1 : metric.target * 0.7;
+    if (v >= warm) return "var(--warm)";
+    return "var(--hot)";
+  }
+  if (v <= metric.target) return "#5dff9b";
+  if (v <= metric.target * 1.5) return "var(--warm)";
+  return "var(--hot)";
+}
+
+function render_writing_health(refs, run, writingSteps, writingByStep, haveCheckpoints) {
+  const root = $(refs.writingHealthId);
+  if (!root) return;
+  if (!writingSteps || writingSteps.length === 0) {
+    root.innerHTML = haveCheckpoints
+      ? `<span class="meta" style="color:var(--warm)">No writing-health dumps yet for this run. They appear automatically at every checkpoint after this change ships.</span>`
+      : `<span class="meta">No checkpoint yet.</span>`;
+    return;
+  }
+  const latestStep = writingSteps[writingSteps.length - 1];
+  const latest = writingByStep[latestStep];
+  if (!latest || !latest.aggregate) {
+    root.innerHTML = `<span class="meta">writing_health_step_${latestStep}.json missing aggregate field</span>`;
+    return;
+  }
+
+  // Caveat banner. Worded to be impossible to miss and impossible to misread.
+  let html = `<div class="desc" style="margin:0 0 12px;padding:10px 12px;border-left:3px solid var(--warm);background:rgba(255,170,80,0.06);font-size:11.5px;line-height:1.5">
+    <b style="color:var(--warm)">What this card measures &mdash; and what it doesn't.</b>
+    Six mathematical proxies for the <b>structure</b> of the model's own writing.
+    They detect <i>mode collapse</i> (repeating the same phrase), <i>broken pronouns</i> (he/she with no referent), <i>vocabulary diversity</i>, <i>off-distribution drift</i>, and <i>off-corpus word combinations</i>.
+    They <b>cannot</b> detect whether the story actually makes sense. A passage like "the volcano married a sandwich" will score perfectly here.
+    World-knowledge coherence requires a human reader or an LLM judge &mdash; there is no math for it.
+  </div>`;
+  // Corpus-coverage note: PMI is corpus-relative. If the index is missing,
+  // tell the user how to build it instead of silently showing "—".
+  const cfg = latest.config || {};
+  if (cfg.corpus_path && !cfg.pmi_index_path) {
+    const stem = (cfg.corpus_path.match(/([^\\\/]+)_train\.bin$/) || [null, "<corpus>"])[1];
+    html += `<div class="desc" style="margin:0 0 12px;padding:8px 10px;border-left:3px solid var(--accent);background:rgba(120,180,255,0.06);font-size:11px">
+      <b>PMI is disabled for this run.</b> The corpus has no bigram index. Build one once with:
+      <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">python veritate_mri/tools/build_bigram_index.py --corpus ${escapeHtml(stem)}</code>
+      and the next checkpoint will include PMI scores.
+    </div>`;
+  }
+
+  // Metric grid.
+  html += `<div style="display:grid;grid-template-columns:170px 90px minmax(160px,1fr);gap:6px 14px;font-size:11.5px;align-items:center">`;
+  for (const m of WRITING_METRICS) {
+    const v = latest.aggregate[m.id];
+    const tone = _whTone(m, v);
+    const arrow = m.higher ? "&uarr;" : "&darr;";
+    const targetStr = `${m.higher ? "&ge;" : "&le;"} ${m.target}`;
+    html += `<div style="text-align:right"><b>${m.label}</b><div class="meta" style="font-size:10px">${arrow} ${targetStr} target</div></div>
+      <div style="text-align:left"><b style="color:${tone};font-size:14px">${v == null ? "—" : m.fmt(v)}</b></div>
+      <div class="meta" style="font-size:10.5px;line-height:1.35">${m.blurb}</div>`;
+  }
+  html += `</div>`;
+
+  // Trajectory: distinct_3, lex_chain_density, repeat_rate, pronoun_unbacked over steps.
+  // Scaled 0..1 already, so we plot directly. Self-ppl plotted on its own (different scale).
+  if (writingSteps.length >= 2) {
+    html += `<div class="meta" style="margin:14px 0 4px;font-size:10.5px">trajectory across checkpoints (each line is one metric, 0..1 scale)</div>`;
+    html += `<div id="${refs.writingHealthId}_traj" style="position:relative;height:140px;background:rgba(255,255,255,.02);border-radius:4px"></div>`;
+  }
+
+  // Sample preview: show the actual generations from the latest checkpoint so
+  // the user can sanity-check the scores against the real text. without this,
+  // numbers without examples are hard to trust.
+  if (Array.isArray(latest.samples) && latest.samples.length > 0) {
+    html += `<div class="meta" style="margin:14px 0 4px;font-size:10.5px">latest generations (step ${latestStep}, you decide if they make sense)</div>`;
+    html += `<div style="display:flex;flex-direction:column;gap:8px">`;
+    for (const s of latest.samples) {
+      const promptHtml = `<span class="meta" style="font-style:italic">${escapeHtml(s.prompt)}</span>`;
+      const genHtml = escapeHtml(s.generation || "");
+      html += `<div style="background:rgba(255,255,255,.03);padding:8px 10px;border-radius:4px;font-size:11px;line-height:1.45;white-space:pre-wrap;font-family:var(--font-mono, monospace)">${promptHtml}<span style="color:var(--text)">${genHtml}</span></div>`;
+    }
+    html += `</div>`;
+  }
+
+  root.innerHTML = html;
+
+  // Trajectory render via existing plotTrainSeries helper. Each metric becomes
+  // its own series; we normalise self-ppl into 0..1 by clamping at ppl=10.
+  const trajRoot = document.getElementById(`${refs.writingHealthId}_traj`);
+  if (trajRoot && writingSteps.length >= 2) {
+    const W = trajRoot.clientWidth || 600;
+    const H = 140;
+    trajRoot.innerHTML = `<canvas width="${W}" height="${H}" style="width:100%;height:100%"></canvas>`;
+    const canvas = trajRoot.querySelector("canvas");
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+    // axes
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 1;
+    for (let p = 0; p <= 4; p++) {
+      const y = (p / 4) * (H - 20) + 10;
+      ctx.beginPath(); ctx.moveTo(40, y); ctx.lineTo(W - 8, y); ctx.stroke();
+    }
+    const minStep = writingSteps[0], maxStep = writingSteps[writingSteps.length - 1];
+    const xOf = s => 40 + ((s - minStep) / Math.max(1, maxStep - minStep)) * (W - 48);
+    const yOf = v => H - 10 - Math.max(0, Math.min(1, v)) * (H - 20);
+    const colors = { distinct_3: "#5dff9b", lex_chain_density: "#80c1ff", pronoun_unbacked: "#ff7d5d", repeat_rate: "var(--warm)", pmi: "#c08bff" };
+    // PMI is in [-1, +1], remap to [0, 1] for the same chart axis: 0.5 = independent words.
+    const remap = (id, v) => id === "pmi" ? (v + 1) / 2 : v;
+    const trajMetrics = ["distinct_3", "lex_chain_density", "pronoun_unbacked", "repeat_rate", "pmi"];
+    for (const id of trajMetrics) {
+      ctx.strokeStyle = colors[id] || "#fff";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      let first = true;
+      for (const step of writingSteps) {
+        const r = writingByStep[step];
+        if (!r || !r.aggregate) continue;
+        const v = r.aggregate[id];
+        if (v == null) continue;
+        const x = xOf(step), y = yOf(remap(id, v));
+        if (first) { ctx.moveTo(x, y); first = false; } else { ctx.lineTo(x, y); }
+      }
+      ctx.stroke();
+    }
+    // labels
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.font = "10px sans-serif";
+    ctx.fillText("1.0", 8, 14);
+    ctx.fillText("0.0", 8, H - 6);
+    ctx.fillText(`step ${minStep}`, 40, H - 0);
+    ctx.textAlign = "right";
+    ctx.fillText(`step ${maxStep}`, W - 8, H - 0);
+    ctx.textAlign = "left";
+    // legend
+    let lx = 50, ly = 12;
+    for (const id of trajMetrics) {
+      const c = colors[id] || "#fff";
+      ctx.fillStyle = c;
+      ctx.fillRect(lx, ly - 6, 10, 2);
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      const label = id.replace(/_/g, " ");
+      ctx.fillText(label, lx + 14, ly);
+      lx += ctx.measureText(label).width + 38;
+    }
+  }
+}
+
 // load classroom panels for a model name into the supplied (state, refs) pair.
 // state holds the cached config/steps/probes/lens; refs hold the dom IDs / canvas to render into.
 // shared by the live-training tab (trainSelectedRun) and the learning tab (timeline picker).
@@ -3983,6 +4180,7 @@ async function loadClassroomFor(state, refs, run) {
   const grammarFiles   = classroomItems.filter(it => it.kind === "grammar");
   const reasoningFiles = classroomItems.filter(it => it.kind === "reasoning");
   const conceptsFiles  = classroomItems.filter(it => it.kind === "concepts");
+  const writingFiles   = classroomItems.filter(it => it.kind === "writing_health");
   if (steps.length === 0) {
     $(refs.lensDriftId).innerHTML = `<span style="color:var(--warm)">No checkpoint yet.</span>`;
     plotTrainSeries(refs.confCanvas, refs.confCtx, []);
@@ -4050,6 +4248,15 @@ async function loadClassroomFor(state, refs, run) {
   }));
   state.conceptsSteps = Object.keys(state.conceptsByStep).map(s => parseInt(s, 10)).sort((a, b) => a - b);
   if (refs.conceptsId) render_concepts(refs, run, state.conceptsSteps, state.conceptsByStep, steps.length > 0);
+  // writing health
+  await Promise.all(writingFiles.map(async it => {
+    try {
+      const r = await fetch(`/timeline/${encodeURIComponent(run)}/${encodeURIComponent(it.file)}?` + Date.now(), { cache: "no-store" });
+      if (r.ok) state.writingByStep[it.step] = await r.json();
+    } catch (e) { console.warn("writing_health fetch", it.step, e); }
+  }));
+  state.writingSteps = Object.keys(state.writingByStep).map(s => parseInt(s, 10)).sort((a, b) => a - b);
+  if (refs.writingHealthId) render_writing_health(refs, run, state.writingSteps, state.writingByStep, steps.length > 0);
   state.loaded = true;
 }
 

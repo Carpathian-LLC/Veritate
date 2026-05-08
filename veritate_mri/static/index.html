@@ -660,6 +660,28 @@
   </div>
 
   <div class="panel" data-expandable="true">
+    <h2>writing health <em>structural quality of the model's own writing &mdash; NOT a measure of meaning</em></h2>
+    <div class="body">
+      <div id="learnWritingHealth">no writing-health data yet</div>
+    </div>
+    <p class="desc">Five mathematical proxies (vocabulary variety, entity tracking, broken pronouns, duplicate words, self-perplexity) computed over generations from three fixed prompts at every checkpoint. <b>These tell you when the model graduates from gibberish to grammar.</b> They cannot tell you whether the story makes sense &mdash; "the volcano married a sandwich" scores fine here. World-knowledge coherence requires a human reader; there's no closed-form math for it.</p>
+    <details class="more"><summary>how each metric is calculated</summary><div class="more-content">
+      <h4>vocabulary variety (distinct-3)</h4>
+      <p>Take the generated text, split into words, slide a 3-word window across it, count unique 3-tuples / total 3-tuples. Fraction near 1.0 = every 3-word window is unique (rich, varied prose). Fraction near 0 = the model is repeating phrases (mode collapse, the most common early-training failure mode).</p>
+      <h4>entity tracking (lexical chain density)</h4>
+      <p>Of all "content" words (length &gt; 3 characters, filtering out small function words like "the", "and"), what fraction recur somewhere else in the passage? High = the model keeps mentioning the same characters and objects (suggests it's tracking entities). Low = each sentence introduces fresh nouns with no follow-through (a story about disjoint things).</p>
+      <h4>broken pronouns (pronoun unbacked rate)</h4>
+      <p>Find every pronoun (he/she/it/they/this/that/etc). For each, check if there's a noun-like word (length &gt; 3, not a pronoun) within the previous 50 bytes. If not, the pronoun is "unbacked" &mdash; it's referring to something that was never introduced. Counts unbacked pronouns / total pronouns. High = the writer keeps saying "she" without telling you who.</p>
+      <h4>duplicate words (repeat rate)</h4>
+      <p>Fraction of consecutive identical words. "the the cat" → repeat rate 0.33. Catches the simplest mode-collapse pattern where a model gets stuck on one token.</p>
+      <h4>self-perplexity</h4>
+      <p>The model's perplexity on its own generation. Low = the model "stands behind" what it just wrote (consistent with what it would predict given the prompt). Rising over training would mean it's drifting away from its own distribution &mdash; usually a sign the sampler is grabbing low-probability tokens too often. This number is also gameable by simple repetition (the cat the cat the cat scores low) so read it together with vocabulary variety.</p>
+      <h4>what these proxies cannot detect</h4>
+      <p>Narrative logic. Causality. Whether a fact is true. Whether characters behave consistently across paragraphs. Whether the world the story describes is internally coherent. There is no math for those without a model that has world knowledge. To measure narrative coherence, the only honest tool is an LLM judge or a human.</p>
+    </div></details>
+  </div>
+
+  <div class="panel" data-expandable="true">
     <h2>concepts formation <em>50-probe association test, grouped by category</em></h2>
     <div class="body">
       <div id="learnConcepts" class="concepts-scroll">no concepts data</div>
@@ -979,6 +1001,14 @@
     <div class="body">
       <div id="trainReasoningLevel">no reasoning probe yet</div>
     </div>
+  </div>
+
+  <div class="panel">
+    <h2>writing health <em>structural quality only &mdash; cannot detect narrative nonsense</em></h2>
+    <div class="body">
+      <div id="trainWritingHealth">no writing-health data yet</div>
+    </div>
+    <p class="desc">Mathematical proxies for writing structure: vocabulary variety, entity tracking, broken pronouns, duplicate words, self-perplexity. They catch mode collapse and grammatical breakdown, but cannot tell whether a story makes sense at the world-knowledge level. See the Learning tab for the full explanation.</p>
   </div>
 
   <div class="panel">

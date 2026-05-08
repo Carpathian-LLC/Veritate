@@ -36,10 +36,17 @@ summary: Engine gains a ternary scalar oracle and AVX-512 + VNNI ternary matmul 
 
 ### model smartness meter
 
-- **Reading bins regenerated** from fresh hand-authored sources at `veritate_mri/grade_eval/sources/`.
+- **Reading bins regenerated** from fresh hand-authored sources at `veritate_mri/grade_eval/sources/`. All 7 bands now FK-calibrated to ±2 grades of target and sized at 8 KB+; `tools/build_grade_evals.py` runs the FK check on every build.
+- **Reading-level threshold** now relative to the model's own floor (`prek_ppl × 1.5`) with a hard ceiling (ppl ≥ 32 = random). Untrained models no longer "pass phd". Picker takes the hardest passing band, not the easiest.
 - **Math** (5 difficulty tiers, 50 problems each) — algorithmic generation: arithmetic → multi-digit → linear algebra → word problems → multi-step.
 - **Grammar** (4 pair-types, 50 each) — pairwise NLL preference: subject-verb agreement, articles, tense, word order. Lower mean per-byte NLL on the correct sentence wins.
 - **Reasoning** (4 type-tiers, 50 each) — recall, analogy, single-step deduction, multi-step transitive ordering.
+- **Writing health** (new probe) — six structural proxies on per-checkpoint generations from three fixed prompts: distinct-2/3/4, lexical chain density, broken-pronoun rate, repeat rate, NPMI, self-perplexity. NPMI is corpus-relative and loads the matching `<stem>_bigrams.npz` sidecar built by `tools/build_bigram_index.py`. Indexes shipped for tinystories, children_classics, general_fiction, qa. Dashboard card carries an unmissable caveat: this measures writing structure, **not** narrative sense.
+
+### dashboard backend resilience
+
+- **C engine** now surfaces a clean "model not QAT-trained" state instead of a generic "not loaded" when the bin has `act_boost > 1`. The Generate button disables with a tooltip explaining the fix.
+- **PyTorch backend** auto-falls back to a vanilla checkpoint when the default model is non-vanilla (MoE, etc.), rather than failing silently.
 
 ## known issues
 

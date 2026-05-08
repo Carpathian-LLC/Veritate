@@ -76,6 +76,7 @@ HOOK_ARTIFACTS = {
     "concepts":   ("concepts.json",   "json"),
     "surprise":   ("surprise.json",   "json"),
     "quant_kl":   ("quant_kl.json",   "json"),
+    "writing_health": ("writing_health.json", "json"),
     "generation": ("generation.json", "json"),
 }
 

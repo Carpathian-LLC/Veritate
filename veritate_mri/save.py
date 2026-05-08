@@ -51,6 +51,7 @@ RENAME_MAP_TEMPLATE = {
     "concepts_step_{step}.json":  "concepts.json",
     "surprise_step_{step}.json":  "surprise.json",
     "quant_kl_step_{step}.json":  "quant_kl.json",
+    "writing_health_step_{step}.json": "writing_health.json",
     "step_{step}.json":           "generation.json",
 }
 
@@ -205,7 +206,8 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     from checkpoint_probe import (
         dump_probe, dump_classroom, dump_grades, dump_concepts,
         dump_math, dump_grammar, dump_reasoning,
-        dump_surprise, dump_quant_kl, dump_generation, PROBE_PROMPT,
+        dump_surprise, dump_quant_kl, dump_generation,
+        dump_writing_health, PROBE_PROMPT,
     )
 
     _validate_name(name)
@@ -275,6 +277,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         ("concepts",   lambda: dump_concepts  (view,         step_dir, step)),
         ("surprise",   lambda: dump_surprise  (view, prompt, step_dir, step)),
         ("quant_kl",   lambda: dump_quant_kl  (view, prompt, step_dir, step)),
+        ("writing_health", lambda: dump_writing_health(view,    step_dir, step, corpus_path=corpus_path)),
         ("generation", lambda: dump_generation(view, prompt, step_dir, step, corpus_path=corpus_path)),
     ]
     cuda_avail = torch.cuda.is_available()
