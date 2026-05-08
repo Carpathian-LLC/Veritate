@@ -1110,7 +1110,6 @@ function setMeta(m) {
     ? `<span class="stat">c-precision <b style="color:${cPrecColor}" title="bin v${m.c_model_bin_version || '?'} ${m.c_model_training || ''} ${m.c_model_activation || ''}">${cPrec}</b></span>`
     : "";
   $("modelMeta").innerHTML = `
-    <span class="stat">pytorch <b>${m.checkpoint}</b></span>
     ${cEngineChip}
     ${cModelChip}
     ${cPrecChip}
@@ -1119,9 +1118,41 @@ function setMeta(m) {
     <span class="stat">layers <b>${m.layers}</b></span>
     <span class="stat">heads <b>${m.heads}</b></span>
     <span class="stat">ffn <b>${m.ffn}</b></span>
-    <span class="stat">memory <b style="color:${m.has_memory ? "var(--data-pos)" : "var(--dim)"}">${m.has_memory ? "loaded" : "none"}</b></span>
   `;
 }
+
+// ---- addons ----
+async function loadAddons() {
+  const list = $("addonsList");
+  if (!list) return;
+  try {
+    const r = await fetch("/addons");
+    const data = await r.json();
+    const addons = (data && data.addons) || [];
+    if (!addons.length) {
+      list.innerHTML = `<span class="stat" style="color:var(--dim)">none discovered</span>`;
+      return;
+    }
+    list.innerHTML = addons.map(a => {
+      const m = a.manifest || {};
+      const desc = (m.description || "").replace(/"/g, "&quot;");
+      return `<label title="${desc}" style="display:inline-flex;align-items:center;gap:4px;color:var(--text);cursor:pointer">
+        <input type="checkbox" class="addon-toggle" data-id="${a.id}" style="vertical-align:middle">
+        <span>${m.name || a.id}</span>
+      </label>`;
+    }).join("");
+  } catch (e) {
+    list.innerHTML = `<span class="stat" style="color:var(--hot)">load failed: ${e}</span>`;
+  }
+}
+
+function collectSelectedAddons() {
+  return Array.from(document.querySelectorAll(".addon-toggle"))
+    .filter(cb => cb.checked)
+    .map(cb => cb.dataset.id);
+}
+
+loadAddons();
 
 // ---- generation ----
 $("go").addEventListener("click", () => {
@@ -1137,7 +1168,7 @@ $("go").addEventListener("click", () => {
 
   renderResponse();
   $("liveStats").innerHTML = `<span class="stat">thinking...</span>`;
-  $("go").disabled = true; $("stop").disabled = false;
+  $("go").disabled = true; $("go").dataset.generating = "1"; $("stop").disabled = false;
 
   const backend = $("backend").value;
   const ablLayer  = parseInt(($("ablLayer")  || {value:"-1"}).value, 10);
@@ -1145,7 +1176,9 @@ $("go").addEventListener("click", () => {
   const ablBadge  = $("ablBadge");
   if (ablBadge) ablBadge.style.display = (ablLayer >= 0 && ablNeuron >= 0) ? "" : "none";
   if (ablBadge && ablLayer >= 0 && ablNeuron >= 0) ablBadge.textContent = `ablated L${ablLayer} N${ablNeuron}`;
-  const url = `/generate?prompt=${encodeURIComponent(prompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}`;
+  const addonsSel = collectSelectedAddons();
+  const addonsParam = addonsSel.length ? `&addons=${encodeURIComponent(addonsSel.join(","))}` : "";
+  const url = `/generate?prompt=${encodeURIComponent(prompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}`;
   evtSrc = new EventSource(url);
   const t0 = performance.now();
   evtSrc.onmessage = (e) => {
@@ -1159,7 +1192,7 @@ $("go").addEventListener("click", () => {
       $("liveStats").innerHTML = `<span class="stat" style="color:var(--hot)">stream error: ${msg}</span>`;
       try { evtSrc.close(); } catch (_) {}
       evtSrc = null;
-      $("go").disabled = false; $("stop").disabled = true;
+      $("go").disabled = false; $("go").dataset.generating = ""; $("stop").disabled = true; _applyGenerateGate();
       live = false;
       if (frames.length > 0) setReplayMode("ready");
       console.warn("[/generate] backend error event:", ev);
@@ -1188,13 +1221,13 @@ $("go").addEventListener("click", () => {
   };
   evtSrc.addEventListener("done", () => {
     evtSrc?.close(); evtSrc = null;
-    $("go").disabled = false; $("stop").disabled = true;
+    $("go").disabled = false; $("go").dataset.generating = ""; $("stop").disabled = true; _applyGenerateGate();
     live = false; renderResponse();
     setReplayMode("ready");
   });
   evtSrc.onerror = () => {
     evtSrc?.close(); evtSrc = null;
-    $("go").disabled = false; $("stop").disabled = true;
+    $("go").disabled = false; $("go").dataset.generating = ""; $("stop").disabled = true; _applyGenerateGate();
     if (frames.length > 0) setReplayMode("ready");
   };
 });
@@ -1294,7 +1327,7 @@ function activateTab(name) {
       }
       if (classroomStateL.loaded) {
         render_confidence_evo(classroomRefsL, classroomStateL.run, classroomStateL.steps, classroomStateL.confByStep);
-        render_reading_level(classroomRefsL, classroomStateL.run, classroomStateL.gradesSteps, classroomStateL.gradesByStep);
+        render_reading_level(classroomRefsL, classroomStateL.run, classroomStateL.gradesSteps, classroomStateL.gradesByStep, true, classroomStateL.config);
       }
     });
   } else if (name === "training") {
@@ -1305,7 +1338,7 @@ function activateTab(name) {
       if (trainLastText) parseAndRenderTrain(trainLastText);
       if (classroomState.loaded) {
         render_confidence_evo(classroomRefsT, classroomState.run, classroomState.steps, classroomState.confByStep);
-        render_reading_level(classroomRefsT, classroomState.run, classroomState.gradesSteps, classroomState.gradesByStep);
+        render_reading_level(classroomRefsT, classroomState.run, classroomState.gradesSteps, classroomState.gradesByStep, true, classroomState.config);
       }
     });
   } else if (name === "wiki") {
@@ -1382,6 +1415,7 @@ function applyBackendUI() {
   const isC = $("backend").value === "c";
   $("cModel").disabled = !isC || $("cModel").options.length === 0;
   refreshQatWarning();
+  if (typeof _applyGenerateGate === "function") _applyGenerateGate();
 }
 
 function fillSelectFallback(selId, text) {
@@ -2447,13 +2481,22 @@ function plotTrainSeries(canvas, ctx, series, opts) {
     if (p.y > yMax) yMax = p.y;
   }
   if (!isFinite(xMin)) return;
+  // optional fixed y bounds. opts.yMinFloor lowers yMin to at most this value
+  // (useful for "anchor the chart at ppl 1.0"), opts.yMaxCeil raises yMax.
+  if (typeof opts.yMinFloor === "number") yMin = Math.min(yMin, opts.yMinFloor);
+  if (typeof opts.yMaxCeil  === "number") yMax = Math.max(yMax, opts.yMaxCeil);
+  // optional x bounds — used to reserve x-axis room for future checkpoints
+  // so the chart layout doesn't shift each time a probe lands.
+  if (typeof opts.xMinFloor === "number") xMin = Math.min(xMin, opts.xMinFloor);
+  if (typeof opts.xMaxCeil  === "number") xMax = Math.max(xMax, opts.xMaxCeil);
   if (opts.logY) {
     yMin = Math.max(yMin, 0.01);
     yMin = Math.log10(yMin);
     yMax = Math.log10(yMax + 0.01);
   }
   const xR = xMax - xMin || 1, yR = yMax - yMin || 1;
-  const padL = 50, padR = 12, padT = 8, padB = 22;
+  const padL = opts.yTitle ? 64 : 50, padR = 12, padT = 8, padB = 22;
+  const tickX = opts.yTitle ? 18 : 4;
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const xS = x => padL + ((x - xMin) / xR) * plotW;
   const yS = y => {
@@ -2469,7 +2512,7 @@ function plotTrainSeries(canvas, ctx, series, opts) {
     const y = padT + (plotH * i / 4);
     const v = yMax - (yR * i / 4);
     const lbl = opts.logY ? Math.pow(10, v).toFixed(2) : v.toFixed(2);
-    ctx.fillText(lbl, 4, y + 4);
+    ctx.fillText(lbl, tickX, y + 4);
     ctx.strokeStyle = "#171b24"; ctx.beginPath();
     ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
   }
@@ -2478,6 +2521,39 @@ function plotTrainSeries(canvas, ctx, series, opts) {
     const v = xMin + (xR * i / 5);
     ctx.fillStyle = "#6f7480";
     ctx.fillText(Math.round(v).toLocaleString(), x - 16, H - 6);
+  }
+  // optional horizontal threshold lines, e.g. ppl 3.0 = fluent.
+  // shape: opts.thresholdLines = [{ y, color, label, lineDash }]
+  if (Array.isArray(opts.thresholdLines)) {
+    ctx.save();
+    for (const t of opts.thresholdLines) {
+      const y = yS(t.y);
+      ctx.strokeStyle = t.color || "#5dff9b";
+      ctx.lineWidth = 1;
+      ctx.setLineDash(t.lineDash || [4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(W - padR, y);
+      ctx.stroke();
+      if (t.label) {
+        ctx.setLineDash([]);
+        ctx.fillStyle = t.color || "#5dff9b";
+        ctx.font = "10px ui-monospace,monospace";
+        ctx.fillText(t.label, W - padR - 6 - ctx.measureText(t.label).width, y - 3);
+      }
+    }
+    ctx.restore();
+  }
+  // optional rotated y-axis title in the left margin.
+  if (opts.yTitle) {
+    ctx.save();
+    ctx.translate(12, padT + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = "#9aa0ad";
+    ctx.font = "10px ui-monospace,monospace";
+    const w = ctx.measureText(opts.yTitle).width;
+    ctx.fillText(opts.yTitle, -w / 2, 0);
+    ctx.restore();
   }
   for (const s of series) {
     if (s.points.length === 0) continue;
@@ -2506,7 +2582,7 @@ function detectPlateauT(valPoints) {
   const minPoints = 4, windowMax = 8;
   const flatPct = 0.005, slowPct = 0.02, regressPct = 0.003;
   if (valPoints.length < minPoints) {
-    return { state: "warming", note: "need " + minPoints + " val points, have " + valPoints.length };
+    return { state: "warming", note: `need <span style="color:var(--accent)">${minPoints}</span> val points, have <span style="color:var(--warm)">${valPoints.length}</span>` };
   }
   const recent = valPoints.slice(-Math.min(windowMax, valPoints.length));
   const n = recent.length;
@@ -2557,7 +2633,7 @@ function renderTrainPlateau(valPoints) {
     regressing: { bg: "#330a0a", fg: "#ff7d5d", label: "REGRESSING" },
   };
   const notes = {
-    warming:    { what: "Not enough val measurements yet to judge a trend.",                                          act: "Wait. Detection starts at 4 evals." },
+    warming:    { what: "Not enough val measurements yet to judge a trend.",                                          act: "" },
     improving:  { what: "Val loss is dropping consistently across the last 4 evals.",                                  act: "Keep training." },
     bouncing:   { what: "Val is moving up and down with no clear direction.",                                          act: "Often a local minimum. Lower LR a bit, or keep going to see if average drifts down." },
     slowing:    { what: "Val is trending down at a small rate (slope between 0.5% and 2% per eval). Normal late-training behavior — the bulk of learning is done; remaining gains come from polish.", act: "Keep training. Cosine LR decay is doing its job. Stop early only if val starts curving back up." },
@@ -2573,7 +2649,7 @@ function renderTrainPlateau(valPoints) {
   }
   html += `</div>
     <p style="margin:4px 0 6px;color:var(--text)">${n.what}</p>
-    <p style="margin:4px 0 12px;color:${c.fg}"><b>→ what to do:</b> ${n.act}</p>`;
+    ${n.act ? `<p style="margin:4px 0 12px;color:${c.fg}"><b>→ what to do:</b> ${n.act}</p>` : ""}`;
 
   if (r.state !== "warming") {
     html += `<table><tr><th>step</th><th>val loss</th><th>delta from prev</th></tr>`;
@@ -2728,8 +2804,12 @@ const classroomRefsT = {
   confCanvas:  cConfEvoT,
   confCtx:     ctxConfEvoT,
   readLevelId: "trainReadLevel",
+  readLegendId:"trainReadLegend",
   readGradeCanvas: cReadGradeT,
   readGradeCtx:    ctxReadGradeT,
+  mathLevelId:     "trainMathLevel",
+  grammarLevelId:  "trainGrammarLevel",
+  reasoningLevelId: "trainReasoningLevel",
   conceptsId:      "trainConcepts",
   conceptsHoverId: "trainConceptsHover",
 };
@@ -2739,8 +2819,12 @@ const classroomRefsL = {
   confCanvas:  cConfEvoL,
   confCtx:     ctxConfEvoL,
   readLevelId: "learnReadLevel",
+  readLegendId:"learnReadLegend",
   readGradeCanvas: cReadGradeL,
   readGradeCtx:    ctxReadGradeL,
+  mathLevelId:     "learnMathLevel",
+  grammarLevelId:  "learnGrammarLevel",
+  reasoningLevelId: "learnReasoningLevel",
   conceptsId:      "learnConcepts",
   conceptsHoverId: "learnConceptsHover",
   pruneBodyId:     "pruneBody",
@@ -2758,6 +2842,12 @@ function makeClassroomState() {
     confByStep:   {},              // step -> {margin, entropy, lens_consistency, residual_stab}
     gradesSteps:    [],            // sorted ints, steps with grades_step_*.json
     gradesByStep:   {},            // step -> {grades:{...}, estimated_reading_grade}
+    mathSteps:      [],            // sorted ints, steps with math_step_*.json
+    mathByStep:     {},            // step -> {tiers:{...}}
+    grammarSteps:   [],            // sorted ints, steps with grammar_step_*.json
+    grammarByStep:  {},            // step -> {types:{...}}
+    reasoningSteps: [],            // sorted ints, steps with reasoning_step_*.json
+    reasoningByStep:{},            // step -> {tiers:{...}}
     conceptsSteps:  [],            // sorted ints, steps with concepts_step_*.json
     conceptsByStep: {},            // step -> {concepts:{name:{surprise_bits}}}
     loaded:       false,
@@ -3208,11 +3298,28 @@ function render_lens_drift(refs, run, steps, lensByStep) {
   root.innerHTML = html;
 }
 
+// shared progress-bar renderer used by every smartness-meter axis (reading,
+// math, grammar, reasoning) so all ladders look identical. ticks are vertical
+// hairlines that mark threshold boundaries (e.g. emerging / fluent), passed
+// in as { pct: 0..100, opacity: 0..1 } pairs.
+function renderProgressBar(pct, color, ticks) {
+  const safe = Math.max(0, Math.min(100, pct));
+  let tickHtml = "";
+  if (ticks && ticks.length) {
+    for (const t of ticks) {
+      tickHtml += `<span style="position:absolute;left:${t.pct}%;top:0;height:100%;width:1px;background:rgba(255,255,255,${t.opacity})"></span>`;
+    }
+  }
+  return `<div style="background:#1f242e;border-radius:2px;height:9px;overflow:hidden;position:relative"><span style="display:block;height:100%;width:${safe}%;background:${color}"></span>${tickHtml}</div>`;
+}
+
 // reading-level grade ladder (Pre-K -> PhD). matches docs/notes/GRADING_SCALE.md
 // and training/checkpoint_probe.py::GRADE_LEVELS / GRADE_PPL_PASS.
 const GRADE_ORDER       = ["prek", "k", "elem", "middle", "hs", "college", "phd"];
 const GRADE_LABEL       = { prek: "Pre-K", k: "K", elem: "Elem", middle: "Middle", hs: "HS", college: "College", phd: "PhD" };
 const GRADE_AGE         = { prek: "ages 3-4", k: "ages 5-6", elem: "ages 7-9", middle: "ages 10-13", hs: "ages 14-17", college: "ages 18-22", phd: "ages 23+" };
+const GRADE_CORPUS      = { prek: "early reader", k: "primary narrative", elem: "chapter book", middle: "middle grade", hs: "literary novel", college: "academic essay", phd: "research abstract" };
+const GRADE_CORPUS_FULL = { prek: "early-reader narrative, ~5-word sentences", k: "primary narrative, ~8-word sentences", elem: "chapter-book narrative, ~12-word sentences", middle: "middle-grade narrative, ~16-word sentences", hs: "literary novel prose, ~20-word sentences", college: "academic essay, ~24-word sentences", phd: "research abstract, ~28-word sentences" };
 const GRADE_FLUENT_PPL  = 3.0;
 const GRADE_EMERGING_PPL = 4.5;
 
@@ -3231,7 +3338,7 @@ function highestPassingGrade(grades) {
   return best;
 }
 
-function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoints) {
+function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoints, config) {
   const root = $(refs.readLevelId);
   const canvas = refs.readGradeCanvas;
   const ctx = refs.readGradeCtx;
@@ -3250,44 +3357,50 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
     return;
   }
 
-  const top    = highestPassingGrade(latest.grades);
-  const heroG  = top ? GRADE_LABEL[top] : "below Pre-K";
-  const heroAge= top ? GRADE_AGE[top]   : "ramping up";
-  const heroColor = top ? "#5dff9b" : "#ff9a5d";
+  // legend: chips matching the trajectory line colors. lives above the chart
+  // so the user can match band names to lines at a glance.
+  if (refs.readLegendId) {
+    const legendRoot = $(refs.readLegendId);
+    if (legendRoot) {
+      let lhtml = `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;font-size:11px">`;
+      for (const g of GRADE_ORDER) {
+        lhtml += `<span style="display:inline-flex;align-items:center;gap:5px"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${GRADE_BAND_COLOR[g]}"></span>${GRADE_LABEL[g]}</span>`;
+      }
+      lhtml += `</div>`;
+      legendRoot.innerHTML = lhtml;
+    }
+  }
 
-  let html = `<div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px;flex-wrap:wrap">
-    <span style="color:var(--dim);font-size:11px;letter-spacing:.04em;text-transform:uppercase">reading at</span>
-    <span style="font-size:26px;font-weight:700;color:${heroColor};letter-spacing:.02em">${escapeHtml(heroG)}</span>
-    <span class="meta">${escapeHtml(heroAge)} &middot; step <b>${latestStep.toLocaleString()}</b></span>
-  </div>`;
-
-  // perplexity legend: explain the unit and colour-band thresholds so every
-  // number in the ladder below is interpretable on first read.
-  html += `<div class="meta" style="margin-bottom:12px;font-size:10.5px;line-height:1.55;border-left:2px solid var(--line);padding:5px 10px">
-    <b style="color:var(--text)">perplexity (ppl) = the effective number of bytes the model is choosing between at each step.</b>
-    <span style="color:#5dff9b">ppl 1.0</span> = perfect (always knows the next byte).
-    <span style="color:#5dff9b">ppl &lt; ${GRADE_FLUENT_PPL.toFixed(1)}</span> = <b style="color:#5dff9b">FLUENT</b> (under 1.6 bits of uncertainty per byte &mdash; prose feels coherent).
-    <span style="color:var(--warm)">ppl ${GRADE_FLUENT_PPL.toFixed(1)} - ${GRADE_EMERGING_PPL.toFixed(1)}</span> = <b style="color:var(--warm)">EMERGING</b>.
-    <span style="color:var(--hot)">ppl &gt; ${GRADE_EMERGING_PPL.toFixed(1)}</span> = <b style="color:var(--hot)">NOT YET</b>.
-    ppl 256 = uniform random over all bytes. <i>Lower is better.</i>
-  </div>`;
-
-  // ladder rows: every band, with state badge + ppl + gap-to-fluent.
-  html += `<div style="display:grid;grid-template-columns:96px 1fr 110px 150px;gap:6px 12px;font-size:11.5px;align-items:center">`;
+  let html = "";
+  // ladder rows: every band, with state badge + ppl + gap-to-fluent. corpus
+  // source is folded into the leftmost cell so the eval-text origin sits next
+  // to its score — band labels alone don't explain ppl, the corpus does. A
+  // colored swatch matches the band's trajectory line for quick eye linkage.
+  html += `<div style="display:grid;grid-template-columns:150px minmax(120px, 280px) 110px 150px;gap:6px 12px;font-size:11.5px;align-items:center">`;
   for (const g of GRADE_ORDER) {
     const e = latest.grades[g];
     const lbl = GRADE_LABEL[g];
     const age = GRADE_AGE[g];
+    const corpus = GRADE_CORPUS[g];
+    const corpusFull = GRADE_CORPUS_FULL[g];
+    const swatch = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${GRADE_BAND_COLOR[g]};margin-right:6px;vertical-align:middle"></span>`;
+    const labelCell = `<div style="text-align:right" title="${escapeHtml(corpusFull)}">
+      <b>${swatch}${lbl}</b>
+      <div class="meta" style="font-size:10px">${age}</div>
+      <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(corpus)}</div>
+    </div>`;
     if (!e || typeof e.ppl !== "number") {
-      html += `<div style="text-align:right"><b style="color:var(--dim)">${lbl}</b><div class="meta" style="font-size:10px">${age}</div></div>
-        <div style="grid-column:span 3"><span class="meta">no data</span></div>`;
+      html += `${labelCell}<div style="grid-column:span 3"><span class="meta">no data</span></div>`;
       continue;
     }
     const ppl = e.ppl;
     const passed = ppl < GRADE_FLUENT_PPL;
     const emerging = !passed && ppl < GRADE_EMERGING_PPL;
-    // bar: fluency proxy. 100% at the threshold, 0% at 2x the threshold.
-    const fluencyPct = Math.max(2, Math.min(100, ((2 * GRADE_FLUENT_PPL - ppl) / GRADE_FLUENT_PPL) * 100));
+    // bar: log-scale progress from random (ppl 256) to fluent (ppl 3.0).
+    // linear-from-threshold was useless during pre-fluent training (every
+    // pre-fluent band clamped to ~2%). this version animates the whole way.
+    const LOG_RANDOM = Math.log(256), LOG_FLUENT = Math.log(GRADE_FLUENT_PPL);
+    const fluencyPct = Math.max(2, Math.min(100, ((LOG_RANDOM - Math.log(Math.max(ppl, 1))) / (LOG_RANDOM - LOG_FLUENT)) * 100));
     const color = passed ? "#5dff9b" : (emerging ? "var(--warm)" : "var(--hot)");
     const badge = passed
       ? `<span class="case" style="background:#103025;color:#5dff9b">FLUENT</span>`
@@ -3295,73 +3408,228 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
         ? `<span class="case b-mid">EMERGING</span>`
         : `<span class="case" style="background:#330a0a;color:#ff7d5d">NOT YET</span>`);
     const gap = passed
-      ? `ppl <b>${ppl.toFixed(2)}</b> <span class="meta">&lt; ${GRADE_FLUENT_PPL}</span>`
-      : `ppl <b>${ppl.toFixed(2)}</b> <span class="meta">+${(ppl - GRADE_FLUENT_PPL).toFixed(2)} over</span>`;
-    html += `<div style="text-align:right"><b>${lbl}</b><div class="meta" style="font-size:10px">${age}</div></div>
-      <div><span class="bar" style="width:${fluencyPct}%;background:${color}"></span></div>
+      ? `ppl <b style="color:#5dff9b">${ppl.toFixed(2)}</b> <span class="meta">&lt; ${GRADE_FLUENT_PPL}</span>`
+      : `ppl <b style="color:var(--hot)">${ppl.toFixed(2)}</b> <span class="meta">+${(ppl - GRADE_FLUENT_PPL).toFixed(2)} over</span>`;
+    html += `${labelCell}
+      ${renderProgressBar(fluencyPct, color, [{ pct: 91, opacity: 0.28 }])}
       <div style="text-align:left">${badge}</div>
       <div style="text-align:right">${gap}</div>`;
   }
   html += `</div>`;
 
-  // corpus-source hint: each band's eval text is from a different corpus.
-  // shape and origin matter — explains a lot of the apparent ordering quirks.
-  // sources mirror docs/notes/GRADING_SCALE.md tables 1 + 5.
-  html += `<div class="meta" style="margin-top:10px;font-size:10px;line-height:1.6">
-    <b style="color:var(--text)">corpus sources:</b>
-    <b>Pre-K / K / Elem</b> &mdash; Project-Gutenberg children's classics (Victorian-era sentence rhythms);
-    <b>Middle</b> &mdash; mid-grade fantasy chapter books;
-    <b>HS</b> &mdash; novels (1984, Mockingbird, Catcher, Frankenstein);
-    <b>College</b> &mdash; literary fiction + intro academic;
-    <b>PhD</b> &mdash; arxiv abstracts (stub).
-  </div>`;
-
-  // order-anomaly callout: when a "harder" band scores better than an "easier"
-  // band by a meaningful margin, surface it explicitly. tells the user which
-  // grade labels aren't doing what their name suggests, and points at why.
-  const inversions = [];
-  for (let i = 0; i < GRADE_ORDER.length - 1; i++) {
-    const easyG = GRADE_ORDER[i];
-    const easyE = latest.grades[easyG];
-    if (!easyE || typeof easyE.ppl !== "number") continue;
-    for (let j = i + 1; j < GRADE_ORDER.length; j++) {
-      const hardG = GRADE_ORDER[j];
-      const hardE = latest.grades[hardG];
-      if (!hardE || typeof hardE.ppl !== "number") continue;
-      if (easyE.ppl - hardE.ppl > 1.0) {
-        inversions.push({ easy: easyG, hard: hardG, easyPpl: easyE.ppl, hardPpl: hardE.ppl });
-      }
+  // legend + style-outlier callout merged: explain the unit and colour-band
+  // thresholds, then list bands by actual ppl (easiest first) so the reader
+  // can see why grade-label order doesn't match difficulty. style mismatch
+  // reflects corpus prose, not the grade label.
+  const ppls = GRADE_ORDER
+    .map(g => ({ g, ppl: latest.grades[g] && typeof latest.grades[g].ppl === "number" ? latest.grades[g].ppl : null }))
+    .filter(x => x.ppl !== null && x.ppl > 0);
+  if (ppls.length >= 3) {
+    const orderedBands = ppls.slice();
+    html += `<div class="desc" style="margin-top:12px">
+      <p><b style="color:var(--text)">perplexity (ppl) = the effective number of bytes the model is choosing between at each step.</b>
+        <span style="color:#5dff9b">ppl 1.0</span> = perfect (always knows the next byte).
+        <span style="color:#5dff9b">ppl &lt; ${GRADE_FLUENT_PPL.toFixed(1)}</span> = <b style="color:#5dff9b">FLUENT</b> (under 1.6 bits of uncertainty per byte &mdash; prose feels coherent).
+        <span style="color:var(--warm)">ppl ${GRADE_FLUENT_PPL.toFixed(1)} - ${GRADE_EMERGING_PPL.toFixed(1)}</span> = <b style="color:var(--warm)">EMERGING</b>.
+        <span style="color:var(--hot)">ppl &gt; ${GRADE_EMERGING_PPL.toFixed(1)}</span> = <b style="color:var(--hot)">NOT YET</b>.
+        ppl 256 = uniform random over all bytes. <i>Lower is better.</i>
+        Each band's eval text is a different Gutenberg work, so prose style drives ppl, not grade label:</p>
+      <div style="display:grid;grid-template-columns:70px 1fr auto auto;gap:4px 14px;font-size:11.5px;align-items:baseline;margin:8px 0 10px">`;
+    for (const o of orderedBands) {
+      const ppl = o.ppl;
+      const passed = ppl < GRADE_FLUENT_PPL;
+      const emerging = !passed && ppl < GRADE_EMERGING_PPL;
+      const tone = passed ? "color:#5dff9b" : (emerging ? "color:var(--warm)" : "color:var(--hot)");
+      html += `<b>${GRADE_LABEL[o.g]}</b>
+        <i class="meta" style="font-style:italic">${escapeHtml(GRADE_CORPUS_FULL[o.g])}</i>
+        <span><span class="meta">current:</span> ppl <b style="${tone}">${ppl.toFixed(2)}</b></span>
+        <span class="meta">ideal: ppl &lt; ${GRADE_FLUENT_PPL.toFixed(1)}</span>`;
     }
-  }
-  if (inversions.length) {
-    html += `<div style="margin-top:12px;padding:8px 11px;border:1px solid var(--line);border-left:3px solid var(--warm);background:#11151c;border-radius:3px;font-size:11px;line-height:1.55">
-      <b style="color:var(--warm)">why are the bands out of order?</b>
-      <div style="margin:5px 0">A "harder" grade band is scoring better than an "easier" one. Specifically:</div>
-      <ul style="margin:5px 0 0 16px;padding:0;color:var(--text)">`;
-    for (const inv of inversions.slice(0, 4)) {
-      html += `<li><b>${GRADE_LABEL[inv.easy]}</b> (ppl ${inv.easyPpl.toFixed(2)}) is <i>harder</i> for the model than <b>${GRADE_LABEL[inv.hard]}</b> (ppl ${inv.hardPpl.toFixed(2)}).</li>`;
-    }
-    html += `</ul>
-      <div style="margin-top:7px;color:var(--dim)">Each band's eval text comes from a different corpus, and the model's training mix decides which prose style scores better &mdash; the grade <i>label</i> is just a label. Common causes: <b>Middle</b> uses long fantasy sentences (Hatchet, Wrinkle in Time) which are stylistically harder than the standardised academic prose in <b>College</b>; <b>Pre-K</b>'s Victorian children's-classics rhythms can score harder than modern <b>K</b>-level readers despite simpler vocabulary.</div>
-      <div style="margin-top:5px;color:var(--dim)">Where to focus: training data that matches the band where the model is <b>NOT YET</b>. If the model handles College but stumbles on Middle, the corpus needs more long-sentence narrative fiction, not more difficult vocabulary.</div>
+    html += `</div>
+      <p>Red bands aren't harder content; they're prose styles the model rarely sees in training. Closing the gap means training on text in those styles, not on simpler text.</p>
     </div>`;
   }
 
   root.innerHTML = html;
 
-  // sparkline: highest passing band over training (mapped 0..6). re-derived from
-  // grades each step rather than reading estimated_reading_grade, so old runs
-  // with the legacy "first passing band" estimator render the honest ceiling too.
-  const points = [];
+  // trajectory: per-band fluency % over checkpoints. UP = better. converts
+  // each ppl into the same log-scale 0..100% the ladder bars use, so the
+  // bar pct and the trajectory share an identical y-axis scale. every band
+  // is anchored at (step 0, fluency 0) — random init = ppl ~256 = 0% — so
+  // all lines depart from the same origin and the chart shows a journey
+  // toward fluent rather than auto-fitting around the first measurement.
+  // x-axis is reserved out to total_steps from the manifest, so future
+  // checkpoints land at predictable positions rather than reshuffling the
+  // axis each time. threshold lines at 91 (emerging) and 100 (fluent).
+  const LOG_RANDOM_T = Math.log(256);
+  const LOG_FLUENT_T = Math.log(GRADE_FLUENT_PPL);
+  const fluencyOf = ppl => Math.max(0, Math.min(100,
+    ((LOG_RANDOM_T - Math.log(Math.max(ppl, 1))) / (LOG_RANDOM_T - LOG_FLUENT_T)) * 100
+  ));
+  const bandSeries = GRADE_ORDER.map(g => ({ g, points: [{ x: 0, y: 0 }] }));
   for (const step of gradesSteps) {
     const r = gradesByStep[step];
     if (!r || !r.grades) continue;
-    const t = highestPassingGrade(r.grades);
-    points.push({ x: step, y: t ? gradeIndex(t) : -1 });
+    for (const s of bandSeries) {
+      const e = r.grades[s.g];
+      if (e && typeof e.ppl === "number" && e.ppl > 0) {
+        s.points.push({ x: step, y: fluencyOf(e.ppl) });
+      }
+    }
   }
-  plotTrainSeries(canvas, ctx, [
-    { points, color: "#5dff9b", lw: 2, dots: true },
-  ]);
+  const series = bandSeries
+    .filter(s => s.points.length > 1)  // need real measurement, not just origin
+    .map(s => ({ points: s.points, color: GRADE_BAND_COLOR[s.g], lw: 1.5, dots: true }));
+  const totalSteps = (config && config.training_args && config.training_args.total_steps) || null;
+  plotTrainSeries(canvas, ctx, series, {
+    yMinFloor: 0,
+    yMaxCeil:  108,                       // headroom so the FLUENT label at y=100 isn't clipped
+    xMinFloor: 0,
+    xMaxCeil:  totalSteps || undefined,
+    yTitle: "fluency % (higher = better)",
+    thresholdLines: [
+      { y: 100, color: "#5dff9b", label: "FLUENT (ppl 3.0)", lineDash: [4, 3] },
+      { y: 91,  color: "#ffae5d", label: "EMERGING (ppl 4.5)", lineDash: [3, 4] },
+    ],
+  });
+}
+
+// per-band trajectory colors. red->violet rainbow tracks reading-difficulty
+// order (Pre-K low / red, PhD high / violet). matches the ladder ordering.
+const GRADE_BAND_COLOR = {
+  prek:    "#ff5d5d",
+  k:       "#ff9a5d",
+  elem:    "#ffe45d",
+  middle:  "#5dff9b",
+  hs:      "#5dd6ff",
+  college: "#5d9bff",
+  phd:     "#b58aff",
+};
+
+// ----------------------------------------------------------------------------
+// Score-axis rendering: shared by math, grammar, reasoning panels. Each axis
+// is a list of tiers/types where the model scores 0..1 accuracy. Pass mark is
+// SCORE_PASS = 0.80; "emerging" sits between SCORE_EMERGING (0.50) and pass.
+// JSON shape:
+//   math      -> { tiers: { tier: { correct, total, accuracy } } }
+//   reasoning -> { tiers: { tier: { ... } } }
+//   grammar   -> { types: { type: { ... } } }
+const SCORE_PASS_PCT     = 0.80;
+const SCORE_EMERGING_PCT = 0.50;
+
+const AXIS_META = {
+  math: {
+    rootKey:  "mathLevelId",
+    fieldKey: "tiers",
+    order:    ["t1_arith1", "t2_arith2", "t3_algebra", "t4_word", "t5_multi"],
+    label:    { t1_arith1: "Arithmetic 1",  t2_arith2: "Arithmetic 2", t3_algebra: "Algebra 1",
+                t4_word:   "Word Problems", t5_multi:  "Multi-Step" },
+    sub:      { t1_arith1: "single-digit + / -", t2_arith2: "two-digit + / - / *",
+                t3_algebra: "x + b = c, solve",  t4_word:   "one-op story problems",
+                t5_multi:   "(a + b) * c style" },
+    colors:   { t1_arith1: "#ff5d5d", t2_arith2: "#ff9a5d", t3_algebra: "#ffe45d",
+                t4_word:   "#5dff9b", t5_multi:  "#5d9bff" },
+    title:    "math fluency",
+    blurb:    "% correct via argmax-decode and string match. Floor on a TinyStories-trained model is expected — math curriculum has to be in training data for this to move.",
+  },
+  grammar: {
+    rootKey:  "grammarLevelId",
+    fieldKey: "types",
+    order:    ["sv_agreement", "articles", "tense", "word_order"],
+    label:    { sv_agreement: "Subject-Verb", articles: "Articles", tense: "Tense", word_order: "Word Order" },
+    sub:      { sv_agreement: "agreement (cats sleep / sleeps)", articles: "a / an / the",
+                tense: "past / present consistency", word_order: "constituent order" },
+    colors:   { sv_agreement: "#ff5d5d", articles: "#ffae5d", tense: "#5dff9b", word_order: "#5d9bff" },
+    title:    "grammar preference",
+    blurb:    "Pairwise: lower mean per-byte NLL on the correct sentence vs. the mutated one counts as a preference. Raw fluency, no decoding.",
+  },
+  reasoning: {
+    rootKey:  "reasoningLevelId",
+    fieldKey: "tiers",
+    order:    ["recall", "pattern", "deduction1", "deduction_n"],
+    label:    { recall: "Recall", pattern: "Analogy", deduction1: "1-step Deduction", deduction_n: "Multi-step" },
+    sub:      { recall: "fact completion (capitals, basic facts)", pattern: "cat:kitten :: dog:?",
+                deduction1: "All A are B; X is A; so X is ?", deduction_n: "transitive ordering chains" },
+    colors:   { recall: "#ff5d5d", pattern: "#ffae5d", deduction1: "#5dff9b", deduction_n: "#5d9bff" },
+    title:    "reasoning",
+    blurb:    "% correct via argmax-decode and string match. Recall and analogy will move first; deductions only after the model sees similar chains in training.",
+  },
+};
+
+function _scoreColor(acc) {
+  if (acc >= SCORE_PASS_PCT)     return "#5dff9b";
+  if (acc >= SCORE_EMERGING_PCT) return "var(--warm)";
+  return "var(--hot)";
+}
+
+function _scoreBadge(acc) {
+  if (acc >= SCORE_PASS_PCT)
+    return `<span class="case" style="background:#103025;color:#5dff9b">FLUENT</span>`;
+  if (acc >= SCORE_EMERGING_PCT)
+    return `<span class="case b-mid">EMERGING</span>`;
+  return `<span class="case" style="background:#330a0a;color:#ff7d5d">NOT YET</span>`;
+}
+
+// Highest passing tier index (>= SCORE_PASS_PCT). null if none.
+function _highestPassingTier(entries, order) {
+  let best = null;
+  for (const k of order) {
+    const e = entries && entries[k];
+    if (e && typeof e.accuracy === "number" && e.accuracy >= SCORE_PASS_PCT) best = k;
+  }
+  return best;
+}
+
+function render_score_axis(axisName, refs, axisSteps, axisByStep, haveCheckpoints) {
+  const meta = AXIS_META[axisName];
+  if (!meta) return;
+  const root = $(refs[meta.rootKey]);
+  if (!root) return;
+  if (!axisSteps || axisSteps.length === 0) {
+    root.innerHTML = haveCheckpoints
+      ? `<span class="meta">no ${axisName} probe yet for this run</span>`
+      : `<span style="color:var(--warm)">No checkpoint yet.</span>`;
+    return;
+  }
+  const latestStep = axisSteps[axisSteps.length - 1];
+  const latest = axisByStep[latestStep];
+  const entries = latest && latest[meta.fieldKey];
+  if (!entries) {
+    root.innerHTML = `<span class="meta">latest ${axisName}_step_${latestStep}.json missing ${meta.fieldKey} field</span>`;
+    return;
+  }
+
+  let html = `<div style="display:grid;grid-template-columns:160px minmax(120px, 260px) 110px 130px;gap:6px 12px;font-size:11.5px;align-items:center">`;
+  for (const k of meta.order) {
+    const e = entries[k];
+    const lbl = meta.label[k];
+    const sub = meta.sub[k] || "";
+    const tierColor = (meta.colors && meta.colors[k]) || "var(--accent)";
+    const swatch = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${tierColor};margin-right:6px;vertical-align:middle"></span>`;
+    const labelCell = `<div style="text-align:right">
+      <b>${swatch}${lbl}</b>
+      <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(sub)}</div>
+    </div>`;
+    if (!e || typeof e.accuracy !== "number") {
+      html += `${labelCell}<div style="grid-column:span 3"><span class="meta">no data</span></div>`;
+      continue;
+    }
+    const acc = e.accuracy;
+    const pct = Math.max(2, Math.min(100, acc * 100));
+    const color = _scoreColor(acc);
+    const badge = _scoreBadge(acc);
+    const accColor = acc >= SCORE_PASS_PCT ? "#5dff9b" : (acc >= SCORE_EMERGING_PCT ? "var(--warm)" : "var(--hot)");
+    const right = `<b style="color:${accColor}">${(acc * 100).toFixed(0)}%</b> <span class="meta">${e.correct}/${e.total}</span>`;
+    html += `${labelCell}
+      ${renderProgressBar(pct, color, [{ pct: 50, opacity: 0.18 }, { pct: 80, opacity: 0.28 }])}
+      <div style="text-align:left">${badge}</div>
+      <div style="text-align:right">${right}</div>`;
+  }
+  html += `</div>`;
+
+  html += `<p class="desc" style="margin-top:10px">${escapeHtml(meta.blurb)}</p>`;
+
+  root.innerHTML = html;
 }
 
 // concept categories. derived from training/checkpoint_probe.py::CONCEPTS — any
@@ -3678,6 +3946,12 @@ async function loadClassroomFor(state, refs, run) {
   state.confByStep = {};
   state.gradesSteps = [];
   state.gradesByStep = {};
+  state.mathSteps = [];
+  state.mathByStep = {};
+  state.grammarSteps = [];
+  state.grammarByStep = {};
+  state.reasoningSteps = [];
+  state.reasoningByStep = {};
   state.conceptsSteps = [];
   state.conceptsByStep = {};
   $(refs.sizeMeterId).innerHTML = `<span class="meta">loading…</span>`;
@@ -3704,8 +3978,11 @@ async function loadClassroomFor(state, refs, run) {
     const r = await fetch(`/run/${encodeURIComponent(run)}/classroom?` + Date.now(), { cache: "no-store" });
     if (r.ok) { const d = await r.json(); classroomItems = d.items || []; }
   } catch (e) {}
-  const gradesFiles   = classroomItems.filter(it => it.kind === "grades");
-  const conceptsFiles = classroomItems.filter(it => it.kind === "concepts");
+  const gradesFiles    = classroomItems.filter(it => it.kind === "grades");
+  const mathFiles      = classroomItems.filter(it => it.kind === "math");
+  const grammarFiles   = classroomItems.filter(it => it.kind === "grammar");
+  const reasoningFiles = classroomItems.filter(it => it.kind === "reasoning");
+  const conceptsFiles  = classroomItems.filter(it => it.kind === "concepts");
   if (steps.length === 0) {
     $(refs.lensDriftId).innerHTML = `<span style="color:var(--warm)">No checkpoint yet.</span>`;
     plotTrainSeries(refs.confCanvas, refs.confCtx, []);
@@ -3738,7 +4015,32 @@ async function loadClassroomFor(state, refs, run) {
     } catch (e) { console.warn("grades fetch", it.step, e); }
   }));
   state.gradesSteps = Object.keys(state.gradesByStep).map(s => parseInt(s, 10)).sort((a, b) => a - b);
-  if (refs.readLevelId) render_reading_level(refs, run, state.gradesSteps, state.gradesByStep, steps.length > 0);
+  if (refs.readLevelId) render_reading_level(refs, run, state.gradesSteps, state.gradesByStep, steps.length > 0, state.config);
+  // math / grammar / reasoning — same shape, fetched in parallel.
+  await Promise.all(mathFiles.map(async it => {
+    try {
+      const r = await fetch(`/timeline/${encodeURIComponent(run)}/${encodeURIComponent(it.file)}?` + Date.now(), { cache: "no-store" });
+      if (r.ok) state.mathByStep[it.step] = await r.json();
+    } catch (e) { console.warn("math fetch", it.step, e); }
+  }));
+  state.mathSteps = Object.keys(state.mathByStep).map(s => parseInt(s, 10)).sort((a, b) => a - b);
+  if (refs.mathLevelId) render_score_axis("math", refs, state.mathSteps, state.mathByStep, steps.length > 0);
+  await Promise.all(grammarFiles.map(async it => {
+    try {
+      const r = await fetch(`/timeline/${encodeURIComponent(run)}/${encodeURIComponent(it.file)}?` + Date.now(), { cache: "no-store" });
+      if (r.ok) state.grammarByStep[it.step] = await r.json();
+    } catch (e) { console.warn("grammar fetch", it.step, e); }
+  }));
+  state.grammarSteps = Object.keys(state.grammarByStep).map(s => parseInt(s, 10)).sort((a, b) => a - b);
+  if (refs.grammarLevelId) render_score_axis("grammar", refs, state.grammarSteps, state.grammarByStep, steps.length > 0);
+  await Promise.all(reasoningFiles.map(async it => {
+    try {
+      const r = await fetch(`/timeline/${encodeURIComponent(run)}/${encodeURIComponent(it.file)}?` + Date.now(), { cache: "no-store" });
+      if (r.ok) state.reasoningByStep[it.step] = await r.json();
+    } catch (e) { console.warn("reasoning fetch", it.step, e); }
+  }));
+  state.reasoningSteps = Object.keys(state.reasoningByStep).map(s => parseInt(s, 10)).sort((a, b) => a - b);
+  if (refs.reasoningLevelId) render_score_axis("reasoning", refs, state.reasoningSteps, state.reasoningByStep, steps.length > 0);
   // concepts
   await Promise.all(conceptsFiles.map(async it => {
     try {
@@ -3932,7 +4234,7 @@ window.addEventListener("resize", () => {
     if (typeof renderTier2ForLearning === "function") renderTier2ForLearning();
     if (classroomStateL.loaded) {
       render_confidence_evo(classroomRefsL, classroomStateL.run, classroomStateL.steps, classroomStateL.confByStep);
-      render_reading_level(classroomRefsL, classroomStateL.run, classroomStateL.gradesSteps, classroomStateL.gradesByStep);
+      render_reading_level(classroomRefsL, classroomStateL.run, classroomStateL.gradesSteps, classroomStateL.gradesByStep, true, classroomStateL.config);
     }
   }
   if (document.querySelector('.tab-body[data-tab="training"]').classList.contains("active") && trainLastText) {
@@ -3940,7 +4242,7 @@ window.addEventListener("resize", () => {
     parseAndRenderTrain(trainLastText);
     if (classroomState.loaded) {
       render_confidence_evo(classroomRefsT, classroomState.run, classroomState.steps, classroomState.confByStep);
-      render_reading_level(classroomRefsT, classroomState.run, classroomState.gradesSteps, classroomState.gradesByStep);
+      render_reading_level(classroomRefsT, classroomState.run, classroomState.gradesSteps, classroomState.gradesByStep, true, classroomState.config);
     }
   }
 });
@@ -4251,10 +4553,56 @@ function _renderBackendState() {
     lbl.innerHTML = `<span class="spinner"></span><b style="color:var(--warm)">${detail}</b>`;
     return;
   }
+  // C backend with zero exported .bin files — surface the real cause clearly.
+  // "not loaded" with no exported model is just confusing; the user has to know
+  // to go to Training → export to .bin before anything will work.
+  if (which === "c" && !s.loaded && s.bins_available === 0) {
+    lbl.innerHTML = `<b style="color:var(--warm)">no exported model</b> &mdash; <a href="#training" style="color:var(--accent)">Training &rarr; export to .bin</a>`;
+    _applyGenerateGate();
+    return;
+  }
+  // C backend selected a non-QAT bin: engine refuses to load (it would
+  // produce gibberish). Show a clear "QAT required" state instead of a
+  // generic "not loaded", and disable the Generate button.
+  if (which === "c" && !s.loaded && s.blocked_reason === "qat_required") {
+    const bm = s.blocked_model || s.model_dir || "model";
+    lbl.innerHTML = `<b style="color:var(--warm)">model not QAT-trained</b> &mdash; generate disabled. switch to PyTorch backend, or retrain <code>${bm}</code> with <code>qat_enabled=true</code>.`;
+    _applyGenerateGate();
+    return;
+  }
   const err = backendsState.lastError ? ` <span style="color:var(--hot)">${backendsState.lastError}</span>` : "";
   lbl.innerHTML = (s.loaded
     ? `<b style="color:var(--data-pos)">ready</b>`
     : `<b style="color:var(--dim)">not loaded</b>`) + err;
+  _applyGenerateGate();
+}
+
+function _applyGenerateGate() {
+  // Disable Generate when the currently-selected backend is unusable.
+  // Use case: c backend has act_boost>1 (QAT required), or no model.
+  const sel = $("backend"), goBtn = $("go");
+  if (!sel || !goBtn) return;
+  const which = sel.value;
+  const s = backendsState[which] || {};
+  const generating = goBtn.dataset.generating === "1";
+  let block = false;
+  let title = "";
+  if (which === "c") {
+    if (s.blocked_reason === "qat_required") {
+      block = true;
+      title = `model '${s.blocked_model || ""}' is not QAT-trained — switch to PyTorch backend or retrain with qat_enabled=true`;
+    } else if (!s.loaded && s.bins_available === 0) {
+      block = true;
+      title = "no exported .bin — Training → export to .bin first";
+    }
+  }
+  if (block && !generating) {
+    goBtn.disabled = true;
+    goBtn.title = title;
+  } else if (!generating) {
+    goBtn.disabled = false;
+    goBtn.title = "";
+  }
 }
 
 function _pollBackends() {
@@ -4274,6 +4622,9 @@ function _waitUntilSettled(which) {
       backendsState.busy = false;
       if (which === "c" && s.build && s.build.status === "failed" && !s.loaded) {
         backendsState.lastError = (s.build && s.build.error) || "build failed";
+      } else if (which === "c" && s.bins_available === 0) {
+        // suppress "did not load"; _renderBackendState shows the no-export hint
+        backendsState.lastError = "";
       } else if (!s.loaded && !backendsState.lastError) {
         backendsState.lastError = "did not load";
       }
@@ -4311,13 +4662,19 @@ document.addEventListener("DOMContentLoaded", () => {
   sel.addEventListener("change", () => {
     backendsState.lastError = "";
     const which = sel.value;
-    if (!backendsState[which].loaded) _toggleBackend(which, "load");
+    const s = backendsState[which] || {};
+    if (which === "c" && s.bins_available === 0) { _renderBackendState(); return; }
+    if (!s.loaded) _toggleBackend(which, "load");
     else _renderBackendState();
   });
   _pollBackends().then(d => {
     if (!d) return;
     const which = sel.value;
     const s = d[which];
+    // skip the load round-trip when c is selected but nothing has been
+    // exported yet — there is nothing the server can load, and the
+    // backend-state line is already showing the "no exported model" hint.
+    if (which === "c" && s && s.bins_available === 0) return;
     if (s && !s.loaded && !s.pending) _toggleBackend(which, "load");
   });
 });
@@ -6152,6 +6509,7 @@ async function loadVersions() {
   const el = document.getElementById("versionList");
   if (!el) return;
   const LABEL = {
+    channel: "Channel",
     build:   "Platform Build",
     engine:  "Veritate Engine",
     mri:     "MRI",
@@ -6159,6 +6517,10 @@ async function loadVersions() {
     plugins: "Plugin Engine",
   };
   const EXPLAIN = {
+    channel: {
+      title: "Channel",
+      body:  "Which fork this build is on. stable is the canonical mainline. experimental is a fork."
+    },
     build: {
       title: "Platform Build",
       body:  "Build number for the dashboard, settings layout, JS, and Python glue around the engine. Bumps when the UI changes, when routes are added, or when packaging shifts. It does not imply the inference engine, model format, or plugin contract changed; those have their own versions."
@@ -6180,19 +6542,50 @@ async function loadVersions() {
       body:  "Version of the plugin contract surfaced by veritate.plugin: manifest schema, lifecycle hooks, and the platform calls a plugin is allowed to make. Bumps when a hook is added, renamed, or removed. Plugins compiled against an older contract version may refuse to load."
     },
   };
-  const ORDER = ["build", "engine", "mri", "format", "plugins"];
+  const ORDER = ["channel", "build", "engine", "mri", "format", "plugins"];
   const SEP = '<span style="color:var(--text);font-size:14px;font-weight:300;margin:0 4px">|</span>';
+  function channelMeta(raw) {
+    const s = (raw || "").toString().toLowerCase();
+    if (!s || s === "stable") return { hide: true, display: "", color: null };
+    if (s === "development" || s === "dev") return { hide: false, display: "dev", color: "var(--warm)" };
+    if (s === "experimental") return { hide: false, display: "experimental", color: "var(--cool)" };
+    return { hide: false, display: s, color: "var(--cool)" };
+  }
   function chip(k, val) {
     const label = LABEL[k] || k;
-    return `<a href="#" data-vkey="${escapeHtml(k)}" style="color:var(--soft);text-decoration:none;border-bottom:1px dotted var(--line);cursor:pointer">${escapeHtml(label)} <span style="color:var(--text)">${escapeHtml(String(val))}</span></a>`;
+    const isChannel = (k === "channel");
+    let displayVal = String(val);
+    let valStyle = "color:var(--text)";
+    if (isChannel) {
+      const meta = channelMeta(val);
+      if (!meta.hide) {
+        displayVal = meta.display;
+        valStyle = `color:${meta.color};font-weight:600`;
+      }
+    }
+    return `<a href="#" data-vkey="${escapeHtml(k)}" style="color:var(--soft);text-decoration:none;border-bottom:1px dotted var(--line);cursor:pointer">${escapeHtml(label)} <span style="${valStyle}">${escapeHtml(displayVal)}</span></a>`;
   }
   try {
     const r = await fetch("/versions");
     if (!r.ok) throw new Error(r.status);
     const v = await r.json();
+    const meta = channelMeta(v.channel);
+    for (const id of ["channelBadge"]) {
+      const node = document.getElementById(id);
+      if (!node) continue;
+      if (!meta.hide) {
+        node.textContent = meta.display;
+        node.style.color = meta.color;
+        node.style.display = "";
+      } else {
+        node.textContent = "";
+        node.style.display = "none";
+      }
+    }
     const parts = [];
     for (const k of ORDER) {
       if (v[k] === undefined) continue;
+      if (k === "channel" && channelMeta(v[k]).hide) continue;
       parts.push(chip(k, v[k]));
     }
     for (const [k, val] of Object.entries(v)) {
@@ -6269,6 +6662,36 @@ const _AI = (() => {
     "consulting the binder",
     "squaring the math",
   ];
+  const SLOW_PHRASES = [
+    "ok this one's actually hard hold on",
+    "hm",
+    "wait let me reread the question",
+    "one sec im cooking",
+    "ok ok ok give me a minute",
+    "ok new plan",
+    "i swear i know this",
+    "ok yes. wait no",
+    "give me one more sec sorry",
+    "the answer is in here i can feel it",
+    "this is embarrassing how long this is taking",
+    "pls dont close the tab",
+    "why is this question harder than it looked",
+    "i was right the first time. probably. nope go back",
+    "one more pass and then im sending it",
+    "promise im still here",
+    "don't worry im not asleep",
+    'would it help if i said "almost done"?',
+    "ok genuinely not far now",
+    "unless. nope yes. ok",
+    "alright drafting the real answer",
+    "ok ok ok i see it now",
+    "ok now i'm just being thorough",
+    "polishing it a little, sorry",
+    "retyping that whole part",
+    "final lap promise",
+    "40% there. now 38%. wait",
+  ];
+  const SLOW_THRESHOLD_MS = 35000;
   const CHAR_BASE_MS  = 55;
   const CHAR_JITTER   = 70;
   const PAUSE_CHANCE  = 0.07;
@@ -6286,6 +6709,8 @@ const _AI = (() => {
   let phraseCursor = 0;
   let inflight = null;
   let lastAnswerText = "";
+  let openedAt = 0;
+  let slowMode = false;
 
   function _rand(min, max) { return min + Math.random() * (max - min); }
 
@@ -6338,8 +6763,14 @@ const _AI = (() => {
   }
 
   function _nextPhrase() {
+    const elapsed = Date.now() - openedAt;
+    if (!slowMode && elapsed >= SLOW_THRESHOLD_MS) {
+      slowMode = true;
+      phraseOrder = _shuffleCopy(SLOW_PHRASES);
+      phraseCursor = 0;
+    }
     if (phraseCursor >= phraseOrder.length) {
-      phraseOrder = _shuffleCopy(PHRASES);
+      phraseOrder = _shuffleCopy(slowMode ? SLOW_PHRASES : PHRASES);
       phraseCursor = 0;
     }
     const p = phraseOrder[phraseCursor++];
@@ -6356,6 +6787,8 @@ const _AI = (() => {
     lastAnswerText = "";
     document.getElementById("aiSaveTxtBtn").disabled = true;
     _setState("loading", "loading");
+    openedAt = Date.now();
+    slowMode = false;
     phraseOrder = _shuffleCopy(PHRASES);
     phraseCursor = 0;
     _nextPhrase();

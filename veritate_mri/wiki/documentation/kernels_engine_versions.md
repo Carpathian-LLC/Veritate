@@ -2,30 +2,20 @@
 title: engine versioning
 date: 2026-05-05
 tags: [engine, versions, semver, manifest]
-summary: Engine version schema for the C inference binary and the engine_versions.json manifest.
+summary: How the C engine binary is versioned and how the dashboard picks which one to use.
 ---
 
-> Source: `documentation/kernels/engine_versions.md` (mirrored copy; the file at that path remains the canonical contract).
+> Friendly summary. The canonical contract is `documentation/kernels/engine_versions.md`.
 
-# Engine versioning
+The C engine (`veritate.exe`) uses simple semver. The current build is **v2.0.0**. The earlier build, historically tagged v3.4.5, has been renumbered to **v1.0.0** under this scheme.
 
-The C inference engine (`veritate.exe` and historical builds) is versioned
-with simple semver. The current build is **v2.0.0**. The previous build,
-historically tagged `v3.4.5`, has been renumbered to **v1.0.0** under this
-simplified scheme.
+## why renumber
 
-## Why renumber
+The earlier 3.4.5 number conflated kernel changes, dashboard changes, and weight-format changes into one tag. v1 / v2 here track only the engine binary, so a kernel-only bump increments cleanly without dragging unrelated work along.
 
-The earlier 3.4.5 number conflated kernel changes, MRI app changes, and
-weight-format changes into one tag. v1/v2 here track the engine binary
-only, so a kernel-only bump cleanly increments without dragging unrelated
-work into the version number.
+## the manifest
 
-## Manifest
-
-`veritate_engine/engine_versions.json` is the source of truth. Each entry maps an
-exe filename in `$LOCALAPPDATA/veritate/` to a semver string and a
-human-readable label.
+`veritate_engine/engine_versions.json` is the source of truth. It maps an exe filename in `$LOCALAPPDATA/veritate/` to a semver string and a label.
 
 ```json
 {
@@ -37,39 +27,32 @@ human-readable label.
 }
 ```
 
-The MRI server reads this manifest at startup, defaults the C backend to
-the highest-version entry whose exe file exists, and exposes the active
-version in the top-right meta strip of the UI.
+The MRI server reads this at startup, picks the highest-version entry whose exe exists, and shows the active version in the top-right meta strip of the dashboard.
 
-## When to bump
+## when to bump
 
-Bump the patch number for kernel tweaks, the minor for new kernel
-families, the major for protocol or weight-format changes (anything that
-breaks compatibility with older `.bin` files or older trace formats).
+| change | bump |
+|---|---|
+| kernel tweak | patch |
+| new kernel family | minor |
+| protocol or weight-format break | major |
 
-## Workflow when shipping a new engine
+## shipping a new engine
 
 1. `build.bat` writes `veritate.exe` (the live build).
-2. If you want to keep the previous build for A/B comparison, copy the
-   old `veritate.exe` out to `veritate_v<old>.exe` BEFORE rebuilding.
-3. Bump the `version` of the `veritate.exe` entry in
-   `veritate_engine/engine_versions.json` and add a new entry for the archived exe.
+2. To keep the previous build for A/B comparison, copy it to `veritate_v<old>.exe` **before** rebuilding.
+3. Bump the `version` of the `veritate.exe` entry in `veritate_engine/engine_versions.json` and add a new entry for the archived exe.
 4. Restart the MRI server. The dropdown auto-defaults to the new version.
 
-The user-facing UI does not expose engine selection. The engine is
-abstracted to "always the newest version with an existing binary." If
-you need to run an older engine for benchmarking, pass
-`--c-exe <path>` to `run_serve.py`.
+The user-facing UI doesn't expose engine selection. The engine is abstracted to "always the newest version with an existing binary." To run an older engine for benchmarking, pass `--c-exe <path>` to `run_serve.py`.
 
-## Performance reference
+## reference perf
 
-Numbers from the dev box (Ryzen 9800X3D, AVX-512 + VNNI). Per-byte
-decode wall time on the 80M model:
+Numbers from the dev box (Ryzen 9800X3D, AVX-512 + VNNI). Per-byte decode wall time on the 80M model.
 
-| version | ms/byte | notes                                           |
-|---------|---------|-------------------------------------------------|
-| v1.0.0  | 7.0     | legacy v3.4.5 build                             |
-| v2.0.0  | 4.0     | current build                                   |
+| version | ms/byte | notes |
+|---|---|---|
+| v1.0.0 | 7.0 | legacy v3.4.5 build |
+| v2.0.0 | 4.0 | current build |
 
-Treat these as informational anchors; the workbook holds live bench
-numbers from `veritate.exe bench 50 200`.
+Treat these as informational anchors. The workbook holds live bench numbers from `veritate.exe bench 50 200`.

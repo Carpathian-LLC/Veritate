@@ -38,7 +38,10 @@
 
 <div class="topbar">
   <div>
-    <h1>Veritate</h1>
+    <h1>V·E·R·I·T·A·T·E<sup id="channelBadge"
+   style="font-size:9px;color:var(--cool);font-weight:600;letter-spacing:.04em;
+          margin-left:4px;vertical-align:super;position:relative;top:-3px;
+          text-transform:lowercase;display:none"></sup></h1>
   </div>
   <div class="right">
     <a href="/multimind" style="color:var(--dim);font-size:11px;text-decoration:none;border-bottom:1px dashed var(--dim);display:none">multimind →</a>
@@ -99,6 +102,11 @@
         <span id="ablBadge" class="stat" style="font-size:10px;color:#ff6b6b;display:none">ablated</span>
         <span id="maxHint" class="stat" style="font-size:10px;color:var(--dim)"></span>
         <span id="liveStats" class="stats"></span>
+      </div>
+      <div id="addonsRow" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
+        <span style="color:var(--text);font-weight:600" title="inference-time addons applied to the PyTorch backend before sampling. each addon biases next-byte logits without touching the model.">addons</span>
+        <span id="addonsList" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"></span>
+        <span id="addonsHint" class="stat" style="font-size:10px;color:var(--dim)">PyTorch backend only</span>
       </div>
       <details class="more">
         <summary>what these knobs do</summary>
@@ -609,25 +617,46 @@
   </div>
 
   <div class="panel">
-    <h2>reading level <em>highest grade band the model is fluent at</em></h2>
+    <h2>reading level <em>per-band fluency over training, 7 reading-level tiers</em></h2>
     <div class="body">
+      <div id="learnReadLegend" style="margin-bottom:6px"></div>
+      <canvas id="cReadGradeL" height="200" style="margin-top:4px"></canvas>
+      <div class="meta" style="margin-top:4px;margin-bottom:14px;font-size:10.5px">trajectory: per-band fluency % (UP = better). Each band starts at 0 (random) at step 0 and rises toward FLUENT (ppl 3.0 = 100%). Threshold lines marked.</div>
       <div id="learnReadLevel">no grades data</div>
-      <canvas id="cReadGradeL" height="140" style="margin-top:10px"></canvas>
-      <div class="meta" style="margin-top:4px;font-size:10.5px">trajectory: y-axis is the highest fluent band per probed checkpoint. 0&nbsp;=&nbsp;Pre-K, 1&nbsp;=&nbsp;K, 2&nbsp;=&nbsp;Elem, 3&nbsp;=&nbsp;Middle, 4&nbsp;=&nbsp;HS, 5&nbsp;=&nbsp;College, 6&nbsp;=&nbsp;PhD. &minus;1 means no band was fluent yet.</div>
     </div>
-    <p class="desc">7 grade bands, Pre-K → PhD. <b style="color:#5dff9b">FLUENT</b> = perplexity &lt; 3.0; <b style="color:var(--warm)">EMERGING</b> = within 1.5&times;; <b style="color:var(--hot)">NOT YET</b> = beyond. Hero label = highest band currently fluent. Line plot = how that ceiling has moved over training.</p>
     <details class="more"><summary>how the grade is computed</summary><div class="more-content">
       <h4>where the test corpora come from</h4>
-      <p>For each of the 7 bands (Pre-K, K, Elem, Middle, HS, College, PhD) we hold out ~4&nbsp;KB of grade-labeled byte text in <code>plugins/corpus/grade_&lt;level&gt;_eval.bin</code>. Pre-K through Elem are Project-Gutenberg children's classics cross-checked against Lexile / Flesch-Kincaid bands; HS and College are excerpts from age-appropriate literature; PhD is academic abstracts (stub). Probe IDs never overlap with training corpora. The model has never seen these bytes. Producer: <code>training/prep_grade_eval.py</code>.</p>
+      <p>For each of the 7 bands (Pre-K, K, Elem, Middle, HS, College, PhD) we hold out ~4&nbsp;KB of grade-labeled byte text in <code>veritate_mri/grade_eval/grade_&lt;level&gt;_eval.bin</code>. Sources are fresh hand-authored passages tuned to each band's prose statistics (sentence length, clause density, register), giving clean bytes from offset 0 with no Gutenberg boilerplate to inflate ppl. Probe text never overlaps with training corpora. Sources live at <code>veritate_mri/grade_eval/sources/</code>; producer: <code>veritate_mri/tools/build_grade_evals.py</code>.</p>
       <h4>what perplexity (ppl) actually measures</h4>
       <p><b>Perplexity = exp(mean cross-entropy)</b>. It is the effective number of bytes the model is choosing between at each step. ppl 256 = uniform random across all bytes. ppl 1.0 = perfect prediction. ppl &lt; 3.0 means the model needs under 1.6 bits to commit to each next byte (the empirical floor where TinyStories-clone prose stops looking like noise). Lower is better.</p>
       <h4>why "highest passing band" is the honest read</h4>
-      <p>A model with low ppl on K and high ppl on Pre-K isn't "below K." The Pre-K corpus uses Victorian sentence rhythms (Beatrix Potter, etc.) that score harder than modern leveled readers despite the simple vocabulary. See the note in <code>docs/notes/GRADING_SCALE.md</code>. The most informative answer is the highest band the model can read fluently. That's the ceiling, and it's what the hero label shows.</p>
+      <p>A model with low ppl on Elem and high ppl on Pre-K isn't necessarily "below Elem." Each band's prose has a different statistical signature (sentence length, clause density, register), and the model's training mix decides which signature scores best. The most informative answer is the highest band the model can read fluently. That's the ceiling, and it's what the hero label shows.</p>
       <h4>what to do with this</h4>
       <p><b class="lead">FLUENT band that's the curriculum target.</b> Stage gate passes. Advance to the next stage.</p>
       <p><b class="lead">EMERGING band with a small gap</b> (e.g. ppl 3.3 vs 3.0 threshold). The next 1-2k steps on that domain usually closes it; keep training.</p>
       <p><b class="lead">NOT YET band on the curriculum target.</b> Corpus mix is wrong for the stage. Lower the LR or rewind to easier text rather than pushing on.</p>
     </div></details>
+  </div>
+
+  <div class="panel">
+    <h2>math fluency <em>argmax-decode accuracy, 5 difficulty tiers</em></h2>
+    <div class="body">
+      <div id="learnMathLevel">no math probe yet</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>grammar preference <em>pairwise NLL preference, 4 categories</em></h2>
+    <div class="body">
+      <div id="learnGrammarLevel">no grammar probe yet</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>reasoning <em>argmax-decode accuracy, 4 categories</em></h2>
+    <div class="body">
+      <div id="learnReasoningLevel">no reasoning probe yet</div>
+    </div>
   </div>
 
   <div class="panel" data-expandable="true">
@@ -763,7 +792,7 @@
       </div>
 
     </div>
-    <p class="desc">A <b>trainer</b> is a script that runs the training loop. A <b>training data file</b> (corpus) is the text the model learns from, e.g. <code>tinystories_train.bin</code>. A <b>model</b> is the trained product saved under <code>models/&lt;name&gt;/</code>. Trainers live in <code>plugins/</code> as either a single file (<code>plugins/&lt;name&gt;.py</code>) or a self-contained bundle folder (<code>plugins/&lt;name&gt;/plugin.py</code> + optional <code>corpus/</code> subfolder). The MANIFEST declares <code>kind: "trainer"</code> and <code>flow: "scratch" | "refine" | "distill"</code>; the form auto-renders from <code>args</code> and pre-fills from <code>defaults</code>. Shared corpora live at <code>plugins/corpus/</code>. One run at a time. Output streams into the Logs tab. Hooks are produced by the platform's <code>save.py::save()</code>; trainers do not author hook files. Full schema: <code>plugins/readme.md</code>.</p>
+    <p class="desc"><b>Trainers</b> live in <code>plugins/</code> as <code>&lt;name&gt;.py</code> or a bundle (<code>&lt;name&gt;/plugin.py</code> + optional <code>corpus/</code>). They read a <b>corpus</b> (shared at <code>plugins/corpus/</code>) and write a <b>model</b> to <code>models/&lt;name&gt;/</code>.</p>
   </div>
 
   <div class="panel" style="margin-bottom: 10px;">
@@ -780,7 +809,7 @@
       <div id="runCsvStatus" class="meta">loading...</div>
       <div id="trainStreamFeed" style="display:none;margin-top:10px;font:11px monospace;max-height:240px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);padding:6px;border-radius:3px"></div>
     </div>
-    <p class="desc">Loss / lr / grad-norm from the selected run's <code>train.csv</code>, polled every 5s. Brain-scan rows (residual norms, top-K firing neurons, lens top-3) appear automatically when the trainer is run with <code>--mri-stream</code> and calls <code>veritate_mri.train_stream.publish()</code> per step.</p>
+    <p class="desc">Polls <code>train.csv</code> every 5s for loss/lr/grad-norm. Brain-scan rows (residuals, top-K neurons, lens top-3) require <code>--mri-stream</code> + per-step <code>train_stream.publish()</code>.</p>
   </div>
 
   <div class="panel">
@@ -922,30 +951,43 @@
   </div>
 
   <div class="panel">
-    <h2>reading level <em>highest grade band the model is fluent at</em></h2>
+    <h2>reading level <em>per-band fluency over training, 7 reading-level tiers</em></h2>
     <div class="body">
+      <div id="trainReadLegend" style="margin-bottom:6px"></div>
+      <canvas id="cReadGradeT" height="200" style="margin-top:4px"></canvas>
+      <div class="meta" style="margin-top:4px;margin-bottom:14px;font-size:10.5px">trajectory: per-band fluency % (UP = better). Each band starts at 0 (random) at step 0 and rises toward FLUENT (ppl 3.0 = 100%). Threshold lines marked.</div>
       <div id="trainReadLevel">no grades data</div>
-      <canvas id="cReadGradeT" height="140" style="margin-top:10px"></canvas>
-      <div class="meta" style="margin-top:4px;font-size:10.5px">trajectory: y-axis is the highest fluent band per probed checkpoint (0&nbsp;=&nbsp;Pre-K &hellip; 6&nbsp;=&nbsp;PhD; &minus;1&nbsp;=&nbsp;no band fluent).</div>
     </div>
-    <p class="desc">7 grade bands, Pre-K → PhD. <b style="color:#5dff9b">FLUENT</b> = perplexity &lt; 3.0. Hero label = highest fluent band; line plot = how it moved. Math explainer on the Learning tab.</p>
+  </div>
+
+  <div class="panel">
+    <h2>math fluency <em>argmax-decode accuracy, 5 difficulty tiers</em></h2>
+    <div class="body">
+      <div id="trainMathLevel">no math probe yet</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>grammar preference <em>pairwise NLL preference, 4 categories</em></h2>
+    <div class="body">
+      <div id="trainGrammarLevel">no grammar probe yet</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>reasoning <em>argmax-decode accuracy, 4 categories</em></h2>
+    <div class="body">
+      <div id="trainReasoningLevel">no reasoning probe yet</div>
+    </div>
   </div>
 
   <div class="panel">
     <h2>concepts formation <em>50-probe association test, grouped by category</em></h2>
     <div class="body">
       <div id="trainConcepts" style="max-height: 620px; overflow: auto">no concepts data</div>
-      <div class="meta hover-info" id="trainConceptsHover">click any concept to see its surprise trajectory across checkpoints</div>
-      <div class="meta" style="margin-top:6px;font-size:10.5px;line-height:1.55">
-        <b style="color:var(--text)">how to read the trajectory:</b>
-        dots run <b>left&nbsp;&rarr;&nbsp;right</b> oldest to latest. <b>Larger dot</b> = lower surprise = more confident.
-        Color tiers:
-        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5dff9b;vertical-align:middle"></span>&nbsp;<span style="color:#5dff9b">mastered</span>,
-        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffae5d;vertical-align:middle"></span>&nbsp;<span style="color:var(--warm)">learning</span>,
-        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff5d5d;vertical-align:middle"></span>&nbsp;<span style="color:var(--hot)">struggling</span>.
-      </div>
+      <div class="meta hover-info" id="trainConceptsHover">click any concept below for its trajectory chart and the neurons that fire for it.</div>
     </div>
-    <p class="desc">Tier counts = how many of 50 probes are formed. "Biggest gaps" = top 5 still-surprising concepts. Category strips show clusters. Full math explainer on the Learning tab.</p>
+    <p class="desc">A 50-probe quiz that asks: given a short preamble, how many guesses does the model need to land on the right next byte? Tier counts at the top show how many concepts are mastered (under 1 bit), still learning, or struggling. The grouped strips below split the 50 probes by topic. Click any concept for its full trajectory.</p>
   </div>
 
 </div>
@@ -1105,23 +1147,6 @@
         </div>
       </div>
 
-      <div class="settings-row" style="border-top: 1px solid var(--hot); margin-top: 18px; padding-top: 18px">
-        <div class="label" style="color: var(--hot)">Danger zone</div>
-        <div class="desc">
-          <ul style="margin:0 0 0 18px;padding:0">
-            <li><b style="color: var(--data-pos)">Soft reload (keeps training alive)</b>. Re-execs the Python launcher without touching the active training subprocess. The training PID is on disk, so the new server reattaches to it on startup. The C engine subprocess is closed and respawns on demand. Use this after you change Python code and want the new code live without losing training progress.</li>
-            <li><b style="color: var(--warm)">Reload Python (keeps training alive)</b>. Full shutdown of the C engine and PyTorch backend, then re-execs the launcher. Training is a separate subprocess and keeps running; the new server reattaches via the PID file. Use this when the dashboard is wedged or you want backends freshly loaded.</li>
-            <li><b style="color: var(--hot)">Kill everything (kills training)</b>. Stops the training subprocess, the C engine, and the PyTorch backend, then exits the Python process. The launcher does <i>not</i> come back. Uncheckpointed training progress is lost; saved checkpoints on disk survive. Requires typing "kill" to confirm.</li>
-          </ul>
-        </div>
-        <div class="inline" style="gap: 10px;flex-wrap:wrap">
-          <button id="softReloadBtn" class="action" type="button" style="border-color: var(--data-pos); color: var(--data-pos)">soft reload (keep training)</button>
-          <button id="restartServerBtn" class="action" type="button" style="border-color: var(--warm); color: var(--warm)">reload python (keep training)</button>
-          <button id="killServerBtn" class="action" type="button" style="border-color: var(--hot); color: var(--hot)">kill everything</button>
-          <span id="lifecycleStatus" class="meta">idle</span>
-        </div>
-      </div>
-
       <div class="settings-row">
         <div class="label">Anonymous heartbeat</div>
         <div class="desc">
@@ -1182,6 +1207,23 @@
               <span class="opt-sub">Inline numbers next to each bar — CPU normalized % and core count, RSS as % of system + total RAM, GPU name and VRAM used/total. The HUD just shows headline values otherwise.</span>
             </span>
           </label>
+        </div>
+      </div>
+
+      <div class="settings-row" style="border-top: 1px solid var(--hot); margin-top: 18px; padding-top: 18px">
+        <div class="label" style="color: var(--hot)">Danger zone</div>
+        <div class="desc">
+          <ul style="margin:0 0 0 18px;padding:0">
+            <li><b style="color: var(--data-pos)">Soft reload (keeps training alive)</b>. Re-execs the Python launcher without touching the active training subprocess. The training PID is on disk, so the new server reattaches to it on startup. The C engine subprocess is closed and respawns on demand. Use this after you change Python code and want the new code live without losing training progress.</li>
+            <li><b style="color: var(--warm)">Reload Python (keeps training alive)</b>. Full shutdown of the C engine and PyTorch backend, then re-execs the launcher. Training is a separate subprocess and keeps running; the new server reattaches via the PID file. Use this when the dashboard is wedged or you want backends freshly loaded.</li>
+            <li><b style="color: var(--hot)">Kill everything (kills training)</b>. Stops the training subprocess, the C engine, and the PyTorch backend, then exits the Python process. The launcher does <i>not</i> come back. Uncheckpointed training progress is lost; saved checkpoints on disk survive. Requires typing "kill" to confirm.</li>
+          </ul>
+        </div>
+        <div class="inline" style="gap: 10px;flex-wrap:wrap">
+          <button id="softReloadBtn" class="action" type="button" style="border-color: var(--data-pos); color: var(--data-pos)">soft reload (keep training)</button>
+          <button id="restartServerBtn" class="action" type="button" style="border-color: var(--warm); color: var(--warm)">reload python (keep training)</button>
+          <button id="killServerBtn" class="action" type="button" style="border-color: var(--hot); color: var(--hot)">kill everything</button>
+          <span id="lifecycleStatus" class="meta">idle</span>
         </div>
       </div>
 
@@ -1316,7 +1358,7 @@
       <button id="qatHelpModalClose">×</button>
     </div>
     <div style="font-size:12.5px;line-height:1.6;color:var(--text)">
-      <p><b>Short version.</b> The Veritate (C) engine runs the model in INT8: every number is one of 256 discrete steps. Models trained in float32 or bf16 without QAT (quantization-aware training) often have weights too small to survive that rounding, so the C engine produces gibberish even though PyTorch produces coherent text from the exact same checkpoint.</p>
+      <p>The Veritate (C) engine runs the model in INT8: every number is one of 256 discrete steps. Models trained in float32 or bf16 without QAT (quantization-aware training) often have weights too small to survive that rounding, so the C engine produces gibberish even though PyTorch produces coherent text from the exact same checkpoint.</p>
       <p><b>The fix is QAT.</b> QAT teaches the model, during training, to be robust to INT8 rounding. It adds fake-quant operations to the forward pass so weights drift into magnitude ranges that quantize cleanly. The architecture, optimizer, and checkpoint format do not change. Only the forward-pass numerics during training change.</p>
       <p><b>You do not have to start over.</b> Take the existing <code id="qatHelpModelName2" style="color:var(--accent)">your model</code> checkpoint, switch on QAT, and continue training for a few hundred to a couple thousand more steps at a low learning rate (about 1e-5). The model keeps everything it learned. It just learns to round well. This is the standard fix for a non-QAT model.</p>
       <p><b>How to do it on this platform.</b></p>

@@ -50,6 +50,16 @@ GRADE_LEVELS    = ["prek", "k", "elem", "middle", "hs", "college", "phd"]
 GRADE_PPL_PASS  = 3.0
 GRADE_BYTES     = 4096
 
+# smartness-meter axes beyond reading. each axis is a directory of jsonl
+# tier files under veritate_mri/grade_eval/<axis>/. tier order here drives
+# the dashboard ladder order.
+EVAL_ROOT       = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "grade_eval"))
+MATH_TIERS      = ["t1_arith1", "t2_arith2", "t3_algebra", "t4_word", "t5_multi"]
+GRAMMAR_TYPES   = ["sv_agreement", "articles", "tense", "word_order"]
+REASONING_TIERS = ["recall", "pattern", "deduction1", "deduction_n"]
+SCORE_PASS      = 0.80   # tier passes when accuracy >= this
+SCORE_EMERGING  = 0.50   # tier is "emerging" between this and SCORE_PASS
+
 GRADE_SOURCES = {
     "prek":    [(39784, "real_mother_goose"),         (24108, "the_three_bears")],
     "k":       [(19994, "more_english_fairy_tales"),  (7439,  "english_fairy_tales")],
@@ -855,6 +865,218 @@ def dump_grades(model, out_dir: str, step: int):
     return path
 
 
+# ------------------------------------------------------------------------------------
+# Smartness-meter axes beyond reading: math, grammar, reasoning.
+# Shared scoring primitives, then three thin dump functions.
+
+def _load_jsonl(path):
+    if not os.path.isfile(path):
+        return []
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out
+
+
+@torch.no_grad()
+def _argmax_decode(model, prompt_bytes: bytes, max_new: int, device):
+    """Greedy-decode `max_new` bytes from the model after `prompt_bytes`.
+
+    Truncates the input context to model.seq tokens before each forward pass.
+    Stops early on newline so single-line answers don't bleed into noise.
+    """
+    seq = model.seq
+    arr = np.frombuffer(prompt_bytes, dtype=np.uint8)
+    if len(arr) == 0:
+        return b""
+    ids = torch.tensor(arr.copy(), dtype=torch.long, device=device).unsqueeze(0)
+    out = bytearray()
+    for _ in range(max_new):
+        x = ids[:, -seq:]
+        logits, _ = model(x)
+        nxt = int(logits[0, -1].argmax().item())
+        if nxt == 0x0A:  # newline = end of answer
+            break
+        out.append(nxt)
+        ids = torch.cat([ids, torch.tensor([[nxt]], device=device)], dim=1)
+    return bytes(out)
+
+
+def _extract_answer_token(decoded: bytes) -> str:
+    """Pull the first whitespace-delimited token from decoded bytes,
+    stripping common trailing punctuation. Used for math + reasoning scoring."""
+    s = decoded.decode("utf-8", errors="replace").strip()
+    if not s:
+        return ""
+    head = s.split()[0]
+    return head.rstrip(".,;:!?\"'")
+
+
+@torch.no_grad()
+def _score_qa_axis(model, axis_dir_name: str, tiers, device):
+    """Generic scorer for argmax-decode-and-string-match axes (math + reasoning).
+
+    Returns dict: {tier_name: {"correct": int, "total": int, "accuracy": float, "examples": [...]}}.
+    A few sample (prompt, expected, predicted) triples are kept per tier for
+    debugging; the dashboard does not display them but they are useful in JSON.
+    """
+    axis_dir = os.path.join(EVAL_ROOT, axis_dir_name)
+    out = {}
+    for tier in tiers:
+        items = _load_jsonl(os.path.join(axis_dir, f"{tier}.jsonl"))
+        if not items:
+            continue
+        correct = 0
+        examples = []
+        for it in items:
+            prompt = it.get("prompt", "")
+            answer = str(it.get("answer", "")).strip()
+            if not prompt or not answer:
+                continue
+            pb = prompt.encode("utf-8", errors="replace")
+            decoded = _argmax_decode(model, pb, max_new=max(8, len(answer) + 4), device=device)
+            pred = _extract_answer_token(decoded)
+            ok = pred == answer
+            if ok:
+                correct += 1
+            if len(examples) < 4:
+                examples.append({"prompt": prompt, "expected": answer, "predicted": pred, "ok": ok})
+        total = len(items)
+        out[tier] = {
+            "correct":  int(correct),
+            "total":    int(total),
+            "accuracy": round(correct / total, 4) if total else 0.0,
+            "examples": examples,
+        }
+    return out
+
+
+@torch.no_grad()
+def _grammar_pair_score(model, correct: str, incorrect: str, device):
+    """Mean per-byte NLL (nats) for each side of a pair. Lower is preferred."""
+    def _nll_mean(s):
+        b = s.encode("utf-8", errors="replace")
+        if len(b) < 2:
+            return float("nan")
+        arr = np.frombuffer(b, dtype=np.uint8)
+        seq = model.seq
+        chunk = torch.tensor(arr[:seq + 1].copy(), dtype=torch.long, device=device).unsqueeze(0)
+        x = chunk[:, :-1]
+        y = chunk[:, 1:]
+        logits, _ = model(x)
+        log_probs = F.log_softmax(logits.float(), dim=-1)
+        nll = -log_probs.gather(-1, y.unsqueeze(-1)).squeeze(-1)
+        return float(nll.mean().item())
+    nc = _nll_mean(correct)
+    ni = _nll_mean(incorrect)
+    return nc, ni
+
+
+@torch.no_grad()
+def dump_math(model, out_dir: str, step: int):
+    """Per-tier argmax-match accuracy on math problems."""
+    t0 = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+    tiers = _score_qa_axis(model, "math", MATH_TIERS, device)
+    if was_training: model.train()
+    out = {
+        "step":      int(step),
+        "precision": _precision_tag(model),
+        "tiers":     tiers,
+        "time_s":    round(time.time() - t0, 4),
+    }
+    path = os.path.join(out_dir, f"math_step_{step}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+    return path
+
+
+@torch.no_grad()
+def dump_reasoning(model, out_dir: str, step: int):
+    """Per-tier argmax-match accuracy on reasoning problems."""
+    t0 = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+    tiers = _score_qa_axis(model, "reasoning", REASONING_TIERS, device)
+    if was_training: model.train()
+    out = {
+        "step":      int(step),
+        "precision": _precision_tag(model),
+        "tiers":     tiers,
+        "time_s":    round(time.time() - t0, 4),
+    }
+    path = os.path.join(out_dir, f"reasoning_step_{step}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+    return path
+
+
+@torch.no_grad()
+def dump_grammar(model, out_dir: str, step: int):
+    """Per-type preference accuracy on grammar pairs.
+
+    For each pair, score both correct and incorrect sentences under the model
+    and count it correct when mean NLL on the correct sentence is lower.
+    """
+    t0 = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+
+    grammar_dir = os.path.join(EVAL_ROOT, "grammar")
+    types = {}
+    for typ in GRAMMAR_TYPES:
+        pairs = _load_jsonl(os.path.join(grammar_dir, f"{typ}.jsonl"))
+        if not pairs:
+            continue
+        correct_pref = 0
+        examples = []
+        for p in pairs:
+            cs = p.get("correct", "")
+            ic = p.get("incorrect", "")
+            if not cs or not ic:
+                continue
+            nc, ni = _grammar_pair_score(model, cs, ic, device)
+            ok = (nc < ni)  # lower NLL = preferred
+            if ok:
+                correct_pref += 1
+            if len(examples) < 4:
+                examples.append({"correct": cs, "incorrect": ic, "nll_correct": round(nc, 4),
+                                 "nll_incorrect": round(ni, 4), "preferred_correct": ok})
+        total = len(pairs)
+        types[typ] = {
+            "correct":  int(correct_pref),
+            "total":    int(total),
+            "accuracy": round(correct_pref / total, 4) if total else 0.0,
+            "examples": examples,
+        }
+
+    if was_training: model.train()
+    out = {
+        "step":      int(step),
+        "precision": _precision_tag(model),
+        "types":     types,
+        "time_s":    round(time.time() - t0, 4),
+    }
+    path = os.path.join(out_dir, f"grammar_step_{step}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+    return path
+
+
 @torch.no_grad()
 def _concept_surprise_bits(model, preamble: str, target: str, device):
     """Surprise of `target` bytes given `preamble`, in bits per byte (mean)."""
@@ -1053,7 +1275,10 @@ def _load_checkpoint(ckpt_path):
     sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
     from veritate.model import Veritate
     s = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    cfg = s.get("args") or {}
+    cfg = dict(s.get("args") or {})
+    sd = s["model"]
+    step = int(s.get("step", 0))
+    del s  # drops optimizer state (~8 GB on 1B) before model construction
     required = ("vocab", "hidden", "layers", "ffn", "heads", "seq")
     missing = [k for k in required if k not in cfg]
     if missing:
@@ -1064,8 +1289,9 @@ def _load_checkpoint(ckpt_path):
         layers=cfg["layers"], ffn=cfg["ffn"],
         heads=cfg["heads"], seq=cfg["seq"],
     )
-    model.load_state_dict(s["model"], strict=False)
-    return model, int(s.get("step", 0))
+    model.load_state_dict(sd, strict=False)
+    del sd
+    return model, step
 
 
 def main():
@@ -1086,6 +1312,9 @@ def main():
     if args.all:
         print(f"wrote {dump_classroom(model, args.out_dir, step)}")
         print(f"wrote {dump_grades(model,    args.out_dir, step)}")
+        print(f"wrote {dump_math(model,      args.out_dir, step)}")
+        print(f"wrote {dump_grammar(model,   args.out_dir, step)}")
+        print(f"wrote {dump_reasoning(model, args.out_dir, step)}")
         print(f"wrote {dump_concepts(model,  args.out_dir, step)}")
         print(f"wrote {dump_surprise(model,  args.prompt, args.out_dir, step)}")
         print(f"wrote {dump_quant_kl(model,  args.prompt, args.out_dir, step)}")

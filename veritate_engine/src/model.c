@@ -10,6 +10,7 @@
 
 #include "veritate.h"
 #include "portability.h"
+#include "addons.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -482,6 +483,24 @@ static void attention(const veritate_shape_t* sh, const block_t* blk, acts_t* ac
 }
 
 // ------------------------------------------------------------------------------------
+// MoE router — top-1 selection per token.
+// returns the index of the highest-scoring expert for this token's hidden state.
+// router weights are int8 and shaped [n_experts x hidden]; per-row uniform
+// scale, dot product against the int8-quantized post-LN activations.
+// ------------------------------------------------------------------------------------
+
+static int32_t route_token_top1(const block_t* blk, const int8_t* hidden_row,
+                                int32_t scratch_n_experts, int32_t* scratch) {
+    matmul_int8_vnni_prep(hidden_row, &blk->router, scratch, 1);
+    int32_t best = 0;
+    int32_t best_v = scratch[0];
+    for (int32_t e = 1; e < scratch_n_experts; e++) {
+        if (scratch[e] > best_v) { best_v = scratch[e]; best = e; }
+    }
+    return best;
+}
+
+// ------------------------------------------------------------------------------------
 // feed-forward network — 2 matmuls + GELU
 // ------------------------------------------------------------------------------------
 
@@ -698,6 +717,18 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
              int32_t real_len, int8_t* out_act, trace_record_t* trace, profile_t* prof) {
     const veritate_shape_t* sh = &m->shape;
     const int32_t S = sh->seq, H = sh->hidden, F = sh->ffn, V = sh->vocab, NH = sh->heads;
+
+    // MoE prefill: ffn() is single-FFN-only. when any block routes per-token,
+    // fall back to S sequential forward_decode calls. correctness-first; the
+    // batched MoE prefill is a follow-up performance optimization.
+    if (m->n_experts > 1) {
+        cache->len = 0;
+        for (int32_t r = 0; r < real_len; r++) {
+            forward_decode(m, cache, tokens[r], out_act, trace);
+        }
+        return;
+    }
+
     acts_t* a = &((acts_pool_t*)m->scratch)->prefill;
     const size_t per_layer_residual = (size_t)S * H;
     const size_t per_layer_ffn      = (size_t)S * F;
@@ -1027,6 +1058,25 @@ void forward_decode(const model_t* m, kv_cache_t* cache, int32_t token, int8_t* 
 
         layernorm_i16_to_i8(d->act, d->act_norm, blk->ln2_w, 1, H);
 
+        // MoE: top-1 route per token, dispatch through the chosen expert's
+        // ffn_up / ffn_down. when n_experts == 1, fall through to the standard
+        // single-FFN path so the hot path is unchanged for non-MoE models.
+        const prepped_b_t* ffn_up_block   = &blk->ffn_up;
+        const prepped_b_t* ffn_down_block = &blk->ffn_down;
+        if (blk->n_experts > 1 && blk->experts_up != NULL && blk->experts_down != NULL) {
+            int32_t route_scratch[64];
+            int32_t e_idx = 0;
+            if (blk->n_experts <= 64) {
+                e_idx = route_token_top1(blk, d->act_norm, blk->n_experts, route_scratch);
+            } else {
+                int32_t* heap_scratch = (int32_t*)malloc((size_t)blk->n_experts * sizeof(int32_t));
+                e_idx = route_token_top1(blk, d->act_norm, blk->n_experts, heap_scratch);
+                free(heap_scratch);
+            }
+            ffn_up_block   = &blk->experts_up[e_idx];
+            ffn_down_block = &blk->experts_down[e_idx];
+        }
+
         if (blk->use_int4) {
             hadamard_apply_int8(d->act_norm, d->act_norm_rot, H);
             matmul_int4_vnni_prep(d->act_norm_rot, &blk->ffn_up_i4, d->ffn_up32, 1);
@@ -1034,9 +1084,9 @@ void forward_decode(const model_t* m, kv_cache_t* cache, int32_t token, int8_t* 
                 d->ffn_up8[i] = sat_int8(requant(d->ffn_up32[i], blk->ffn_up_i4.row_q24[i]));
             }
         } else {
-            matmul_int8_vnni_prep(d->act_norm, &blk->ffn_up, d->ffn_up32, 1);
+            matmul_int8_vnni_prep(d->act_norm, ffn_up_block, d->ffn_up32, 1);
             for (int32_t i = 0; i < F; i++) {
-                d->ffn_up8[i] = sat_int8(requant_pb(d->ffn_up32[i], &blk->ffn_up, i));
+                d->ffn_up8[i] = sat_int8(requant_pb(d->ffn_up32[i], ffn_up_block, i));
             }
         }
         gelu_int8(d->ffn_up8, F);
@@ -1060,9 +1110,13 @@ void forward_decode(const model_t* m, kv_cache_t* cache, int32_t token, int8_t* 
                 d->act[i] = sat_int16((int32_t)d->act[i] + requant(d->ffn_down32[i], blk->ffn_down_i4.row_q24[i]) * m->act_boost);
             }
         } else {
-            ffn_down_decode(d->ffn_up8, &blk->ffn_down, d->ffn_down32);
+            // MoE: ffn_down_block was selected by the router above; for non-MoE
+            // it points at blk->ffn_down. ffn_down_decode requires b_rowmaj to
+            // exist on the prepped_b; the v10 expert load uses load_b which sets
+            // it, so this works for both paths.
+            ffn_down_decode(d->ffn_up8, ffn_down_block, d->ffn_down32);
             for (int32_t i = 0; i < H; i++) {
-                d->act[i] = sat_int16((int32_t)d->act[i] + requant_pb(d->ffn_down32[i], &blk->ffn_down, i) * m->act_boost);
+                d->act[i] = sat_int16((int32_t)d->act[i] + requant_pb(d->ffn_down32[i], ffn_down_block, i) * m->act_boost);
             }
         }
 
@@ -1100,8 +1154,9 @@ void forward_verify(const model_t* m, kv_cache_t* cache, int32_t K,
     const int32_t NH = sh->heads, HD = sh->head_dim;
     if (K <= 0) return;
     if (K > VERITATE_VERIFY_K_MAX) K = VERITATE_VERIFY_K_MAX;
-    if (K == 1 || m->blocks[0].use_int4) {
-        // int4 path uses the per-row decode kernel; just call decode K times.
+    if (K == 1 || m->blocks[0].use_int4 || m->n_experts > 1) {
+        // int4 path uses the per-row decode kernel; MoE has no batched verify
+        // path; either way, just call decode K times.
         for (int32_t r = 0; r < K; r++) {
             forward_decode(m, cache, tokens[r], out_hidden_K + (size_t)r * H, NULL);
         }
@@ -1278,6 +1333,24 @@ int32_t sample_token_ext(const model_t* m, const int8_t* hidden, float temp, int
     }
     if (out_logits) memcpy(out_logits, logits, (size_t)V * sizeof(int32_t));
     if (out_argmax) *out_argmax = argmax;
+
+    // addon chain: bias the logits in float space before any threshold/sample.
+    // out_logits is the unbiased trace export (unchanged); the post-bias floats
+    // drive sampling only. NULL chain -> no overhead, identical hot path.
+    addon_chain_t* chain = addons_get_global();
+    if (chain != NULL && chain->count > 0) {
+        for (int32_t v = 0; v < V; v++) fp[v] = (float)logits[v];
+        addon_chain_bias_logits(chain, fp, V);
+        for (int32_t v = 0; v < V; v++) {
+            if (fp[v] <= -1.0e30f) logits[v] = -2147483647 - 1;
+            else                   logits[v] = (int32_t)fp[v];
+        }
+        argmax = 0;
+        argmax_logit = logits[0];
+        for (int32_t v = 1; v < V; v++) {
+            if (logits[v] > argmax_logit) { argmax_logit = logits[v]; argmax = v; }
+        }
+    }
 
     if (temp <= 0.0f) { free(logits); free(fp); return argmax; }
 
@@ -1513,6 +1586,9 @@ int model_load(model_t* m, const char* path) {
 
     memset(m, 0, sizeof(*m));
     m->act_boost      = 1;
+    m->quant_mode     = VERITATE_QUANT_INT8;
+    m->n_experts      = 1;
+    m->router_topk    = 1;
     m->shape.vocab    = (int32_t)hdr.v_vocab;
     m->shape.seq      = (int32_t)hdr.v_seq;
     m->shape.hidden   = (int32_t)hdr.v_hidden;
@@ -1539,14 +1615,57 @@ int model_load(model_t* m, const char* path) {
         hdr.version != VERITATE_MODEL_VERSION_PERCOL &&
         hdr.version != VERITATE_MODEL_VERSION_MOD &&
         hdr.version != VERITATE_MODEL_VERSION_NORM &&
-        hdr.version != VERITATE_MODEL_VERSION_BOOST) { fclose(f); return -1; }
+        hdr.version != VERITATE_MODEL_VERSION_BOOST &&
+        hdr.version != VERITATE_MODEL_VERSION_MOE) { fclose(f); return -1; }
 
     const int32_t V = m->shape.vocab, H = m->shape.hidden, S = m->shape.seq;
     const int32_t F = m->shape.ffn, Ln = m->shape.layers;
 
-    if (hdr.version == VERITATE_MODEL_VERSION_BOOST) {
+    if (hdr.version == VERITATE_MODEL_VERSION_BOOST ||
+        hdr.version == VERITATE_MODEL_VERSION_MOE) {
         if (fread(&m->act_boost, sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
         if (m->act_boost < 1) m->act_boost = 1;
+    }
+
+    if (hdr.version == VERITATE_MODEL_VERSION_MOE) {
+        // v10 header extension: quant_mode, n_experts, router_topk.
+        if (fread(&m->quant_mode,  sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
+        if (fread(&m->n_experts,   sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
+        if (fread(&m->router_topk, sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
+        if (m->n_experts < 1)  m->n_experts  = 1;
+        if (m->router_topk < 1) m->router_topk = 1;
+        if (m->router_topk > 1) {
+            fprintf(stderr,
+                "model_load: v10 binary requires top-k>1 routing (router_topk=%d), "
+                "only top-1 routing is wired today. retrain with router_topk=1 "
+                "or wait for the multi-expert combine path.\n", m->router_topk);
+            fclose(f); model_free(m); return -1;
+        }
+        if (m->quant_mode != VERITATE_QUANT_INT8) {
+            fprintf(stderr,
+                "model_load: v10 binary requires quant_mode=%d, only the "
+                "INT8 forward is wired today. ternary kernel exists "
+                "(matmul_ternary_*); the forward path that calls it lands "
+                "in a follow-up.\n", m->quant_mode);
+            fclose(f); model_free(m); return -1;
+        }
+    }
+
+    // gibberish prevention: act_boost > 1 means this binary was exported from a
+    // non-QAT-trained checkpoint, where weight magnitudes fall below the engine's
+    // INT8 quantization-noise floor. the boost helps the embedding tier but the
+    // matmul accumulator noise still dominates. running gives gibberish. refuse
+    // and message the user. fix: retrain with qat_enabled=true. context:
+    // docs/c_engine_120m_fix_tracking.md.
+    if (m->act_boost > 1) {
+        fprintf(stderr,
+            "model_load: refusing to load. act_boost=%d means this model was "
+            "trained without QAT; matmul accumulator quantization noise will "
+            "dominate the signal and the engine will produce gibberish. "
+            "retrain with qat_enabled=true (multimind_mega trainer in the "
+            "dashboard) or use the PyTorch backend for non-QAT checkpoints. "
+            "context: docs/c_engine_120m_fix_tracking.md.\n", m->act_boost);
+        fclose(f); model_free(m); return -1;
     }
 
     if (fread(m->embed,     (size_t)V * H, 1, f) != 1) { fclose(f); return -1; }
@@ -1556,9 +1675,13 @@ int model_load(model_t* m, const char* path) {
                          hdr.version == VERITATE_MODEL_VERSION_MOD);
     const int has_gate = (hdr.version == VERITATE_MODEL_VERSION_MOD);
     const int has_norm = (hdr.version == VERITATE_MODEL_VERSION_NORM ||
-                         hdr.version == VERITATE_MODEL_VERSION_BOOST);
+                         hdr.version == VERITATE_MODEL_VERSION_BOOST ||
+                         hdr.version == VERITATE_MODEL_VERSION_MOE);
+    const int has_moe  = (hdr.version == VERITATE_MODEL_VERSION_MOE && m->n_experts > 1);
     for (int32_t L = 0; L < Ln; L++) {
         block_t* blk = &m->blocks[L];
+        blk->n_experts   = m->n_experts;
+        blk->router_topk = m->router_topk;
         int rc = (fread(blk->ln1_w, (size_t)H, 1, f) != 1) ? -1 : 0;
         if (rc == 0) rc = per_col
             ? load_b_percol(f, 3 * H, H, &blk->qkv, 0)
@@ -1567,12 +1690,27 @@ int model_load(model_t* m, const char* path) {
             ? load_b_percol(f, H,     H, &blk->out_proj, 0)
             : load_b       (f, H,     H, &blk->out_proj, 0);
         if (rc == 0 && fread(blk->ln2_w, (size_t)H, 1, f) != 1) rc = -1;
-        if (rc == 0) rc = per_col
-            ? load_b_percol(f, F,     H, &blk->ffn_up, 0)
-            : load_b       (f, F,     H, &blk->ffn_up, 0);
-        if (rc == 0) rc = per_col
-            ? load_b_percol(f, H,     F, &blk->ffn_down, 1)
-            : load_b       (f, H,     F, &blk->ffn_down, 1);
+        if (rc == 0 && has_moe) {
+            // v10 MoE: router (n_experts x H) then per-expert ffn_up + ffn_down.
+            // uniform per-tensor scale applies to both.
+            rc = load_b(f, m->n_experts, H, &blk->router, 0);
+            if (rc == 0) {
+                blk->experts_up   = (prepped_b_t*)calloc((size_t)m->n_experts, sizeof(prepped_b_t));
+                blk->experts_down = (prepped_b_t*)calloc((size_t)m->n_experts, sizeof(prepped_b_t));
+                if (!blk->experts_up || !blk->experts_down) rc = -1;
+            }
+            for (int32_t e = 0; rc == 0 && e < m->n_experts; e++) {
+                rc = load_b(f, F, H, &blk->experts_up[e],   0);
+                if (rc == 0) rc = load_b(f, H, F, &blk->experts_down[e], 1);
+            }
+        } else if (rc == 0) {
+            if (rc == 0) rc = per_col
+                ? load_b_percol(f, F,     H, &blk->ffn_up, 0)
+                : load_b       (f, F,     H, &blk->ffn_up, 0);
+            if (rc == 0) rc = per_col
+                ? load_b_percol(f, H,     F, &blk->ffn_down, 1)
+                : load_b       (f, H,     F, &blk->ffn_down, 1);
+        }
         if (rc == 0 && has_gate) {
             blk->gate_w = (int8_t*)xalloc64((size_t)H);
             if (!blk->gate_w) rc = -1;
@@ -1660,9 +1798,20 @@ void model_free(model_t* m) {
             } else {
                 free_prepped_b(&blk->qkv);
                 free_prepped_b(&blk->out_proj);
-                free_prepped_b(&blk->ffn_up);
-                free_prepped_b(&blk->ffn_down);
+                if (blk->experts_up == NULL) free_prepped_b(&blk->ffn_up);
+                if (blk->experts_down == NULL) free_prepped_b(&blk->ffn_down);
             }
+            if (blk->experts_up != NULL) {
+                for (int32_t e = 0; e < blk->n_experts; e++) free_prepped_b(&blk->experts_up[e]);
+                free(blk->experts_up);
+                blk->experts_up = NULL;
+            }
+            if (blk->experts_down != NULL) {
+                for (int32_t e = 0; e < blk->n_experts; e++) free_prepped_b(&blk->experts_down[e]);
+                free(blk->experts_down);
+                blk->experts_down = NULL;
+            }
+            if (blk->n_experts > 1) free_prepped_b(&blk->router);
             if (blk->ln1_w) veritate_aligned_free(blk->ln1_w);
             if (blk->ln2_w) veritate_aligned_free(blk->ln2_w);
             if (blk->gate_w) { veritate_aligned_free(blk->gate_w); blk->gate_w = NULL; }

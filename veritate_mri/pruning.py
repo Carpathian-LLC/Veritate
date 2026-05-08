@@ -221,9 +221,9 @@ def main():
     src_ckpt = paths.checkpoint_path(args.source, args.step)
     print(f"loading source checkpoint: {{src_ckpt}}", flush=True)
     s = torch.load(src_ckpt, map_location="cpu", weights_only=False)
-    cfg = s.get("args", {{}})
-
+    cfg = dict(s.get("args", {{}}))
     sd = s["model"]
+    del s  # drops optimizer state (~8 GB on 1B) before model construction
     layers = 1 + max(int(k.split(".")[1]) for k in sd if k.startswith("blocks."))
     ffn_per_layer = [sd[f"blocks.{{L}}.ff.up.weight"].shape[0] for L in range(layers)]
     vocab, hidden = sd["tok_emb.weight"].shape

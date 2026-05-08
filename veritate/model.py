@@ -67,12 +67,20 @@ class CausalSelfAttention(nn.Module):
         self.d    = hidden // heads
         self.qkv  = QuantLinear(hidden, 3 * hidden, bias=False)
         self.proj = QuantLinear(hidden, hidden,     bias=False)
+        self.qat = False
+        self.engine_faithful = False
 
     def forward(self, x):
         B, T, C = x.shape
         qkv = self.qkv(x).view(B, T, 3, self.h, self.d).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
+        if self.qat and self.engine_faithful:
+            q = _qat.fake_quant_act(q)
+            k = _qat.fake_quant_act(k)
+            v = _qat.fake_quant_act(v)
         out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        if self.qat and self.engine_faithful:
+            out = _qat.fake_quant_act(out)
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         return self.proj(out)
 

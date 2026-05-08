@@ -32,7 +32,7 @@ set ROOT=%~dp0..
 set OUT=%ROOT%\bin\windows\x86_64
 if not exist "%OUT%" mkdir "%OUT%"
 
-set CFLAGS=-O3 -march=native -mavx2 -mavx512f -mavx512bw -mavx512vnni -Wall -Wextra -Wno-unused-parameter -DVERITATE_VERIFY_DECODE -DVERITATE_GELU_ZERO_THRESH=4
+set CFLAGS=-O3 -flto=full -march=native -mavx2 -mavx512f -mavx512bw -mavx512vnni -Wall -Wextra -Wno-unused-parameter -DVERITATE_VERIFY_DECODE -DVERITATE_GELU_ZERO_THRESH=4
 
 echo build: %CLANG%
 "%CLANG%" %CFLAGS% ^
@@ -41,11 +41,15 @@ echo build: %CLANG%
     "%ROOT%\src\model.c" ^
     "%ROOT%\src\alloc.c" ^
     "%ROOT%\src\threadpool.c" ^
+    "%ROOT%\src\addons.c" ^
+    "%ROOT%\src\addons\slot_table.c" ^
     "%ROOT%\kernels\scalar\matmul_scalar.c" ^
+    "%ROOT%\kernels\scalar\matmul_ternary_scalar.c" ^
     "%ROOT%\kernels\scalar\transformer_scalar.c" ^
     "%ROOT%\kernels\x86_64\matmul_avx2.c" ^
     "%ROOT%\kernels\x86_64\matmul_vnni.c" ^
     "%ROOT%\kernels\x86_64\matmul_int4.c" ^
+    "%ROOT%\kernels\x86_64\matmul_ternary_vnni.c" ^
     "%ROOT%\kernels\x86_64\transformer_avx512.c" ^
     -o "%OUT%\veritate.exe"
 

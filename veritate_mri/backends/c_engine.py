@@ -143,6 +143,12 @@ class CTracedSubprocess:
         env = os.environ.copy()
         if self.model_path:
             env["VERITATE_MODEL_PATH"] = self.model_path
+        # VERITATE_ADDONS=<csv> is inherited from the parent env automatically
+        # via os.environ.copy(). set it before starting the MRI server to
+        # enable engine-side addons. per-request addon selection from the
+        # dashboard is python-only today; the C subprocess holds whatever
+        # chain it had at spawn time. Restart the C backend in the dashboard
+        # to pick up an env-var change. spec: documentation/addons/c_engine_port.md.
         self.proc = subprocess.Popen(
             [self.exe, "chat_traced"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -151,9 +157,13 @@ class CTracedSubprocess:
         )
         line = self.proc.stderr.readline()
         if not line.strip().startswith(b"ready"):
-            err = self.proc.stderr.read()
+            # kill before draining: a refusal that doesn't exit (random-fallback
+            # branch in chat_traced_loop) leaves stderr open, so stderr.read()
+            # would block forever waiting for EOF.
             try: self.proc.kill()
             except Exception: pass
+            try: err = self.proc.stderr.read()
+            except Exception: err = b""
             raise RuntimeError(f"chat_traced not ready: {line!r} {err!r}")
 
     def _ensure_alive(self):
@@ -161,12 +171,18 @@ class CTracedSubprocess:
             self._spawn()
 
     def stream(self, prompt, temperature, top_k, max_new,
-               ablate_layer=-1, ablate_neuron=-1):
+               ablate_layer=-1, ablate_neuron=-1, addons_csv=""):
         with self.lock:
             self._ensure_alive()
             p = prompt.replace("\r", "").replace("\n", " ")
+            # addons token: empty -> use whatever chain was set at spawn time
+            # (env var path); "-" -> clear any prior chain; otherwise comma-
+            # separated id list. token must contain no whitespace.
+            csv_token = (addons_csv or "").strip().replace(" ", "")
+            if not csv_token:
+                csv_token = "-"  # explicit clear when caller passed nothing
             header = (f"{float(temperature):.4f} {int(top_k)} {int(max_new)} "
-                      f"{int(ablate_layer)} {int(ablate_neuron)}\n").encode("ascii")
+                      f"{int(ablate_layer)} {int(ablate_neuron)} {csv_token}\n").encode("ascii")
             try:
                 self.proc.stdin.write(header)
                 self.proc.stdin.write(p.encode("latin-1", "replace") + b"\n")

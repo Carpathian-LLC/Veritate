@@ -122,6 +122,43 @@ void matmul_int4_vnni_prep(const int8_t* a, const prepped_b_int4_t* p,
                            int32_t* c, int32_t m);
 
 // ------------------------------------------------------------------------------------
+// ternary packed weights -- BitNet b1.58. trits in {-1, 0, +1} packed 5-per-byte
+// (3^5 = 243 < 256). per-tensor mean-abs scale (gamma). spec at
+// documentation/kernels/ternary.md.
+// ------------------------------------------------------------------------------------
+
+typedef struct {
+    uint8_t* bt_packed;     // [n][ceil(k/5)]   row j holds 5 trits per byte
+    int32_t* row_q24;       // [n]              per-row q24 multiplier for requant
+    float    gamma;         // per-tensor mean-abs scale
+    int32_t  n;
+    int32_t  k;
+} prepped_b_ternary_t;
+
+// pack k trits (each in {-1,0,1}) into ceil(k/5) bytes. tail trits past k are 0.
+void ternary_pack_row(const int8_t* trits, int32_t k, uint8_t* out_bytes);
+
+// unpack ceil(k/5) bytes back into k trits in {-1,0,1}.
+void ternary_unpack_row(const uint8_t* bytes, int32_t k, int8_t* out_trits);
+
+// build a prepped ternary block from an int8 weight tensor of shape [n,k]
+// (column-major, b[p*n+j]). values must be in {-1, 0, +1}. gamma is the per-
+// tensor mean-abs scale produced at QAT export time.
+void prep_b_ternary(const int8_t* b_trits, int32_t n, int32_t k,
+                    float gamma, prepped_b_ternary_t* out);
+void free_prepped_b_ternary(prepped_b_ternary_t* p);
+
+// scalar oracle. unpacks trits, dot-products against int8 activations, writes
+// int32 output. m=1 decode path; m>1 supported for prefill.
+void matmul_ternary_scalar_prep(const int8_t* a, const prepped_b_ternary_t* p,
+                                int32_t* c, int32_t m);
+
+// avx-512 fast path. unpacks 5 trits per byte into a sequential int8 cache
+// line, then dispatches through vnni dpbusd. bit-identical to scalar.
+void matmul_ternary_vnni_prep(const int8_t* a, const prepped_b_ternary_t* p,
+                              int32_t* c, int32_t m);
+
+// ------------------------------------------------------------------------------------
 // transformer hot-path kernels — runtime-dispatched per arch.
 // callers go through score_dot_v / softmax_rows / layernorm_i16_to_i8 (function
 // pointers); dispatch_init points each at the best impl for the live cpu.
@@ -225,8 +262,8 @@ typedef struct {
 typedef struct {
     prepped_b_t qkv;       // [3*hidden x hidden]   q, k, v stacked
     prepped_b_t out_proj;  // [hidden x hidden]
-    prepped_b_t ffn_up;    // [ffn x hidden]
-    prepped_b_t ffn_down;  // [hidden x ffn]
+    prepped_b_t ffn_up;    // [ffn x hidden]   (n_experts=1 path)
+    prepped_b_t ffn_down;  // [hidden x ffn]   (n_experts=1 path)
     prepped_b_int4_t qkv_i4;
     prepped_b_int4_t out_proj_i4;
     prepped_b_int4_t ffn_up_i4;
@@ -237,6 +274,16 @@ typedef struct {
     int32_t     has_gate;  // 0 = no mod gate, 1 = use mod gate
     int8_t*     gate_w;    // [hidden] int8 row, present when has_gate
     int32_t     gate_scale_q24;  // q24 requant for gate dot
+    // MoE fields (v10+). when n_experts == 1, experts_up / experts_down are
+    // NULL and the standard ffn_up / ffn_down above are used. when
+    // n_experts > 1, the per-expert blocks below replace the standard pair
+    // and router holds a [n_experts x hidden] matrix that produces routing
+    // logits per token.
+    int32_t      n_experts;     // 1 = no MoE
+    int32_t      router_topk;   // experts active per token; 1 = sticky
+    prepped_b_t  router;        // [n_experts x hidden]
+    prepped_b_t* experts_up;    // [n_experts] of [ffn x hidden]
+    prepped_b_t* experts_down;  // [n_experts] of [hidden x ffn]
 } block_t;
 
 // runtime-shaped model. embed, pos_embed, blocks, byte_direction[*], scratch all
@@ -246,6 +293,9 @@ typedef struct {
     int8_t*  embed;            // [vocab * hidden]
     int8_t*  pos_embed;        // [seq * hidden]
     int32_t  act_boost;        // residual stream scale = act_boost * ACT_INT8_SCALE
+    int32_t  quant_mode;       // VERITATE_QUANT_*. v9 and earlier load as INT8.
+    int32_t  n_experts;        // 1 = no MoE. v10+ only; older versions default to 1.
+    int32_t  router_topk;      // experts active per token. 1 = sticky single-expert.
     block_t* blocks;           // [layers]
     int16_t** byte_direction;  // [layers] of [ffn * vocab] (NULL until built)
     float*   byte_direction_scale; // [layers]
@@ -286,6 +336,12 @@ typedef struct {
 #define VERITATE_MODEL_VERSION_MOD 6
 #define VERITATE_MODEL_VERSION_NORM 8
 #define VERITATE_MODEL_VERSION_BOOST 9
+#define VERITATE_MODEL_VERSION_MOE 10
+
+// quant_mode values stored in the v10+ header.
+#define VERITATE_QUANT_INT8    0
+#define VERITATE_QUANT_INT4    1
+#define VERITATE_QUANT_TERNARY 2
 
 // per-head sylvester hadamard, size 64 = V_HEAD_DIM, normalized 1/sqrt(64).
 // applies block-diagonally along the in-channel axis. cols must be a multiple of 64.

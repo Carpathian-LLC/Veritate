@@ -10,6 +10,7 @@
 
 #include "veritate.h"
 #include "portability.h"
+#include "addons.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -335,7 +336,11 @@ static int chat_traced_loop(void) {
     int loaded = 0;
     if (model_path) {
         if (model_load(&model, model_path) == 0) loaded = 1;
-        else fprintf(stderr, "load failed: %s\n", model_path);
+        else {
+            fprintf(stderr, "load failed: %s\n", model_path);
+            fflush(stderr);
+            return 1;
+        }
     }
     if (!loaded) model_init_random(&model, 42);
 
@@ -387,8 +392,9 @@ static int chat_traced_loop(void) {
     fprintf(stderr, "ready\n");
     fflush(stderr);
 
-    char header[64];
+    char header[256];
     char* prompt_line = (char*)malloc((size_t)S + 4);
+    char  prev_addons_csv[128] = "";
 
     while (1) {
         if (!fgets(header, sizeof(header), stdin)) break;
@@ -397,8 +403,30 @@ static int chat_traced_loop(void) {
         int   max_new = 200;
         int   ablate_layer = -1;
         int   ablate_neuron = -1;
-        sscanf(header, "%f %d %d %d %d", &temp, &top_k, &max_new, &ablate_layer, &ablate_neuron);
+        char  addons_csv[128] = "";
+        // header format: "temp top_k max_new ablate_l ablate_n [addons_csv]\n"
+        // addons_csv is optional; missing means "use the env-var chain or none".
+        // empty token "-" explicitly clears any previously-installed chain.
+        sscanf(header, "%f %d %d %d %d %127s",
+               &temp, &top_k, &max_new, &ablate_layer, &ablate_neuron, addons_csv);
         veritate_set_ablation(ablate_layer, ablate_neuron);
+
+        // per-request addon chain swap. only rebuild when csv changes; common
+        // case (single chain, no swaps) reuses the previous chain.
+        if (strcmp(addons_csv, prev_addons_csv) != 0) {
+            addon_chain_t* old_chain = addons_get_global();
+            addon_chain_t* new_chain = NULL;
+            if (addons_csv[0] != '\0' && strcmp(addons_csv, "-") != 0) {
+                new_chain = addons_build_chain(addons_csv);
+            }
+            addons_set_global(new_chain);
+            if (old_chain != NULL) {
+                addon_chain_free(old_chain);
+                free(old_chain);
+            }
+            strncpy(prev_addons_csv, addons_csv, sizeof(prev_addons_csv) - 1);
+            prev_addons_csv[sizeof(prev_addons_csv) - 1] = '\0';
+        }
         if (!fgets(prompt_line, S + 4, stdin)) break;
         size_t plen = strlen(prompt_line);
         while (plen > 0 && (prompt_line[plen - 1] == '\n' || prompt_line[plen - 1] == '\r'))
@@ -411,6 +439,15 @@ static int chat_traced_loop(void) {
         cache.len = 0;
         forward(&model, &cache, tokens, n, hidden, trace, NULL);
 
+        // addons see the prompt before the first sample, then each sampled byte.
+        addon_chain_t* g_chain = addons_get_global();
+        if (g_chain != NULL && g_chain->count > 0) {
+            addon_chain_reset(g_chain);
+            for (int32_t i = 0; i < n; i++) {
+                addon_chain_observe(g_chain, tokens[i] & 0xFF);
+            }
+        }
+
         int32_t budget = S - n;
         if (budget > max_new) budget = max_new;
 
@@ -421,6 +458,9 @@ static int chat_traced_loop(void) {
             int32_t next = sample_token_ext(&model, hidden, temp, top_k, &rng, logits, &argmax_v);
             uint8_t b = (uint8_t)(next & 0xFF);
             uint8_t ab = (uint8_t)(argmax_v & 0xFF);
+            if (g_chain != NULL && g_chain->count > 0) {
+                addon_chain_observe(g_chain, (int)b);
+            }
 
             // header
             uint8_t hdr[16];
@@ -1089,6 +1129,13 @@ static int ppl_mode(int argc, char** argv) {
 // ------------------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
+    // addon chain: configured via VERITATE_ADDONS=<csv>. NULL/empty -> no addons,
+    // hot path is bit-identical to the pre-addon engine.
+    const char* addons_csv = getenv("VERITATE_ADDONS");
+    if (addons_csv && addons_csv[0] != '\0') {
+        addons_set_global(addons_build_chain(addons_csv));
+    }
+
     if (argc > 1 && strcmp(argv[1], "chat") == 0) return chat_loop();
     if (argc > 1 && strcmp(argv[1], "chat_spec") == 0) {
         int b = argc > 2 ? atoi(argv[2]) : 0;
@@ -1116,6 +1163,8 @@ int main(int argc, char** argv) {
     dispatch_info_t info;
     dispatch_init(&feat, &info);
     printf("dispatch: matmul -> %s\n\n", info.matmul_backend);
+
+    int parity_failures = 0;
 
 #if defined(__x86_64__) || defined(_M_X64)
     const int32_t M = 1024, N = 1024, K = 1024;
@@ -1252,6 +1301,7 @@ int main(int argc, char** argv) {
         if (!ok_i4) {
             printf("  first mismatch at j=%d: scalar=%d simd=%d\n",
                    first_mismatch, c_ref4[first_mismatch], c_avx4[first_mismatch]);
+            parity_failures++;
         }
 
         // bench decode shape (m=1) for int4 vs int8 reference
@@ -1309,6 +1359,7 @@ int main(int argc, char** argv) {
         for (int32_t j = 0; j < V_HIDDEN; j++) if (c_a4_dn[j] != c_ref_dn[j]) ok_dn = 0;
         printf("  scalar vs simd (ffn_down k=%d n=%d):   %s\n",
                V_FFN, V_HIDDEN, ok_dn ? "verify OK" : "FAIL");
+        if (!ok_dn) parity_failures++;
 
         for (int t = 0; t < 50; t++) {
             matmul_int4_vnni_prep(i4_a_dn, &pb4_dn, c_a4_dn, 1);
@@ -1339,6 +1390,72 @@ int main(int argc, char** argv) {
         free_prepped_b(&pb8_dn);
         veritate_aligned_free(i4_a); veritate_aligned_free(i4_w); veritate_aligned_free(c_ref4); veritate_aligned_free(c_avx4); veritate_aligned_free(c_int8d);
         veritate_aligned_free(i4_a_dn); veritate_aligned_free(i4_w_dn); veritate_aligned_free(c_ref_dn); veritate_aligned_free(c_a4_dn); veritate_aligned_free(c_a8_dn);
+    }
+
+    // ------------------------------------------------------------------------------
+    // ternary kernel parity check (BitNet b1.58). trits in {-1, 0, +1} packed
+    // 5-per-byte. scalar oracle vs vnni path; rule-23 contract.
+    // ------------------------------------------------------------------------------
+    {
+        const int32_t TK = V_HIDDEN;   // 768
+        const int32_t TN = V_FFN;      // 3072
+        int8_t*  t_a   = (int8_t*) veritate_aligned_alloc((size_t)TK,             64);
+        int8_t*  t_w   = (int8_t*) veritate_aligned_alloc((size_t)TK * TN,        64);
+        int32_t* c_ref_t = (int32_t*)veritate_aligned_alloc((size_t)TN * sizeof(int32_t), 64);
+        int32_t* c_simd_t= (int32_t*)veritate_aligned_alloc((size_t)TN * sizeof(int32_t), 64);
+
+        unsigned ts = 1234567u;
+        for (int32_t p = 0; p < TK; p++) {
+            ts = ts * 1103515245u + 12345u;
+            t_a[p] = (int8_t)((int32_t)((ts >> 16) & 0xFF) - 128);
+        }
+        for (size_t p = 0; p < (size_t)TK * TN; p++) {
+            ts = ts * 1103515245u + 12345u;
+            int32_t r = (int32_t)((ts >> 24) & 3);
+            t_w[p] = (int8_t)(r == 0 ? 0 : (r == 1 ? 1 : (r == 2 ? -1 : 0)));
+        }
+
+        prepped_b_ternary_t pbt;
+        prep_b_ternary(t_w, TN, TK, 1.0f, &pbt);
+
+        matmul_ternary_scalar_prep(t_a, &pbt, c_ref_t,  1);
+        matmul_ternary_vnni_prep  (t_a, &pbt, c_simd_t, 1);
+
+        int ok_t = 1;
+        int first_mismatch_t = -1;
+        for (int32_t j = 0; j < TN; j++) {
+            if (c_simd_t[j] != c_ref_t[j]) {
+                if (first_mismatch_t < 0) first_mismatch_t = j;
+                ok_t = 0;
+            }
+        }
+        printf("\n");
+        printf("ternary packed (m=1, k=%d, n=%d):\n", TK, TN);
+        printf("  scalar vs simd:               %s\n",
+               ok_t ? "verify OK (bit-match)" : "FAIL");
+        if (!ok_t) {
+            printf("  first mismatch at j=%d: scalar=%d simd=%d\n",
+                   first_mismatch_t, c_ref_t[first_mismatch_t], c_simd_t[first_mismatch_t]);
+            parity_failures++;
+        }
+
+        // pack/unpack round-trip on a length-TK row.
+        uint8_t* packed = (uint8_t*)veritate_aligned_alloc(((size_t)TK + 4) / 5, 64);
+        int8_t*  back   = (int8_t*) veritate_aligned_alloc((size_t)TK, 64);
+        ternary_pack_row(t_w, TK, packed);
+        ternary_unpack_row(packed, TK, back);
+        int ok_pack = 1;
+        for (int32_t i = 0; i < TK; i++) {
+            if (back[i] != t_w[i]) { ok_pack = 0; break; }
+        }
+        printf("  pack/unpack round-trip:       %s\n",
+               ok_pack ? "verify OK" : "FAIL");
+        if (!ok_pack) parity_failures++;
+
+        veritate_aligned_free(packed); veritate_aligned_free(back);
+        free_prepped_b_ternary(&pbt);
+        veritate_aligned_free(t_a); veritate_aligned_free(t_w);
+        veritate_aligned_free(c_ref_t); veritate_aligned_free(c_simd_t);
     }
 
     // v3 — single transformer block forward pass
@@ -1424,6 +1541,7 @@ int main(int argc, char** argv) {
         int decode_ok = max_abs_diff <= 1;
         printf("  decode vs full forward:       %s   (max int8 diff = %d)\n",
                decode_ok ? "OK (within 1 LSB)" : "MISMATCH", max_abs_diff);
+        if (!decode_ok) parity_failures++;
         free(verify_tokens); free(hidden_full); free(hidden_decode);
     }
 
@@ -1471,6 +1589,7 @@ int main(int argc, char** argv) {
         }
         printf("%s   (max int8 diff = %d, K in {1,2,4,8,16})\n",
                all_ok ? "OK (within 1 LSB)" : "MISMATCH", worst);
+        if (!all_ok) parity_failures++;
         free(hidden_seed); free(out_ref); free(out_ver); free(hbuf);
         kv_cache_free(&cache_seed); kv_cache_free(&cache_ref); kv_cache_free(&cache_ver);
     }
@@ -1534,8 +1653,11 @@ int main(int argc, char** argv) {
     kv_cache_free(&cache);
     model_free(&model);
 #if defined(__x86_64__) || defined(_M_X64)
-    return (ok_avx2 && ok_vnni && ok_mt && ok_prep) ? 0 : 1;
-#else
-    return 0;
+    if (!(ok_avx2 && ok_vnni && ok_mt && ok_prep)) parity_failures++;
 #endif
+    if (parity_failures > 0) {
+        printf("\nparity: %d failure(s)\n", parity_failures);
+        return 1;
+    }
+    return 0;
 }

@@ -2,78 +2,39 @@
 title: kernels architecture
 date: 2026-05-05
 tags: [kernels, architecture, int8, dispatch]
-summary: How Veritate is built and why. Layering, INT8 rationale, runtime dispatch, matmul kernel, ablation contract.
+summary: How Veritate is built. Three layers, INT8 weights, runtime dispatch, one matmul.
 ---
 
-> Source: `documentation/kernels/architecture.md` (mirrored copy; the file at that path remains the canonical contract).
+> Friendly summary. The canonical contract is `documentation/kernels/architecture.md`.
 
-# Architecture
+## three layers
 
-How Veritate is built, and why.
+| layer | files | job |
+|---|---|---|
+| top | `main.c`, `model.c` | entry point, forward pass, composes kernels into layers |
+| middle | `dispatch.c`, `tensor.c` | detect CPU at startup, fill function-pointer table, allocate INT8 tensors |
+| bottom | `kernels/<arch>/` | hand-tuned matmul + helpers per CPU |
 
-# ------------------------------------------------------------------------------------
-# The big picture
-# ------------------------------------------------------------------------------------
+The top layer never knows which kernel ran. Calls go through function pointers filled at startup based on `cpuid`.
 
-Veritate is three layers:
+## why INT8
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  main.c — entry point, timing, CLI                          │
-├─────────────────────────────────────────────────────────────┤
-│  dispatch.c — detect CPU, fill function-pointer table       │
-│  tensor.c   — alloc, init, quantize INT8 tensors            │
-│  model.c    — forward pass: composes kernels into a layer   │
-├─────────────────────────────────────────────────────────────┤
-│  KERNELS (one per backend, picked at startup):              │
-│    scalar/matmul.c          plain C, runs anywhere          │
-│    x86_64/matmul_avx2.c     AVX2 intrinsics, INT8 dot       │
-│    x86_64/matmul_vnni.c     AVX-512 + VPDPBUSD              │
-│    arm64/matmul_neon_sdot.c NEON + SDOT, Apple Silicon path │
-│    arm64/matmul_neon.c      NEON without SDOT (Pi 4 class)  │
-└─────────────────────────────────────────────────────────────┘
-```
+INT8 weights cost negligible accuracy for inference and unlock four wins.
 
-The high-level layer never knows which kernel ran. The dispatch table is filled at
-startup based on `cpuid` results, and every call site invokes through a function pointer.
+- 4× the memory bandwidth of float32. Inference is RAM-bound.
+- 4× the cache footprint. A 7B model fits in 7 GB instead of 28 GB.
+- Native SIMD throughput. AVX-512 VNNI does 64 INT8 multiply-accumulates per instruction.
+- Analog hardware (Mythic, IBM) runs at ~8 bits via Ohm's law on flash. INT8 code ports natively.
 
-# ------------------------------------------------------------------------------------
-# Why INT8
-# ------------------------------------------------------------------------------------
+Block quantization Q8_0 (one fp16 scale per 32 INT8 values), same format as GGUF / llama.cpp.
 
-Modern weights compress to INT8 with negligible accuracy loss for inference. INT8 buys us:
+## why runtime dispatch
 
-- **4× memory bandwidth** vs float32. The bottleneck for inference is RAM, not compute.
-- **4× cache footprint** improvement. A 7B model in INT8 fits in 7 GB; in fp32 it's 28 GB.
-- **Native SIMD throughput**: VPDPBUSD does 64 INT8 multiply-accumulates per instruction.
-- **Analog compatibility**: real analog hardware (Mythic, IBM) operates at ~8-bit precision
-  via Ohm's law on flash cells. Code written in INT8 ports natively.
+Compile once, run on any x86 from a 2013 Haswell to a 2025 Zen 5. The runtime probes for SSE 4.2, AVX2, AVX-512, and VNNI, then patches the kernel pointers to the highest tier the CPU supports. Cost per call: one indirect jump that the branch predictor learns after the first hit. Same pattern as FFmpeg, OpenBLAS, and llama.cpp.
 
-Block quantization (Q8_0): for every 32 INT8 values, we store one fp16 scale. This is the
-exact format used by GGUF / llama.cpp.
+## memory layout
 
-# ------------------------------------------------------------------------------------
-# Why runtime dispatch
-# ------------------------------------------------------------------------------------
-
-Compile once, run on any x86 CPU from a 2013 Haswell to a 2025 Zen 5. The runtime detects:
-
-- `sse4_2` → must-have baseline (2008+)
-- `avx2`   → 256-bit vectors (2013+)
-- `avx512f` → 512-bit vectors (2017+, server / workstation)
-- `avx512_vnni` → INT8 dot product instruction (2019+, Ice Lake / Zen 4+)
-
-It picks the highest tier available and patches function pointers at startup. Cost at call
-site: one indirect jump, predicted by the branch predictor after the first call. Effectively
-zero overhead.
-
-This is the same pattern used by FFmpeg, OpenBLAS, and llama.cpp.
-
-# ------------------------------------------------------------------------------------
-# Memory layout
-# ------------------------------------------------------------------------------------
-
-Weights are stored on disk as a flat binary blob, `mmap()`ed at startup. Layout:
+Weights are a flat blob `mmap()`ed at startup. Zero-copy load, demand-paged by the OS. The matmul access pattern is linear within a block, so the caches stay happy.
 
 ```
 [ header (16 bytes) ]
@@ -82,125 +43,41 @@ Weights are stored on disk as a flat binary blob, `mmap()`ed at startup. Layout:
 ...
 ```
 
-`mmap` means zero-copy load. The OS pages weights in on demand. Cache-friendly because
-the access pattern in matmul is linear within a block.
+## the matmul
 
-# ------------------------------------------------------------------------------------
-# The matmul kernel — the heart of Veritate
-# ------------------------------------------------------------------------------------
+99% of inference time. Everything else is rounding error. Veritate spends its complexity budget on this one kernel.
 
-99% of inference time is matrix multiplication. Everything else (softmax, layernorm, GELU)
-is rounding error. Veritate spends its complexity budget on one kernel and keeps the rest
-trivial.
+| kernel | one MAC takes | where |
+|---|---|---|
+| scalar reference | 3 nested loops, INT8 in, INT32 accumulator | `kernels/scalar/matmul.c` |
+| AVX2 | 32 MACs per ~3 instructions via `maddubs` + `madd` | `kernels/x86_64/matmul_avx2.c` |
+| AVX-512 + VNNI | 64 MACs per single `vpdpbusd` | `kernels/x86_64/matmul_vnni.c` |
+| NEON SDOT | 16 MACs per `sdot` | `kernels/arm64/matmul_neon_sdot.c` |
+| NEON only | scalar fallback for pre-SDOT ARM | `kernels/arm64/matmul_neon.c` |
 
-### Scalar reference (always works)
+Sub-millisecond matmul on the 9800X3D. A 1024×1024×1024 INT8 matmul is 2 GOps; at ~4 effective TOPS that's ~0.5 ms. Achievable, not free. Every commit benches and logs to the workbook; regressions revert.
 
-```c
-for (int i = 0; i < M; i++)
-    for (int j = 0; j < N; j++) {
-        int32_t acc = 0;
-        for (int k = 0; k < K; k++)
-            acc += a[i*K + k] * b[k*N + j];
-        c[i*N + j] = acc * scale;
-    }
-```
+## what we are not doing
 
-3 nested loops, INT8 inputs, INT32 accumulator (so we don't overflow on long dot products).
+No graph executor. No autograd. No plugin kernel system. No format flexibility (INT8 today, INT4 in v4). No GPU. No cross-language runtime. C and assembly only. The architecture is compile-time — layer count, hidden dim, head count are `#define`s. The binary is the model.
 
-### AVX2 (current target)
+## streaming prefill (v3)
 
-For each output element, we want the dot product of two INT8 vectors of length K. AVX2:
+Sub-ms matmul is half the latency story. The other half is hiding compute behind the user's typing.
 
-1. `_mm256_loadu_si256` — load 32 INT8 values from each input
-2. `_mm256_maddubs_epi16` — multiply pairs into INT16, sum adjacent pairs
-3. `_mm256_madd_epi16` — sum INT16 pairs into INT32
-4. `_mm256_add_epi32` — accumulate into running sum
-5. After K iterations: horizontal-sum the INT32 lanes into one int.
-
-That's 32 multiply-accumulates per ~3 instructions. Plus aggressive loop unrolling.
-
-### AVX-512 VNNI (v2, where the magic is)
-
-`VPDPBUSD` does steps 2+3+4 in **one instruction**. 64 INT8 muls per cycle. On the 9800X3D,
-two FMA units per core × 8 cores ≈ ~8 TOPS aggregate INT8 throughput.
-
-# ------------------------------------------------------------------------------------
-# Sub-millisecond — the bar
-# ------------------------------------------------------------------------------------
-
-A 1024×1024×1024 INT8 matmul = 2 GOps. At 1 TOPS effective (single core, AVX2) that's 2 ms.
-At 4 TOPS (multi-core AVX-512 VNNI) it's ~0.5 ms. Sub-millisecond is achievable but not free.
-
-Every commit must benchmark and log the result in `docs/WORKBOOK.md`. Regressions revert.
-
-# ------------------------------------------------------------------------------------
-# What we're NOT doing
-# ------------------------------------------------------------------------------------
-
-- No graph executor. Forward pass is hand-coded.
-- No autograd. Inference only.
-- No plugin system. Kernels are statically dispatched.
-- No format flexibility. INT8 only. (INT4 in v4.)
-- No GPU. Veritate is CPU-first; GPU would be a sister project.
-- No cross-language runtime. C and assembly only.
-
-# ------------------------------------------------------------------------------------
-# Streaming prefill — making latency disappear
-# ------------------------------------------------------------------------------------
-
-Sub-millisecond matmul is half the story. The other half is hiding compute behind the
-user's input phase. From the moment a user starts typing to the moment they hit Enter
-is dead time on the CPU — Veritate uses it.
-
-Mechanism (v3+):
 - On every keystroke (debounced to word boundaries), forward-pass the partial input.
 - Persist the resulting KV cache, keyed by the prefix.
-- On Enter, only the final token positions need processing — everything else is reused.
+- On Enter, only the final token positions need processing.
 - Effective user-perceived latency = typing speed, not model speed.
 
-Edge case: user edits or deletes. KV cache is structured as a tree, not a chain. On
-divergence, rewind to the last common prefix and re-prefill from there.
+Edits or deletes? KV cache is a tree. Rewind to the last common prefix and re-prefill from there. Same idea as vLLM, llama.cpp prompt caching, and iOS predictive text. Defaults on once the autoregressive forward lands in v3.
 
-This is not theoretical — vLLM does it server-side, llama.cpp has primitive prompt
-caching, and Apple's iOS predictive text is essentially this idea. Veritate makes it
-the default UX.
+## causal ablation (v8)
 
-Implementation deferred to v3 when the autoregressive forward pass exists.
+Ablation is a forward-pass parameter, not a model field. The engine zeros `ffn_neurons[L][pos][N]` immediately before `ffn_down` when the request carries `(ablate_layer, ablate_neuron)`. One line of code, no kernel signatures change, every kernel tier sees identical inputs so bitwise parity holds. PyTorch mirrors with a forward hook. Default `(-1, -1)` is a no-op.
 
-# ------------------------------------------------------------------------------------
-# Causal ablation (v8)
-# ------------------------------------------------------------------------------------
+Per generation: `GET /generate?ablate_layer=L&ablate_neuron=N`. The engine echoes the active `(L, N)` into the TFRM frame for UI labeling.
 
-Ablation is applied in `model.c::forward_decode` on the post-GELU
-`ffn_neurons` buffer immediately before the `ffn_down` matmul. When the model
-is configured with `(ablate_layer, ablate_neuron) = (L, N)`, the engine zeros
-`ffn_neurons[L][pos][N]` for the current position before the down-projection
-runs. This is a one-line operation against the int8 buffer; no kernel
-signatures change. Every kernel tier (scalar, AVX-512 VNNI, future ARM64
-NEON) sees identical inputs, so the rule 23 bitwise-parity contract holds
-without modification.
+## the ASIC analogy
 
-Contract:
-
-- Ablation is a forward-pass parameter, not a model field. It does not
-  appear in `veritate.bin`. It does not change `VERITATE_MODEL_VERSION`.
-- Ablation is requested per generation via `/generate?ablate_layer=L&ablate_neuron=N`
-  (engine + pytorch). The engine echoes the active `(L, N)` into the TFRM v8
-  frame's `ablation_layer` / `ablation_neuron` fields for UI labeling.
-- Pytorch parity: `Brain.stream` exposes a forward hook that zeros the same
-  `ffn_neurons[L][N]` pre-`ffn_down`, ensuring the same output deltas as the
-  engine path.
-- Default: `(ablate_layer, ablate_neuron) = (-1, -1)`. No-op; zero runtime
-  cost.
-
-# ------------------------------------------------------------------------------------
-# What "ASIC-like" means here
-# ------------------------------------------------------------------------------------
-
-A real ASIC bakes the model architecture into silicon. Etched Sohu only runs transformers
-because the transformer dataflow is wired into the chip. Veritate does the software analogue:
-the model topology is compile-time. Layer count, hidden dim, head count — all `#define`s.
-The compiler unrolls accordingly. The binary is the model.
-
-The trade-off: changing the architecture requires recompiling. The win: zero runtime
-overhead, no graph traversal, no shape checks.
+Etched Sohu only runs transformers because the dataflow is wired into the silicon. Veritate is the software analogue. The model topology is compile-time. Compiler unrolls accordingly. Trade-off: changing the architecture requires recompiling. Win: zero runtime overhead, no graph traversal, no shape checks.

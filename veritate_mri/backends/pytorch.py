@@ -73,9 +73,12 @@ class Brain:
         globals()["Veritate"] = Veritate
         torch.set_num_threads(threads)
         s = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        cfg = s.get("args", {})
-        self.checkpoint = os.path.basename(checkpoint)
+        # Snapshot what we need from the checkpoint dict, then drop it so the
+        # optimizer state (~8 GB on 1B) doesn't sit resident through inference.
+        cfg = dict(s.get("args", {}))
         sd = s["model"]
+        del s
+        self.checkpoint = os.path.basename(checkpoint)
         if "tok_emb.weight" not in sd:
             plugin_name = str(cfg.get("plugin") or "").strip()
             tag = f" (plugin: {plugin_name})" if plugin_name else ""
@@ -88,6 +91,7 @@ class Brain:
         shape = _shape_from_state_dict(sd, cfg)
         self.model = Veritate(**shape)
         self.model.load_state_dict(sd, strict=True)
+        del sd  # frees the duplicate copy now that the model owns the params
         self.model.eval()
         self.n_params = sum(p.numel() for p in self.model.parameters())
 
@@ -529,7 +533,7 @@ class Brain:
         ranked = sorted(scores.items(), key=lambda x: -x[1])[:MEMORY_TOP_N]
         return [{"text": t[:120], "score": round(s, 2)} for t, s in ranked]
 
-    def stream(self, prompt, temperature=0.7, top_k_sample=40, max_new=200):
+    def stream(self, prompt, temperature=0.7, top_k_sample=40, max_new=200, addons_chain=None):
         m = self.model
         seq = m.seq
         if not prompt:
@@ -538,6 +542,10 @@ class Brain:
         ids = torch.tensor([b for b in prompt_bytes], dtype=torch.long).unsqueeze(0)
         if ids.size(1) >= seq:
             ids = ids[:, -(seq - 1):]
+
+        if addons_chain is not None:
+            addons_chain.reset()
+            addons_chain.observe_bytes(prompt_bytes)
 
         yield {
             "kind": "meta",
@@ -634,6 +642,8 @@ class Brain:
                           for pp, b in zip(cv.tolist(), ci.tolist())]
 
             scaled = last_logits / max(temperature, 1e-6)
+            if addons_chain is not None and len(addons_chain) > 0:
+                scaled = addons_chain.bias_logits(scaled)
             sv, si = torch.topk(scaled, top_k_sample)
             mask = torch.full_like(scaled, float("-inf"))
             mask.scatter_(0, si, sv)
@@ -683,6 +693,8 @@ class Brain:
                 "memory": memory,
             }
 
+            if addons_chain is not None:
+                addons_chain.observe(nxt)
             ids = torch.cat([ids, torch.tensor([[nxt]])], dim=1)
             if ids.size(1) >= seq:
                 ids = ids[:, -(seq - 1):]

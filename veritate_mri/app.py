@@ -41,6 +41,7 @@ import settings as settings_mod
 import heartbeat as heartbeat_mod
 import ai_assist as ai_assist_mod
 import app_sync as app_sync_mod
+import addons as addons_mod
 import threading
 
 # ------------------------------------------------------------------------------------
@@ -217,7 +218,7 @@ def _build_c_mri_frame(raw, fwd_ms, shape):
 
 
 def _c_engine_stream(prompt, max_new, temperature=0.7, top_k=40,
-                     ablate_layer=-1, ablate_neuron=-1):
+                     ablate_layer=-1, ablate_neuron=-1, addons_csv=""):
     sub = app.config["C_SUBPROCESS"]
     if sub is None:
         yield {"kind": "error", "message": "c chat_traced subprocess not running"}
@@ -247,7 +248,8 @@ def _c_engine_stream(prompt, max_new, temperature=0.7, top_k=40,
     try:
         last = time.perf_counter()
         for raw in sub.stream(prompt, temperature, top_k, max_new,
-                              ablate_layer=ablate_layer, ablate_neuron=ablate_neuron):
+                              ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
+                              addons_csv=addons_csv):
             now = time.perf_counter()
             fwd_ms = (now - last) * 1000.0
             last = now
@@ -474,20 +476,23 @@ def settings_route():
                         step = checkpoints.latest_step(name)
                         app.config["DEFAULT_STEP"]  = step
                 if name and step is not None:
-                    ckpt = checkpoints.path_for(name, step)
-                    mem_path = os.path.join(paths.model_dir(name), "neuron_memory.json")
                     threads = int(app.config.get("DEFAULT_THREADS") or auto_thread_count())
-                    brain = Brain(ckpt, threads=threads, memory=load_memory(mem_path))
+                    brain, name, step = _load_pytorch_brain(name, step, threads)
                     app.config["BRAIN"] = brain
                     app.config["BRAIN_MODEL"] = name
                     app.config["BRAIN_STEP"]  = int(step)
+                    app.config["DEFAULT_MODEL"] = name
+                    app.config["DEFAULT_STEP"]  = int(step)
                     app.config["BRAIN_LAST_USED"] = time.time()
                     app.config["BRAIN_LAST_ERROR"] = None
                     logmod.ok("backends", f"pytorch eager-loaded after settings flip: {name} step {step}")
             except Exception as e:
                 msg = f"{type(e).__name__}: {e}"
                 app.config["BRAIN_LAST_ERROR"] = msg
-                logmod.error("backends", f"pytorch eager load on settings flip failed: {msg}")
+                if isinstance(e, RuntimeError) and "PyTorch inference is not enabled" in str(e):
+                    logmod.warn("backends", f"pytorch backend skipped for {name}: non-vanilla architecture (use C engine)")
+                else:
+                    logmod.error("backends", f"pytorch eager load on settings flip failed: {msg}")
         return out
     return settings_mod.get()
 
@@ -613,8 +618,9 @@ def pruning_report():
         from veritate.model import Veritate
         ckpt_path = checkpoints.path_for(name, step)
         s = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        cfg = s.get("args", {})
+        cfg = dict(s.get("args", {}))
         sd = s["model"]
+        del s  # drops optimizer state (~8 GB on 1B) before model construction
         if "tok_emb.weight" not in sd:
             plugin_name = str(cfg.get("plugin") or "").strip()
             tag = f" (plugin: {plugin_name})" if plugin_name else ""
@@ -705,8 +711,9 @@ def pruning_generate_plugin():
         from veritate.model import Veritate
         ckpt_path = checkpoints.path_for(name, step)
         s = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        cfg = s.get("args", {})
+        cfg = dict(s.get("args", {}))
         sd = s["model"]
+        del s  # drops optimizer state (~8 GB on 1B) before model construction
         if "tok_emb.weight" not in sd:
             plugin_name = str(cfg.get("plugin") or "").strip()
             tag = f" (plugin: {plugin_name})" if plugin_name else ""
@@ -885,7 +892,7 @@ def run_classroom(name):
         return ({"name": name, "model_dir": False, "items": []}, 404)
     items = []
     for s in hooks.list_steps(name):
-        for kind in ("classroom", "grades", "concepts"):
+        for kind in ("classroom", "grades", "math", "grammar", "reasoning", "concepts"):
             if hooks.artifact_exists(name, s, kind):
                 items.append({"kind": kind, "step": s, "file": f"{kind}_step_{s}.json"})
     items.sort(key=lambda r: (r["step"], r["kind"]))
@@ -961,7 +968,7 @@ def timeline_file_compat(name, fname):
     if fname == "timeline.json":
         return run_timeline(name)
     import re
-    m = re.match(r"^(probe|classroom|grades|concepts|surprise|quant_kl)_step_(\d+)\.json$", fname)
+    m = re.match(r"^(probe|classroom|grades|math|grammar|reasoning|concepts|surprise|quant_kl)_step_(\d+)\.json$", fname)
     if m:
         data = hooks.load_artifact(name, int(m.group(2)), m.group(1))
         if data is None: return ("artifact not found", 404)
@@ -1179,6 +1186,32 @@ def c_config():
     if old is not None:
         try: old.close()
         except Exception: pass
+    name = os.path.basename(os.path.dirname(new_model)) if new_model else None
+    boost = binr.act_boost(name) if name else None
+    # If selected bin is non-QAT, don't spawn — surface blocked state.
+    if boost is not None and boost > 1:
+        app.config["C_EXE"]            = new_exe
+        app.config["C_MODEL"]          = new_model
+        app.config["C_SUBPROCESS"]     = None
+        app.config["C_BLOCKED_REASON"] = "qat_required"
+        app.config["C_BLOCKED_MODEL"]  = name
+        precision, version = (binr.header(name) if name else ("?", 0))
+        training, activation = (cfg_reader.training_kind(name) if name else ("", ""))
+        logmod.warn("backends", f"c-config: {name} not QAT-trained (act_boost={boost}); generate disabled")
+        return {
+            "ok": True,
+            "c_exe_path":  new_exe,
+            "c_exe":       os.path.basename(new_exe),
+            "c_model_path": new_model,
+            "c_model":     os.path.basename(new_model) if new_model else None,
+            "c_model_dir": name,
+            "c_model_precision":   precision,
+            "c_model_bin_version": version,
+            "c_model_training":    training,
+            "c_model_activation":  activation,
+            "c_model_act_boost":   boost,
+            "blocked_reason":      "qat_required",
+        }
     try:
         sub = CTracedSubprocess(new_exe, new_model)
     except Exception as e:
@@ -1187,11 +1220,11 @@ def c_config():
     app.config["C_EXE"]        = new_exe
     app.config["C_MODEL"]      = new_model
     app.config["C_SUBPROCESS"] = sub
+    app.config["C_BLOCKED_REASON"] = None
+    app.config["C_BLOCKED_MODEL"]  = None
     print(f"c-config: exe={new_exe} model={new_model} pid={sub.proc.pid}")
-    name = os.path.basename(os.path.dirname(new_model)) if new_model else None
     precision, version = (binr.header(name) if name else ("?", 0))
     training, activation = (cfg_reader.training_kind(name) if name else ("", ""))
-    boost = binr.act_boost(name) if name else None
     return {
         "ok": True,
         "c_exe_path":  new_exe,
@@ -1211,6 +1244,10 @@ def c_config():
 def backends_status():
     cur_exe   = app.config.get("C_EXE")
     cur_model = app.config.get("C_MODEL")
+    try:
+        bins_available = sum(1 for n in models.list_models() if binr.exists(n))
+    except Exception:
+        bins_available = 0
     return {
         "pytorch": {
             "loaded":  app.config.get("BRAIN") is not None,
@@ -1225,7 +1262,10 @@ def backends_status():
             "exe":       cur_exe,
             "model_bin": cur_model,
             "model_dir": (os.path.basename(os.path.dirname(cur_model)) if cur_model else None),
+            "blocked_reason": app.config.get("C_BLOCKED_REASON"),
+            "blocked_model":  app.config.get("C_BLOCKED_MODEL"),
             "build":     build_runner.state(),
+            "bins_available": bins_available,
         },
     }
 
@@ -1255,19 +1295,22 @@ def backends_pytorch():
         step = body.get("step") or app.config.get("DEFAULT_STEP") or checkpoints.latest_step(name)
         if step is None:
             return ({"ok": False, "error": f"no checkpoints under models/{name}/"}, 400)
-        ckpt = checkpoints.path_for(name, step)
         threads = int(body.get("threads") or app.config.get("DEFAULT_THREADS") or auto_thread_count())
         try:
-            mem_path = os.path.join(paths.model_dir(name), "neuron_memory.json")
-            brain = Brain(ckpt, threads=threads, memory=load_memory(mem_path))
+            brain, name, step = _load_pytorch_brain(name, step, threads)
         except Exception as e:
             msg = f"{type(e).__name__}: {e}"
             app.config["BRAIN_LAST_ERROR"] = msg
+            if isinstance(e, RuntimeError) and "PyTorch inference is not enabled" in str(e):
+                logmod.warn("backends", f"pytorch: no vanilla checkpoints found (default '{name}' is non-vanilla and fallback search yielded nothing)")
+                return ({"ok": False, "error": msg, "reason": "non_vanilla"}, 400)
             logmod.error("backends", f"pytorch load failed: {msg}")
             return ({"ok": False, "error": msg}, 500)
         app.config["BRAIN"] = brain
         app.config["BRAIN_MODEL"] = name
         app.config["BRAIN_STEP"]  = int(step)
+        app.config["DEFAULT_MODEL"] = name
+        app.config["DEFAULT_STEP"]  = int(step)
         app.config["BRAIN_LAST_USED"] = time.time()
         app.config["BRAIN_LAST_ERROR"] = None
         logmod.ok("backends", f"pytorch loaded: {name} step {step} ({brain.n_params:,} params)")
@@ -1327,6 +1370,22 @@ def _ensure_c_loaded(model_override=None):
             logmod.error("backends", "no veritate.bin under any model; train + export one first")
             app.config["C_PENDING"] = False
             return
+        # Peek act_boost: engine refuses act_boost>1 (non-QAT models produce
+        # INT8 gibberish). Surface as "qat_required" so the dashboard disables
+        # Generate with a clear message instead of a generic "subprocess died".
+        model_dir = os.path.basename(os.path.dirname(model))
+        boost = binr.act_boost(model_dir)
+        if boost is not None and boost > 1:
+            app.config["C_EXE"]            = exe
+            app.config["C_MODEL"]          = model
+            app.config["C_SUBPROCESS"]     = None
+            app.config["C_BLOCKED_REASON"] = "qat_required"
+            app.config["C_BLOCKED_MODEL"]  = model_dir
+            app.config["C_PENDING"]        = False
+            logmod.warn("backends", f"c engine: {model_dir} not QAT-trained (act_boost={boost}); generate disabled until model is QAT-continued or a different bin is selected")
+            return
+        app.config["C_BLOCKED_REASON"] = None
+        app.config["C_BLOCKED_MODEL"]  = None
         _spawn_c_subprocess(exe, model)
     app.config["C_PENDING"] = True
     threading.Thread(target=worker, name="c-backend-loader", daemon=True).start()
@@ -1422,6 +1481,15 @@ def atlas_concepts_inverted():
         return ({"error": f"{type(e).__name__}: {e}"}, 500)
 
 
+@app.route("/addons")
+def addons_list():
+    try:
+        return {"addons": addons_mod.list_addons()}
+    except Exception as e:
+        logmod.error("addons", f"list failed: {type(e).__name__}: {e}")
+        return ({"error": f"{type(e).__name__}: {e}"}, 500)
+
+
 @app.route("/generate")
 def generate():
     prompt        = request.args.get("prompt", "")
@@ -1431,14 +1499,27 @@ def generate():
     backend       = request.args.get("backend", "c").lower()
     ablate_layer  = int(request.args.get("ablate_layer",  "-1"))
     ablate_neuron = int(request.args.get("ablate_neuron", "-1"))
+    addons_csv    = request.args.get("addons", "")
+    addons_sel    = [s.strip() for s in addons_csv.split(",") if s.strip()]
 
     if backend == "c":
         if app.config.get("C_SUBPROCESS") is None:
+            blocked = app.config.get("C_BLOCKED_REASON")
+            if blocked == "qat_required":
+                bm = app.config.get("C_BLOCKED_MODEL") or "(unknown)"
+                return ({"error": f"model '{bm}' is not QAT-trained — C engine cannot run it (would produce gibberish). Use the PyTorch backend or retrain with qat_enabled=true.", "reason": "qat_required"}, 503)
+            try:
+                bins = sum(1 for n in models.list_models() if binr.exists(n))
+            except Exception:
+                bins = 0
+            if bins == 0:
+                return ({"error": "no exported model available. Train a model and export it to .bin first (Training tab → export to .bin)."}, 503)
             return ({"error": "c engine not loaded. POST /backends/c {action: load} first."}, 503)
         def stream_c():
             try:
                 for ev in _c_engine_stream(prompt, max_new, temperature=temperature, top_k=top_k,
-                                           ablate_layer=ablate_layer, ablate_neuron=ablate_neuron):
+                                           ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
+                                           addons_csv=",".join(addons_sel)):
                     yield f"data: {json.dumps(ev)}\n\n"
                 yield "event: done\ndata: {}\n\n"
             except GeneratorExit:
@@ -1451,11 +1532,19 @@ def generate():
         return ({"error": "pytorch backend not loaded. POST /backends/pytorch {action: load} first."}, 503)
     app.config["BRAIN_LAST_USED"] = time.time()
 
+    chain = None
+    if addons_sel:
+        try:
+            chain = addons_mod.build_chain(addons_sel)
+        except Exception as e:
+            logmod.error("addons", f"build_chain failed: {type(e).__name__}: {e}")
+            return ({"error": f"addons: {type(e).__name__}: {e}"}, 400)
+
     def stream_pt():
         with brain.lock:
             try:
                 brain.set_ablation(ablate_layer, ablate_neuron)
-                for ev in brain.stream(prompt, temperature, top_k, max_new):
+                for ev in brain.stream(prompt, temperature, top_k, max_new, addons_chain=chain):
                     ev["backend"] = "pytorch"
                     yield f"data: {json.dumps(ev)}\n\n"
                 yield "event: done\ndata: {}\n\n"
@@ -1483,6 +1572,49 @@ def _resolve_pytorch_model(name):
         print(f"model not found: models/{name}")
         return None
     return name
+
+
+def _load_pytorch_brain(name, step, threads):
+    """Try to load Brain for `name` at `step`. On non-vanilla failure, scan
+    other models by recency and load the first vanilla one. Returns
+    (brain, name, step) or raises the original RuntimeError if nothing
+    vanilla can be loaded."""
+    def _try(n, s):
+        ck = checkpoints.path_for(n, s)
+        mp = os.path.join(paths.model_dir(n), "neuron_memory.json")
+        return Brain(ck, threads=threads, memory=load_memory(mp))
+
+    try:
+        return (_try(name, step), name, int(step))
+    except RuntimeError as e:
+        if "PyTorch inference is not enabled" not in str(e):
+            raise
+        original_exc = e
+        original_name = name
+
+    # Fallback: scan other models by recency for a vanilla checkpoint.
+    candidates = []
+    for n in models.list_models():
+        if n == original_name:
+            continue
+        if not checkpoints.list_steps(n):
+            continue
+        st = train_csv.file_stat(n)
+        candidates.append((st.st_mtime if st else 0, n))
+    candidates.sort(reverse=True)
+    for _, n in candidates:
+        s = checkpoints.latest_step(n)
+        if s is None:
+            continue
+        try:
+            brain = _try(n, s)
+            logmod.warn("backends", f"pytorch: '{original_name}' is non-vanilla; auto-fell-back to '{n}' step {s}")
+            return (brain, n, int(s))
+        except RuntimeError as e2:
+            if "PyTorch inference is not enabled" in str(e2):
+                continue
+            raise
+    raise original_exc
 
 
 def _resolve_c_model_bin(name):
@@ -1586,19 +1718,25 @@ def main():
         s = settings_mod.get()
         step = app.config.get("DEFAULT_STEP")
         if s.get("pytorch_load_mode") == "always" and name is not None and step is not None:
-            ckpt = checkpoints.path_for(name, step)
-            mem_path = os.path.join(paths.model_dir(name), "neuron_memory.json")
-            brain = Brain(ckpt, threads=threads, memory=load_memory(mem_path))
+            brain, name, step = _load_pytorch_brain(name, step, threads)
             app.config["BRAIN"] = brain
             app.config["BRAIN_MODEL"] = name
             app.config["BRAIN_STEP"]  = int(step)
+            app.config["DEFAULT_MODEL"] = name
+            app.config["DEFAULT_STEP"]  = int(step)
             app.config["BRAIN_LAST_USED"] = time.time()
             app.config["BRAIN_LAST_ERROR"] = None
             logmod.ok("backends", f"pytorch eager-loaded: {name} step {step} ({brain.n_params:,} params)")
     except Exception as e:
         msg = f"{type(e).__name__}: {e}"
         app.config["BRAIN_LAST_ERROR"] = msg
-        logmod.error("backends", f"pytorch eager load failed: {msg}")
+        # MoE / non-vanilla models: Brain raises a known RuntimeError that
+        # is not a real failure -- the dashboard should fall back to the C
+        # engine for these. Log calmly instead of as ERROR.
+        if isinstance(e, RuntimeError) and "PyTorch inference is not enabled" in str(e):
+            logmod.warn("backends", f"pytorch backend skipped for {name}: non-vanilla architecture (use C engine)")
+        else:
+            logmod.error("backends", f"pytorch eager load failed: {msg}")
 
     print(f"http://0.0.0.0:{args.port}")
     app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True)

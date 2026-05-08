@@ -39,7 +39,7 @@ if ! command -v "$CC" >/dev/null 2>&1; then
   exit 1
 fi
 
-CFLAGS_COMMON="-O3 -Wall -Wextra -Wno-unused-parameter -DVERITATE_VERIFY_DECODE -DVERITATE_GELU_ZERO_THRESH=4"
+CFLAGS_COMMON="-O3 -flto=full -Wall -Wextra -Wno-unused-parameter -DVERITATE_VERIFY_DECODE -DVERITATE_GELU_ZERO_THRESH=4"
 LDFLAGS_COMMON="-lm -lpthread"
 
 SHARED_SRC="
@@ -48,7 +48,10 @@ SHARED_SRC="
   $ROOT/src/model.c
   $ROOT/src/alloc.c
   $ROOT/src/threadpool.c
+  $ROOT/src/addons.c
+  $ROOT/src/addons/slot_table.c
   $ROOT/kernels/scalar/matmul_scalar.c
+  $ROOT/kernels/scalar/matmul_ternary_scalar.c
   $ROOT/kernels/scalar/transformer_scalar.c
 "
 
@@ -59,6 +62,7 @@ case "$ARCH_DIR" in
       $ROOT/kernels/x86_64/matmul_avx2.c
       $ROOT/kernels/x86_64/matmul_vnni.c
       $ROOT/kernels/x86_64/matmul_int4.c
+      $ROOT/kernels/x86_64/matmul_ternary_vnni.c
       $ROOT/kernels/x86_64/transformer_avx512.c
     "
     ;;

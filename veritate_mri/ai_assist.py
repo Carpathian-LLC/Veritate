@@ -24,7 +24,7 @@ from readers import config as cfg_reader
 # ------------------------------------------------------------------------------------
 # Constants
 
-REQUEST_TIMEOUT_SECS = 30
+REQUEST_TIMEOUT_SECS = 60
 MODEL_FIELD          = "default"
 RECENT_TAIL_ROWS     = 12
 LOG_SOURCE           = "ai_assist"
