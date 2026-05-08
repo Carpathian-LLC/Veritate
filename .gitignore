@@ -23,3 +23,6 @@ data/*
 /*de.md
 plugins
 models
+experiments
+.DS_Store
+veritate_trace.bin
