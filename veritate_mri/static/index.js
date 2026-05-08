@@ -3957,50 +3957,77 @@ function render_concepts(refs, run, conceptsSteps, conceptsByStep, haveCheckpoin
 // reading "the volcano married a sandwich" should see good scores here, and
 // the caveat tells them why.
 
-// Each metric: id, label, blurb, "good" direction, soft target, formatter.
+// Each metric: id, label, blurb, "good" direction, soft target, formatter,
+// and `score(v)` -> [0..1] where 1 = ideal, 0 = baseline / untrained. The
+// score function is what the trajectory chart plots, so all lines share the
+// same y-axis and each line starts at (step 0, score 0) to mirror how the
+// reading-level chart anchors every band at fluency=0% at the random-init.
 const WRITING_METRICS = [
   { id: "distinct_3",        label: "vocabulary variety",
     blurb: "fraction of unique 3-word groups in the generation. low = the model is repeating phrases (mode collapse).",
-    higher: true,  target: 0.85, fmt: v => v.toFixed(3) },
+    higher: true,  target: 0.92, fmt: v => v.toFixed(3),
+    score: v => v == null ? null : Math.max(0, Math.min(1, v)) },
   { id: "lex_chain_density", label: "entity tracking",
     blurb: "fraction of meaningful words (length ≥ 3, not stop-words) that recur. higher = the model keeps referring back to the same characters/objects, suggesting it's tracking entities through the story.",
-    higher: true,  target: 0.20, fmt: v => v.toFixed(3) },
+    higher: true,  target: 0.25, fmt: v => v.toFixed(3),
+    score: v => v == null ? null : Math.max(0, Math.min(1, v / 0.40)) },
   { id: "pronoun_unbacked",  label: "broken pronouns",
     blurb: "fraction of pronouns (he/she/it/they) without a candidate referent in the previous 50 bytes. high = the model uses pronouns without setting up who they refer to.",
-    higher: false, target: 0.30, fmt: v => v.toFixed(3) },
+    higher: false, target: 0.15, fmt: v => v.toFixed(3),
+    score: v => v == null ? null : Math.max(0, Math.min(1, 1 - v)) },
   { id: "repeat_rate",       label: "duplicate words",
     blurb: "fraction of consecutive duplicate words (the the). high = mode collapse into a single token.",
-    higher: false, target: 0.05, fmt: v => v.toFixed(3) },
+    higher: false, target: 0.03, fmt: v => v.toFixed(3),
+    score: v => v == null ? null : Math.max(0, Math.min(1, 1 - v * 4)) },
   { id: "pmi",               label: "word co-occurrence",
     blurb: "Normalized PMI (NPMI, range -1..+1) of adjacent word pairs against the training corpus. +1 = pairs always co-occur in training, 0 = independent, -1 = unseen pairs. Catches diverse-but-gibberish output that vocabulary variety misses. Requires <stem>_bigrams.npz next to the corpus -- build with veritate_mri/tools/build_bigram_index.py.",
-    higher: true,  target: 0.10,  fmt: v => v == null ? "(no corpus index)" : v.toFixed(3) },
+    higher: true,  target: 0.20,  fmt: v => v == null ? "(no corpus index)" : v.toFixed(3),
+    score: v => v == null ? null : Math.max(0, Math.min(1, (v + 1) / 2)) },
   { id: "self_ppl",          label: "self-perplexity",
     blurb: "model's perplexity on its own generation. low = the model 'stands behind' what it just wrote; rising over training would mean it's drifting off-distribution from itself.",
-    higher: false, target: 3.0,  fmt: v => v == null ? "—" : v.toFixed(2) },
+    higher: false, target: 2.0,  fmt: v => v == null ? "—" : v.toFixed(2),
+    // log-scale: ppl 256 (random) -> 0, ppl 1.5 -> 1.
+    score: v => {
+      if (v == null) return null;
+      const LOG_RANDOM = Math.log(256), LOG_IDEAL = Math.log(1.5);
+      const s = (LOG_RANDOM - Math.log(Math.max(v, 1))) / (LOG_RANDOM - LOG_IDEAL);
+      return Math.max(0, Math.min(1, s));
+    }},
 ];
 
-function _whTone(metric, v) {
+function _whTone(metric, v, prev) {
   if (v == null || isNaN(v)) return "var(--dim)";
+  let tone;
   if (metric.higher) {
-    if (v >= metric.target) return "#5dff9b";
-    // PMI floor is -1, so "70% of target" doesn't work for negative-range metrics.
-    // Use an absolute warm threshold for PMI; default factor for everything else.
-    const warm = metric.id === "pmi" ? -0.1 : metric.target * 0.7;
-    if (v >= warm) return "var(--warm)";
-    return "var(--hot)";
+    if (v >= metric.target) tone = "green";
+    else if (v >= (metric.id === "pmi" ? -0.1 : metric.target * 0.7)) tone = "warm";
+    else tone = "hot";
+  } else {
+    if (v <= metric.target) tone = "green";
+    else if (v <= metric.target * 1.5) tone = "warm";
+    else tone = "hot";
   }
-  if (v <= metric.target) return "#5dff9b";
-  if (v <= metric.target * 1.5) return "var(--warm)";
-  return "var(--hot)";
+  // Trend penalty: if the metric is moving the wrong way by more than a small
+  // tolerance vs. the previous checkpoint, downgrade one step (green -> warm,
+  // warm -> hot). This surfaces deterioration before a metric crosses the
+  // target line. Tolerance is 5% of target for higher-better, 10% for
+  // lower-better (lower-better has tighter targets so absolute swings matter
+  // less).
+  if (prev != null && !isNaN(prev) && tone !== "hot") {
+    const tol = (metric.higher ? 0.05 : 0.10) * Math.max(metric.target, 0.01);
+    const movingWrong = metric.higher ? (v < prev - tol) : (v > prev + tol);
+    if (movingWrong) tone = (tone === "green") ? "warm" : "hot";
+  }
+  return tone === "green" ? "#5dff9b" : tone === "warm" ? "var(--warm)" : "var(--hot)";
 }
 
-function render_writing_health(refs, run, writingSteps, writingByStep, haveCheckpoints) {
+function render_writing_health(refs, run, writingSteps, writingByStep, haveCheckpoints, config) {
   const root = $(refs.writingHealthId);
   if (!root) return;
   if (!writingSteps || writingSteps.length === 0) {
     root.innerHTML = haveCheckpoints
-      ? `<span class="meta" style="color:var(--warm)">No writing-health dumps yet for this run. They appear automatically at every checkpoint after this change ships.</span>`
-      : `<span class="meta">No checkpoint yet.</span>`;
+      ? `<span style="color:var(--hot)">No writing-health dumps yet for this run.</span>`
+      : `<span style="color:var(--warm)">No checkpoint yet.</span>`;
     return;
   }
   const latestStep = writingSteps[writingSteps.length - 1];
@@ -4010,121 +4037,120 @@ function render_writing_health(refs, run, writingSteps, writingByStep, haveCheck
     return;
   }
 
-  // Caveat banner. Worded to be impossible to miss and impossible to misread.
-  let html = `<div class="desc" style="margin:0 0 12px;padding:10px 12px;border-left:3px solid var(--warm);background:rgba(255,170,80,0.06);font-size:11.5px;line-height:1.5">
-    <b style="color:var(--warm)">What this card measures &mdash; and what it doesn't.</b>
-    Six mathematical proxies for the <b>structure</b> of the model's own writing.
-    They detect <i>mode collapse</i> (repeating the same phrase), <i>broken pronouns</i> (he/she with no referent), <i>vocabulary diversity</i>, <i>off-distribution drift</i>, and <i>off-corpus word combinations</i>.
-    They <b>cannot</b> detect whether the story actually makes sense. A passage like "the volcano married a sandwich" will score perfectly here.
-    World-knowledge coherence requires a human reader or an LLM judge &mdash; there is no math for it.
-  </div>`;
-  // Corpus-coverage note: PMI is corpus-relative. If the index is missing,
-  // tell the user how to build it instead of silently showing "—".
+  let html = "";
+  // PMI no-index hint (one short line).
   const cfg = latest.config || {};
   if (cfg.corpus_path && !cfg.pmi_index_path) {
     const stem = (cfg.corpus_path.match(/([^\\\/]+)_train\.bin$/) || [null, "<corpus>"])[1];
-    html += `<div class="desc" style="margin:0 0 12px;padding:8px 10px;border-left:3px solid var(--accent);background:rgba(120,180,255,0.06);font-size:11px">
-      <b>PMI is disabled for this run.</b> The corpus has no bigram index. Build one once with:
-      <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">python veritate_mri/tools/build_bigram_index.py --corpus ${escapeHtml(stem)}</code>
-      and the next checkpoint will include PMI scores.
-    </div>`;
+    html += `<div class="meta" style="margin:0 0 10px;font-size:11px">PMI disabled (no bigram index). Build with: <code>python veritate_mri/tools/build_bigram_index.py --corpus ${escapeHtml(stem)}</code></div>`;
   }
 
-  // Metric grid.
-  html += `<div style="display:grid;grid-template-columns:170px 90px minmax(160px,1fr);gap:6px 14px;font-size:11.5px;align-items:center">`;
+  // Legend colors avoid green/yellow/orange/red (those mean status: good/close/bad).
+  // Picked for high mutual contrast: hot pink, electric cyan, deep violet, magenta,
+  // teal, slate. Each is well-separated in hue and lightness.
+  const WH_COLORS = {
+    distinct_3:        "#ff3db8",   // hot magenta-pink
+    lex_chain_density: "#3dd6ff",   // electric cyan
+    pronoun_unbacked:  "#9b3dff",   // deep violet
+    repeat_rate:       "#ffb3ff",   // light pink
+    pmi:               "#3dffd6",   // teal
+    self_ppl:          "#5d7dff",   // royal blue
+  };
+  // Prev-step record for trend-aware tinting. If a metric is moving the
+  // wrong way vs. the previous checkpoint, _whTone downgrades the color.
+  const prevStep = writingSteps.length >= 2 ? writingSteps[writingSteps.length - 2] : null;
+  const prevAgg = prevStep != null ? (writingByStep[prevStep] || {}).aggregate : null;
+  html += `<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));gap:8px 12px;margin-bottom:10px">`;
   for (const m of WRITING_METRICS) {
     const v = latest.aggregate[m.id];
-    const tone = _whTone(m, v);
-    const arrow = m.higher ? "&uarr;" : "&darr;";
-    const targetStr = `${m.higher ? "&ge;" : "&le;"} ${m.target}`;
-    html += `<div style="text-align:right"><b>${m.label}</b><div class="meta" style="font-size:10px">${arrow} ${targetStr} target</div></div>
-      <div style="text-align:left"><b style="color:${tone};font-size:14px">${v == null ? "—" : m.fmt(v)}</b></div>
-      <div class="meta" style="font-size:10.5px;line-height:1.35">${m.blurb}</div>`;
+    const prevV = prevAgg ? prevAgg[m.id] : null;
+    const tone = _whTone(m, v, prevV);
+    const arrow = m.higher ? "≥" : "≤";
+    const swatch = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${WH_COLORS[m.id] || "#fff"};margin-right:5px;vertical-align:middle"></span>`;
+    // Trend indicator: ↑/↓/→ next to the value. Color it by whether the
+    // direction is good or bad for this metric.
+    let trend = "";
+    if (prevV != null && v != null) {
+      const tol = (m.higher ? 0.02 : 0.005) * Math.max(m.target, 0.01);
+      const dv = v - prevV;
+      if (Math.abs(dv) <= tol) trend = `<span class="meta" style="font-size:10px;margin-left:4px;color:var(--dim)">→</span>`;
+      else {
+        const goodDir = m.higher ? (dv > 0) : (dv < 0);
+        const arrowChar = dv > 0 ? "↑" : "↓";
+        const trendColor = goodDir ? "#5dff9b" : "var(--hot)";
+        trend = `<span style="font-size:11px;margin-left:4px;color:${trendColor}" title="vs step ${prevStep}: ${dv > 0 ? "+" : ""}${dv.toFixed(3)}">${arrowChar}</span>`;
+      }
+    }
+    html += `<div title="${escapeHtml(m.blurb)}" style="background:rgba(255,255,255,.02);padding:6px 8px;border-left:3px solid ${tone};border-radius:3px">
+      <div class="meta" style="font-size:10.5px">${swatch}${m.label}</div>
+      <b style="color:${tone};font-size:14px">${v == null ? "—" : m.fmt(v)}</b>${trend}
+      <span class="meta" style="font-size:10px;margin-left:6px">${arrow} ${m.target}</span>
+    </div>`;
   }
   html += `</div>`;
 
-  // Trajectory: distinct_3, lex_chain_density, repeat_rate, pronoun_unbacked over steps.
-  // Scaled 0..1 already, so we plot directly. Self-ppl plotted on its own (different scale).
+  // Trajectory: HTML chip-legend (matches reading-level style), then canvas.
+  const trajMetrics = ["distinct_3", "lex_chain_density", "pronoun_unbacked", "repeat_rate", "pmi"];
   if (writingSteps.length >= 2) {
-    html += `<div class="meta" style="margin:14px 0 4px;font-size:10.5px">trajectory across checkpoints (each line is one metric, 0..1 scale)</div>`;
-    html += `<div id="${refs.writingHealthId}_traj" style="position:relative;height:140px;background:rgba(255,255,255,.02);border-radius:4px"></div>`;
+    let lhtml = `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;font-size:11px;margin:6px 0 4px">`;
+    for (const id of trajMetrics) {
+      const lbl = (WRITING_METRICS.find(m => m.id === id) || {}).label || id;
+      lhtml += `<span style="display:inline-flex;align-items:center;gap:5px"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${WH_COLORS[id] || "#fff"}"></span>${lbl}</span>`;
+    }
+    lhtml += `</div>`;
+    html += lhtml;
+    html += `<canvas id="${refs.writingHealthId}_traj" height="200" style="width:100%;height:200px;background:rgba(255,255,255,.02);border-radius:4px"></canvas>`;
+    html += `<div class="meta" style="margin:4px 0 8px;font-size:10px">trajectory: each line is one metric, score 0 (untrained) → 1 (ideal). UP = better. All lines start at 0 at step 0.</div>`;
   }
 
-  // Sample preview: show the actual generations from the latest checkpoint so
-  // the user can sanity-check the scores against the real text. without this,
-  // numbers without examples are hard to trust.
+  // Latest-step sample preview.
   if (Array.isArray(latest.samples) && latest.samples.length > 0) {
-    html += `<div class="meta" style="margin:14px 0 4px;font-size:10.5px">latest generations (step ${latestStep}, you decide if they make sense)</div>`;
-    html += `<div style="display:flex;flex-direction:column;gap:8px">`;
+    html += `<div class="meta" style="margin:10px 0 4px;font-size:10.5px">latest generations (step ${latestStep})</div>`;
+    html += `<div style="display:flex;flex-direction:column;gap:6px">`;
     for (const s of latest.samples) {
       const promptHtml = `<span class="meta" style="font-style:italic">${escapeHtml(s.prompt)}</span>`;
       const genHtml = escapeHtml(s.generation || "");
-      html += `<div style="background:rgba(255,255,255,.03);padding:8px 10px;border-radius:4px;font-size:11px;line-height:1.45;white-space:pre-wrap;font-family:var(--font-mono, monospace)">${promptHtml}<span style="color:var(--text)">${genHtml}</span></div>`;
+      html += `<div style="background:rgba(255,255,255,.03);padding:6px 8px;border-radius:4px;font-size:11px;line-height:1.4;white-space:pre-wrap">${promptHtml}<span style="color:var(--text)">${genHtml}</span></div>`;
     }
     html += `</div>`;
   }
 
   root.innerHTML = html;
 
-  // Trajectory render via existing plotTrainSeries helper. Each metric becomes
-  // its own series; we normalise self-ppl into 0..1 by clamping at ppl=10.
-  const trajRoot = document.getElementById(`${refs.writingHealthId}_traj`);
-  if (trajRoot && writingSteps.length >= 2) {
-    const W = trajRoot.clientWidth || 600;
-    const H = 140;
-    trajRoot.innerHTML = `<canvas width="${W}" height="${H}" style="width:100%;height:100%"></canvas>`;
-    const canvas = trajRoot.querySelector("canvas");
+  // Trajectory: each line is a per-metric SCORE in [0..1] where 1 = ideal,
+  // 0 = untrained baseline. All lines anchor at (step 0, score 0), mirroring
+  // how the reading-level chart anchors every band at fluency=0% at random
+  // init. Up = better. This is the same pattern as the reading-level chart.
+  const canvas = document.getElementById(`${refs.writingHealthId}_traj`);
+  if (canvas && writingSteps.length >= 1) {
     const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, W, H);
-    // axes
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.lineWidth = 1;
-    for (let p = 0; p <= 4; p++) {
-      const y = (p / 4) * (H - 20) + 10;
-      ctx.beginPath(); ctx.moveTo(40, y); ctx.lineTo(W - 8, y); ctx.stroke();
-    }
-    const minStep = writingSteps[0], maxStep = writingSteps[writingSteps.length - 1];
-    const xOf = s => 40 + ((s - minStep) / Math.max(1, maxStep - minStep)) * (W - 48);
-    const yOf = v => H - 10 - Math.max(0, Math.min(1, v)) * (H - 20);
-    const colors = { distinct_3: "#5dff9b", lex_chain_density: "#80c1ff", pronoun_unbacked: "#ff7d5d", repeat_rate: "var(--warm)", pmi: "#c08bff" };
-    // PMI is in [-1, +1], remap to [0, 1] for the same chart axis: 0.5 = independent words.
-    const remap = (id, v) => id === "pmi" ? (v + 1) / 2 : v;
-    const trajMetrics = ["distinct_3", "lex_chain_density", "pronoun_unbacked", "repeat_rate", "pmi"];
-    for (const id of trajMetrics) {
-      ctx.strokeStyle = colors[id] || "#fff";
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      let first = true;
+    const metricById = {};
+    for (const m of WRITING_METRICS) metricById[m.id] = m;
+    const series = trajMetrics.map(id => {
+      const m = metricById[id];
+      if (!m || typeof m.score !== "function") return null;
+      const points = [{ x: 0, y: 0 }];   // anchor every line at the random-init baseline
       for (const step of writingSteps) {
         const r = writingByStep[step];
         if (!r || !r.aggregate) continue;
         const v = r.aggregate[id];
-        if (v == null) continue;
-        const x = xOf(step), y = yOf(remap(id, v));
-        if (first) { ctx.moveTo(x, y); first = false; } else { ctx.lineTo(x, y); }
+        const s = m.score(v);
+        if (s == null) continue;
+        points.push({ x: step, y: s });
       }
-      ctx.stroke();
-    }
-    // labels
-    ctx.fillStyle = "rgba(255,255,255,0.45)";
-    ctx.font = "10px sans-serif";
-    ctx.fillText("1.0", 8, 14);
-    ctx.fillText("0.0", 8, H - 6);
-    ctx.fillText(`step ${minStep}`, 40, H - 0);
-    ctx.textAlign = "right";
-    ctx.fillText(`step ${maxStep}`, W - 8, H - 0);
-    ctx.textAlign = "left";
-    // legend
-    let lx = 50, ly = 12;
-    for (const id of trajMetrics) {
-      const c = colors[id] || "#fff";
-      ctx.fillStyle = c;
-      ctx.fillRect(lx, ly - 6, 10, 2);
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
-      const label = id.replace(/_/g, " ");
-      ctx.fillText(label, lx + 14, ly);
-      lx += ctx.measureText(label).width + 38;
-    }
+      return { color: WH_COLORS[id] || "#fff", points, lw: 1.5, dots: true };
+    }).filter(s => s && s.points.length > 1);   // need a real measurement, not just origin
+    const totalSteps = (config && config.training_args && config.training_args.total_steps) || null;
+    plotTrainSeries(canvas, ctx, series, {
+      yMinFloor: 0,
+      yMaxCeil:  1.08,
+      xMinFloor: 0,
+      xMaxCeil:  totalSteps || undefined,
+      yTitle:    "score (1.0 = ideal, 0 = untrained)",
+      thresholdLines: [
+        { y: 1.0, color: "#5dff9b", label: "IDEAL", lineDash: [4, 3] },
+      ],
+    });
   }
 }
 
@@ -4256,7 +4282,7 @@ async function loadClassroomFor(state, refs, run) {
     } catch (e) { console.warn("writing_health fetch", it.step, e); }
   }));
   state.writingSteps = Object.keys(state.writingByStep).map(s => parseInt(s, 10)).sort((a, b) => a - b);
-  if (refs.writingHealthId) render_writing_health(refs, run, state.writingSteps, state.writingByStep, steps.length > 0);
+  if (refs.writingHealthId) render_writing_health(refs, run, state.writingSteps, state.writingByStep, steps.length > 0, state.config);
   state.loaded = true;
 }
 

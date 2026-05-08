@@ -664,7 +664,7 @@
     <div class="body">
       <div id="learnWritingHealth">no writing-health data yet</div>
     </div>
-    <p class="desc">Five mathematical proxies (vocabulary variety, entity tracking, broken pronouns, duplicate words, self-perplexity) computed over generations from three fixed prompts at every checkpoint. <b>These tell you when the model graduates from gibberish to grammar.</b> They cannot tell you whether the story makes sense &mdash; "the volcano married a sandwich" scores fine here. World-knowledge coherence requires a human reader; there's no closed-form math for it.</p>
+    <p class="desc">Five mathematical proxies (vocabulary variety, entity tracking, broken pronouns, duplicate words, self-perplexity) computed over generations from three fixed prompts at every checkpoint. <span style="color:var(--warm)">These tell you when the model graduates from gibberish to grammar. They cannot tell you whether the story makes sense. For example, "the volcano married a sandwich" would score fine here. "World-knowledge" coherence requires a human reader or LLM to review.</span></p>
     <details class="more"><summary>how each metric is calculated</summary><div class="more-content">
       <h4>vocabulary variety (distinct-3)</h4>
       <p>Take the generated text, split into words, slide a 3-word window across it, count unique 3-tuples / total 3-tuples. Fraction near 1.0 = every 3-word window is unique (rich, varied prose). Fraction near 0 = the model is repeating phrases (mode collapse, the most common early-training failure mode).</p>
@@ -1008,7 +1008,7 @@
     <div class="body">
       <div id="trainWritingHealth">no writing-health data yet</div>
     </div>
-    <p class="desc">Mathematical proxies for writing structure: vocabulary variety, entity tracking, broken pronouns, duplicate words, self-perplexity. They catch mode collapse and grammatical breakdown, but cannot tell whether a story makes sense at the world-knowledge level. See the Learning tab for the full explanation.</p>
+    <p class="desc">Mathematical proxies for writing structure: vocabulary variety, entity tracking, broken pronouns, duplicate words, self-perplexity. They catch mode collapse and grammatical breakdown, but cannot tell whether a story makes sense at the world-knowledge level. See the Models tab for the full explanation.</p>
   </div>
 
   <div class="panel">
