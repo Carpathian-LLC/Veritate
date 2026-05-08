@@ -27,3 +27,4 @@ models
 /experiments
 experiments
 veritate_trace.bin
+.DS_Store
