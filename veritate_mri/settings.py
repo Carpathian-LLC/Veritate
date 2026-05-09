@@ -44,6 +44,8 @@ DEFAULTS = {
     "ai_api_key_user": "",
     "last_acknowledged_build": 0,
     "device_name": "",
+    "corpus_catalog_url": "",
+    "corpus_user_sources": [],
 }
 
 # Build notices surface a modal in the dashboard for breaking-build changes the
@@ -52,7 +54,7 @@ DEFAULTS = {
 # last_acknowledged_build >= the highest key.
 BUILD_NOTICES = {
     5: "Build 5 contains substantial engine changes. Please pull the latest source and fully restart the application; older runtime state may not be compatible. Requires a reinstall of requirements (pip install -r requirements.txt).",
-    6: "Build 6 reworks the in-app updater. The 'Update' button now overwrites local tracked source to match upstream so diverging branches and dirty trees no longer block updates; user data in data/, models/, and plugins/ is gitignored and untouched. If your repo is stuck from a previously failed update, delete and re-clone the Veritate repository (your data/, models/, and plugins/ folders carry over). Click the yellow 'reload python' button once after this update to load the new updater logic.",
+    6: "Build 6 reworks the in-app updater. The 'Update' button now overwrites local tracked source to match upstream so diverging branches and dirty trees no longer block updates; user data in data/, models/, and plugins/ is gitignored and untouched. If your repo is stuck from a previously failed update, delete and re-clone the Veritate repository (your data/, models/, and plugins/ folders carry over). Click the yellow 'reload python' button once after this update to load the new updater logic. Build 6 also adds a Corpus library in Settings (apt-style installer for training data into plugins/corpus/) shipping a local catalog of known corpora from Tiny Shakespeare up to RedPajama-V2, with one-click install and downloads above 10 GB gated by a confirm dialog. New Python dependencies are required for HuggingFace-sourced corpora: run 'pip install -r requirements.txt' to pull in datasets and pyarrow before installing any non-direct corpus.",
 }
 
 _LOCK = threading.Lock()
@@ -116,6 +118,26 @@ def _validate(patch):
             if len(stripped) > DEVICE_NAME_MAX_LEN:
                 raise ValueError(f"device_name must be {DEVICE_NAME_MAX_LEN} characters or fewer")
             patch["device_name"] = stripped
+    if "corpus_catalog_url" in patch:
+        v = patch["corpus_catalog_url"]
+        if v is None:
+            patch["corpus_catalog_url"] = ""
+        elif not isinstance(v, str):
+            raise ValueError("corpus_catalog_url must be a string")
+        else:
+            patch["corpus_catalog_url"] = v.strip()
+    if "corpus_user_sources" in patch:
+        v = patch["corpus_user_sources"]
+        if v is None:
+            patch["corpus_user_sources"] = []
+        elif not isinstance(v, list):
+            raise ValueError("corpus_user_sources must be a list")
+        else:
+            cleaned = []
+            for entry in v:
+                if isinstance(entry, dict) and entry.get("stem"):
+                    cleaned.append(entry)
+            patch["corpus_user_sources"] = cleaned
     return patch
 
 

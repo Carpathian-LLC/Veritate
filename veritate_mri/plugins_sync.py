@@ -4,39 +4,39 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - sync the plugins/ folder against its remote git repo. plugins/ is its own
-#   self-contained git repo, separate from the parent Veritate repo.
-# - status() reports remote, branch, head, and ahead/behind. local dirty state
-#   is not surfaced: untracked user content is expected.
-# - sync() does fetch + hard reset to origin/<branch>, or clones if plugins/ is
-#   missing. tracked files are forced to match upstream (this is a download,
-#   not a merge), so any local commits or edits to tracked files are discarded.
-#   untracked user content is preserved. this avoids the "diverging branches
-#   can't be fast-forwarded" failure mode that ff-only pulls hit whenever
-#   local history drifts from remote.
-# - still refuses to clone over a non-empty non-repo dir, and refuses to sync
-#   if a plugin is currently running.
+# - downloads plugin files from the public Veritate-Plugins repo over plain
+#   https. plugins/ is NOT a git repo locally; this is a one-way file pull.
+# - additive only: any file that already exists locally is left alone. only
+#   files that are missing locally get written. user authored plugins and
+#   local edits are never touched.
+# - if plugins/ does not exist, it is created.
+# - refuses to sync while a plugin is running.
 # veritate_mri/plugins_sync.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import io
 import os
-import shutil
+import tarfile
 import threading
 import time
+import urllib.error
+import urllib.request
 
 from readers import paths
 
 import logs as logmod
 import plugin_runner
-from git_runner import run_git as _git
 
 # ------------------------------------------------------------------------------------
 # Constants
 
-DEFAULT_REMOTE_URL = "https://github.com/Carpathian-LLC/Veritate-Plugins.git"
+REPO_OWNER         = "Carpathian-LLC"
+REPO_NAME          = "Veritate-Plugins"
 DEFAULT_BRANCH     = "main"
-GIT_TIMEOUT_SECS   = 120
+DOWNLOAD_TIMEOUT_S = 120
+
+DEFAULT_REMOTE_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}.git"
 
 PLUGINS_DIR = paths.PLUGINS_ROOT
 
@@ -51,72 +51,17 @@ _LAST = {
 # ------------------------------------------------------------------------------------
 # Functions
 
-def _run_git(args, cwd, timeout=GIT_TIMEOUT_SECS):
-    return _git(args, cwd, timeout=timeout)
+def _tarball_url(branch):
+    return f"https://codeload.github.com/{REPO_OWNER}/{REPO_NAME}/tar.gz/refs/heads/{branch}"
 
 
-def _is_repo(path):
-    return os.path.isdir(os.path.join(path, ".git"))
-
-
-def _dir_is_empty(path):
-    if not os.path.isdir(path):
-        return True
-    for entry in os.listdir(path):
-        if entry == ".git":
-            continue
-        return False
-    return True
-
-
-def status():
-    out = {
-        "exists":     os.path.isdir(PLUGINS_DIR),
-        "is_repo":    False,
-        "remote_url": None,
-        "branch":     None,
-        "head_sha":   None,
-        "head_short": None,
-        "behind":     None,
-        "ahead":      None,
-        "default_remote_url": DEFAULT_REMOTE_URL,
-        "default_branch":     DEFAULT_BRANCH,
-        "last": dict(_LAST),
-    }
-    if not out["exists"]:
-        return out
-    if not _is_repo(PLUGINS_DIR):
-        return out
-    out["is_repo"] = True
-
-    code, so, _ = _run_git(["remote", "get-url", "origin"], PLUGINS_DIR, timeout=10)
-    if code == 0:
-        out["remote_url"] = so
-
-    code, so, _ = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], PLUGINS_DIR, timeout=10)
-    if code == 0:
-        out["branch"] = so or None
-
-    code, so, _ = _run_git(["rev-parse", "HEAD"], PLUGINS_DIR, timeout=10)
-    if code == 0 and so:
-        out["head_sha"]   = so
-        out["head_short"] = so[:8]
-
-    if out["branch"] and out["remote_url"]:
-        code, so, _ = _run_git(
-            ["rev-list", "--left-right", "--count", f"HEAD...origin/{out['branch']}"],
-            PLUGINS_DIR, timeout=10,
-        )
-        if code == 0 and so:
-            parts = so.split()
-            if len(parts) == 2:
-                try:
-                    out["ahead"]  = int(parts[0])
-                    out["behind"] = int(parts[1])
-                except ValueError:
-                    pass
-
-    return out
+def _count_local_files():
+    if not os.path.isdir(PLUGINS_DIR):
+        return 0
+    n = 0
+    for _root, _dirs, files in os.walk(PLUGINS_DIR):
+        n += len(files)
+    return n
 
 
 def _record(action, ok, message):
@@ -129,96 +74,152 @@ def _record(action, ok, message):
         })
 
 
-def _clone(remote_url, branch):
-    if os.path.isdir(PLUGINS_DIR) and not _dir_is_empty(PLUGINS_DIR):
-        msg = f"refuse to clone: {PLUGINS_DIR} is non-empty and not a git repo. move or delete it first."
-        logmod.error("plugins-sync", msg)
-        _record("clone", False, msg)
-        return {"ok": False, "error": msg}
-    parent = os.path.dirname(PLUGINS_DIR)
-    os.makedirs(parent, exist_ok=True)
-    if os.path.isdir(PLUGINS_DIR) and _dir_is_empty(PLUGINS_DIR):
-        try:
-            shutil.rmtree(PLUGINS_DIR)
-        except OSError as e:
-            msg = f"could not remove empty {PLUGINS_DIR}: {e}"
-            logmod.error("plugins-sync", msg)
-            _record("clone", False, msg)
-            return {"ok": False, "error": msg}
-    logmod.info("plugins-sync", f"cloning {remote_url} (branch {branch}) into {PLUGINS_DIR}")
-    code, so, se = _run_git(
-        ["clone", "--branch", branch, "--single-branch", remote_url, PLUGINS_DIR],
-        cwd=parent,
-        timeout=GIT_TIMEOUT_SECS,
-    )
-    if code != 0:
-        msg = se or so or f"git clone exit {code}"
-        logmod.error("plugins-sync", f"clone failed: {msg}")
-        _record("clone", False, msg)
-        return {"ok": False, "error": msg}
-    logmod.ok("plugins-sync", "clone done")
-    _record("clone", True, f"cloned {remote_url}@{branch}")
-    return {"ok": True, "action": "clone", "status": status()}
+def status():
+    return {
+        "exists":             os.path.isdir(PLUGINS_DIR),
+        "remote_url":         DEFAULT_REMOTE_URL,
+        "default_remote_url": DEFAULT_REMOTE_URL,
+        "default_branch":     DEFAULT_BRANCH,
+        "local_files":        _count_local_files(),
+        "last":               dict(_LAST),
+    }
 
 
-def _pull(branch):
-    code, so, se = _run_git(["fetch", "origin", branch], PLUGINS_DIR)
-    if code != 0:
-        msg = se or so or f"git fetch exit {code}"
-        logmod.error("plugins-sync", f"fetch failed: {msg}")
-        _record("pull", False, msg)
-        return {"ok": False, "error": msg}
-    code, so, se = _run_git(["reset", "--hard", f"origin/{branch}"], PLUGINS_DIR)
-    if code != 0:
-        msg = se or so or f"git reset --hard exit {code}"
-        logmod.error("plugins-sync", f"reset failed: {msg}")
-        _record("pull", False, msg)
-        return {"ok": False, "error": msg}
-    logmod.ok("plugins-sync", f"synced to origin/{branch}: {so or 'ok'}")
-    _record("pull", True, so or f"synced to origin/{branch}")
-    return {"ok": True, "action": "pull", "status": status()}
+def _download_tarball(branch):
+    url = _tarball_url(branch)
+    req = urllib.request.Request(url, headers={"User-Agent": "veritate-mri/sync"})
+    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_S) as resp:
+        code = getattr(resp, "status", 200)
+        if code != 200:
+            raise RuntimeError(f"http {code} from {url}")
+        return resp.read()
+
+
+def _safe_dest(rel_path, root):
+    """Return the absolute destination path if it stays under root, else None."""
+    candidate = os.path.normpath(os.path.join(root, rel_path))
+    root_norm = os.path.normpath(root)
+    if candidate == root_norm:
+        return None
+    if not candidate.startswith(root_norm + os.sep):
+        return None
+    return candidate
+
+
+def _strip_top_dir(member_name):
+    parts = member_name.split("/", 1)
+    if len(parts) < 2 or not parts[1]:
+        return None
+    return parts[1]
 
 
 def check():
-    """Refresh remote state without pulling. `git fetch origin <branch>` then
-    return the updated status. Read-only; does not mutate the working tree."""
-    if not _is_repo(PLUGINS_DIR):
-        return {"ok": False, "error": "plugins/ is not a git repo. clone via sync first.",
-                "status": status()}
     branch = DEFAULT_BRANCH
-    code, so, _ = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], PLUGINS_DIR, timeout=10)
-    if code == 0 and so:
-        branch = so
-    code, so, se = _run_git(["fetch", "origin", branch], PLUGINS_DIR)
-    if code != 0:
-        msg = se or so or f"git fetch exit {code}"
-        logmod.error("plugins-sync", f"check failed: {msg}")
+    try:
+        data = _download_tarball(branch)
+    except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, OSError) as e:
+        msg = f"could not reach {DEFAULT_REMOTE_URL}: {e}"
+        logmod.error("plugins-sync", msg)
         _record("check", False, msg)
         return {"ok": False, "error": msg, "status": status()}
-    _record("check", True, f"fetched origin/{branch}")
-    return {"ok": True, "action": "check", "status": status()}
+
+    remote = 0
+    missing = 0
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            for member in tar.getmembers():
+                if not member.isfile():
+                    continue
+                rel = _strip_top_dir(member.name)
+                if rel is None:
+                    continue
+                dest = _safe_dest(rel, PLUGINS_DIR)
+                if dest is None:
+                    continue
+                remote += 1
+                if not os.path.exists(dest):
+                    missing += 1
+    except tarfile.TarError as e:
+        msg = f"tarball parse failed: {e}"
+        logmod.error("plugins-sync", msg)
+        _record("check", False, msg)
+        return {"ok": False, "error": msg, "status": status()}
+
+    msg = f"remote has {remote} file(s); {missing} missing locally"
+    logmod.ok("plugins-sync", msg)
+    _record("check", True, msg)
+    return {
+        "ok":           True,
+        "action":       "check",
+        "remote_files": remote,
+        "new_files":    missing,
+        "status":       status(),
+    }
 
 
 def sync():
-    remote_url = DEFAULT_REMOTE_URL
-    branch     = DEFAULT_BRANCH
+    branch = DEFAULT_BRANCH
 
     with _LOCK:
         if plugin_runner.is_running():
             msg = "a plugin is currently running. stop it before syncing."
             logmod.warn("plugins-sync", msg)
-            return {"ok": False, "error": msg}
+            _record("update", False, msg)
+            return {"ok": False, "error": msg, "status": status()}
 
-        if not _is_repo(PLUGINS_DIR):
-            return _clone(remote_url, branch)
-
-        code, so, _ = _run_git(["remote", "get-url", "origin"], PLUGINS_DIR, timeout=10)
-        current_remote = so if code == 0 else None
-        if current_remote and current_remote != remote_url:
-            msg = (f"origin remote is {current_remote!r}, refusing to pull from {remote_url!r}. "
-                   f"reconfigure the remote manually if intentional.")
+        try:
+            data = _download_tarball(branch)
+        except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, OSError) as e:
+            msg = f"could not reach {DEFAULT_REMOTE_URL}: {e}"
             logmod.error("plugins-sync", msg)
-            _record("pull", False, msg)
-            return {"ok": False, "error": msg}
+            _record("update", False, msg)
+            return {"ok": False, "error": msg, "status": status()}
 
-        return _pull(branch)
+        os.makedirs(PLUGINS_DIR, exist_ok=True)
+
+        added = 0
+        skipped = 0
+        try:
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+                for member in tar.getmembers():
+                    if not member.isfile():
+                        continue
+                    rel = _strip_top_dir(member.name)
+                    if rel is None:
+                        continue
+                    dest = _safe_dest(rel, PLUGINS_DIR)
+                    if dest is None:
+                        continue
+                    if os.path.exists(dest):
+                        skipped += 1
+                        continue
+                    parent = os.path.dirname(dest)
+                    if parent:
+                        os.makedirs(parent, exist_ok=True)
+                    src = tar.extractfile(member)
+                    if src is None:
+                        continue
+                    with open(dest, "wb") as out:
+                        out.write(src.read())
+                    added += 1
+        except tarfile.TarError as e:
+            msg = f"tarball extract failed: {e}"
+            logmod.error("plugins-sync", msg)
+            _record("update", False, msg)
+            return {"ok": False, "error": msg, "status": status()}
+        except OSError as e:
+            msg = f"write failed: {e}"
+            logmod.error("plugins-sync", msg)
+            _record("update", False, msg)
+            return {"ok": False, "error": msg, "status": status()}
+
+        msg = f"downloaded {added} new file(s); kept {skipped} existing"
+        logmod.ok("plugins-sync", msg)
+        _record("update", True, msg)
+        return {
+            "ok":         True,
+            "action":     "update",
+            "downloaded": added,
+            "skipped":    skipped,
+            "status":     status(),
+        }
