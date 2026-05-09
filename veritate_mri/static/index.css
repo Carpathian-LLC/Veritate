@@ -164,6 +164,12 @@
 
   .train-no-corpus-error { font-size: 12px; color: var(--hot, #ff5d5d); margin: 4px 0; line-height: 1.5; }
 
+  /* training tab — roomier sections than the rest of the app */
+  .tab-body[data-tab="training"] > .panel { padding: 22px 24px; margin-bottom: 16px; }
+  .tab-body[data-tab="training"] .panel > .body { padding-top: 4px; }
+  .tab-body[data-tab="training"] > .grid { gap: 16px; margin-top: 16px; }
+  .tab-body[data-tab="training"] > .grid > .panel { padding: 22px 24px; }
+
   .bar { display: inline-block; height: 9px; background: var(--accent); vertical-align: middle; border-radius: 1px; }
   .bar.warm { background: var(--warm); }
   .bar.cool { background: var(--cool); }
@@ -355,6 +361,17 @@
   footer { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--dim); font-size: 11px; line-height: 1.6; }
   .spinner { width: 10px; height: 10px; border: 2px solid var(--dim); border-top-color: var(--warm); border-radius: 50%; display: inline-block; animation: spin 0.7s linear infinite; vertical-align: middle; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes cprogslide { 0% { background-position: 0 0; } 100% { background-position: 32px 0; } }
+
+  /* corpus library tag pills — match the .case badge design language */
+  .corpus-tag { display: inline-block; padding: 1px 7px; border-radius: 2px; font-size: 9.5px;
+                font-weight: 700; letter-spacing: .04em; text-transform: uppercase; line-height: 1.55;
+                background: #1a2030; color: var(--soft); white-space: nowrap; vertical-align: middle; }
+  .corpus-tag.t-info { background: #0e2230; color: var(--cool); }
+  .corpus-tag.t-good { background: #142a1a; color: var(--data-pos); }
+  .corpus-tag.t-warm { background: #2a2010; color: var(--warm); }
+  .corpus-tag.t-hot  { background: #2a1a1a; color: #ff9a9a; }
+  .corpus-tag.t-dim  { background: #15181f; color: var(--dim); }
   .ascii-cell.current { background: #b58aff; color: #000; outline: 1px solid #b58aff; }
   .ascii-cell.current .c, .ascii-cell.current .b { color: #000; }
 

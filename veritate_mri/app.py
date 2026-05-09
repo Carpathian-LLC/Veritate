@@ -38,6 +38,7 @@ import lifecycle
 import plugin_runner
 import plugins_sync
 import models_sync
+import corpus_sync
 import sys_metrics
 import settings as settings_mod
 import heartbeat as heartbeat_mod
@@ -861,6 +862,58 @@ def models_git_check():
 @app.route("/models/open_folder", methods=["POST"])
 def models_open_folder():
     folder = paths.MODELS_ROOT
+    os.makedirs(folder, exist_ok=True)
+    sysname = platform.system()
+    try:
+        if sysname == "Windows":
+            subprocess.Popen(["explorer.exe", folder])
+        elif sysname == "Darwin":
+            subprocess.Popen(["open", folder])
+        else:
+            subprocess.Popen(["xdg-open", folder])
+    except OSError as e:
+        return ({"ok": False, "error": str(e), "path": folder}, 500)
+    return {"ok": True, "path": folder}
+
+
+@app.route("/corpus/library/catalog")
+def corpus_library_catalog():
+    return corpus_sync.catalog()
+
+
+@app.route("/corpus/library/install", methods=["POST"])
+def corpus_library_install():
+    body = request.get_json(silent=True) or {}
+    return corpus_sync.install(body)
+
+
+@app.route("/corpus/library/uninstall", methods=["POST"])
+def corpus_library_uninstall():
+    body = request.get_json(silent=True) or {}
+    return corpus_sync.uninstall(body.get("stem"))
+
+
+@app.route("/corpus/library/catalog_url", methods=["POST"])
+def corpus_library_catalog_url():
+    body = request.get_json(silent=True) or {}
+    return corpus_sync.set_catalog_url(body.get("url"))
+
+
+@app.route("/corpus/library/sources/add", methods=["POST"])
+def corpus_library_sources_add():
+    body = request.get_json(silent=True) or {}
+    return corpus_sync.add_user_source(body)
+
+
+@app.route("/corpus/library/sources/remove", methods=["POST"])
+def corpus_library_sources_remove():
+    body = request.get_json(silent=True) or {}
+    return corpus_sync.remove_user_source(body.get("stem"))
+
+
+@app.route("/corpus/open_folder", methods=["POST"])
+def corpus_open_folder():
+    folder = paths.CORPUS_ROOT
     os.makedirs(folder, exist_ok=True)
     sysname = platform.system()
     try:

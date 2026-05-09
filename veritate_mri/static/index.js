@@ -5160,93 +5160,102 @@ const TRAINER_SCHEMA = {
   scratch: [
     // ---- required (every trainer) ----
     { name: "corpus",       type: "corpus", required: true,  label: "training data file",      help: "the file the model reads." },
-    { name: "size",         type: "str",    required: true,  label: "model size",              help: "bigger = smarter, slower, more VRAM. choices depend on plugin: Multimind M1/M3 use 30m..800m dense, MEGA uses 200m/850m/1b/1b5 MoE.", choices: ["30m","80m","120m","200m","400m","800m","850m","1b","1b5"] },
-    { name: "precision",    type: "str",    required: true,  label: "number precision",        help: "bf16 = half memory. fp32 = double memory.", choices: ["bf16","fp32"] },
-    { name: "version",      type: "str",    required: true,  label: "version tag",             help: "label for this run; v1, v1b, v2a..." },
-    { name: "description",  type: "text",   required: true,  label: "what this model is for",  help: "saved into the model's config.json." },
+    { name: "size",         type: "str",    required: true,  label: "model size",               help: "bigger = smarter, slower, more VRAM.", choices: ["30m","80m","120m","200m","400m","800m","850m","1b","1b5"] },
+    { name: "precision",    type: "str",    required: true,  label: "number precision",         help: "bf16 = half memory; fp32 = double.", choices: ["bf16","fp32"] },
+    { name: "version",      type: "str",    required: true,  label: "version tag",              help: "label for this run (v1, v2a, ...)." },
+    { name: "description",  type: "text",   required: true,  label: "what this model is for",   help: "saved into the model config." },
     // ---- standard training loop ----
-    { name: "total_steps",  type: "int",                     label: "total training steps",    help: "more = longer training, more learned." },
-    { name: "batch_size",   type: "int",                     label: "batch size",              help: "higher = faster, more VRAM." },
-    { name: "seq",          type: "int",                     label: "sequence length",         help: "higher = wider per-step view, more VRAM." },
-    { name: "n_chunks",     type: "int",                     label: "TBPTT chunks per step",   help: "higher = more bytes seen per step (and on Multimind M3, a longer adapter memory horizon at runtime). Activation VRAM scales with bptt_window, not n_chunks. More chunks = more compute per step." },
-    { name: "base_lr",      type: "float",                   label: "peak learning rate",      help: "higher = bigger weight updates (risk: divergence). type 0.0001 or 1e-4." },
-    { name: "min_lr",       type: "float",                   label: "minimum learning rate",   help: "where the LR settles at the end. type 0.00001 or 1e-5." },
-    { name: "warmup_steps", type: "int",                     label: "warmup steps",            help: "more = slower ramp from 0 to peak LR." },
-    { name: "lr_schedule",  type: "str",                     label: "lr schedule",             help: "shape of the LR curve after warmup. cosine = smooth decay, linear = straight decay, constant = stays at peak.", choices: ["cosine","linear","constant"] },
-    { name: "weight_decay", type: "float",                   label: "weight decay",            help: "higher = stronger weight shrink (regularization)." },
-    { name: "beta1",        type: "float",                   label: "adamw beta1",             help: "adamw first-moment decay. 0.9 is the default. lower = optimizer reacts faster to recent gradients." },
-    { name: "beta2",        type: "float",                   label: "adamw beta2",             help: "adamw second-moment decay. 0.95 for LMs. 0.999 for general. lower = quicker variance estimate." },
-    { name: "label_smoothing", type: "float",                label: "label smoothing",         help: "0.0 = off. small values (0.05 to 0.1) discourage overconfidence on the target byte." },
-    { name: "grad_clip",    type: "float",                   label: "gradient clip",           help: "lower = stricter cap on per-step gradient norm." },
-    { name: "ckpt_every",   type: "int",                     label: "checkpoint every",        help: "lower = more frequent saves to disk." },
-    { name: "log_every",    type: "int",                     label: "log every",               help: "lower = denser train.csv (busier chart)." },
-    { name: "eval_every",   type: "int",                     label: "eval every",              help: "lower = more frequent validation runs." },
-    { name: "eval_iters",   type: "int",                     label: "eval batches",            help: "higher = more accurate validation loss." },
-    { name: "seed",         type: "int",                     label: "random seed",             help: "different seed = different random run." },
+    { name: "total_steps",  type: "int",                     label: "total training steps",     help: "more = longer training." },
+    { name: "batch_size",   type: "int",                     label: "batch size",               help: "higher = faster, more VRAM." },
+    { name: "seq",          type: "int",                     label: "sequence length",          help: "wider per-step view, more VRAM." },
+    { name: "n_chunks",     type: "int",                     label: "TBPTT chunks per step",    help: "more bytes per step; doesn't change VRAM (that's bptt_window)." },
+    { name: "base_lr",      type: "float",                   label: "peak learning rate",       help: "typical 1e-4 to 5e-4. higher = faster, riskier." },
+    { name: "min_lr",       type: "float",                   label: "minimum learning rate",    help: "where the LR settles. typical 1e-5." },
+    { name: "warmup_steps", type: "int",                     label: "warmup steps",             help: "slower ramp from 0 to peak LR." },
+    { name: "lr_schedule",  type: "str",                     label: "lr schedule",              help: "cosine smooth decay, linear straight, constant flat.", choices: ["cosine","linear","constant"] },
+    { name: "weight_decay", type: "float",                   label: "weight decay",             help: "stronger = more regularization." },
+    { name: "beta1",        type: "float",                   label: "adamw beta1",              help: "1st-moment decay. 0.9 default." },
+    { name: "beta2",        type: "float",                   label: "adamw beta2",              help: "2nd-moment decay. 0.95 for LMs." },
+    { name: "label_smoothing", type: "float",                label: "label smoothing",          help: "0 = off; 0.05-0.1 reduces overconfidence." },
+    { name: "grad_clip",    type: "float",                   label: "gradient clip",            help: "lower = stricter per-step gradient cap." },
+    { name: "ckpt_every",   type: "int",                     label: "checkpoint every",         help: "steps between saves to disk." },
+    { name: "log_every",    type: "int",                     label: "log every",                help: "steps between train.csv rows." },
+    { name: "eval_every",   type: "int",                     label: "eval every",               help: "steps between validation runs." },
+    { name: "eval_iters",   type: "int",                     label: "eval batches",             help: "more = more accurate val loss." },
+    { name: "seed",         type: "int",                     label: "random seed",              help: "different seed = different random run." },
     // ---- experimental / test-model clusters (all ADVANCED) ----
-    // Adapter cluster (M1 + M3)
-    { name: "rank",            type: "int",        advanced: true, label: "adapter rank",            help: "Multimind M3 trainer only (Hebbian-adapter architecture, not Apple Silicon). higher = more memory capacity in the adapter." },
-    { name: "n_slots",         type: "int",        advanced: true, label: "schema slots",            help: "Multimind M1 trainer only (slot-memory architecture, not Apple Silicon). number of named slot vectors in the working-memory table. 256 is the canonical doc value." },
-    { name: "alpha",           type: "float",      advanced: true, label: "adapter write alpha",     help: "Multimind M1/M3 trainers only (memory-adapter architectures, not Apple Silicon). higher = each token writes harder to memory." },
-    { name: "inject_layer",    type: "int",        advanced: true, label: "inject layer (-1=auto)",  help: "Multimind M1/M3 trainers only (memory-adapter architectures, not Apple Silicon). which layer the adapter attaches to. -1 = mid-stack." },
-    { name: "init_from",       type: "model_name", advanced: true, label: "init base from model",    help: "Multimind M1 trainer only (slot-memory architecture, not Apple Silicon). load base weights from another model's latest checkpoint and train M1 adapter on top. New model named <init_from>_m1." },
-    { name: "bptt_window",     type: "int",        advanced: true, label: "BPTT window (chunks)",    help: "TBPTT-using trainers (Veritate base + Multimind M1/M3 — this is a training-loop knob, not Apple Silicon). BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
-    // MEGA cluster (ternary + MoE moonshot)
-    { name: "quant_mode",      type: "str",        advanced: true, label: "weight quant mode",       help: "MEGA only. int8 (1 byte/param), int4 (0.5 bytes, 2x density), or ternary (BitNet b1.58, ~0.2 bytes, 5x density — fits 1B+ in 96 MB L3).", choices: ["int8","int4","ternary"] },
-    { name: "n_experts",       type: "int",        advanced: true, label: "MoE experts",             help: "MEGA only. number of FFN experts per block. Total params scale linearly. Only top-k of these fire per byte at decode time." },
-    { name: "router_topk",     type: "int",        advanced: true, label: "router top-k",            help: "MEGA only. experts that fire per token. 1 = sticky single expert (cheapest, L3-fittest). 2+ = soft mixture (better quality, more compute, more L3 pressure)." },
-    { name: "router_aux_loss", type: "float",      advanced: true, label: "router balance weight",   help: "MEGA only. Switch-Transformer load-balance auxiliary loss coefficient. Prevents router collapse onto one expert. 0.01 is the standard." },
+    { name: "rank",            type: "int",        advanced: true, label: "adapter rank",            help: "Multimind M3 only. higher = more adapter memory." },
+    { name: "n_slots",         type: "int",        advanced: true, label: "schema slots",            help: "Multimind M1 only. # of named slots (256 canonical)." },
+    { name: "alpha",           type: "float",      advanced: true, label: "adapter write alpha",     help: "M1/M3 only. higher = stronger writes to memory." },
+    { name: "inject_layer",    type: "int",        advanced: true, label: "inject layer (-1=auto)",  help: "M1/M3 only. -1 = mid-stack." },
+    { name: "init_from",       type: "model_name", advanced: true, label: "init base from model",    help: "M1 only. load base weights, train M1 adapter on top." },
+    { name: "bptt_window",     type: "int",        advanced: true, label: "BPTT window (chunks)",    help: "BPTT depth in chunks. 1 = frozen, 4 = balanced, n_chunks = full BPTT (max VRAM)." },
+    { name: "quant_mode",      type: "str",        advanced: true, label: "weight quant mode",       help: "MEGA only. int8 / int4 / ternary (BitNet 1.58).", choices: ["int8","int4","ternary"] },
+    { name: "n_experts",       type: "int",        advanced: true, label: "MoE experts",             help: "MEGA only. # FFN experts per block." },
+    { name: "router_topk",     type: "int",        advanced: true, label: "router top-k",            help: "MEGA only. experts that fire per token." },
+    { name: "router_aux_loss", type: "float",      advanced: true, label: "router balance weight",   help: "MEGA only. load-balance loss coefficient (~0.01)." },
     // ---- checkboxes (all together at the end) ----
-    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "trades ~30% slower compute for ~50% less activation VRAM. Recommended on tight VRAM budgets." },
-    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "train with quantization-aware fake-quant in the forward pass. The quant scheme is INT8 by default; MEGA additionally honors quant_mode (int8/int4/ternary). Result exports to a v9 binary that runs on the C engine." },
-    { name: "freeze_base",   type: "bool", featured: true, advanced: true,  label: "freeze base",                help: "Multimind M1 trainer only (slot-memory architecture, not Apple Silicon). if checked, only the adapter trains; base stays exactly as init_from. Cleanest when starting from a converged base." },
-    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "MEGA only. INT8 optimizer state via bitsandbytes. Cuts m+v memory ~75%. Required to fit 1B-class MoE on 12 GB VRAM." },
+    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "~30% slower for ~50% less activation VRAM." },
+    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "fake-quant in forward pass; exports to v9 INT8 binary." },
+    { name: "freeze_base",   type: "bool", featured: true, advanced: true,  label: "freeze base",                help: "M1 only. only the adapter trains; base stays frozen." },
+    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "MEGA only. INT8 optimizer state; required for 1B+ MoE on 12 GB." },
   ],
   continue: [
     // ---- required ----
-    { name: "resume",       type: "model_name", required: true, label: "model to continue", help: "pick a previously-trained model. its config decides shape, corpus, and adapter settings." },
+    { name: "resume",       type: "model_name", required: true, label: "model to continue", help: "previously-trained model; its config sets shape, corpus, adapter." },
     // ---- standard training loop ----
-    { name: "total_steps",  type: "int",                        label: "total training steps",  help: "extend or shorten the run. existing value comes from the model's config." },
+    { name: "total_steps",  type: "int",                        label: "total training steps",  help: "extend or shorten the run." },
     { name: "batch_size",   type: "int",                        label: "batch size",            help: "higher = faster, more VRAM." },
-    { name: "n_chunks",     type: "int",                        label: "TBPTT chunks per step", help: "higher = more bytes seen per step (and on Multimind M3, a longer adapter memory horizon at runtime). Activation VRAM scales with bptt_window, not n_chunks. More chunks = more compute per step." },
-    { name: "base_lr",      type: "float",                      label: "peak learning rate",    help: "higher = bigger weight updates. lower this for fine-tuning. type 0.0001 or 1e-4." },
-    { name: "min_lr",       type: "float",                      label: "minimum learning rate", help: "where the LR settles at the end. type 0.00001 or 1e-5." },
-    { name: "warmup_steps", type: "int",                        label: "warmup steps",          help: "more = slower ramp from 0 to peak LR. usually irrelevant on resume since you start above 0." },
-    { name: "lr_schedule",  type: "str",                        label: "lr schedule",           help: "shape of the LR curve after warmup. cosine = smooth decay, linear = straight decay, constant = stays at peak.", choices: ["cosine","linear","constant"] },
-    { name: "weight_decay", type: "float",                      label: "weight decay",          help: "higher = stronger weight shrink (regularization)." },
-    { name: "beta1",        type: "float",                      label: "adamw beta1",           help: "adamw first-moment decay. 0.9 is the default. lower = optimizer reacts faster to recent gradients." },
-    { name: "beta2",        type: "float",                      label: "adamw beta2",           help: "adamw second-moment decay. 0.95 for LMs. 0.999 for general. lower = quicker variance estimate." },
-    { name: "label_smoothing", type: "float",                   label: "label smoothing",       help: "0.0 = off. small values (0.05 to 0.1) discourage overconfidence on the target byte." },
-    { name: "grad_clip",    type: "float",                      label: "gradient clip",         help: "lower = stricter cap on per-step gradient norm. raise if you see clipping kill the signal." },
-    { name: "ckpt_every",   type: "int",                        label: "checkpoint every",      help: "lower = more frequent saves to disk." },
-    { name: "log_every",    type: "int",                        label: "log every",             help: "lower = denser train.csv (busier chart)." },
-    { name: "eval_every",   type: "int",                        label: "eval every",            help: "lower = more frequent validation runs." },
-    { name: "eval_iters",   type: "int",                        label: "eval batches",          help: "higher = more accurate validation loss, slower eval." },
+    { name: "n_chunks",     type: "int",                        label: "TBPTT chunks per step", help: "more bytes per step; doesn't change VRAM." },
+    { name: "base_lr",      type: "float",                      label: "peak learning rate",    help: "lower this for fine-tuning. typical 1e-4." },
+    { name: "min_lr",       type: "float",                      label: "minimum learning rate", help: "where the LR settles. typical 1e-5." },
+    { name: "warmup_steps", type: "int",                        label: "warmup steps",          help: "usually irrelevant on resume." },
+    { name: "lr_schedule",  type: "str",                        label: "lr schedule",           help: "cosine smooth, linear straight, constant flat.", choices: ["cosine","linear","constant"] },
+    { name: "weight_decay", type: "float",                      label: "weight decay",          help: "stronger = more regularization." },
+    { name: "beta1",        type: "float",                      label: "adamw beta1",           help: "1st-moment decay. 0.9 default." },
+    { name: "beta2",        type: "float",                      label: "adamw beta2",           help: "2nd-moment decay. 0.95 for LMs." },
+    { name: "label_smoothing", type: "float",                   label: "label smoothing",       help: "0 = off; 0.05-0.1 reduces overconfidence." },
+    { name: "grad_clip",    type: "float",                      label: "gradient clip",         help: "lower = stricter per-step gradient cap." },
+    { name: "ckpt_every",   type: "int",                        label: "checkpoint every",      help: "steps between saves to disk." },
+    { name: "log_every",    type: "int",                        label: "log every",             help: "steps between train.csv rows." },
+    { name: "eval_every",   type: "int",                        label: "eval every",            help: "steps between validation runs." },
+    { name: "eval_iters",   type: "int",                        label: "eval batches",          help: "more = more accurate val loss." },
     // ---- experimental / test-model knobs (ADVANCED) ----
-    { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "TBPTT-using trainers (Veritate base + Multimind M1/M3 — this is a training-loop knob, not Apple Silicon). BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
+    { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "BPTT depth. 1 = frozen, 4 = balanced, n_chunks = full." },
     // ---- checkboxes (all together at the end) ----
-    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "trades ~30% slower compute for ~50% less activation VRAM. Recommended on tight VRAM budgets." },
-    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "fine-tune the source model into a new <source>_qat model with quantization-aware training. Use a low lr (1e-5). Result exports cleanly to the C engine." },
-    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "MEGA only. INT8 optimizer state via bitsandbytes. Required to fit 1B-class MoE on 12 GB VRAM. Set the same value as the original run." },
+    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "~30% slower for ~50% less activation VRAM." },
+    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "QAT fine-tune into a new <source>_qat model. use lr ~1e-5." },
+    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "MEGA only. match the original run's setting." },
   ],
 };
 
-// Build the per-render arg list for a plugin: schema fields, filtered to only
-// those the plugin's manifest declares (or that are required), with manifest
-// values overlaid as `default`. The filter keeps each plugin's form focused —
-// MEGA doesn't see M3's `rank` field, M3 doesn't see MEGA's `n_experts`, etc.
-// The schema is the catalog of known knobs; the manifest opts each plugin in.
+// Build the per-render arg list for a plugin. Render order = required fields
+// first (in schema order), then manifest declaration order. The schema is the
+// catalog of known knobs (labels, helps, types); the manifest opts each plugin
+// in via `defaults` and decides the order users see them.
 function _trArgsForPlugin(p) {
   if (!p || !p.manifest) return [];
   const sch  = TRAINER_SCHEMA[trainState.flow] || [];
   const defs = p.manifest.defaults || {};
-  return sch
-    .filter(a => a.required || Object.prototype.hasOwnProperty.call(defs, a.name))
-    .map(a => {
-      const out = Object.assign({}, a);
-      if (defs[a.name] !== undefined) out.default = defs[a.name];
-      return out;
-    });
+  const byName = Object.create(null);
+  for (const a of sch) byName[a.name] = a;
+  const used = new Set();
+  const out = [];
+  for (const a of sch) {
+    if (!a.required) continue;
+    used.add(a.name);
+    const o = Object.assign({}, a);
+    if (defs[a.name] !== undefined) o.default = defs[a.name];
+    out.push(o);
+  }
+  for (const name of Object.keys(defs)) {
+    if (used.has(name)) continue;
+    const a = byName[name];
+    if (!a) continue;
+    used.add(name);
+    out.push(Object.assign({}, a, { default: defs[name] }));
+  }
+  return out;
 }
 
 const _TR_CONTINUE_CFG_CACHE = {};
@@ -5270,9 +5279,27 @@ function _trMemoryBudget() {
   if (!s || !s.platform) return null;
   const gpus = s.gpus || [];
   const discrete = gpus.find(g => g && !g.integrated && g.vram_total);
-  if (discrete) return { bytes: discrete.vram_total, label: discrete.name || "GPU", kind: "vram" };
+  if (discrete) {
+    // Reserve ~512 MB for display/driver/CUDA workspace so the budget reflects
+    // what training can actually allocate, not the full installed VRAM.
+    const reserve = Math.min(512 * 1024 * 1024, Math.round(discrete.vram_total * 0.05));
+    return {
+      bytes: Math.max(0, discrete.vram_total - reserve),
+      raw_bytes: discrete.vram_total,
+      label: discrete.name || "GPU",
+      kind: "vram",
+    };
+  }
   const ramTotal = (s.memory && s.memory.total_bytes) || null;
-  if (ramTotal) return { bytes: Math.round(ramTotal * 0.7), label: "unified memory", kind: "unified" };
+  if (ramTotal) {
+    // Unified memory (Apple Silicon, integrated): leave 30% for OS + other procs.
+    return {
+      bytes: Math.round(ramTotal * 0.7),
+      raw_bytes: ramTotal,
+      label: "unified memory",
+      kind: "unified",
+    };
+  }
   return null;
 }
 
@@ -5320,25 +5347,42 @@ function _trUpdateVramEstimate() {
   const out = _trEl("trainVramEst");
   if (!out) return;
   const est = _trEstimateMemory();
-  if (!est) { out.textContent = ""; return; }
-  const fmt = (b) => b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : (b / 1e6).toFixed(0) + " MB";
+  if (!est) {
+    out.innerHTML = `<span style="color:var(--dim)">fill in size, batch size and sequence length to see the estimated memory footprint.</span>`;
+    return;
+  }
+  const fmtGB = (b) => (b / (1024 ** 3)).toFixed(2) + " GB";
+  const fmtMB = (b) => (b / (1024 ** 2)).toFixed(0) + " MB";
+  const fmt   = (b) => b >= 1024 ** 3 ? fmtGB(b) : fmtMB(b);
 
   const budget = _trMemoryBudget();
-  let badgeColor = "var(--warm)", budgetSuffix = "";
+  let badgeColor = "var(--data-pos)", budgetLine = "", verdict = "fits comfortably";
   if (budget) {
     const ratio = est.total / budget.bytes;
-    if (ratio >= 0.95)      badgeColor = "var(--hot)";
-    else if (ratio >= 0.7)  badgeColor = "var(--warm)";
-    else                    badgeColor = "var(--data-pos)";
+    if (ratio >= 1.0)       { badgeColor = "var(--hot)";      verdict = "WILL NOT FIT — reduce batch / seq, enable activation checkpointing, or pick a smaller model"; }
+    else if (ratio >= 0.92) { badgeColor = "var(--hot)";      verdict = "very tight — likely OOM during training spikes"; }
+    else if (ratio >= 0.75) { badgeColor = "var(--warm)";     verdict = "tight but workable"; }
+    else if (ratio >= 0.45) { badgeColor = "var(--data-pos)"; verdict = "fits comfortably"; }
+    else                    { badgeColor = "var(--data-pos)"; verdict = "lots of headroom"; }
     const pct = (ratio * 100).toFixed(0);
-    budgetSuffix = ` <span style="color:${badgeColor}">of ${fmt(budget.bytes)} ${budget.label} (${pct}%)</span>`;
+    const rawNote = budget.kind === "vram"
+      ? ` <span style="color:var(--dim)">(${fmt(budget.raw_bytes)} installed minus driver reserve)</span>`
+      : ` <span style="color:var(--dim)">(${fmt(budget.raw_bytes)} total minus 30% OS reserve)</span>`;
+    budgetLine =
+      `<div style="margin-top:3px"><span style="color:var(--dim)">budget</span>` +
+      ` <b style="color:var(--text)">${fmt(budget.bytes)}</b>` +
+      ` <span style="color:var(--dim)">${budget.label}</span>${rawNote}` +
+      ` &middot; <span style="color:${badgeColor}">${pct}% used &mdash; ${verdict}</span></div>`;
+  } else {
+    budgetLine = `<div style="margin-top:3px;color:var(--warm)">no system specs detected &mdash; click <b>detect my system</b> in settings to compare against your hardware.</div>`;
   }
 
   out.innerHTML =
-    `<b style="color:${badgeColor}">estimated</b>` +
-    ` <b style="color:var(--text)">≈ ${fmt(est.total)}</b>${budgetSuffix}` +
-    ` <span style="color:var(--dim)">(static ${fmt(est.staticBytes)} + acts ${fmt(est.actBytes)}` +
-    `${est.ckptOn ? ", act-ckpt" : ""}${est.adam8On ? ", 8bit-adam" : ""}, +15% overhead)</span>`;
+    `<div><b style="color:${badgeColor}">estimated training memory</b>` +
+    ` <b style="color:var(--text);font-size:13px">${fmt(est.total)}</b>` +
+    ` <span style="color:var(--dim)">= weights+optim ${fmt(est.staticBytes)} + activations ${fmt(est.actBytes)}` +
+    `${est.ckptOn ? " (act-ckpt -50%)" : ""}${est.adam8On ? ", 8-bit AdamW" : ""}, +15% PyTorch overhead</span></div>` +
+    budgetLine;
 }
 
 // Auto-pick training settings. Gated by Advanced telemetry consent + a
@@ -5348,11 +5392,14 @@ function _trUpdateVramEstimate() {
 // or the user. The Veritate trainers do not implement gradient
 // accumulation, so batch_size is the effective batch.
 function _trUpdateAutoOptimizeVisibility() {
-  const row = $("trainAutoOptimizeRow");
+  const row  = $("trainAutoOptimizeRow");
+  const help = $("trainAutoOptimizeHelp");
   if (!row) return;
   const consent = !!(settingsState.current && settingsState.current.analytics_advanced_enabled);
   const haveSpecs = !!(_sysSpecsCache && _sysSpecsCache.platform);
-  row.style.display = (consent && haveSpecs) ? "flex" : "none";
+  const visible = consent && haveSpecs;
+  row.style.display = visible ? "flex" : "none";
+  if (help) help.style.display = visible ? "block" : "none";
 }
 
 function _trSetArgVal(name, val) {
@@ -5370,7 +5417,7 @@ function _trAutoOptimize() {
   const setStatus = (msg, color) => { if (status) { status.textContent = msg; status.style.color = color || "var(--dim)"; } };
 
   const budget = _trMemoryBudget();
-  if (!budget) { setStatus("no system specs detected — run Detect my system first.", "var(--hot)"); return; }
+  if (!budget) { setStatus("no system specs — click 'detect my system' in settings first.", "var(--hot)"); return; }
 
   const plugin  = trainState.selected;
   const defs    = (plugin && plugin.manifest && plugin.manifest.defaults) || {};
@@ -5464,8 +5511,11 @@ function _trAutoOptimize() {
 
   _trUpdateVramEstimate();
   const mpsCapHit = (mpsBatchCap !== Infinity) && (targetBatch >= mpsBatchCap);
-  const mpsNote   = mpsCapHit ? ", capped by MPS attention-tensor INT_MAX limit" : "";
-  setStatus(`set: batch=${targetBatch}, lr=${newLR}, act_ckpt=${actCkpt ? "on" : "off"}${mpsNote}${totalSteps > 0 ? ", warmup/eval/ckpt scaled to total_steps" : " (set total_steps then re-run for warmup/eval/ckpt)"}.`, "var(--data-pos)");
+  const mpsNote   = mpsCapHit ? " (batch capped by MPS INT_MAX attention-tensor limit)" : "";
+  const cadenceNote = totalSteps > 0
+    ? ", warmup/log/eval/ckpt cadence scaled to total_steps"
+    : " — set total_steps then click again to also tune warmup/log/eval/ckpt";
+  setStatus(`training settings updated: batch=${targetBatch}, lr=${newLR}, act_ckpt=${actCkpt ? "on" : "off"}${mpsNote}${cadenceNote}.`, "var(--data-pos)");
 }
 
 function _trUpdateStepCascades() {
@@ -5538,7 +5588,7 @@ function _trUpdateCorpusMeta() {
 
 function _trWireArgListeners() {
   document.querySelectorAll('#trainArgs [data-arg]').forEach(el => {
-    const fn = () => { _trUpdateComposedName(); _trUpdateStepCascades(); _trUpdateCorpusMeta(); _trUpdateVramEstimate(); };
+    const fn = () => { _trUpdateComposedName(); _trUpdateStepCascades(); _trUpdateCorpusMeta(); _trUpdateVramEstimate(); _trCorpusSizeWarning(); };
     el.addEventListener("change", fn);
     el.addEventListener("input",  fn);
   });
@@ -5600,26 +5650,28 @@ function _trRenderForm() {
   if (descEl) descEl.textContent = p.manifest.description || "";
   const introEl = _trEl("trainFormIntro");
   if (introEl) {
-    introEl.innerHTML = `<b>${_trEsc(p.manifest.name || p.id)}</b> &middot; <span style="color:var(--hot)">*</span> required.`;
+    introEl.innerHTML = `<b>${_trEsc(p.manifest.name || p.id)}</b> &middot; fields marked <span style="color:var(--hot)">*</span> are required &middot; settings render in the order this trainer's manifest declares them.`;
   }
   // Responsive grid: small fields auto-pack into columns; wide types (text/path)
   // and bool span the full row. Inline `style` keeps it self-contained — no
   // class additions to the platform stylesheet.
   let html = `<style>
-    .trArgsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 14px; font-size: 11.5px; }
-    .trArgsGrid .cell { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .trArgsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px 16px; font-size: 11.5px; }
+    .trArgsGrid .cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
     .trArgsGrid .cell.wide { grid-column: 1 / -1; }
-    .trArgsGrid .cell label { color: var(--text); font-size: 11px; }
-    .trArgsGrid .cell .help { color: var(--dim); font-size: 10px; line-height: 1.35; }
+    .trArgsGrid .cell label { color: var(--text); font-size: 11px; font-weight: 500; }
+    .trArgsGrid .cell .help { color: var(--dim); font-size: 10.5px; line-height: 1.4; }
     .trArgsGrid .cell input[type="text"],
     .trArgsGrid .cell input[type="number"],
     .trArgsGrid .cell select,
     .trArgsGrid .cell textarea { width: 100%; min-width: 0; box-sizing: border-box; }
-    .trArgsGrid .cell.bool { flex-direction: row; align-items: center; gap: 6px; }
-    .trArgsGrid .cell.bool label { font-size: 11px; }
-    .trArgsGrid .cell.featured { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+    .trArgsGrid .cell.bool { flex-direction: row; align-items: center; gap: 8px; }
+    .trArgsGrid .cell.bool label { font-size: 11.5px; }
+    .trArgsGrid .cell.bool .help { font-size: 10.5px; }
+    .trArgsGrid .cell.featured { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 6px; }
     .trArgsGrid .cell.featured label { color: var(--text); font-weight: 600; }
     .trArgsGrid .cell.featured .help { color: var(--dim); }
+    @media (max-width: 640px) { .trArgsGrid { grid-template-columns: 1fr; gap: 12px; } }
   </style>
   <div class="trArgsGrid">`;
   for (const a of _trArgsForPlugin(p)) {
@@ -5645,6 +5697,7 @@ function _trRenderForm() {
   _trUpdateStepCascades();
   _trUpdateCorpusMeta();
   _trUpdateVramEstimate();
+  _trCorpusSizeWarning();
 }
 
 function _trCollectArgs() {
@@ -6519,81 +6572,54 @@ function _lifecycleKillExecute() {
     });
 }
 
-// Render the "remote behind" indicator + enable the update button only when
-// the local branch is behind origin. Mirrors the main Veritate update row.
-function _renderRepoBehind(behindEl, updateBtn, s) {
-  if (!behindEl) return;
-  if (!s || !s.is_repo) {
-    behindEl.textContent = "unknown";
-    behindEl.style.color = "var(--dim)";
-    if (updateBtn) updateBtn.disabled = true;
-    return;
-  }
-  if (s.behind == null) {
-    behindEl.textContent = "unknown (run check)";
-    behindEl.style.color = "var(--dim)";
-    if (updateBtn) updateBtn.disabled = true;
-    return;
-  }
-  if (s.behind === 0) {
-    behindEl.textContent = "up to date";
-    behindEl.style.color = "var(--data-pos)";
-    if (updateBtn) updateBtn.disabled = true;
-    return;
-  }
-  behindEl.textContent = `${s.behind} new commit${s.behind === 1 ? "" : "s"} on ${s.branch || "origin"}`;
-  behindEl.style.color = "var(--warm)";
-  if (updateBtn) updateBtn.disabled = false;
-}
-
-
-function _pluginsApplyStatus(s) {
-  const remote   = $("pluginsRemote");
-  const head     = $("pluginsHead");
-  const branch   = $("pluginsBranch");
-  const ahead    = $("pluginsAheadBehind");
-  const aheadL   = $("pluginsAheadBehindLine");
-  const behindEl = $("pluginsBehind");
-  const upBtn    = $("pluginsUpdateBtn");
+// Render a download-style sync row. Backend now does plain HTTPS pulls (no
+// local git repo), so the UI shows: remote URL, local file count, and a
+// status line that reflects the last check/update result.
+function _renderDownloadRow(s, prefix) {
+  const remote = $(prefix + "Remote");
+  const local  = $(prefix + "Local");
+  const behind = $(prefix + "Behind");
+  const lab    = $(prefix + "SyncStatus");
   if (!remote) return;
+  remote.textContent = s.remote_url || s.default_remote_url || ".";
   if (!s.exists) {
-    remote.textContent = s.default_remote_url || "—";
-    head.textContent = "(plugins/ does not exist — update to clone)";
-    branch.textContent = "";
-    aheadL.style.display = "none";
-    _renderRepoBehind(behindEl, upBtn, null);
-    if (upBtn) upBtn.disabled = false;  // allow update to clone
-    return;
-  }
-  if (!s.is_repo) {
-    remote.textContent = s.default_remote_url || "—";
-    head.textContent = "(plugins/ exists but is not a git repo)";
-    branch.textContent = "";
-    aheadL.style.display = "none";
-    _renderRepoBehind(behindEl, upBtn, null);
-    return;
-  }
-  remote.textContent = s.remote_url || "(no origin remote)";
-  head.textContent = s.head_short ? s.head_short : "(no commits yet)";
-  branch.textContent = s.branch ? `· ${s.branch}` : "";
-  if (s.ahead != null && s.behind != null && (s.ahead || s.behind)) {
-    aheadL.style.display = "";
-    ahead.textContent = `${s.ahead} ahead, ${s.behind} behind origin/${s.branch || "?"}`;
+    if (local) local.textContent = "(folder does not exist; update to create)";
   } else {
-    aheadL.style.display = "none";
+    const n = s.local_files || 0;
+    if (local) local.textContent = `${n} file${n === 1 ? "" : "s"}`;
   }
-  _renderRepoBehind(behindEl, upBtn, s);
   const last = s.last || {};
-  const lab = $("pluginsSyncStatus");
-  if (lab && last.action) {
-    if (last.ok) {
-      lab.textContent = `last ${last.action}: ok`;
-      lab.style.color = "var(--data-pos)";
-    } else if (last.ok === false) {
-      lab.textContent = `last ${last.action} failed: ${last.message || "see logs"}`;
-      lab.style.color = "var(--hot)";
+  if (behind) {
+    if (last.action === "check" && last.ok) {
+      // "; 0 missing" => up to date (green), otherwise new files available (warm)
+      const upToDate = /;\s*0\s+missing/.test(last.message || "");
+      behind.textContent = upToDate ? "up to date" : (last.message || "checked");
+      behind.style.color = upToDate ? "var(--data-pos)" : "var(--warm)";
+    } else if (last.action === "update" && last.ok) {
+      behind.textContent = "up to date";
+      behind.style.color = "var(--data-pos)";
+    } else {
+      behind.textContent = "unknown (run check)";
+      behind.style.color = "var(--dim)";
     }
   }
+  if (lab) {
+    if (last.action) {
+      if (last.ok) {
+        lab.textContent = `last ${last.action}: ${last.message || "ok"}`;
+        lab.style.color = "var(--data-pos)";
+      } else if (last.ok === false) {
+        lab.textContent = `last ${last.action} failed: ${last.message || "see logs"}`;
+        lab.style.color = "var(--hot)";
+      }
+    } else {
+      lab.textContent = "";
+    }
+  }
+}
+
+function _pluginsApplyStatus(s) {
+  _renderDownloadRow(s, "plugins");
 }
 
 function _pluginsRefreshStatus() {
@@ -6609,11 +6635,20 @@ function _pluginsCheckTrigger() {
     .then(r => r.json())
     .then(res => {
       if (res.status) _pluginsApplyStatus(res.status);
+      else _pluginsRefreshStatus();
       if (lab) {
-        if (res.ok) { lab.textContent = "checked"; lab.style.color = "var(--data-pos)"; }
-        else { lab.textContent = `check failed: ${res.error || "unknown error"}`; lab.style.color = "var(--hot)"; }
+        if (res.ok) {
+          const n = res.new_files ?? 0;
+          const total = res.remote_files ?? 0;
+          lab.textContent = n === 0
+            ? `up to date (${total} file${total === 1 ? "" : "s"} on remote)`
+            : `${n} new file${n === 1 ? "" : "s"} available (${total} on remote)`;
+          lab.style.color = n === 0 ? "var(--data-pos)" : "var(--warm)";
+        } else {
+          lab.textContent = `check failed: ${res.error || "unknown error"}`;
+          lab.style.color = "var(--hot)";
+        }
       }
-      if (!res.status) _pluginsRefreshStatus();
     })
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
     .finally(() => { if (btn) btn.disabled = false; });
@@ -6628,7 +6663,12 @@ function _pluginsUpdateTrigger() {
     .then(r => r.json())
     .then(res => {
       if (res.ok) {
-        if (lab) { lab.textContent = `${res.action || "update"}: ok`; lab.style.color = "var(--data-pos)"; }
+        if (lab) {
+          const dl = res.downloaded ?? 0;
+          const sk = res.skipped ?? 0;
+          lab.textContent = `downloaded ${dl} new file${dl === 1 ? "" : "s"}; kept ${sk} existing`;
+          lab.style.color = "var(--data-pos)";
+        }
         if (res.status) _pluginsApplyStatus(res.status);
         else _pluginsRefreshStatus();
       } else {
@@ -6641,52 +6681,7 @@ function _pluginsUpdateTrigger() {
 }
 
 function _modelsApplyStatus(s) {
-  const remote   = $("modelsRemote");
-  const head     = $("modelsHead");
-  const branch   = $("modelsBranch");
-  const ahead    = $("modelsAheadBehind");
-  const aheadL   = $("modelsAheadBehindLine");
-  const behindEl = $("modelsBehind");
-  const upBtn    = $("modelsUpdateBtn");
-  if (!remote) return;
-  if (!s.exists) {
-    remote.textContent = s.default_remote_url || ".";
-    head.textContent = "(models/ does not exist. update to clone)";
-    branch.textContent = "";
-    aheadL.style.display = "none";
-    _renderRepoBehind(behindEl, upBtn, null);
-    if (upBtn) upBtn.disabled = false;  // allow update to clone
-    return;
-  }
-  if (!s.is_repo) {
-    remote.textContent = s.default_remote_url || ".";
-    head.textContent = "(models/ exists but is not a git repo)";
-    branch.textContent = "";
-    aheadL.style.display = "none";
-    _renderRepoBehind(behindEl, upBtn, null);
-    return;
-  }
-  remote.textContent = s.remote_url || "(no origin remote)";
-  head.textContent = s.head_short ? s.head_short : "(no commits yet)";
-  branch.textContent = s.branch ? `· ${s.branch}` : "";
-  if (s.ahead != null && s.behind != null && (s.ahead || s.behind)) {
-    aheadL.style.display = "";
-    ahead.textContent = `${s.ahead} ahead, ${s.behind} behind origin/${s.branch || "?"}`;
-  } else {
-    aheadL.style.display = "none";
-  }
-  _renderRepoBehind(behindEl, upBtn, s);
-  const last = s.last || {};
-  const lab = $("modelsSyncStatus");
-  if (lab && last.action) {
-    if (last.ok) {
-      lab.textContent = `last ${last.action}: ok`;
-      lab.style.color = "var(--data-pos)";
-    } else if (last.ok === false) {
-      lab.textContent = `last ${last.action} failed: ${last.message || "see logs"}`;
-      lab.style.color = "var(--hot)";
-    }
-  }
+  _renderDownloadRow(s, "models");
 }
 
 function _modelsRefreshStatus() {
@@ -6702,11 +6697,20 @@ function _modelsCheckTrigger() {
     .then(r => r.json())
     .then(res => {
       if (res.status) _modelsApplyStatus(res.status);
+      else _modelsRefreshStatus();
       if (lab) {
-        if (res.ok) { lab.textContent = "checked"; lab.style.color = "var(--data-pos)"; }
-        else { lab.textContent = `check failed: ${res.error || "unknown error"}`; lab.style.color = "var(--hot)"; }
+        if (res.ok) {
+          const n = res.new_files ?? 0;
+          const total = res.remote_files ?? 0;
+          lab.textContent = n === 0
+            ? `up to date (${total} file${total === 1 ? "" : "s"} on remote)`
+            : `${n} new file${n === 1 ? "" : "s"} available (${total} on remote)`;
+          lab.style.color = n === 0 ? "var(--data-pos)" : "var(--warm)";
+        } else {
+          lab.textContent = `check failed: ${res.error || "unknown error"}`;
+          lab.style.color = "var(--hot)";
+        }
       }
-      if (!res.status) _modelsRefreshStatus();
     })
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
     .finally(() => { if (btn) btn.disabled = false; });
@@ -6721,7 +6725,12 @@ function _modelsUpdateTrigger() {
     .then(r => r.json())
     .then(res => {
       if (res.ok) {
-        if (lab) { lab.textContent = `${res.action || "update"}: ok`; lab.style.color = "var(--data-pos)"; }
+        if (lab) {
+          const dl = res.downloaded ?? 0;
+          const sk = res.skipped ?? 0;
+          lab.textContent = `downloaded ${dl} new file${dl === 1 ? "" : "s"}; kept ${sk} existing`;
+          lab.style.color = "var(--data-pos)";
+        }
         if (res.status) _modelsApplyStatus(res.status);
         else _modelsRefreshStatus();
       } else {
@@ -6731,6 +6740,445 @@ function _modelsUpdateTrigger() {
     })
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
     .finally(() => { if (btn) btn.disabled = false; });
+}
+
+// ---- Corpus library (apt-style downloader for plugins/corpus/) ----
+const corpusLibState = {
+  catalog: null,        // last successful response
+  inflight: false,
+  installing: new Set(), // stems currently being installed (UI lock)
+};
+
+function _corpusFmtBytes(n) {
+  if (n == null) return "?";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+}
+
+function _corpusFmtParams(n) {
+  if (n == null) return "?";
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(0) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + "K";
+  return String(n);
+}
+
+function _corpusEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function _corpusRenderCatalog(data) {
+  corpusLibState.catalog = data;
+  const list = $("corpusList");
+  const urlInput = $("corpusCatalogUrl");
+  const statusEl = $("corpusCatalogStatus");
+  if (!list) return;
+
+  if (urlInput && document.activeElement !== urlInput) {
+    urlInput.value = data.catalog_url || "";
+  }
+
+  if (statusEl) {
+    const n = data.corpora.length;
+    let parts = [];
+    if (!data.catalog_url) {
+      parts.push(`<span style="color:var(--dim)">${n} corpora from local catalog. Click URL to add a remote one.</span>`);
+    } else if (data.catalog_status && data.catalog_status.ok) {
+      parts.push(`<span style="color:var(--data-pos)">${n} corpora (local + remote catalog merged)</span>`);
+    } else {
+      const err = (data.catalog_status && data.catalog_status.error) || "unknown error";
+      parts.push(`<span style="color:var(--hot)">remote catalog unreachable: ${_corpusEsc(err)}</span> <span style="color:var(--warm)">— using local catalog only.</span>`);
+    }
+    if (data.hf_required && !data.hf_available) {
+      parts.push(`<span style="color:var(--hot)">HuggingFace 'datasets' library not installed — most corpora cannot install until you run <code>pip install -r requirements.txt</code></span>`);
+    }
+    statusEl.innerHTML = parts.join("<br>");
+  }
+
+  if (!data.corpora || data.corpora.length === 0) {
+    list.innerHTML = '<div class="meta" style="color:var(--dim);font-size:11px">no corpora in catalog yet</div>';
+    return;
+  }
+
+  list.innerHTML = data.corpora.map(c => {
+    const installed = c.installed_train;
+    const hasUrl    = (c.format === "hf_dataset") ? !!c.hf_dataset : !!c.train_url;
+    const isUser    = c.is_user_source;
+    const sizeLabel = c.size_train != null ? _corpusFmtBytes(c.size_train) : null;
+    const progress  = c.progress;
+    const downloading = corpusLibState.installing.has(c.stem) || !!progress;
+
+    // Recommended-params tag.
+    let recLabel = "";
+    if (c.recommended_min_params || c.recommended_max_params) {
+      const lo = c.recommended_min_params ? _corpusFmtParams(c.recommended_min_params) : null;
+      const hi = c.recommended_max_params ? _corpusFmtParams(c.recommended_max_params) : null;
+      if (lo && hi)      recLabel = `${lo}-${hi} models`;
+      else if (lo)       recLabel = `${lo}+ models`;
+      else if (hi)       recLabel = `&lt;${hi} models`;
+    }
+
+    // Platform-style boxy badges (mirrors the .case badge design used elsewhere).
+    const tags = [];
+    if (recLabel)  tags.push(`<span class="corpus-tag t-info" title="recommended for these model sizes">${recLabel}</span>`);
+    if (sizeLabel) tags.push(`<span class="corpus-tag t-dim" title="approximate download size">~${sizeLabel}</span>`);
+    if (installed) tags.push(`<span class="corpus-tag t-good">installed${c.installed_size_val ? " + val" : ""}</span>`);
+    else if (downloading) tags.push(`<span class="corpus-tag t-warm">downloading</span>`);
+    else if (!hasUrl) tags.push(`<span class="corpus-tag t-hot" title="add a custom source or set a working catalog URL">no source</span>`);
+    if (isUser) tags.push(`<span class="corpus-tag t-info">custom</span>`);
+
+    // Leading indicator: spinner while downloading, otherwise a status dot.
+    let leading;
+    if (downloading) {
+      leading = `<span class="spinner" style="flex-shrink:0"></span>`;
+    } else {
+      let dotColor;
+      if (installed)     dotColor = "var(--data-pos)";
+      else if (!hasUrl)  dotColor = "var(--warm)";
+      else               dotColor = "var(--dim)";
+      leading = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>`;
+    }
+
+    // Action buttons: use the existing .action base style (no shrunk overrides).
+    // Primary install gets accent border so it stands out from the secondary
+    // "remove" button.
+    let actions = "";
+    if (downloading) {
+      actions = `<button class="action" type="button" disabled>downloading...</button>`;
+    } else if (installed) {
+      actions = `<button class="action" type="button" data-corpus-uninstall="${_corpusEsc(c.stem)}">remove</button>`;
+    } else if (hasUrl) {
+      actions = `<button class="action" type="button" data-corpus-install="${_corpusEsc(c.stem)}" style="border-color:var(--accent);color:var(--accent)">install</button>`;
+    } else {
+      actions = `<button class="action" type="button" disabled title="no install source">install</button>`;
+    }
+    if (isUser) {
+      actions += ` <button class="action" type="button" data-corpus-remove-source="${_corpusEsc(c.stem)}" title="remove custom source entry">unlist</button>`;
+    }
+
+    // Hover-only info icon, never takes layout space inline.
+    const infoIcon = c.notes
+      ? `<span style="color:var(--dim);font-size:11px;cursor:help;border:1px solid var(--line);border-radius:50%;width:13px;height:13px;display:inline-flex;align-items:center;justify-content:center;font-style:italic" title="${_corpusEsc(c.notes)}">i</span>`
+      : "";
+
+    const descLine = c.description
+      ? `<div style="padding:1px 8px 0 26px;font-size:10.5px;color:var(--dim);line-height:1.55">${_corpusEsc(c.description)}</div>`
+      : "";
+
+    let progressLine = "";
+    if (downloading) {
+      const wrote = progress ? progress.bytes : 0;
+      const total = progress ? progress.total : null;
+      const kind  = progress && progress.kind ? progress.kind : "starting";
+      const pct   = (total && total > 0) ? Math.floor((wrote / total) * 100) : null;
+      const bar = (pct != null)
+        ? `<div style="flex:1;height:3px;background:#0a0c12;border-radius:2px;overflow:hidden;min-width:80px"><div style="width:${pct}%;height:100%;background:var(--warm);transition:width .3s"></div></div>`
+        : `<div style="flex:1;height:3px;background:repeating-linear-gradient(90deg,var(--warm) 0 8px,#0a0c12 8px 16px);background-size:32px 100%;animation:cprogslide 1s linear infinite;border-radius:2px;min-width:80px"></div>`;
+      progressLine = `
+        <div style="display:flex;align-items:center;gap:8px;padding:3px 8px 0 26px;font-size:10px;color:var(--dim)">
+          ${bar}
+          <span style="white-space:nowrap;color:var(--warm)">${kind} ${_corpusFmtBytes(wrote)}${total ? ` / ${_corpusFmtBytes(total)} (${pct}%)` : ""}</span>
+        </div>`;
+    }
+
+    return `
+      <div style="border-bottom:1px solid #131722;padding:6px 0">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 8px">
+          <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:240px">
+            ${leading}
+            <span style="color:var(--text);font-weight:500;font-size:11.5px">${_corpusEsc(c.label)}</span>
+            <span style="color:var(--dim);font-size:10.5px">(${_corpusEsc(c.stem)})</span>
+            ${infoIcon}
+          </div>
+          <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">${tags.join("")}</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">${actions}</div>
+        </div>
+        ${descLine}
+        ${progressLine}
+      </div>`;
+  }).join("");
+
+  list.querySelectorAll("[data-corpus-install]").forEach(b => {
+    b.addEventListener("click", () => _corpusInstallTrigger(b.getAttribute("data-corpus-install")));
+  });
+  list.querySelectorAll("[data-corpus-uninstall]").forEach(b => {
+    b.addEventListener("click", () => _corpusUninstallTrigger(b.getAttribute("data-corpus-uninstall")));
+  });
+  list.querySelectorAll("[data-corpus-remove-source]").forEach(b => {
+    b.addEventListener("click", () => _corpusRemoveSourceTrigger(b.getAttribute("data-corpus-remove-source")));
+  });
+}
+
+function _corpusRefreshCatalog() {
+  if (corpusLibState.inflight) return;
+  corpusLibState.inflight = true;
+  fetch("/corpus/library/catalog")
+    .then(r => r.json())
+    .then(data => { _corpusRenderCatalog(data); })
+    .catch(e => {
+      const statusEl = $("corpusCatalogStatus");
+      if (statusEl) { statusEl.textContent = `catalog fetch failed: ${e}`; statusEl.style.color = "var(--hot)"; }
+    })
+    .finally(() => { corpusLibState.inflight = false; });
+}
+
+function _corpusInstallTrigger(stem) {
+  if (!stem || corpusLibState.installing.has(stem)) return;
+  const data = corpusLibState.catalog;
+  if (!data) return;
+  const entry = (data.corpora || []).find(c => c.stem === stem);
+  if (!entry) return;
+
+  const fmt = entry.format || "raw_bytes";
+  if (fmt === "raw_bytes" && !entry.train_url) {
+    const lab = $("corpusActionStatus");
+    if (lab) { lab.textContent = `${stem}: no train URL configured`; lab.style.color = "var(--hot)"; }
+    return;
+  }
+  if (fmt === "hf_dataset" && !entry.hf_dataset) {
+    const lab = $("corpusActionStatus");
+    if (lab) { lab.textContent = `${stem}: hf_dataset name missing`; lab.style.color = "var(--hot)"; }
+    return;
+  }
+
+  // Compute expected total bytes (train + val if applicable). >10 GB requires
+  // explicit user confirm before the request goes out, and the backend honors
+  // the confirm_large flag as a second guard.
+  let expected = entry.size_train || entry.max_bytes_train || 0;
+  if (entry.hf_split_val || entry.val_url) {
+    expected += entry.size_val || entry.max_bytes_val || 0;
+  }
+  const TEN_GB = 10 * 1024 * 1024 * 1024;
+  let confirmLarge = false;
+  if (expected > TEN_GB) {
+    const gb = (expected / 1e9).toFixed(1);
+    const msg = `Heads up: ${entry.label} will download ~${gb} GB into plugins/corpus/.\n\n` +
+                `Large downloads may take a while and consume significant disk space and bandwidth.\n\n` +
+                `Continue installing ${stem}?`;
+    if (!confirm(msg)) return;
+    confirmLarge = true;
+  }
+
+  corpusLibState.installing.add(stem);
+  _corpusRenderCatalog(data);
+  const lab = $("corpusActionStatus");
+  if (lab) { lab.textContent = `installing ${stem}...`; lab.style.color = "var(--warm)"; }
+  const poll = setInterval(_corpusRefreshCatalog, 2000);
+
+  fetch("/corpus/library/install", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      stem,
+      format:          fmt,
+      train_url:       entry.train_url,
+      val_url:         entry.val_url,
+      val_split_ratio: entry.val_split_ratio,
+      sha256_train:    entry.sha256_train,
+      sha256_val:      entry.sha256_val,
+      hf_dataset:      entry.hf_dataset,
+      hf_config:       entry.hf_config,
+      hf_split_train:  entry.hf_split_train,
+      hf_split_val:    entry.hf_split_val,
+      hf_text_column:  entry.hf_text_column,
+      max_bytes_train: entry.max_bytes_train,
+      max_bytes_val:   entry.max_bytes_val,
+      size_train:      entry.size_train,
+      size_val:        entry.size_val,
+      confirm_large:   confirmLarge,
+    }),
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (res.ok) {
+        if (lab) {
+          lab.textContent = res.warning
+            ? `${stem}: train installed, ${res.warning}`
+            : `${stem}: installed`;
+          lab.style.color = res.warning ? "var(--warm)" : "var(--data-pos)";
+        }
+      } else {
+        if (lab) { lab.textContent = `${stem}: ${res.error || "install failed"}`; lab.style.color = "var(--hot)"; }
+      }
+    })
+    .catch(e => { if (lab) { lab.textContent = `${stem}: ${_backendErrMsg(e)}`; lab.style.color = "var(--hot)"; } })
+    .finally(() => {
+      clearInterval(poll);
+      corpusLibState.installing.delete(stem);
+      _corpusRefreshCatalog();
+    });
+}
+
+function _corpusUninstallTrigger(stem) {
+  if (!stem) return;
+  if (!confirm(`Remove ${stem} from plugins/corpus/?\nThis deletes ${stem}_train.bin (and val if present).`)) return;
+  const lab = $("corpusActionStatus");
+  if (lab) { lab.textContent = `removing ${stem}...`; lab.style.color = "var(--warm)"; }
+  fetch("/corpus/library/uninstall", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stem }),
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (res.ok) {
+        if (lab) { lab.textContent = `${stem}: removed (${(res.removed || []).join(", ")})`; lab.style.color = "var(--data-pos)"; }
+      } else {
+        if (lab) { lab.textContent = `${stem}: ${res.error || "uninstall failed"}`; lab.style.color = "var(--hot)"; }
+      }
+      _corpusRefreshCatalog();
+    })
+    .catch(e => { if (lab) { lab.textContent = `${stem}: ${_backendErrMsg(e)}`; lab.style.color = "var(--hot)"; } });
+}
+
+function _corpusRemoveSourceTrigger(stem) {
+  if (!stem) return;
+  if (!confirm(`Remove the custom source entry for ${stem}?\nThis only removes the catalog entry, not any installed files.`)) return;
+  const lab = $("corpusActionStatus");
+  fetch("/corpus/library/sources/remove", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stem }),
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (lab) {
+        if (res.ok) { lab.textContent = `${stem}: source removed`; lab.style.color = "var(--data-pos)"; }
+        else { lab.textContent = `${stem}: ${res.error || "remove failed"}`; lab.style.color = "var(--hot)"; }
+      }
+      _corpusRefreshCatalog();
+    })
+    .catch(e => { if (lab) { lab.textContent = `${stem}: ${_backendErrMsg(e)}`; lab.style.color = "var(--hot)"; } });
+}
+
+function _corpusSaveCatalogUrl() {
+  const input = $("corpusCatalogUrl");
+  const lab = $("corpusCatalogUrlStatus");
+  if (!input) return;
+  const url = input.value.trim();
+  if (lab) { lab.textContent = "saving..."; lab.style.color = "var(--warm)"; }
+  fetch("/corpus/library/catalog_url", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (lab) {
+        if (res.ok) { lab.textContent = "saved"; lab.style.color = "var(--data-pos)"; }
+        else { lab.textContent = res.error || "save failed"; lab.style.color = "var(--hot)"; }
+      }
+      _corpusRefreshCatalog();
+    })
+    .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } });
+}
+
+function _corpusOpenAddSourceModal() {
+  const m = $("corpusAddSourceModal");
+  if (!m) return;
+  ["corpusSourceStem","corpusSourceLabel","corpusSourceDesc",
+   "corpusSourceTrainUrl","corpusSourceValUrl",
+   "corpusSourceShaTrain","corpusSourceShaVal"].forEach(id => {
+    const el = $(id);
+    if (el) el.value = "";
+  });
+  const st = $("corpusAddSourceStatus");
+  if (st) { st.textContent = ""; st.style.color = "var(--dim)"; }
+  m.classList.remove("hidden");
+}
+
+function _corpusCloseAddSourceModal() {
+  const m = $("corpusAddSourceModal");
+  if (m) m.classList.add("hidden");
+}
+
+function _corpusSaveAddSource() {
+  const stem      = ($("corpusSourceStem")     || {}).value || "";
+  const label     = ($("corpusSourceLabel")    || {}).value || "";
+  const desc      = ($("corpusSourceDesc")     || {}).value || "";
+  const trainUrl  = ($("corpusSourceTrainUrl") || {}).value || "";
+  const valUrl    = ($("corpusSourceValUrl")   || {}).value || "";
+  const shaTrain  = ($("corpusSourceShaTrain") || {}).value || "";
+  const shaVal    = ($("corpusSourceShaVal")   || {}).value || "";
+  const lab = $("corpusAddSourceStatus");
+  if (lab) { lab.textContent = "saving..."; lab.style.color = "var(--warm)"; }
+  fetch("/corpus/library/sources/add", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      stem: stem.trim(),
+      label: label.trim(),
+      description: desc.trim(),
+      train_url: trainUrl.trim(),
+      val_url: valUrl.trim(),
+      sha256_train: shaTrain.trim(),
+      sha256_val: shaVal.trim(),
+    }),
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (res.ok) {
+        if (lab) { lab.textContent = "added"; lab.style.color = "var(--data-pos)"; }
+        _corpusRefreshCatalog();
+        setTimeout(_corpusCloseAddSourceModal, 600);
+      } else {
+        if (lab) { lab.textContent = res.error || "save failed"; lab.style.color = "var(--hot)"; }
+      }
+    })
+    .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } });
+}
+
+function _corpusOpenFolderTrigger() {
+  fetch("/corpus/open_folder", { method: "POST" }).catch(() => {});
+}
+
+// ---- Training-tab corpus-vs-model-size warning ----
+// Looks up the currently selected corpus stem in the catalog and compares the
+// chosen model size against the catalog's recommended_param_range. Renders a
+// yellow warning into #trainCorpusSizeWarning so the user knows when they've
+// picked a corpus that's too big or too small for the model. Catalog is
+// fetched once and cached on corpusLibState.catalog.
+function _trCorpusBaseStem(stem) {
+  if (!stem) return "";
+  // bundled corpora are namespaced "<plugin_id>:<leaf>"
+  return stem.includes(":") ? stem.split(":").pop() : stem;
+}
+
+function _trCorpusSizeWarning() {
+  let warnEl = document.getElementById("trainCorpusSizeWarning");
+  const meta = document.getElementById("trainCorpusMeta");
+  if (!meta) return;
+  if (!warnEl) {
+    warnEl = document.createElement("div");
+    warnEl.id = "trainCorpusSizeWarning";
+    warnEl.style.cssText = "display:none;margin-top:6px;padding:6px 8px;border-radius:3px;font-size:11px;line-height:1.5;border:1px solid var(--warm);background:#2a200a;color:var(--warm)";
+    meta.parentNode.insertBefore(warnEl, meta.nextSibling);
+  }
+  const stem = _trCorpusBaseStem(typeof _trArgVal === "function" ? _trArgVal("corpus") : "");
+  const size = (typeof _trArgVal === "function") ? _trArgVal("size") : "";
+  if (!stem || !size) { warnEl.style.display = "none"; return; }
+  const data = corpusLibState.catalog;
+  if (!data || !data.corpora) {
+    // Try to load it once so we have something to compare against.
+    if (!corpusLibState.inflight) _corpusRefreshCatalog();
+    return;
+  }
+  const entry = data.corpora.find(c => c.stem === stem);
+  if (!entry) { warnEl.style.display = "none"; return; }
+  const preset = (typeof _TR_SIZE_PRESETS !== "undefined") ? _TR_SIZE_PRESETS[size] : null;
+  const params = preset ? preset.params : null;
+  if (params == null) { warnEl.style.display = "none"; return; }
+  const minP = entry.recommended_min_params;
+  const maxP = entry.recommended_max_params;
+  if (minP == null && maxP == null) { warnEl.style.display = "none"; return; }
+  let msg = "";
+  if (minP != null && params < minP) {
+    msg = `Heads up: <b>${_corpusEsc(entry.label)}</b> is large for a ${size} model (~${_corpusFmtParams(params)} params). Recommended starting size is ${_corpusFmtParams(minP)}+ params. The model may underfit and waste compute reading bytes it can't memorize.`;
+  } else if (maxP != null && params > maxP) {
+    msg = `Heads up: <b>${_corpusEsc(entry.label)}</b> is small for a ${size} model (~${_corpusFmtParams(params)} params). Recommended ceiling is ${_corpusFmtParams(maxP)} params. Bigger models will overfit fast on this corpus — consider a larger corpus or a smaller model.`;
+  }
+  if (!msg) { warnEl.style.display = "none"; return; }
+  warnEl.innerHTML = msg;
+  warnEl.style.display = "block";
 }
 
 function _pollBuildStatus() {
@@ -7172,6 +7620,29 @@ document.addEventListener("DOMContentLoaded", () => {
   if (mub) mub.addEventListener("click", _modelsUpdateTrigger);
   _modelsRefreshStatus();
   setInterval(_modelsRefreshStatus, 15000);
+
+  // ---- Corpus library wiring ----
+  const crb = $("corpusRefreshBtn");
+  if (crb) crb.addEventListener("click", _corpusRefreshCatalog);
+  const cof = $("corpusOpenFolderBtn");
+  if (cof) cof.addEventListener("click", _corpusOpenFolderTrigger);
+  const cusb = $("corpusCatalogUrlSaveBtn");
+  if (cusb) cusb.addEventListener("click", _corpusSaveCatalogUrl);
+  const cas = $("corpusAddSourceBtn");
+  if (cas) cas.addEventListener("click", _corpusOpenAddSourceModal);
+  const ctc = $("corpusToggleConfigBtn");
+  if (ctc) ctc.addEventListener("click", () => {
+    const row = $("corpusConfigRow");
+    if (row) row.style.display = (row.style.display === "none" || !row.style.display) ? "flex" : "none";
+  });
+  const casc = $("corpusAddSourceModalClose");
+  if (casc) casc.addEventListener("click", _corpusCloseAddSourceModal);
+  const cass = $("corpusAddSourceSave");
+  if (cass) cass.addEventListener("click", _corpusSaveAddSource);
+  const casm = $("corpusAddSourceModal");
+  if (casm) casm.addEventListener("click", (e) => { if (e.target === casm) _corpusCloseAddSourceModal(); });
+  _corpusRefreshCatalog();
+  setInterval(() => { if (_isTabActive("settings")) _corpusRefreshCatalog(); }, 15000);
 
   const srb = $("softReloadBtn");
   if (srb) srb.addEventListener("click", _lifecycleSoftReload);
