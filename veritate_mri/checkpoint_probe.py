@@ -88,6 +88,10 @@ MEMORY_PROBE_STORIES     = 500
 MEMORY_PROBE_TOPK        = 6
 MEMORY_PROBE_MAX_STORY   = 256
 MEMORY_PROBE_SEED        = 7
+MEMORY_PROBE_MIN_STORY   = 32
+MEMORY_PROBE_MIN_WINDOW  = 64
+MEMORY_PROBE_MIN_CORPUS  = 64
+MEMORY_PROBE_CHUNK_BYTES = 1024 * 1024
 REPO_ROOT                = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 CORPUS_CANDIDATES        = [
     os.path.join(REPO_ROOT, "data", "corpus", "tinystories_train.bin"),
@@ -95,7 +99,8 @@ CORPUS_CANDIDATES        = [
 ]
 DEFAULT_CORPUS_PATH      = CORPUS_CANDIDATES[0]
 
-_STORY_CACHE = {}
+_STORY_CACHE     = {}
+_STORY_CACHE_MAX = 2
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -299,25 +304,36 @@ def _load_probe_stories(corpus_path: str, seed: int, n_stories: int, max_story_b
         raise FileNotFoundError(f"memory probe corpus not found: {corpus_path}")
     arr = np.memmap(corpus_path, dtype=np.uint8, mode="r")
     N = len(arr)
-    if N < 64:
+    if N < MEMORY_PROBE_MIN_CORPUS:
         raise ValueError(f"memory probe corpus too small: {corpus_path} ({N} bytes)")
-    parts = []
-    if N < 64 * 1024 * 1024:
-        with open(corpus_path, "rb") as f:
-            corpus = f.read()
-        split = corpus.split(b"\x00")
-        parts = [p for p in split if 32 <= len(p) <= max_story_bytes]
-    rng = np.random.default_rng(seed)
-    if len(parts) >= n_stories:
-        chosen = rng.choice(len(parts), size=n_stories, replace=False)
-        stories = [parts[int(i)] for i in chosen]
+    nulls = []
+    for off in range(0, N, MEMORY_PROBE_CHUNK_BYTES):
+        end = min(off + MEMORY_PROBE_CHUNK_BYTES, N)
+        nulls.append(np.flatnonzero(arr[off:end] == 0) + off)
+    null_pos = np.concatenate(nulls) if nulls else np.array([], dtype=np.int64)
+    if null_pos.size:
+        seg_starts = np.concatenate(([0], null_pos[:-1] + 1))
+        seg_ends   = null_pos
+        lengths    = seg_ends - seg_starts
+        valid      = (lengths >= MEMORY_PROBE_MIN_STORY) & (lengths <= max_story_bytes)
+        seg_starts = seg_starts[valid]
+        seg_ends   = seg_ends[valid]
     else:
-        win = min(max_story_bytes, max(64, N // (n_stories * 4) or 64))
+        seg_starts = np.array([], dtype=np.int64)
+        seg_ends   = np.array([], dtype=np.int64)
+    rng = np.random.default_rng(seed)
+    if seg_starts.size >= n_stories:
+        sel = rng.choice(seg_starts.size, size=n_stories, replace=False)
+        stories = [bytes(arr[int(seg_starts[i]):int(seg_ends[i])]) for i in sel]
+    else:
+        win = min(max_story_bytes, max(MEMORY_PROBE_MIN_WINDOW, N // (n_stories * 4) or MEMORY_PROBE_MIN_WINDOW))
         if N <= win + 1:
             stories = [bytes(arr[:N])]
         else:
-            starts = rng.integers(0, N - win - 1, size=n_stories, dtype=np.int64)
-            stories = [bytes(arr[int(s):int(s) + win]) for s in starts]
+            win_starts = rng.integers(0, N - win - 1, size=n_stories, dtype=np.int64)
+            stories = [bytes(arr[int(s):int(s) + win]) for s in win_starts]
+    if key not in _STORY_CACHE and len(_STORY_CACHE) >= _STORY_CACHE_MAX:
+        _STORY_CACHE.pop(next(iter(_STORY_CACHE)))
     _STORY_CACHE[key] = stories
     return stories
 

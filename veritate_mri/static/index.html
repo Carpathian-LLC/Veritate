@@ -741,19 +741,19 @@
 <!-- ============================ LIVE TRAINING TAB ============================ -->
 <div class="tab-body" data-tab="training">
 
-  <div class="panel" style="margin-bottom: 10px;">
+  <div class="panel train-panel" style="margin-bottom: 16px; padding: 22px 24px;">
     <h2>train a model <em>new, continue, distill, or export</em></h2>
     <div class="body">
 
       <div style="color:var(--dim);font-size:11px;margin-bottom:6px">step 1 &mdash; what to do?</div>
-      <div class="controls" style="margin-bottom: 12px;gap:6px;flex-wrap:wrap">
+      <div class="controls" style="margin-bottom: 18px;gap:6px;flex-wrap:wrap">
         <button class="trainFlowBtn" data-flow="scratch"  type="button">from scratch</button>
         <button class="trainFlowBtn" data-flow="continue" type="button">continue saved</button>
         <button class="trainFlowBtn" data-flow="distill"  type="button">distill</button>
         <button class="trainFlowBtn" data-flow="export"   type="button">export .bin</button>
       </div>
 
-      <div id="trainPickerRow" class="controls" style="display:none;margin-bottom:8px;gap:8px;flex-wrap:wrap;align-items:center">
+      <div id="trainPickerRow" class="controls" style="display:none;margin-bottom:14px;gap:8px;flex-wrap:wrap;align-items:center">
         <span style="color:var(--dim);font-size:11px">step 2 &mdash; trainer</span>
         <select id="trainPicker" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:240px">
           <option value="">- pick a trainer -</option>
@@ -763,23 +763,28 @@
         <span id="trainEmptyHint" style="display:none;color:var(--dim);font-size:11px"></span>
       </div>
 
-      <div id="trainDesc" class="meta" style="font-size:11px;color:var(--dim);margin-bottom:6px"></div>
+      <div id="trainDesc" class="meta" style="font-size:11px;color:var(--dim);margin-bottom:10px"></div>
 
       <div id="trainFormWrap" style="display:none">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
           <span style="color:var(--dim);font-size:11px">step 3 &mdash; details &rsaquo; <span id="trainComposedName" style="font-family:monospace;color:var(--accent)"></span></span>
+        </div>
+        <div id="trainFormIntro" style="color:var(--dim);font-size:10.5px;margin-bottom:10px;line-height:1.5"></div>
+        <div id="trainArgs"></div>
+        <div id="trainEstimateRow" style="margin-top:14px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:10px 12px;background:#0a0c12;border:1px solid var(--line);border-radius:4px">
+          <div id="trainVramEst" style="font-size:11px;color:var(--dim);flex:1 1 280px;min-width:0;line-height:1.5"></div>
           <div id="trainAutoOptimizeRow" style="display:none;align-items:center;gap:8px;flex-wrap:wrap">
-            <button id="trainAutoOptimizeBtn" class="action" type="button" style="border-color:var(--accent);color:var(--accent)">auto-pick</button>
+            <button id="trainAutoOptimizeBtn" class="action" type="button"
+                    title="Apply training settings tuned for your detected hardware. Sets batch size, learning rate, activation checkpointing, and (if total_steps is filled) warmup / log / eval / checkpoint cadence."
+                    style="border-color:var(--accent);color:var(--accent);font-weight:600">auto optimize</button>
             <span id="trainAutoOptimizeStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
           </div>
         </div>
-        <div id="trainFormIntro" style="color:var(--dim);font-size:10.5px;margin-bottom:6px;line-height:1.5"></div>
-        <div id="trainArgs"></div>
-        <div id="trainVramEst" style="margin-top:6px;font-size:11px;color:var(--dim)"></div>
-        <div id="trainCorpusMeta" style="display:none;margin-top:8px;padding:6px 8px;background:#0a0c12;border:1px solid var(--line);border-radius:3px;font-size:11px;color:var(--dim);font-family:monospace"></div>
+        <div id="trainAutoOptimizeHelp" style="display:none;font-size:10.5px;color:var(--dim);margin-top:4px;line-height:1.45">auto optimize updates the training settings above (batch size, learning rate, activation checkpointing, and cadence) to fit your detected hardware budget. Review them before you start.</div>
+        <div id="trainCorpusMeta" style="display:none;margin-top:10px;padding:6px 8px;background:#0a0c12;border:1px solid var(--line);border-radius:3px;font-size:11px;color:var(--dim);font-family:monospace"></div>
       </div>
 
-      <div id="trainRunRow" class="controls" style="display:none;margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">
+      <div id="trainRunRow" class="controls" style="display:none;margin-top:18px;gap:8px;flex-wrap:wrap;align-items:center">
         <span style="color:var(--dim);font-size:11px;margin-right:4px">step 4 &mdash; start training</span>
         <button id="trainRun"  type="button" style="background:var(--data-pos);color:#000;font-weight:600">start training</button>
         <button id="trainStop" type="button" style="background:var(--hot);color:#000;font-weight:600" disabled>stop</button>
@@ -1108,13 +1113,12 @@
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="pluginsSyncRow">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Plugins</div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="pluginsRemote">.</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">commit: <span id="pluginsHead">.</span> <span id="pluginsBranch"></span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="pluginsBehind">unknown</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim);display:none" id="pluginsAheadBehindLine">local: <span id="pluginsAheadBehind"></span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Self-contained git repo of trainers and experiments. Refuses to pull while a plugin is running.</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">local: <span id="pluginsLocal">.</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">status: <span id="pluginsBehind">unknown</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Downloads plugin files from the public Veritate-Plugins repo. Additive only: existing local files are never overwritten. Refuses to sync while a plugin is running.</div>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="pluginsCheckBtn"  class="action" type="button">check</button>
-              <button id="pluginsUpdateBtn" class="action" type="button" disabled>update</button>
+              <button id="pluginsUpdateBtn" class="action" type="button">update</button>
             </div>
             <span id="pluginsSyncStatus" class="meta" style="font-size:10.5px"></span>
           </div>
@@ -1122,15 +1126,35 @@
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="modelsSyncRow">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Models</div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="modelsRemote">.</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">commit: <span id="modelsHead">.</span> <span id="modelsBranch"></span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="modelsBehind">unknown</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim);display:none" id="modelsAheadBehindLine">local: <span id="modelsAheadBehind"></span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Pulls untrained barebones models (config + manifest). Local checkpoints, hooks, and trained models are not touched.</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">local: <span id="modelsLocal">.</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">status: <span id="modelsBehind">unknown</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Downloads barebones model files (config + manifest) from the public Veritate-Models repo. Additive only: local checkpoints, hooks, and trained models are never overwritten.</div>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="modelsCheckBtn"  class="action" type="button">check</button>
-              <button id="modelsUpdateBtn" class="action" type="button" disabled>update</button>
+              <button id="modelsUpdateBtn" class="action" type="button">update</button>
             </div>
             <span id="modelsSyncStatus" class="meta" style="font-size:10.5px"></span>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:4px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;grid-column:1 / -1" id="corpusLibraryRow">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+              <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Corpus library</div>
+              <div class="inline" style="gap:6px;flex-wrap:wrap">
+                <button id="corpusRefreshBtn"   class="action" type="button">refresh</button>
+                <button id="corpusOpenFolderBtn" class="action" type="button">folder</button>
+                <button id="corpusAddSourceBtn" class="action" type="button">+ custom</button>
+                <button id="corpusToggleConfigBtn" class="action" type="button" title="catalog URL settings">URL</button>
+              </div>
+            </div>
+            <div id="corpusCatalogStatus" class="meta" style="font-size:10.5px"></div>
+            <div id="corpusConfigRow" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+              <input type="text" id="corpusCatalogUrl" placeholder="https://.../catalog.json"
+                     style="flex:1;min-width:240px;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:3px 6px;font-size:10.5px;color:var(--text);font-family:monospace">
+              <button id="corpusCatalogUrlSaveBtn" class="action" type="button">save</button>
+              <span id="corpusCatalogUrlStatus" class="meta" style="font-size:10.5px"></span>
+            </div>
+            <div id="corpusList" style="display:flex;flex-direction:column;gap:2px;margin-top:4px"></div>
+            <span id="corpusActionStatus" class="meta" style="font-size:10.5px"></span>
           </div>
 
         </div>
@@ -1444,6 +1468,52 @@
         <li>Switch the Training tab to <b>export to .bin</b>, pick the new <code>_qat</code> model and its latest checkpoint, click <b>export</b>. The resulting v9 binary lands with <code>act_boost=1</code> and runs cleanly on the C engine.</li>
         <li>Back on the <b>Generation</b> tab, pick the new <code>_qat</code> model from the model dropdown. The warning will not appear, and the C engine output should match PyTorch.</li>
       </ol>
+    </div>
+  </div>
+</div>
+
+<div id="corpusAddSourceModal" class="modal-backdrop hidden">
+  <div class="modal-box" style="max-width:560px">
+    <div class="modal-header">
+      <h3>Add custom corpus</h3>
+      <button id="corpusAddSourceModalClose">×</button>
+    </div>
+    <div style="font-size:12px;line-height:1.55;color:var(--text);display:flex;flex-direction:column;gap:8px">
+      <div style="color:var(--dim);font-size:11px">Add a corpus by direct URL. The stem is the file basename — for <code>foo_train.bin</code> use <code>foo</code>. SHA-256 fields are optional; if provided, the install will verify them and abort on mismatch.</div>
+      <label style="display:flex;flex-direction:column;gap:3px">
+        <span style="font-size:11px;color:var(--dim)">stem (filename basename, no extension)</span>
+        <input type="text" id="corpusSourceStem" placeholder="e.g. mycorpus" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:monospace">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:3px">
+        <span style="font-size:11px;color:var(--dim)">label (display name)</span>
+        <input type="text" id="corpusSourceLabel" placeholder="My corpus" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text)">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:3px">
+        <span style="font-size:11px;color:var(--dim)">description (optional)</span>
+        <input type="text" id="corpusSourceDesc" placeholder="What this corpus contains" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text)">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:3px">
+        <span style="font-size:11px;color:var(--dim)">train URL (required)</span>
+        <input type="text" id="corpusSourceTrainUrl" placeholder="https://.../mycorpus_train.bin" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11px;color:var(--text);font-family:monospace">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:3px">
+        <span style="font-size:11px;color:var(--dim)">val URL (optional)</span>
+        <input type="text" id="corpusSourceValUrl" placeholder="https://.../mycorpus_val.bin" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11px;color:var(--text);font-family:monospace">
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <label style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:180px">
+          <span style="font-size:11px;color:var(--dim)">sha256 train (optional)</span>
+          <input type="text" id="corpusSourceShaTrain" placeholder="hex digest" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11px;color:var(--text);font-family:monospace">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:180px">
+          <span style="font-size:11px;color:var(--dim)">sha256 val (optional)</span>
+          <input type="text" id="corpusSourceShaVal" placeholder="hex digest" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11px;color:var(--text);font-family:monospace">
+        </label>
+      </div>
+      <div class="inline" style="gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button id="corpusAddSourceSave" class="action" type="button" style="border-color:var(--accent);color:var(--accent)">save</button>
+        <span id="corpusAddSourceStatus" class="meta" style="font-size:10.5px"></span>
+      </div>
     </div>
   </div>
 </div>

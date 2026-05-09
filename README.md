@@ -32,9 +32,10 @@ Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 t
 
 | | Requirement | Notes |
 |---|---|---|
-| **1** | **Python 3.10+** | For the dashboard, training plugins, and PyTorch fallback. |
-| **2** | **A C compiler** | The dashboard builds the C engine for you. You just need `clang` (macOS / Linux) or MSVC / `clang` (Windows) installed. See the per-OS install steps below. |
-| **3** | **CUDA toolkit** *(optional)* | Only for GPU training on NVIDIA. CPU and Apple Silicon work without it. |
+| **1** | **Git** | Already on macOS (via Xcode CLT) and most Linux distros. On Windows install [Git for Windows](https://git-scm.com/download/win) or run `winget install Git.Git`. |
+| **2** | **Python 3.10+** | For the dashboard, training plugins, and PyTorch fallback. On Windows: `winget install Python.Python.3.12`. |
+| **3** | **A C compiler** | The dashboard builds the C engine for you. You just need `clang` (macOS / Linux) or MSVC / `clang` (Windows) installed. See the per-OS install steps below. |
+| **4** | **CUDA toolkit** *(optional)* | Only for GPU training on NVIDIA. CPU and Apple Silicon work without it. |
 
 [`models/`](./) is gitignored. A fresh clone ships **no weights**. You'll train your first model from the dashboard's [**Training**](#tabs) tab in step 4.
 
@@ -44,15 +45,17 @@ Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 t
 
 <br/>
 
-## Step 1 &nbsp;·&nbsp; Install Python deps
+## Step 1 &nbsp;·&nbsp; Clone and install Python deps
 
-Same on every platform.
+Same commands work in bash, zsh, and PowerShell.
 
 ```sh
 git clone https://github.com/Carpathian-LLC/Veritate.git
 cd Veritate
 pip install -r requirements.txt
 ```
+
+On Windows use `py -m pip install -r requirements.txt` if `pip` isn't on PATH.
 
 <br/>
 
@@ -82,10 +85,10 @@ xcode-select --install
 Or run the bundled checker, which verifies the toolchain is in place:
 
 ```sh
-bash veritate_engine/build/setup.sh
+bash veritate_engine/v1/build/setup.sh
 ```
 
-See [`veritate_engine/build/setup.sh`](veritate_engine/build/setup.sh).
+See [`veritate_engine/v1/build/setup.sh`](veritate_engine/v1/build/setup.sh).
 
 <br/>
 
@@ -108,13 +111,19 @@ Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
 
 #### Step 2 &nbsp;·&nbsp; Install a C compiler &nbsp;<sub>*(one-time)*</sub>
 
-The bundled installer checks for and installs the toolchain:
+The bundled installer uses `winget` to install LLVM (clang) and NASM if they're missing. Run it from the repo root in Windows PowerShell:
 
 ```powershell
-pwsh veritate_engine/build/setup.ps1
+powershell -ExecutionPolicy Bypass -File veritate_engine\v1\build\setup.ps1
 ```
 
-See [`veritate_engine/build/setup.ps1`](veritate_engine/build/setup.ps1).
+If you have PowerShell 7+ installed, this also works:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File veritate_engine\v1\build\setup.ps1
+```
+
+After it finishes, **open a new terminal** so the updated `PATH` takes effect, then `cd` back into the repo. See [`veritate_engine/v1/build/setup.ps1`](veritate_engine/v1/build/setup.ps1).
 
 <br/>
 
@@ -140,10 +149,10 @@ Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
 The bundled script auto-detects your package manager (`apt`, `dnf`, `pacman`) and installs clang.
 
 ```sh
-bash veritate_engine/build/setup.sh
+bash veritate_engine/v1/build/setup.sh
 ```
 
-See [`veritate_engine/build/setup.sh`](veritate_engine/build/setup.sh).
+See [`veritate_engine/v1/build/setup.sh`](veritate_engine/v1/build/setup.sh).
 
 <br/>
 
@@ -255,17 +264,17 @@ If you didn't let `run.py` auto-build, build manually.
 <br/>
 
 ```sh
-bash veritate_engine/build/build.sh
+bash veritate_engine/v1/build/build.sh
 ```
 
-Binary lands at `veritate_engine/bin/macos/arm64/veritate`. Examples:
+Binary lands at `veritate_engine/v1/bin/macos/arm64/veritate`. Examples:
 
 ```sh
-veritate_engine/bin/macos/arm64/veritate chat
-veritate_engine/bin/macos/arm64/veritate bench 50 200
+veritate_engine/v1/bin/macos/arm64/veritate chat
+veritate_engine/v1/bin/macos/arm64/veritate bench 50 200
 ```
 
-See [`veritate_engine/build/build.sh`](veritate_engine/build/build.sh).
+See [`veritate_engine/v1/build/build.sh`](veritate_engine/v1/build/build.sh).
 
 </details>
 
@@ -277,17 +286,17 @@ See [`veritate_engine/build/build.sh`](veritate_engine/build/build.sh).
 <br/>
 
 ```powershell
-veritate_engine\build\build.bat
+veritate_engine\v1\build\build.bat
 ```
 
-Binary lands at `veritate_engine\bin\windows\x86_64\veritate.exe`:
+Binary lands at `veritate_engine\v1\bin\windows\x86_64\veritate.exe`:
 
 ```powershell
-veritate_engine\bin\windows\x86_64\veritate.exe chat
-veritate_engine\bin\windows\x86_64\veritate.exe bench 50 200
+veritate_engine\v1\bin\windows\x86_64\veritate.exe chat
+veritate_engine\v1\bin\windows\x86_64\veritate.exe bench 50 200
 ```
 
-See [`veritate_engine/build/build.bat`](veritate_engine/build/build.bat).
+See [`veritate_engine/v1/build/build.bat`](veritate_engine/v1/build/build.bat).
 
 </details>
 
@@ -299,17 +308,17 @@ See [`veritate_engine/build/build.bat`](veritate_engine/build/build.bat).
 <br/>
 
 ```sh
-bash veritate_engine/build/build.sh
+bash veritate_engine/v1/build/build.sh
 ```
 
-Binary lands at `veritate_engine/bin/linux/x86_64/veritate`:
+Binary lands at `veritate_engine/v1/bin/linux/x86_64/veritate`:
 
 ```sh
-veritate_engine/bin/linux/x86_64/veritate chat
-veritate_engine/bin/linux/x86_64/veritate bench 50 200
+veritate_engine/v1/bin/linux/x86_64/veritate chat
+veritate_engine/v1/bin/linux/x86_64/veritate bench 50 200
 ```
 
-See [`veritate_engine/build/build.sh`](veritate_engine/build/build.sh).
+See [`veritate_engine/v1/build/build.sh`](veritate_engine/v1/build/build.sh).
 
 </details>
 
@@ -408,7 +417,7 @@ Windows is the primary platform today. The structure is set up to add macOS and 
 | **ARM64 + AMX** | M-series Mac | ![planned](https://img.shields.io/badge/planned-lightgrey) Stretch goal |
 | **scalar C** | Anything | ![done](https://img.shields.io/badge/done-brightgreen) Correctness oracle for all other tiers |
 
-[`build.bat`](veritate_engine/build/build.bat) (Windows) and [`build.sh`](veritate_engine/build/build.sh) (POSIX) drive identical compile commands per OS. `build.sh` detects host via `uname -s/-m` and picks the matching kernel translation units. All kernels live under [`veritate_engine/kernels/<arch>/`](veritate_engine/kernels/) and [`veritate_engine/kernels/scalar/`](veritate_engine/kernels/scalar/). One binary per OS+arch. No fat universal binary.
+[`build.bat`](veritate_engine/v1/build/build.bat) (Windows) and [`build.sh`](veritate_engine/v1/build/build.sh) (POSIX) drive identical compile commands per OS. `build.sh` detects host via `uname -s/-m` and picks the matching kernel translation units. All kernels live under [`veritate_engine/v1/kernels/<arch>/`](veritate_engine/v1/kernels/) and [`veritate_engine/v1/kernels/scalar/`](veritate_engine/v1/kernels/scalar/). One binary per OS+arch. No fat universal binary.
 
 <br/>
 
@@ -430,7 +439,7 @@ A project by **[Carpathian, LLC](https://carpathian.ai/veritate)**. **Distributi
 
 | folder | what |
 |---|---|
-| [`veritate_engine/`](veritate_engine/) | C inference engine. `src/`, `kernels/<arch>/`, `build/`, `bin/<os>/<arch>/`, `engine_versions.json`. |
+| [`veritate_engine/`](veritate_engine/) | C inference engine. Versioned subtrees (currently [`v1/`](veritate_engine/v1/)) hold `src/`, `kernels/<arch>/`, `build/`, `bin/<os>/<arch>/`, and `engine_versions.json`. |
 | [`veritate_mri/`](veritate_mri/) | MRI server, dashboard, [`save.py`](veritate_mri/save.py) (checkpoint + dump suite), [`readers/`](veritate_mri/readers/), [`atlas.py`](veritate_mri/atlas.py). |
 | [`veritate/`](veritate/) | Python package. `veritate.plugin` is the only surface plugins may import. |
 | [`plugins/`](plugins/) | Plugin implementations. [`common/`](plugins/common/) for shared helpers, [`corpus/`](plugins/corpus/) for `.bin` training data. See [`plugins/readme.md`](plugins/readme.md). |
