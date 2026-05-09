@@ -190,6 +190,26 @@ def _pull(branch):
     return {"ok": True, "action": "pull", "status": status()}
 
 
+def check():
+    """Refresh remote state without pulling. `git fetch origin <branch>` then
+    return the updated status. Read-only; does not mutate the working tree."""
+    if not _is_repo(PLUGINS_DIR):
+        return {"ok": False, "error": "plugins/ is not a git repo. clone via sync first.",
+                "status": status()}
+    branch = DEFAULT_BRANCH
+    code, so, _ = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], PLUGINS_DIR, timeout=10)
+    if code == 0 and so:
+        branch = so
+    code, so, se = _run_git(["fetch", "origin", branch], PLUGINS_DIR)
+    if code != 0:
+        msg = se or so or f"git fetch exit {code}"
+        logmod.error("plugins-sync", f"check failed: {msg}")
+        _record("check", False, msg)
+        return {"ok": False, "error": msg, "status": status()}
+    _record("check", True, f"fetched origin/{branch}")
+    return {"ok": True, "action": "check", "status": status()}
+
+
 def sync():
     remote_url = DEFAULT_REMOTE_URL
     branch     = DEFAULT_BRANCH

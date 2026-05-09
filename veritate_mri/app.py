@@ -802,6 +802,11 @@ def plugins_git_sync():
     return plugins_sync.sync()
 
 
+@app.route("/plugins/git/check", methods=["POST"])
+def plugins_git_check():
+    return plugins_sync.check()
+
+
 @app.route("/plugins/open_folder", methods=["POST"])
 def plugins_open_folder():
     folder = plugins_reader.PLUGINS_ROOT
@@ -848,6 +853,11 @@ def models_git_status():
 @app.route("/models/git/sync", methods=["POST"])
 def models_git_sync():
     return models_sync.sync()
+
+
+@app.route("/models/git/check", methods=["POST"])
+def models_git_check():
+    return models_sync.check()
 
 
 @app.route("/models/open_folder", methods=["POST"])

@@ -1104,33 +1104,37 @@
             <div class="meta" style="font-size:10.5px;color:var(--dim)">last check: <span id="updateLastCheck">never</span></div>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="updateCheckBtn" class="action" type="button">check</button>
-              <button id="updatePullBtn"  class="action" type="button" disabled>pull</button>
+              <button id="updatePullBtn"  class="action" type="button" disabled>update</button>
             </div>
-            <span id="updateActionStatus" class="meta" style="font-size:10.5px">idle</span>
+            <span id="updateActionStatus" class="meta" style="font-size:10.5px"></span>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="pluginsSyncRow">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Plugins</div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="pluginsRemote">.</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">commit: <span id="pluginsHead">.</span> <span id="pluginsBranch"></span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="pluginsBehind">unknown</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim);display:none" id="pluginsAheadBehindLine">local: <span id="pluginsAheadBehind"></span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">Self-contained git repo of trainers and experiments. Refuses to pull while a plugin is running.</div>
-            <div class="inline" style="gap:6px;margin-top:4px">
-              <button id="pluginsSyncBtn" class="action" type="button">sync</button>
-              <span id="pluginsSyncStatus" class="meta" style="font-size:10.5px">idle</span>
+            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button id="pluginsCheckBtn"  class="action" type="button">check</button>
+              <button id="pluginsUpdateBtn" class="action" type="button" disabled>update</button>
             </div>
+            <span id="pluginsSyncStatus" class="meta" style="font-size:10.5px"></span>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="modelsSyncRow">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Models</div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="modelsRemote">.</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">commit: <span id="modelsHead">.</span> <span id="modelsBranch"></span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="modelsBehind">unknown</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim);display:none" id="modelsAheadBehindLine">local: <span id="modelsAheadBehind"></span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">Pulls untrained barebones models (config + manifest). Local checkpoints, hooks, and trained models are not touched.</div>
-            <div class="inline" style="gap:6px;margin-top:4px">
-              <button id="modelsSyncBtn" class="action" type="button">sync</button>
-              <span id="modelsSyncStatus" class="meta" style="font-size:10.5px">idle</span>
+            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button id="modelsCheckBtn"  class="action" type="button">check</button>
+              <button id="modelsUpdateBtn" class="action" type="button" disabled>update</button>
             </div>
+            <span id="modelsSyncStatus" class="meta" style="font-size:10.5px"></span>
           </div>
 
         </div>
@@ -1174,7 +1178,7 @@
         <div class="desc">Recompiles the C inference engine for this machine's OS and architecture. Build output streams into the Logs tab.</div>
         <div class="inline">
           <button id="settingsBuildBtn" class="action" type="button">trigger build</button>
-          <span id="buildStatusLine">idle</span>
+          <span id="buildStatusLine"></span>
         </div>
       </div>
 
@@ -1192,7 +1196,7 @@
           <div class="meta" id="heartbeatStatusLine" style="font-size:11px;color:var(--dim)">machine id: <span id="heartbeatMachineId">.</span> &nbsp;·&nbsp; last send: <span id="heartbeatLastSend">never</span> &nbsp;·&nbsp; restarts: <span id="heartbeatRestarts">0</span> &nbsp;·&nbsp; total runtime: <span id="heartbeatRuntime">0s</span></div>
           <div class="inline" style="gap:8px;margin-top:4px">
             <button id="heartbeatSendBtn" class="action" type="button">send now</button>
-            <span id="heartbeatSendStatus" class="meta">idle</span>
+            <span id="heartbeatSendStatus" class="meta"></span>
           </div>
         </div>
       </div>
@@ -1218,7 +1222,7 @@
               <input type="password" id="aiApiKeyUser" placeholder="(default)" style="width:380px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;margin-left:6px">
             </label>
             <button id="aiSaveBtn" class="action" type="button">save overrides</button>
-            <span id="aiSaveStatus" class="meta" style="font-size:10.5px">idle</span>
+            <span id="aiSaveStatus" class="meta" style="font-size:10.5px"></span>
           </div>
         </div>
       </div>
@@ -1254,7 +1258,7 @@
           <button id="softReloadBtn" class="action" type="button" style="border-color: var(--data-pos); color: var(--data-pos)">soft reload (keep training)</button>
           <button id="restartServerBtn" class="action" type="button" style="border-color: var(--warm); color: var(--warm)">reload python (keep training)</button>
           <button id="killServerBtn" class="action" type="button" style="border-color: var(--hot); color: var(--hot)">kill everything</button>
-          <span id="lifecycleStatus" class="meta">idle</span>
+          <span id="lifecycleStatus" class="meta"></span>
         </div>
       </div>
 

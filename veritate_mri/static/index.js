@@ -24,6 +24,21 @@ let generatedBytes = [];
 let coactState = { pairs: new Map(), nFrames: 0 };
 
 // ---- utility ----
+
+// Friendly message for the two errors the UI sees when the Python backend
+// is offline: WebKit fetch failure ("TypeError: Load failed" / "Failed to fetch")
+// and the SyntaxError thrown when response.json() runs on an empty/HTML body.
+function _backendErrMsg(e) {
+  const s = String(e && e.message || e || "");
+  if (e instanceof TypeError && /load failed|failed to fetch|networkerror/i.test(s)) {
+    return "backend offline. relaunch with python run.py";
+  }
+  if (e instanceof SyntaxError) {
+    return "backend offline or returned non-JSON. relaunch with python run.py";
+  }
+  return s || String(e);
+}
+
 function fitCanvas(c) {
   if (c.offsetParent === null) return { w: 0, h: 0 };
   const dpr = window.devicePixelRatio || 1;
@@ -1142,7 +1157,7 @@ async function loadAddons() {
       </label>`;
     }).join("");
   } catch (e) {
-    list.innerHTML = `<span class="stat" style="color:var(--hot)">load failed: ${e}</span>`;
+    list.innerHTML = `<span class="stat" style="color:var(--hot)">${_backendErrMsg(e)}</span>`;
   }
 }
 
@@ -3120,7 +3135,7 @@ async function load_pruning_report(refs, run) {
                              { cache: "no-store" });
     r = await resp.json();
   } catch (e) {
-    body.innerHTML = `<span style="color:var(--hot)">request failed: ${e}</span>`;
+    body.innerHTML = `<span style="color:var(--hot)">${_backendErrMsg(e)}</span>`;
     return;
   }
   if (!r.ok) {
@@ -3224,7 +3239,7 @@ function render_pruning_report(refs, r) {
       }
     } catch (e) {
       st.className = "status err";
-      st.textContent = `request failed: ${e}`;
+      st.textContent = _backendErrMsg(e);
     } finally {
       btn.disabled = false;
     }
@@ -5893,11 +5908,13 @@ function _renderHeartbeatStatus(s) {
   const mid = $("heartbeatMachineId"); if (mid) mid.textContent = s.machine_id || ".";
   const ls  = $("heartbeatLastSend");
   if (ls) {
-    if (!s.last_send_ts) { ls.textContent = "never"; ls.style.color = "var(--dim)"; }
+    if (!s.last_send_ts) { ls.textContent = "never"; ls.style.color = "var(--dim)"; ls.title = ""; }
     else {
       const okSend = (s.last_send_status >= 200 && s.last_send_status < 300);
       ls.textContent = `${_fmtAgo(s.last_send_ts)} (${okSend ? "ok" : "fail"})`;
       ls.style.color = okSend ? "var(--data-pos)" : "var(--hot)";
+      ls.title = okSend ? "" : (s.last_send_error || "no error reason recorded");
+      if (!okSend) ls.style.cursor = "help";
     }
   }
   const rs = $("heartbeatRestarts"); if (rs) rs.textContent = String(s.restarts || 0);
@@ -6074,7 +6091,7 @@ function _lifecycleRestart() {
       _lifecycleWaitForServer(label);
     })
     .catch(e => {
-      if (label) { label.textContent = `request failed: ${e}`; label.style.color = "var(--hot)"; }
+      if (label) { label.textContent = _backendErrMsg(e); label.style.color = "var(--hot)"; }
       _lifecycleSetButtonsDisabled(false);
     });
 }
@@ -6131,6 +6148,94 @@ function _lifecycleKill() {
   });
 }
 
+// Branch-switch confirm modal. Triggered when the user picks a different
+// channel while a training run is active. Resolves to "cancel", "keep", or
+// "full":
+//   cancel — no-op, revert the radio selection
+//   keep   — switch the branch on disk but leave the running training alone
+//   full   — kill training, switch, fully reload the app
+function _branchSwitchConfirm(targetChannel) {
+  return new Promise(resolve => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    backdrop.innerHTML = `
+      <div class="modal-box" style="max-width:580px;border-color:var(--warm)">
+        <div class="modal-header" style="border-bottom-color:var(--warm)">
+          <h3 style="color:var(--warm)">Switch channel to ${targetChannel}?</h3>
+        </div>
+        <p style="color:var(--warm);font-size:13px;line-height:1.55;margin:6px 0 10px">
+          A training run is active. Switching channels replaces the code on disk with whatever is on the target branch. Two options:
+        </p>
+        <ul style="font-size:12px;line-height:1.5;color:var(--soft);margin:0 0 14px;padding-left:18px">
+          <li><b style="color:var(--hot)">FULLY reset</b> — kills the training subprocess, the C engine, and the PyTorch backend, switches the branch, then reloads the entire app. Uncheckpointed training progress is lost; saved checkpoints on disk survive.</li>
+          <li><b style="color:var(--warm)">not kill training</b> — switches the branch on disk but leaves the running training process alone. Training keeps using the old code in memory; the dashboard sees the new branch on next reload. Risky if the new branch changes a checkpoint format your run depends on.</li>
+        </ul>
+        <p style="color:var(--soft);font-size:12px;margin:0 0 6px">Type <b style="color:var(--warm)">switch</b> to arm the buttons:</p>
+        <input id="switchConfirmInput" type="text" autocomplete="off" spellcheck="false"
+               style="width:100%;background:#0a0c12;border:1px solid var(--warm);color:var(--warm);
+                      padding:8px 10px;border-radius:3px;font-family:inherit;font-size:13px;
+                      box-sizing:border-box;margin-bottom:12px" />
+        <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+          <button id="switchConfirmCancel" class="action" type="button">cancel</button>
+          <button id="switchConfirmKeep" class="action" type="button" disabled
+                  style="border-color:var(--warm);color:var(--warm);opacity:0.5">not kill training</button>
+          <button id="switchConfirmFull" class="action" type="button" disabled
+                  style="border-color:var(--hot);color:var(--hot);opacity:0.5">FULLY reset</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(backdrop);
+    const input   = backdrop.querySelector("#switchConfirmInput");
+    const keepBtn = backdrop.querySelector("#switchConfirmKeep");
+    const fullBtn = backdrop.querySelector("#switchConfirmFull");
+    const cxBtn   = backdrop.querySelector("#switchConfirmCancel");
+    const finish  = result => { backdrop.remove(); resolve(result); };
+    input.addEventListener("input", () => {
+      const armed = input.value.trim().toLowerCase() === "switch";
+      keepBtn.disabled = !armed;
+      fullBtn.disabled = !armed;
+      keepBtn.style.opacity = armed ? "1" : "0.5";
+      fullBtn.style.opacity = armed ? "1" : "0.5";
+    });
+    input.addEventListener("keydown", e => { if (e.key === "Escape") finish("cancel"); });
+    keepBtn.addEventListener("click", () => finish("keep"));
+    fullBtn.addEventListener("click", () => finish("full"));
+    cxBtn.addEventListener("click",   () => finish("cancel"));
+    backdrop.addEventListener("click", e => { if (e.target === backdrop) finish("cancel"); });
+    setTimeout(() => input.focus(), 30);
+  });
+}
+
+// Final "are you sure" gate before the FULLY reset path actually fires.
+function _branchSwitchAreYouSure() {
+  return new Promise(resolve => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    backdrop.innerHTML = `
+      <div class="modal-box" style="max-width:480px;border-color:var(--hot)">
+        <div class="modal-header" style="border-bottom-color:var(--hot)">
+          <h3 style="color:var(--hot)">Are you sure?</h3>
+        </div>
+        <p style="color:var(--hot);font-size:13px;line-height:1.55;margin:6px 0 12px">
+          This kills the training process, switches the branch, and reloads the entire app. Uncheckpointed progress is lost. Saved checkpoints survive.
+        </p>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button id="confirmAreYouSureCancel" class="action" type="button">cancel</button>
+          <button id="confirmAreYouSureGo" class="action" type="button"
+                  style="border-color:var(--hot);color:var(--hot)">yes, fully reset</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(backdrop);
+    const goBtn = backdrop.querySelector("#confirmAreYouSureGo");
+    const cxBtn = backdrop.querySelector("#confirmAreYouSureCancel");
+    const finish = ok => { backdrop.remove(); resolve(ok); };
+    goBtn.addEventListener("click", () => finish(true));
+    cxBtn.addEventListener("click", () => finish(false));
+    backdrop.addEventListener("click", e => { if (e.target === backdrop) finish(false); });
+  });
+}
+
 function _lifecycleKillExecute() {
   const label = $("lifecycleStatus");
   _lifecycleSetButtonsDisabled(true);
@@ -6152,18 +6257,50 @@ function _lifecycleKillExecute() {
     });
 }
 
+// Render the "remote behind" indicator + enable the update button only when
+// the local branch is behind origin. Mirrors the main Veritate update row.
+function _renderRepoBehind(behindEl, updateBtn, s) {
+  if (!behindEl) return;
+  if (!s || !s.is_repo) {
+    behindEl.textContent = "unknown";
+    behindEl.style.color = "var(--dim)";
+    if (updateBtn) updateBtn.disabled = true;
+    return;
+  }
+  if (s.behind == null) {
+    behindEl.textContent = "unknown (run check)";
+    behindEl.style.color = "var(--dim)";
+    if (updateBtn) updateBtn.disabled = true;
+    return;
+  }
+  if (s.behind === 0) {
+    behindEl.textContent = "up to date";
+    behindEl.style.color = "var(--data-pos)";
+    if (updateBtn) updateBtn.disabled = true;
+    return;
+  }
+  behindEl.textContent = `${s.behind} new commit${s.behind === 1 ? "" : "s"} on ${s.branch || "origin"}`;
+  behindEl.style.color = "var(--warm)";
+  if (updateBtn) updateBtn.disabled = false;
+}
+
+
 function _pluginsApplyStatus(s) {
-  const remote = $("pluginsRemote");
-  const head   = $("pluginsHead");
-  const branch = $("pluginsBranch");
-  const ahead  = $("pluginsAheadBehind");
-  const aheadL = $("pluginsAheadBehindLine");
+  const remote   = $("pluginsRemote");
+  const head     = $("pluginsHead");
+  const branch   = $("pluginsBranch");
+  const ahead    = $("pluginsAheadBehind");
+  const aheadL   = $("pluginsAheadBehindLine");
+  const behindEl = $("pluginsBehind");
+  const upBtn    = $("pluginsUpdateBtn");
   if (!remote) return;
   if (!s.exists) {
     remote.textContent = s.default_remote_url || "—";
-    head.textContent = "(plugins/ does not exist — sync to clone)";
+    head.textContent = "(plugins/ does not exist — update to clone)";
     branch.textContent = "";
     aheadL.style.display = "none";
+    _renderRepoBehind(behindEl, upBtn, null);
+    if (upBtn) upBtn.disabled = false;  // allow update to clone
     return;
   }
   if (!s.is_repo) {
@@ -6171,6 +6308,7 @@ function _pluginsApplyStatus(s) {
     head.textContent = "(plugins/ exists but is not a git repo)";
     branch.textContent = "";
     aheadL.style.display = "none";
+    _renderRepoBehind(behindEl, upBtn, null);
     return;
   }
   remote.textContent = s.remote_url || "(no origin remote)";
@@ -6182,6 +6320,7 @@ function _pluginsApplyStatus(s) {
   } else {
     aheadL.style.display = "none";
   }
+  _renderRepoBehind(behindEl, upBtn, s);
   const last = s.last || {};
   const lab = $("pluginsSyncStatus");
   if (lab && last.action) {
@@ -6199,16 +6338,35 @@ function _pluginsRefreshStatus() {
   fetch("/plugins/git/status").then(r => r.json()).then(_pluginsApplyStatus).catch(() => {});
 }
 
-function _pluginsSyncTrigger() {
-  const btn = $("pluginsSyncBtn");
+function _pluginsCheckTrigger() {
+  const btn = $("pluginsCheckBtn");
   const lab = $("pluginsSyncStatus");
   if (btn) btn.disabled = true;
-  if (lab) { lab.textContent = "syncing…"; lab.style.color = "var(--warm)"; }
+  if (lab) { lab.textContent = "checking…"; lab.style.color = "var(--warm)"; }
+  fetch("/plugins/git/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+    .then(r => r.json())
+    .then(res => {
+      if (res.status) _pluginsApplyStatus(res.status);
+      if (lab) {
+        if (res.ok) { lab.textContent = "checked"; lab.style.color = "var(--data-pos)"; }
+        else { lab.textContent = `check failed: ${res.error || "unknown error"}`; lab.style.color = "var(--hot)"; }
+      }
+      if (!res.status) _pluginsRefreshStatus();
+    })
+    .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
+    .finally(() => { if (btn) btn.disabled = false; });
+}
+
+function _pluginsUpdateTrigger() {
+  const btn = $("pluginsUpdateBtn");
+  const lab = $("pluginsSyncStatus");
+  if (btn) btn.disabled = true;
+  if (lab) { lab.textContent = "updating…"; lab.style.color = "var(--warm)"; }
   fetch("/plugins/git/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
     .then(r => r.json())
     .then(res => {
       if (res.ok) {
-        if (lab) { lab.textContent = `${res.action || "sync"}: ok`; lab.style.color = "var(--data-pos)"; }
+        if (lab) { lab.textContent = `${res.action || "update"}: ok`; lab.style.color = "var(--data-pos)"; }
         if (res.status) _pluginsApplyStatus(res.status);
         else _pluginsRefreshStatus();
       } else {
@@ -6216,24 +6374,26 @@ function _pluginsSyncTrigger() {
         _pluginsRefreshStatus();
       }
     })
-    .catch(e => {
-      if (lab) { lab.textContent = `failed: ${e}`; lab.style.color = "var(--hot)"; }
-    })
+    .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
     .finally(() => { if (btn) btn.disabled = false; });
 }
 
 function _modelsApplyStatus(s) {
-  const remote = $("modelsRemote");
-  const head   = $("modelsHead");
-  const branch = $("modelsBranch");
-  const ahead  = $("modelsAheadBehind");
-  const aheadL = $("modelsAheadBehindLine");
+  const remote   = $("modelsRemote");
+  const head     = $("modelsHead");
+  const branch   = $("modelsBranch");
+  const ahead    = $("modelsAheadBehind");
+  const aheadL   = $("modelsAheadBehindLine");
+  const behindEl = $("modelsBehind");
+  const upBtn    = $("modelsUpdateBtn");
   if (!remote) return;
   if (!s.exists) {
     remote.textContent = s.default_remote_url || ".";
-    head.textContent = "(models/ does not exist. sync to clone)";
+    head.textContent = "(models/ does not exist. update to clone)";
     branch.textContent = "";
     aheadL.style.display = "none";
+    _renderRepoBehind(behindEl, upBtn, null);
+    if (upBtn) upBtn.disabled = false;  // allow update to clone
     return;
   }
   if (!s.is_repo) {
@@ -6241,6 +6401,7 @@ function _modelsApplyStatus(s) {
     head.textContent = "(models/ exists but is not a git repo)";
     branch.textContent = "";
     aheadL.style.display = "none";
+    _renderRepoBehind(behindEl, upBtn, null);
     return;
   }
   remote.textContent = s.remote_url || "(no origin remote)";
@@ -6252,6 +6413,7 @@ function _modelsApplyStatus(s) {
   } else {
     aheadL.style.display = "none";
   }
+  _renderRepoBehind(behindEl, upBtn, s);
   const last = s.last || {};
   const lab = $("modelsSyncStatus");
   if (lab && last.action) {
@@ -6269,16 +6431,35 @@ function _modelsRefreshStatus() {
   fetch("/models/git/status").then(r => r.json()).then(_modelsApplyStatus).catch(() => {});
 }
 
-function _modelsSyncTrigger() {
-  const btn = $("modelsSyncBtn");
+function _modelsCheckTrigger() {
+  const btn = $("modelsCheckBtn");
   const lab = $("modelsSyncStatus");
   if (btn) btn.disabled = true;
-  if (lab) { lab.textContent = "syncing…"; lab.style.color = "var(--warm)"; }
+  if (lab) { lab.textContent = "checking…"; lab.style.color = "var(--warm)"; }
+  fetch("/models/git/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+    .then(r => r.json())
+    .then(res => {
+      if (res.status) _modelsApplyStatus(res.status);
+      if (lab) {
+        if (res.ok) { lab.textContent = "checked"; lab.style.color = "var(--data-pos)"; }
+        else { lab.textContent = `check failed: ${res.error || "unknown error"}`; lab.style.color = "var(--hot)"; }
+      }
+      if (!res.status) _modelsRefreshStatus();
+    })
+    .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
+    .finally(() => { if (btn) btn.disabled = false; });
+}
+
+function _modelsUpdateTrigger() {
+  const btn = $("modelsUpdateBtn");
+  const lab = $("modelsSyncStatus");
+  if (btn) btn.disabled = true;
+  if (lab) { lab.textContent = "updating…"; lab.style.color = "var(--warm)"; }
   fetch("/models/git/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
     .then(r => r.json())
     .then(res => {
       if (res.ok) {
-        if (lab) { lab.textContent = `${res.action || "sync"}: ok`; lab.style.color = "var(--data-pos)"; }
+        if (lab) { lab.textContent = `${res.action || "update"}: ok`; lab.style.color = "var(--data-pos)"; }
         if (res.status) _modelsApplyStatus(res.status);
         else _modelsRefreshStatus();
       } else {
@@ -6286,9 +6467,7 @@ function _modelsSyncTrigger() {
         _modelsRefreshStatus();
       }
     })
-    .catch(e => {
-      if (lab) { lab.textContent = `failed: ${e}`; lab.style.color = "var(--hot)"; }
-    })
+    .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
     .finally(() => { if (btn) btn.disabled = false; });
 }
 
@@ -6356,35 +6535,81 @@ document.addEventListener("DOMContentLoaded", () => {
           lab.style.color = s.ok ? "var(--data-pos)" : "var(--hot)";
         }
       })
-      .catch(e => { if (lab) { lab.textContent = `failed: ${e}`; lab.style.color = "var(--hot)"; } })
+      .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
       .finally(() => { hbBtn.disabled = false; });
   });
   _refreshHeartbeatStatus();
   setInterval(_refreshHeartbeatStatus, 30000);
 
   document.querySelectorAll('input[name="updateChannel"]').forEach(r => {
-    r.addEventListener("change", () => {
+    r.addEventListener("change", async () => {
       if (!r.checked) return;
+      // Mark the visual selection optimistically; we may revert on cancel.
       document.querySelectorAll('input[name="updateChannel"]').forEach(other => {
         const w = other.closest("label.opt");
         if (w) w.classList.toggle("checked", other === r);
       });
       const lab = $("updateActionStatus");
-      if (lab) { lab.textContent = "switching channel..."; lab.style.color = "var(--warm)"; }
-      fetch("/app/update_channel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel: r.value }),
-      }).then(x => x.json()).then(res => {
-        if (res && res.ok) {
-          if (lab) { lab.textContent = "channel switched"; lab.style.color = "var(--data-pos)"; }
-          if (res.status) _renderUpdateStatus(res.status);
+
+      // Detect active training before firing the switch.
+      let trainingActive = false;
+      try {
+        const pl = await fetch("/plugins").then(x => x.json());
+        trainingActive = !!(pl && pl.running && pl.running.status === "running");
+      } catch (_) { /* if /plugins is down, fall through and let the switch try */ }
+
+      const _doSwitch = (postAction) => {
+        if (lab) { lab.textContent = postAction === "full" ? "switching + reloading…" : "switching channel…"; lab.style.color = "var(--warm)"; }
+        return fetch("/app/update_channel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channel: r.value }),
+        }).then(x => x.json()).then(async res => {
+          if (res && res.ok) {
+            if (res.status) _renderUpdateStatus(res.status);
+            if (postAction === "full") {
+              // Kill + restart the entire app. The /lifecycle/restart endpoint
+              // returns once the relaunch is queued; the page will lose its
+              // socket and reload itself.
+              if (lab) { lab.textContent = "switched. fully resetting…"; lab.style.color = "var(--warm)"; }
+              try { await fetch("/lifecycle/restart", { method: "POST" }); } catch (_) {}
+              setTimeout(() => location.reload(), 1500);
+              return;
+            }
+            if (lab) { lab.textContent = "channel switched"; lab.style.color = "var(--data-pos)"; }
+            _refreshUpdateStatus();
+          } else {
+            if (lab) { lab.textContent = `failed: ${res && res.error || "unknown"}`; lab.style.color = "var(--hot)"; }
+            _refreshUpdateStatus();
+          }
+        }).catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } });
+      };
+
+      if (!trainingActive) {
+        _doSwitch("normal");
+        return;
+      }
+
+      // Training is active. Modal flow.
+      const decision = await _branchSwitchConfirm(r.value);
+      if (decision === "cancel") {
+        if (lab) { lab.textContent = "switch cancelled"; lab.style.color = "var(--dim)"; }
+        _refreshUpdateStatus();   // resync radio to actual server-side channel
+        return;
+      }
+      if (decision === "keep") {
+        _doSwitch("keep");
+        return;
+      }
+      if (decision === "full") {
+        const yes = await _branchSwitchAreYouSure();
+        if (!yes) {
+          if (lab) { lab.textContent = "switch cancelled"; lab.style.color = "var(--dim)"; }
           _refreshUpdateStatus();
-        } else {
-          if (lab) { lab.textContent = `failed: ${res && res.error || "unknown"}`; lab.style.color = "var(--hot)"; }
-          _refreshUpdateStatus();
+          return;
         }
-      }).catch(e => { if (lab) { lab.textContent = `failed: ${e}`; lab.style.color = "var(--hot)"; } });
+        _doSwitch("full");
+      }
     });
   });
   const ar = $("updateAutoReload");
@@ -6456,7 +6681,7 @@ document.addEventListener("DOMContentLoaded", () => {
           else { lab.textContent = `failed: ${res && res.error || "unknown"}`; lab.style.color = "var(--hot)"; }
         }
       })
-      .catch(e => { if (lab) { lab.textContent = `failed: ${e}`; lab.style.color = "var(--hot)"; } })
+      .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
       .finally(() => { ucb.disabled = false; });
   });
   const upb = $("updatePullBtn");
@@ -6485,7 +6710,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
       })
-      .catch(e => { if (lab) { lab.textContent = `failed: ${e}`; lab.style.color = "var(--hot)"; } })
+      .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
       .finally(() => { upb.disabled = false; _refreshUpdateStatus(); });
   });
   const ub = $("updateBanner");
@@ -6503,13 +6728,17 @@ document.addEventListener("DOMContentLoaded", () => {
   _pollBuildStatus();
   setInterval(_pollBuildStatus, 3000);
 
-  const psb = $("pluginsSyncBtn");
-  if (psb) psb.addEventListener("click", _pluginsSyncTrigger);
+  const pcb = $("pluginsCheckBtn");
+  if (pcb) pcb.addEventListener("click", _pluginsCheckTrigger);
+  const pub = $("pluginsUpdateBtn");
+  if (pub) pub.addEventListener("click", _pluginsUpdateTrigger);
   _pluginsRefreshStatus();
   setInterval(_pluginsRefreshStatus, 15000);
 
-  const msb = $("modelsSyncBtn");
-  if (msb) msb.addEventListener("click", _modelsSyncTrigger);
+  const mcb = $("modelsCheckBtn");
+  if (mcb) mcb.addEventListener("click", _modelsCheckTrigger);
+  const mub = $("modelsUpdateBtn");
+  if (mub) mub.addEventListener("click", _modelsUpdateTrigger);
   _modelsRefreshStatus();
   setInterval(_modelsRefreshStatus, 15000);
 

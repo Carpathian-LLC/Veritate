@@ -201,10 +201,31 @@ def _send_once():
         _update_state({
             "last_send_ts":     int(time.time()),
             "last_send_status": int(status),
+            "last_send_error":  None,
         })
         return True
-    except (urllib.error.URLError, socket.timeout, OSError):
-        _update_state({"last_send_ts": int(time.time()), "last_send_status": 0})
+    except urllib.error.HTTPError as e:
+        body_excerpt = ""
+        try:
+            body_excerpt = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            pass
+        reason = f"http {e.code}: {body_excerpt or e.reason}"
+        logmod.warn("heartbeat", f"send failed: {reason}")
+        _update_state({
+            "last_send_ts":     int(time.time()),
+            "last_send_status": int(e.code),
+            "last_send_error":  reason,
+        })
+        return False
+    except (urllib.error.URLError, socket.timeout, OSError) as e:
+        reason = f"{type(e).__name__}: {e}"
+        logmod.warn("heartbeat", f"send failed: {reason}")
+        _update_state({
+            "last_send_ts":     int(time.time()),
+            "last_send_status": 0,
+            "last_send_error":  reason,
+        })
         return False
 
 
@@ -255,6 +276,7 @@ def status():
         "total_runtime_secs": int(float(s.get("total_runtime_secs") or 0.0)),
         "last_send_ts":       s.get("last_send_ts"),
         "last_send_status":   s.get("last_send_status"),
+        "last_send_error":    s.get("last_send_error"),
         "errors_pending":     int(s.get("errors_pending") or 0),
     }
 
