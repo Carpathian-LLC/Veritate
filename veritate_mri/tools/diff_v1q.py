@@ -92,7 +92,7 @@ def shape_from_config(name):
 
 
 def pytorch_trace(checkpoint, shape, prompt, real_len_pad, qat_mode):
-    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
     sd = state.get("model") if isinstance(state, dict) and "model" in state else state
 
     m = Veritate(vocab=shape["vocab"], hidden=shape["hidden"], layers=shape["layers"],

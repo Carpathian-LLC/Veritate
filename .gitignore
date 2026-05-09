@@ -22,7 +22,6 @@ c_trace_*.bin
 .plugin_run.log
 plugins/
 data/*
-!data/mri_settings.default.json
 /*de.md
 plugins
 models

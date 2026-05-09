@@ -44,7 +44,6 @@
           text-transform:lowercase;display:none"></sup></h1>
   </div>
   <div class="right">
-    <a href="/multimind" style="color:var(--dim);font-size:11px;text-decoration:none;border-bottom:1px dashed var(--dim);display:none">multimind →</a>
     <a id="updateBanner" style="display:none;color:var(--warm);font-size:11px;text-decoration:none;border:1px solid var(--warm);padding:4px 9px;border-radius:3px;cursor:pointer;letter-spacing:.02em">update available</a>
     <a id="staleBinBanner" title="" style="display:none;color:var(--warm);font-size:11px;text-decoration:none;border:1px solid var(--warm);padding:4px 9px;border-radius:3px;cursor:pointer;letter-spacing:.02em;margin-left:6px">0 stale .bin</a>
     <div class="current-model">
@@ -743,48 +742,38 @@
 <div class="tab-body" data-tab="training">
 
   <div class="panel" style="margin-bottom: 10px;">
-    <h2>train a model <em>start a new model, continue an existing one, or shrink a big one</em></h2>
+    <h2>train a model <em>new, continue, distill, or export</em></h2>
     <div class="body">
 
-      <div style="color:var(--dim);font-size:11px;margin-bottom:6px">step 1 &mdash; what do you want to do?</div>
-      <div class="controls" style="margin-bottom: 12px;gap:10px;flex-wrap:wrap;align-items:flex-start">
-        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:2px">
-          <button class="trainFlowBtn" data-flow="scratch" type="button">train from scratch</button>
-          <span style="font-size:10px;color:var(--dim)">brand new weights from a data file</span>
-        </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:2px">
-          <button class="trainFlowBtn" data-flow="continue" type="button">continue from saved</button>
-          <span style="font-size:10px;color:var(--dim)">keep training an existing model</span>
-        </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:2px">
-          <button class="trainFlowBtn" data-flow="distill" type="button">distill from teacher</button>
-          <span style="font-size:10px;color:var(--dim)">small model learns from a bigger one</span>
-        </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:2px">
-          <button class="trainFlowBtn" data-flow="export" type="button">export to .bin</button>
-          <span style="font-size:10px;color:var(--dim)">quantize a checkpoint to int8 for the C engine</span>
-        </div>
+      <div style="color:var(--dim);font-size:11px;margin-bottom:6px">step 1 &mdash; what to do?</div>
+      <div class="controls" style="margin-bottom: 12px;gap:6px;flex-wrap:wrap">
+        <button class="trainFlowBtn" data-flow="scratch"  type="button">from scratch</button>
+        <button class="trainFlowBtn" data-flow="continue" type="button">continue saved</button>
+        <button class="trainFlowBtn" data-flow="distill"  type="button">distill</button>
+        <button class="trainFlowBtn" data-flow="export"   type="button">export .bin</button>
       </div>
 
-      <div id="trainPickerRow" class="controls" style="display:none;margin-bottom:8px;gap:8px;flex-wrap:wrap">
-        <span style="color:var(--dim);font-size:11px;margin-right:4px">step 2 &mdash; pick the trainer (the script that runs the training)</span>
-        <label>trainer
-          <select id="trainPicker" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:280px">
-            <option value="">- pick a trainer -</option>
-          </select>
-        </label>
-        <button id="trainRefresh" type="button">refresh</button>
-        <a id="trainOpenFolder" href="#" style="font-size:11px;color:var(--accent);text-decoration:underline">open plugins folder</a>
+      <div id="trainPickerRow" class="controls" style="display:none;margin-bottom:8px;gap:8px;flex-wrap:wrap;align-items:center">
+        <span style="color:var(--dim);font-size:11px">step 2 &mdash; trainer</span>
+        <select id="trainPicker" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:240px">
+          <option value="">- pick a trainer -</option>
+        </select>
+        <button id="trainRefresh" class="action" type="button">refresh</button>
+        <a id="trainOpenFolder" href="#" style="font-size:11px;color:var(--accent);text-decoration:underline">plugins folder</a>
         <span id="trainEmptyHint" style="display:none;color:var(--dim);font-size:11px"></span>
       </div>
 
       <div id="trainDesc" class="meta" style="font-size:11px;color:var(--dim);margin-bottom:6px"></div>
 
       <div id="trainFormWrap" style="display:none">
-        <div style="color:var(--dim);font-size:11px;margin-bottom:4px">step 3 &mdash; set the details</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <span style="color:var(--dim);font-size:11px">step 3 &mdash; details &rsaquo; <span id="trainComposedName" style="font-family:monospace;color:var(--accent)"></span></span>
+          <div id="trainAutoOptimizeRow" style="display:none;align-items:center;gap:8px;flex-wrap:wrap">
+            <button id="trainAutoOptimizeBtn" class="action" type="button" style="border-color:var(--accent);color:var(--accent)">auto-pick</button>
+            <span id="trainAutoOptimizeStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+          </div>
+        </div>
         <div id="trainFormIntro" style="color:var(--dim);font-size:10.5px;margin-bottom:6px;line-height:1.5"></div>
-        <div style="color:var(--dim);font-size:10px;margin-bottom:6px">the new model will be saved at this directory name:</div>
-        <div id="trainComposedName" style="font-family:monospace;font-size:12px;color:var(--accent);margin:2px 0 8px 0"></div>
         <div id="trainArgs"></div>
         <div id="trainVramEst" style="margin-top:6px;font-size:11px;color:var(--dim)"></div>
         <div id="trainCorpusMeta" style="display:none;margin-top:8px;padding:6px 8px;background:#0a0c12;border:1px solid var(--line);border-radius:3px;font-size:11px;color:var(--dim);font-family:monospace"></div>
@@ -1080,7 +1069,7 @@
       <div class="settings-row">
         <div class="label">Sources &amp; updates</div>
         <div class="desc">Three independent git remotes: the Veritate platform (this repo), the plugins repo, and the models repo. Each can be pulled on its own; platform pulls are fast-forward only and follow the selected release channel.</div>
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:8px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;margin-top:8px">
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Platform</div>
@@ -1104,96 +1093,144 @@
             <div class="meta" style="font-size:10.5px;color:var(--dim)">last check: <span id="updateLastCheck">never</span></div>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="updateCheckBtn" class="action" type="button">check</button>
-              <button id="updatePullBtn"  class="action" type="button" disabled>pull</button>
+              <button id="updatePullBtn"  class="action" type="button" disabled>update</button>
             </div>
-            <span id="updateActionStatus" class="meta" style="font-size:10.5px">idle</span>
+            <span id="updateActionStatus" class="meta" style="font-size:10.5px"></span>
+            <label style="display:flex;flex-direction:row;align-items:flex-start;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line);cursor:pointer">
+              <input type="checkbox" id="updateAutoReload" style="margin-top:2px;accent-color:var(--accent)">
+              <span style="display:flex;flex-direction:column;gap:2px">
+                <span style="font-weight:500;color:var(--text);font-size:11px">Auto soft-reload after update</span>
+                <span style="color:var(--dim);font-size:10px;line-height:1.4">When a new commit is pulled, immediately soft-reload the dashboard. Active training keeps running.</span>
+              </span>
+            </label>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="pluginsSyncRow">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Plugins</div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="pluginsRemote">.</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">commit: <span id="pluginsHead">.</span> <span id="pluginsBranch"></span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="pluginsBehind">unknown</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim);display:none" id="pluginsAheadBehindLine">local: <span id="pluginsAheadBehind"></span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">Self-contained git repo of trainers and experiments. Refuses to pull while a plugin is running.</div>
-            <div class="inline" style="gap:6px;margin-top:4px">
-              <button id="pluginsSyncBtn" class="action" type="button">sync</button>
-              <span id="pluginsSyncStatus" class="meta" style="font-size:10.5px">idle</span>
+            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button id="pluginsCheckBtn"  class="action" type="button">check</button>
+              <button id="pluginsUpdateBtn" class="action" type="button" disabled>update</button>
             </div>
+            <span id="pluginsSyncStatus" class="meta" style="font-size:10.5px"></span>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="modelsSyncRow">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Models</div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="modelsRemote">.</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">commit: <span id="modelsHead">.</span> <span id="modelsBranch"></span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="modelsBehind">unknown</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim);display:none" id="modelsAheadBehindLine">local: <span id="modelsAheadBehind"></span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">Pulls untrained barebones models (config + manifest). Local checkpoints, hooks, and trained models are not touched.</div>
-            <div class="inline" style="gap:6px;margin-top:4px">
-              <button id="modelsSyncBtn" class="action" type="button">sync</button>
-              <span id="modelsSyncStatus" class="meta" style="font-size:10.5px">idle</span>
+            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button id="modelsCheckBtn"  class="action" type="button">check</button>
+              <button id="modelsUpdateBtn" class="action" type="button" disabled>update</button>
+            </div>
+            <span id="modelsSyncStatus" class="meta" style="font-size:10.5px"></span>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="settings-row">
+        <div class="label">Engine</div>
+        <div class="desc">Veritate runs two engines side by side. The <b>Veritate Engine</b> is the C inference runtime (sub-millisecond inference). The <b>PyTorch backend</b> powers every live MRI panel (full activation capture) and holds the model in memory; switching to it from the Generation tab triggers a load.</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px;margin-top:8px">
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Veritate Engine</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Recompiles the C inference engine for this machine's OS and architecture. Build output streams into the Logs tab.</div>
+            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button id="settingsBuildBtn" class="action" type="button">trigger build</button>
+              <span id="buildStatusLine" class="meta" style="font-size:10.5px"></span>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">PyTorch backend</div>
+            <div class="opts" id="pytorchModeOpts" style="margin-top:2px;gap:8px">
+              <label class="opt" data-mode="on_demand" style="padding:6px 8px;flex:1 1 220px;max-width:none">
+                <input type="radio" name="pytorchMode" value="on_demand">
+                <span>
+                  <span class="opt-title" style="margin:0;font-size:11.5px">On-demand <span style="color:var(--dim);font-weight:400">(default)</span><span class="badge-active">ACTIVE</span></span>
+                  <span class="opt-sub" style="font-size:10.5px">Load when first needed; unload after idle timeout. Saves memory.</span>
+                </span>
+              </label>
+              <label class="opt" data-mode="always" style="padding:6px 8px;flex:1 1 220px;max-width:none">
+                <input type="radio" name="pytorchMode" value="always">
+                <span>
+                  <span class="opt-title" style="margin:0;font-size:11.5px">Always loaded<span class="badge-active">ACTIVE</span></span>
+                  <span class="opt-sub" style="font-size:10.5px">Keep PyTorch in memory. Faster first generation; uses RAM continuously.</span>
+                </span>
+              </label>
+            </div>
+            <div class="inline" id="idleTimeoutWrap" style="gap:6px;margin-top:4px">
+              <span class="meta" style="font-size:10.5px">idle unload after</span>
+              <input type="number" id="idleSecs" min="60" step="60" value="600" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 6px;font:inherit;border-radius:3px;font-size:11px">
+              <span class="meta" style="font-size:10.5px">seconds</span>
             </div>
           </div>
 
         </div>
-        <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:10px;padding:8px 14px;margin-top:10px">
-          <input type="checkbox" id="updateAutoReload">
-          <span style="display:flex;flex-direction:column;gap:2px">
-            <span class="opt-title" style="margin:0">Auto soft-reload after platform update</span>
-            <span class="opt-sub">When a new commit is pulled, immediately soft-reload the dashboard. Active training keeps running (same path as the yellow "reload python" button).</span>
-          </span>
-        </label>
       </div>
 
       <div class="settings-row">
-        <div class="label">PyTorch backend</div>
-        <div class="desc">The PyTorch backend is what powers every live MRI panel (full activation capture). It also holds the model in memory. Switching to it from the Generation tab triggers a load.</div>
-        <div class="opts" id="pytorchModeOpts">
-          <label class="opt" data-mode="on_demand">
-            <input type="radio" name="pytorchMode" value="on_demand">
-            <span>
-              <span class="opt-title">On-demand <span style="color:var(--dim);font-weight:400">(default)</span><span class="badge-active">ACTIVE</span></span>
-              <span class="opt-sub">Load when first needed and unload after the idle timeout. Saves memory; first generation each session takes a few seconds to load.</span>
-            </span>
-          </label>
-          <label class="opt" data-mode="always">
-            <input type="radio" name="pytorchMode" value="always">
-            <span>
-              <span class="opt-title">Always loaded<span class="badge-active">ACTIVE</span></span>
-              <span class="opt-sub">Keep PyTorch in memory full-time. Faster first generation; uses RAM continuously even when idle.</span>
-            </span>
-          </label>
-        </div>
-        <div class="inline" id="idleTimeoutWrap">
-          <span class="meta">idle unload after</span>
-          <input type="number" id="idleSecs" min="60" step="60" value="600" style="width:90px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px">
-          <span class="meta">seconds</span>
+        <div class="label">Analytics</div>
+        <div class="desc">Anonymous data that tells us Veritate is alive in the wild and what hardware to support next. Aggregated counts (no machine ids, no IPs) appear at <a href="https://carpathian.ai/veritate" target="_blank" style="color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)">carpathian.ai/veritate</a>.</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px;margin-top:8px">
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Heartbeat <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">required &middot; every 6h</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Hashed machine id, OS/arch, uptime, restart and error counts, model count, model-name hash. No prompts, checkpoints, or source.</div>
+            <div class="meta" id="heartbeatStatusLine" style="font-size:10.5px;color:var(--dim);line-height:1.55">
+              machine id: <span id="heartbeatMachineId">.</span><br>
+              device id: <span id="heartbeatDeviceId">.</span><br>
+              last send: <span id="heartbeatLastSend">never</span> &middot; restarts: <span id="heartbeatRestarts">0</span><br>
+              total runtime: <span id="heartbeatRuntime">0s</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">
+              <label for="deviceNameInput" class="meta" style="font-size:10.5px;color:var(--dim)">device name <span style="color:var(--dim)">(optional, max 15 chars; defaults to 8-char hash)</span></label>
+              <div class="inline" style="gap:6px;flex-wrap:wrap">
+                <input type="text" id="deviceNameInput" maxlength="15" placeholder="e.g. lab-rig-01"
+                       style="flex:1;min-width:160px;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:inherit">
+                <button id="deviceNameSaveBtn" class="action" type="button">save</button>
+              </div>
+              <span id="deviceNameStatus" class="meta" style="font-size:10.5px"></span>
+            </div>
+            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button id="heartbeatSendBtn" class="action" type="button">send now</button>
+              <span id="heartbeatSendStatus" class="meta" style="font-size:10.5px"></span>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Advanced <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">opt-in</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Once per machine: CPU, RAM, GPU specs. Per training run: model name, size, arch, precision, batch size, total steps. Hardware never repeated. No weights, datasets, or metrics.</div>
+            <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
+              <input type="checkbox" id="analyticsAdvancedEnable">
+              <span class="opt-title" style="margin:0;font-size:11.5px">Send hardware &amp; training events</span>
+            </label>
+            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button id="reviewConsentBtn" class="action" type="button">review what gets sent</button>
+            </div>
+          </div>
+
         </div>
       </div>
 
       <div class="settings-row">
-        <div class="label">C engine build</div>
-        <div class="desc">Recompiles the C inference engine for this machine's OS and architecture. Build output streams into the Logs tab.</div>
-        <div class="inline">
-          <button id="settingsBuildBtn" class="action" type="button">trigger build</button>
-          <span id="buildStatusLine">idle</span>
-        </div>
-      </div>
-
-      <div class="settings-row">
-        <div class="label">Anonymous heartbeat</div>
+        <div class="label">Detect my system</div>
         <div class="desc">
-          Pings <code>api.carpathian.ai/webhook/veritate-heartbeat</code> every 6 hours with a tiny JSON envelope: machine id, OS/arch, uptime, total runtime, restart count, error count since last send, model count, and a hash of the model names. No prompts, no checkpoints, no source. Used to track install footprint and active training. Off-line machines just skip; missed pings are not retried.
-          <div style="margin-top:6px;font-size:11px">Aggregated counts (no machine ids, no IPs) appear at <a href="https://carpathian.ai/veritate" target="_blank" style="color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)">carpathian.ai/veritate</a>.</div>
+          Capture a snapshot of this machine's CPU, RAM, GPU, and OS into <code>data/system_specs.json</code>. The training-tab memory estimator uses this to show how close your settings are to your VRAM / unified memory budget. Re-run after a hardware change.
+          <div style="margin-top:6px;color:var(--warm)">When <b>Advanced telemetry</b> (above) is also enabled, an <b>Auto-pick training settings</b> button appears on the Training tab and uses these specs to fill batch size, gradient accumulation, learning rate, warmup, and activation checkpointing for you.</div>
         </div>
         <div class="inline" style="flex-direction:column;align-items:flex-start;gap:8px">
-          <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:10px;padding:8px 14px">
-            <input type="checkbox" id="heartbeatEnable">
-            <span class="opt-title" style="margin:0">Enable heartbeat</span>
-          </label>
-          <div class="meta" id="heartbeatStatusLine" style="font-size:11px;color:var(--dim)">machine id: <span id="heartbeatMachineId">.</span> &nbsp;·&nbsp; last send: <span id="heartbeatLastSend">never</span> &nbsp;·&nbsp; restarts: <span id="heartbeatRestarts">0</span> &nbsp;·&nbsp; total runtime: <span id="heartbeatRuntime">0s</span></div>
-          <div class="inline" style="gap:8px;margin-top:4px">
-            <button id="heartbeatSendBtn" class="action" type="button">send now</button>
-            <span id="heartbeatSendStatus" class="meta">idle</span>
-          </div>
+          <button id="sysDetectBtn" class="action" type="button">Detect now</button>
+          <div id="sysSpecsView" class="meta" style="font-size:11px;color:var(--dim);line-height:1.55">not detected yet</div>
         </div>
       </div>
 
@@ -1218,7 +1255,7 @@
               <input type="password" id="aiApiKeyUser" placeholder="(default)" style="width:380px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;margin-left:6px">
             </label>
             <button id="aiSaveBtn" class="action" type="button">save overrides</button>
-            <span id="aiSaveStatus" class="meta" style="font-size:10.5px">idle</span>
+            <span id="aiSaveStatus" class="meta" style="font-size:10.5px"></span>
           </div>
         </div>
       </div>
@@ -1243,19 +1280,24 @@
 
       <div class="settings-row" style="border-top: 1px solid var(--hot); margin-top: 18px; padding-top: 18px">
         <div class="label" style="color: var(--hot)">Danger zone</div>
-        <div class="desc">
-          <ul style="margin:0 0 0 18px;padding:0">
-            <li><b style="color: var(--data-pos)">Soft reload (keeps training alive)</b>. Re-execs the Python launcher without touching the active training subprocess. The training PID is on disk, so the new server reattaches to it on startup. The C engine subprocess is closed and respawns on demand. Use this after you change Python code and want the new code live without losing training progress.</li>
-            <li><b style="color: var(--warm)">Reload Python (keeps training alive)</b>. Full shutdown of the C engine and PyTorch backend, then re-execs the launcher. Training is a separate subprocess and keeps running; the new server reattaches via the PID file. Use this when the dashboard is wedged or you want backends freshly loaded.</li>
-            <li><b style="color: var(--hot)">Kill everything (kills training)</b>. Stops the training subprocess, the C engine, and the PyTorch backend, then exits the Python process. The launcher does <i>not</i> come back. Uncheckpointed training progress is lost; saved checkpoints on disk survive. Requires typing "kill" to confirm.</li>
-          </ul>
+        <div class="danger-zone">
+          <div class="danger-box" style="border-color: var(--data-pos)">
+            <div class="danger-title" style="color: var(--data-pos)">soft reload</div>
+            <div class="danger-sub">re-exec python. training & PyTorch stay loaded.</div>
+            <button id="softReloadBtn" class="action" type="button" style="border-color: var(--data-pos); color: var(--data-pos)">soft reload</button>
+          </div>
+          <div class="danger-box" style="border-color: var(--warm)">
+            <div class="danger-title" style="color: var(--warm)">reload python</div>
+            <div class="danger-sub">re-exec python + reload C engine & PyTorch. training stays.</div>
+            <button id="restartServerBtn" class="action" type="button" style="border-color: var(--warm); color: var(--warm)">reload python</button>
+          </div>
+          <div class="danger-box" style="border-color: var(--hot)">
+            <div class="danger-title" style="color: var(--hot)">kill everything</div>
+            <div class="danger-sub">kills training. launcher does not come back.</div>
+            <button id="killServerBtn" class="action" type="button" style="border-color: var(--hot); color: var(--hot)">kill</button>
+          </div>
         </div>
-        <div class="inline" style="gap: 10px;flex-wrap:wrap">
-          <button id="softReloadBtn" class="action" type="button" style="border-color: var(--data-pos); color: var(--data-pos)">soft reload (keep training)</button>
-          <button id="restartServerBtn" class="action" type="button" style="border-color: var(--warm); color: var(--warm)">reload python (keep training)</button>
-          <button id="killServerBtn" class="action" type="button" style="border-color: var(--hot); color: var(--hot)">kill everything</button>
-          <span id="lifecycleStatus" class="meta">idle</span>
-        </div>
+        <div id="lifecycleStatus" class="meta" style="margin-top: 10px"></div>
       </div>
 
     </div>

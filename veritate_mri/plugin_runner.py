@@ -315,7 +315,14 @@ def start(plugin_id, args=None):
         return {"ok": False, "error": f"plugin not found: {plugin_id}"}
     if plugins_reader.update_defaults(plugin_id, args or {}):
         logmod.info("plugin", f"manifest defaults updated: {plugin_id}")
-    t = threading.Thread(target=_run, args=(plugin, args or {}),
+    a = args or {}
+    model_name = a.get("resume") or a.get("name") or a.get("version") or plugin_id
+    try:
+        import heartbeat as _hb
+        _hb.record_training_event(str(model_name), plugin_id)
+    except Exception:
+        pass
+    t = threading.Thread(target=_run, args=(plugin, a),
                          name=f"plugin:{plugin_id}", daemon=True)
     t.start()
     return {"ok": True, "state": state()}

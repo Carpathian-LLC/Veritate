@@ -41,6 +41,7 @@ CANONICAL_ARTIFACTS = {
     "concepts.json",
     "surprise.json",
     "quant_kl.json",
+    "writing_health.json",
     "generation.json",
 }
 

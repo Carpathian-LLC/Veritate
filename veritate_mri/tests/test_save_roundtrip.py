@@ -70,7 +70,7 @@ class TestCheckpointRoundtrip(unittest.TestCase):
         )
         self.assertTrue(os.path.isfile(ckpt_path))
 
-        loaded = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        loaded = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         self.assertIn("model", loaded)
         self.assertEqual(loaded.get("step"), TEST_STEP)
 

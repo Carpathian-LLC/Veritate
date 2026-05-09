@@ -169,7 +169,7 @@ def quantize_layernorm(w):
 
 
 def load_state_dict(checkpoint_path):
-    state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     if isinstance(state, dict) and "model" in state and isinstance(state["model"], dict):
         sd = state["model"]
         del state  # drops optimizer state (~8 GB on 1B) immediately
@@ -210,7 +210,7 @@ def moe_config(name):
     with open(cfg_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
     plugin = cfg.get("plugin", "")
-    if plugin != "multimind_mega":
+    if plugin not in ("veritate_mega", "multimind_mega"):
         return 1, 1, VERITATE_QUANT_INT8
     mega = cfg.get("mega") or {}
     n_experts   = int(mega.get("n_experts", 1))

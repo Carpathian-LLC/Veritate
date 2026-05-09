@@ -25,7 +25,7 @@ import torch.nn.functional as F
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, REPO)
-sys.path.insert(0, os.path.join(REPO, "plugins", "multimind_mega"))
+sys.path.insert(0, os.path.join(REPO, "plugins", "veritate_mega"))
 sys.path.insert(0, os.path.join(REPO, "plugins", "multimind_m3"))
 
 from veritate.plugin import qat as qat_helpers
@@ -118,7 +118,7 @@ def load_state(model, ckpt_path, device):
     # that the trainer wrote to the .pt. For a 1B mega checkpoint, the
     # optimizer dict (AdamW m + v fp32) is ~8 GB — bigger than the model
     # itself. Dropping it immediately keeps resident RAM near the model size.
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     sd = ckpt["model"]
     del ckpt  # frees ckpt["optimizer"] + ckpt["args"]; ~8 GB on 1B
     if any(k.startswith("base.") for k in sd):

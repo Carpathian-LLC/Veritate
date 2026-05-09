@@ -17,6 +17,7 @@ All paths relative to `models/<name>/hooks/step_<N>/`. Every artifact below is p
 | `concepts_step_<N>.json` | `dump_concepts` | `step`, `precision`, `concepts`, `top_k_per_layer`, `time_s` |
 | `surprise_step_<N>.json` | `dump_surprise` | `step`, `precision`, `prompt`, `tokens`, `surprise` (bits/byte per token), `time_s` |
 | `quant_kl_step_<N>.json` | `dump_quant_kl` | `step`, `precision`, `quant_kl_bits`, `n_levels`, `time_s` |
+| `writing_health_step_<N>.json` | `dump_writing_health` | `step`, `precision`, `samples[]: {prompt, generation, metrics}`, `aggregate`, `config`, `caveat`, `time_s`. Mathematical proxies for writing structure only (mode collapse, repetition, anaphora, off-corpus drift). Not a measure of narrative sense or factual correctness. |
 | `step_<N>.json` | `dump_generation` | `meta`, `frames[]` (each frame carries the full TFRM v7 field set below) |
 
 ## tfrm v7 frame fields (per generated token)
