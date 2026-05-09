@@ -25,7 +25,7 @@ import torch.nn.functional as F
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, REPO)
-sys.path.insert(0, os.path.join(REPO, "plugins", "multimind_mega"))
+sys.path.insert(0, os.path.join(REPO, "plugins", "veritate_mega"))
 sys.path.insert(0, os.path.join(REPO, "plugins", "multimind_m3"))
 
 from veritate.plugin import qat as qat_helpers

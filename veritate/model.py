@@ -37,11 +37,14 @@ class RMSNorm(nn.Module):
         self.qat    = False
 
     def forward(self, x):
-        d  = x.dtype
-        xf = x.float()
-        n  = xf.pow(2).mean(-1, keepdim=True)
-        w  = _qat.fake_quant_ln_weight(self.weight) if self.qat else self.weight
-        return (xf * torch.rsqrt(n + self.eps) * w).to(d)
+        # Compute the variance reduction in fp32 for numerical stability, but
+        # leave the activation in its incoming dtype (bf16 under autocast).
+        # Avoids casting the full [B, T, H] tensor up to fp32 and back, which
+        # is a memory-bandwidth bottleneck on Apple Silicon's unified memory.
+        n   = x.float().pow(2).mean(-1, keepdim=True)
+        inv = torch.rsqrt(n + self.eps).to(x.dtype)
+        w   = _qat.fake_quant_ln_weight(self.weight) if self.qat else self.weight
+        return x * inv * w
 
 
 class QuantLinear(nn.Linear):

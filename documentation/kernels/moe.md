@@ -9,7 +9,7 @@ This is a versioned contract. Adding, removing, or changing the signature of any
 
 Total parameters scale linearly with `n_experts` while active parameters per byte stay near a single expert's footprint. Combined with ternary weights ([documentation/kernels/ternary.md](ternary.md)), an 8-expert 1B-class model has a per-byte active footprint that fits the 96 MB L3 of the 9800X3D. Without MoE, the same accuracy band requires a dense 1B model that misses cache catastrophically.
 
-MEGA is the canonical MoE trainer (`plugins/multimind_mega/`). It produces top-1 ternary 8-expert checkpoints. The engine reads those.
+MEGA is the canonical MoE trainer (`plugins/veritate_mega/`). It produces top-1 8-expert checkpoints. The engine reads those.
 
 # ------------------------------------------------------------------------------------
 # block layout
