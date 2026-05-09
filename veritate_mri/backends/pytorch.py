@@ -5,7 +5,9 @@
 # ------------------------------------------------------------------------------------
 # Notes:
 # - pytorch runtime wrapper. forward hooks capture activations for the mri viewer.
+# veritate_mri/backends/pytorch.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 import heapq
 import json
@@ -16,6 +18,11 @@ import threading
 import time
 
 import numpy as np
+
+import logs as logmod
+
+# ------------------------------------------------------------------------------------
+# Constants
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -33,6 +40,9 @@ ACTIVATION_INT8_SCALE = 32.0
 INT8_SAT_THRESHOLD    = 127.0 / ACTIVATION_INT8_SCALE  # ~3.97
 
 
+# ------------------------------------------------------------------------------------
+# Functions
+
 def load_memory(path):
     if not path or not os.path.isfile(path):
         return None
@@ -41,7 +51,7 @@ def load_memory(path):
             blob = json.load(f)
         return blob.get("neurons", {})
     except Exception as e:
-        print(f"  memory load skipped: {e}")
+        logmod.warn("backends.pytorch", f"memory load skipped: {e}")
         return None
 
 
@@ -72,7 +82,7 @@ class Brain:
         globals()["F"] = F
         globals()["Veritate"] = Veritate
         torch.set_num_threads(threads)
-        s = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        s = torch.load(checkpoint, map_location="cpu", weights_only=True)
         # Snapshot what we need from the checkpoint dict, then drop it so the
         # optimizer state (~8 GB on 1B) doesn't sit resident through inference.
         cfg = dict(s.get("args", {}))

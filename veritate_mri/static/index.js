@@ -39,6 +39,11 @@ function _backendErrMsg(e) {
   return s || String(e);
 }
 
+function _isTabActive(tabName) {
+  const el = document.querySelector('.tab-body[data-tab="' + tabName + '"]');
+  return !!(el && el.classList.contains("active"));
+}
+
 function fitCanvas(c) {
   if (c.offsetParent === null) return { w: 0, h: 0 };
   const dpr = window.devicePixelRatio || 1;
@@ -1216,6 +1221,14 @@ $("go").addEventListener("click", () => {
     if (ev.kind === "token") {
       frames.push(ev);
       generatedBytes.push(ev.byte);
+      // bound memory on long generations: drop the oldest 1024 frames once we
+      // exceed 4096. scrubbing back further than that is not supported.
+      if (frames.length > 4096) {
+        const drop = 1024;
+        frames.splice(0, drop);
+        generatedBytes.splice(0, drop);
+        if (currentFrame >= 0) currentFrame = Math.max(-1, currentFrame - drop);
+      }
       if (live) {
         currentFrame = frames.length - 1;
         render(ev);
@@ -4379,19 +4392,21 @@ async function maybeRefreshClassroomForRun(run) {
 attachHoverInspect(cConfEvoT, "cConfEvoTHover", ["margin (norm)", "entropy", "lens-consistency", "residual-stab"], v => v.toFixed(3));
 attachHoverInspect(cConfEvoL, "cConfEvoLHover", ["margin (norm)", "entropy", "lens-consistency", "residual-stab"], v => v.toFixed(3));
 
+let trainRunsTimer = null;
+let trainClassroomTimer = null;
 async function startTrainPolling() {
   if (trainPollTimer) return;
   await loadRunsList();
   loadTrainCsv();
   loadClassroomForRun(trainSelectedRun);
   trainPollTimer = setInterval(loadTrainCsv, 5000);
-  // refresh runs list every 30s so newly-created runs show up
-  setInterval(loadRunsList, 30000);
-  // re-check classroom for new lens/probe dumps every 30s; reload only if step count grew
-  setInterval(() => maybeRefreshClassroomForRun(trainSelectedRun), 30000);
+  trainRunsTimer = setInterval(loadRunsList, 30000);
+  trainClassroomTimer = setInterval(() => maybeRefreshClassroomForRun(trainSelectedRun), 30000);
 }
 function stopTrainPolling() {
-  if (trainPollTimer) { clearInterval(trainPollTimer); trainPollTimer = null; }
+  if (trainPollTimer)      { clearInterval(trainPollTimer);      trainPollTimer = null; }
+  if (trainRunsTimer)      { clearInterval(trainRunsTimer);      trainRunsTimer = null; }
+  if (trainClassroomTimer) { clearInterval(trainClassroomTimer); trainClassroomTimer = null; }
 }
 
 // hover inspector — show value at cursor x
@@ -5722,6 +5737,7 @@ function _trRenderPicker() {
 }
 
 function _trPoll() {
+  if (!_isTabActive("training")) return Promise.resolve();
   return Promise.all([
     fetch("/plugins").then(r => r.json()),
     fetch("/train/discovery").then(r => r.json()),
@@ -6141,6 +6157,19 @@ function _fmtAgo(ts) {
 function _renderHeartbeatStatus(s) {
   if (!s) return;
   const mid = $("heartbeatMachineId"); if (mid) mid.textContent = s.machine_id || ".";
+  const did = $("heartbeatDeviceId");
+  const eff = s.device_id || s.device_id_default || "";
+  if (did) {
+    const isCustom = !!(s.device_name && s.device_name.length);
+    did.textContent = `${eff || "."}${isCustom ? " (custom)" : " (default)"}`;
+  }
+  const newTitle = eff ? `Veritate | ${eff}` : "Veritate";
+  if (document.title !== newTitle) document.title = newTitle;
+  const dn = $("deviceNameInput");
+  if (dn && document.activeElement !== dn) {
+    dn.value = (s.device_name != null) ? String(s.device_name) : "";
+    if (typeof s.device_name_max === "number") dn.maxLength = s.device_name_max;
+  }
   const ls  = $("heartbeatLastSend");
   if (ls) {
     if (!s.last_send_ts) { ls.textContent = "never"; ls.style.color = "var(--dim)"; ls.title = ""; }
@@ -6705,6 +6734,7 @@ function _modelsUpdateTrigger() {
 }
 
 function _pollBuildStatus() {
+  if (!_isTabActive("settings")) return;
   fetch("/engine/status").then(r => r.json()).then(s => {
     const el = $("buildStatusLine");
     if (!el) return;
@@ -6884,6 +6914,61 @@ document.addEventListener("DOMContentLoaded", () => {
       .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
       .finally(() => { hbBtn.disabled = false; });
   });
+  const dnInput = $("deviceNameInput");
+  const dnBtn   = $("deviceNameSaveBtn");
+  const dnStat  = $("deviceNameStatus");
+  const DEVICE_NAME_MAX = 15;
+  function _dnSetStatus(msg, color) {
+    if (!dnStat) return;
+    dnStat.textContent = msg || "";
+    dnStat.style.color = color || "var(--dim)";
+  }
+  function _dnSave() {
+    if (!dnInput) return;
+    const raw = dnInput.value || "";
+    const trimmed = raw.trim();
+    if (trimmed.length > DEVICE_NAME_MAX) {
+      _dnSetStatus(`max ${DEVICE_NAME_MAX} characters`, "var(--hot)");
+      return;
+    }
+    if (dnBtn) dnBtn.disabled = true;
+    _dnSetStatus("saving…", "var(--warm)");
+    fetch("/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_name: trimmed }),
+    })
+      .then(async r => {
+        if (!r.ok) {
+          let err = `HTTP ${r.status}`;
+          try { const j = await r.json(); if (j && j.error) err = j.error; } catch (_) {}
+          throw new Error(err);
+        }
+        return r.json();
+      })
+      .then(s => {
+        settingsState.current = s;
+        _dnSetStatus("saved", "var(--data-pos)");
+        _refreshHeartbeatStatus();
+      })
+      .catch(e => { _dnSetStatus(e.message || "save failed", "var(--hot)"); })
+      .finally(() => { if (dnBtn) dnBtn.disabled = false; });
+  }
+  if (dnInput) {
+    dnInput.addEventListener("input", () => {
+      const len = (dnInput.value || "").trim().length;
+      if (len > DEVICE_NAME_MAX) {
+        _dnSetStatus(`max ${DEVICE_NAME_MAX} characters`, "var(--hot)");
+      } else {
+        _dnSetStatus("");
+      }
+    });
+    dnInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); _dnSave(); }
+    });
+  }
+  if (dnBtn) dnBtn.addEventListener("click", _dnSave);
+
   _refreshHeartbeatStatus();
   setInterval(_refreshHeartbeatStatus, 30000);
 

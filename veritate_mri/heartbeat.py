@@ -48,6 +48,8 @@ HEARTBEAT_USER_AGENT    = "veritate-heartbeat/2"
 STATE_PATH    = os.path.join(paths.REPO_ROOT, "data", "heartbeat_state.json")
 MACHINE_ID_LEN = 16
 MODELS_HASH_LEN = 12
+DEVICE_ID_DEFAULT_LEN = 8
+HOST_TOKEN_LEN = 12
 
 PROTOCOL_VERSION = 2
 TRAINING_EVENTS_PER_PING_MAX = 32
@@ -113,6 +115,32 @@ def _machine_id():
     mid = hashlib.sha256(seed).hexdigest()[:MACHINE_ID_LEN]
     _update_state({"machine_id": mid})
     return mid
+
+
+def _host_token():
+    """Random per-install token persisted in state. Replaces the OS hostname
+    in the payload so we never ship platform.node() (which on macOS reveals
+    the user's name, e.g. 'Sams-MacBook-Pro.local')."""
+    s = _state()
+    h = s.get("host_token")
+    if isinstance(h, str) and len(h) == HOST_TOKEN_LEN:
+        return h
+    h = uuid.uuid4().hex[:HOST_TOKEN_LEN]
+    _update_state({"host_token": h})
+    return h
+
+
+def _default_device_id():
+    return _machine_id()[:DEVICE_ID_DEFAULT_LEN]
+
+
+def _effective_device_id():
+    name = settings_mod.get().get("device_name") or ""
+    name = name.strip() if isinstance(name, str) else ""
+    max_len = getattr(settings_mod, "DEVICE_NAME_MAX_LEN", 15)
+    if name:
+        return name[:max_len]
+    return _default_device_id()
 
 
 def _models_hash():
@@ -205,8 +233,9 @@ def _build_payload():
     payload = {
         "v":           PROTOCOL_VERSION,
         "machine_id":  _machine_id(),
+        "device_id":   _effective_device_id(),
         "ts":          int(time.time()),
-        "host":        platform.node() or "",
+        "host":        _host_token(),
         "os":          platform.system() or "",
         "arch":        platform.machine() or "",
         "uptime_secs": int(uptime),
@@ -334,6 +363,10 @@ def status():
     s = _state()
     return {
         "machine_id":         _machine_id(),
+        "device_id":          _effective_device_id(),
+        "device_id_default":  _default_device_id(),
+        "device_name":        (settings_mod.get().get("device_name") or ""),
+        "device_name_max":    getattr(settings_mod, "DEVICE_NAME_MAX_LEN", 15),
         "enabled":            _enabled(),
         "interval_secs":      HEARTBEAT_INTERVAL_SECS,
         "url":                HEARTBEAT_URL,

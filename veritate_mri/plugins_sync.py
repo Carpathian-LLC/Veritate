@@ -22,7 +22,6 @@
 
 import os
 import shutil
-import subprocess
 import threading
 import time
 
@@ -30,6 +29,7 @@ from readers import paths
 
 import logs as logmod
 import plugin_runner
+from git_runner import run_git as _git
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -39,7 +39,6 @@ DEFAULT_BRANCH     = "main"
 GIT_TIMEOUT_SECS   = 120
 
 PLUGINS_DIR = paths.PLUGINS_ROOT
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 _LOCK = threading.RLock()
 _LAST = {
@@ -53,27 +52,7 @@ _LAST = {
 # Functions
 
 def _run_git(args, cwd, timeout=GIT_TIMEOUT_SECS):
-    env = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_ALLOW_PROTOCOL":  "https",
-        "GIT_ASKPASS":         "echo",
-    }
-    try:
-        r = subprocess.run(
-            ["git"] + list(args),
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-            creationflags=_NO_WINDOW,
-        )
-        return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
-    except FileNotFoundError:
-        return 127, "", "git executable not found on PATH"
-    except subprocess.TimeoutExpired:
-        return 124, "", f"git {' '.join(args)} timed out after {timeout}s"
+    return _git(args, cwd, timeout=timeout)
 
 
 def _is_repo(path):

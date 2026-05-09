@@ -13,7 +13,9 @@
 # - shape (layers, hidden, ffn, heads, seq, vocab) is read from the bin header at
 #   subprocess spawn. all per-frame buffer sizes derive from it. supports any
 #   model, not just the 80M fixed shape.
+# veritate_mri/backends/c_engine.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 import os
 import struct
@@ -37,6 +39,8 @@ except Exception:
         def ok(self, *a, **kw): pass
     logmod = _NoLog()
 
+# ------------------------------------------------------------------------------------
+# Constants
 
 VERITATE_MODEL_MAGIC = b"VRTE"
 HEADER_BYTES         = 32
@@ -62,6 +66,8 @@ DLA_DTYPE = np.dtype([
 ], align=False)
 assert DLA_DTYPE.itemsize == DLA_ENTRY_BYTES
 
+# ------------------------------------------------------------------------------------
+# Functions
 
 def _read_exact(f, n):
     out = bytearray()

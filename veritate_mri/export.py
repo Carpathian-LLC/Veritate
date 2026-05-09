@@ -169,7 +169,7 @@ def quantize_layernorm(w):
 
 
 def load_state_dict(checkpoint_path):
-    state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     if isinstance(state, dict) and "model" in state and isinstance(state["model"], dict):
         sd = state["model"]
         del state  # drops optimizer state (~8 GB on 1B) immediately

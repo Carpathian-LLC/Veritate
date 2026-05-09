@@ -89,7 +89,7 @@ def load_c_trace(path):
 
 
 def pytorch_trace(checkpoint, prompt, real_len_pad=V_SEQ):
-    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
     cfg = dict(state.get("args", {}))
     sd = state["model"]
     del state  # drops optimizer state (~8 GB on 1B) before model construction

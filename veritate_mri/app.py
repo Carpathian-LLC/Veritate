@@ -11,6 +11,7 @@
 # Imports:
 
 import argparse
+import errno
 import json
 import math
 import os
@@ -21,6 +22,7 @@ import time
 
 import numpy as np
 from flask import Flask, Response, request, send_from_directory
+from werkzeug.serving import WSGIRequestHandler
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -364,28 +366,6 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
-@app.route("/multimind")
-def multimind():
-    return send_from_directory(STATIC_DIR, "multimind.html")
-
-
-@app.route("/multimind/results")
-def multimind_results():
-    root = os.path.normpath(os.path.join(HERE, "..", "docs", "results", "multimind"))
-    out = {"root": root, "files": {}}
-    if not os.path.isdir(root):
-        return out
-    for fn in sorted(os.listdir(root)):
-        if not fn.endswith(".json"): continue
-        p = os.path.join(root, fn)
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                out["files"][fn] = json.load(f)
-        except Exception as e:
-            out["files"][fn] = {"_load_error": str(e)}
-    return out
-
-
 @app.route("/sys_metrics")
 def sys_metrics_route():
     return sys_metrics.snapshot()
@@ -474,7 +454,10 @@ def wiki_entry(category, slug):
 def settings_route():
     if request.method == "POST":
         body = request.get_json(silent=True) or {}
-        out = settings_mod.update(body)
+        try:
+            out = settings_mod.update(body)
+        except ValueError as ve:
+            return {"error": str(ve)}, 400
         if out.get("pytorch_load_mode") == "always" and app.config.get("BRAIN") is None:
             try:
                 name = app.config.get("BRAIN_MODEL") or app.config.get("DEFAULT_MODEL")
@@ -632,7 +615,7 @@ def pruning_report():
         import pruning as pruning_mod
         from veritate.model import Veritate
         ckpt_path = checkpoints.path_for(name, step)
-        s = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        s = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         cfg = dict(s.get("args", {}))
         sd = s["model"]
         del s  # drops optimizer state (~8 GB on 1B) before model construction
@@ -725,7 +708,7 @@ def pruning_generate_plugin():
         import pruning as pruning_mod
         from veritate.model import Veritate
         ckpt_path = checkpoints.path_for(name, step)
-        s = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        s = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         cfg = dict(s.get("args", {}))
         sd = s["model"]
         del s  # drops optimizer state (~8 GB on 1B) before model construction
@@ -1268,7 +1251,7 @@ def c_config():
     app.config["C_SUBPROCESS"] = sub
     app.config["C_BLOCKED_REASON"] = None
     app.config["C_BLOCKED_MODEL"]  = None
-    print(f"c-config: exe={new_exe} model={new_model} pid={sub.proc.pid}")
+    logmod.info("c-config", f"exe={new_exe} model={new_model} pid={sub.proc.pid}")
     precision, version = (binr.header(name) if name else ("?", 0))
     training, activation = (cfg_reader.training_kind(name) if name else ("", ""))
     return {
@@ -1610,12 +1593,12 @@ def _resolve_pytorch_model(name):
             if checkpoints.list_steps(n):
                 candidates.append((train_csv.file_stat(n).st_mtime if train_csv.file_stat(n) else 0, n))
         if not candidates:
-            print("no models with checkpoints under models/. pass --model <name> explicitly.")
+            logmod.warn("backends", "no models with checkpoints under models/. pass --model <name> explicitly.")
             return None
         candidates.sort(reverse=True)
         return candidates[0][1]
     if not models.exists(name):
-        print(f"model not found: models/{name}")
+        logmod.warn("backends", f"model not found: models/{name}")
         return None
     return name
 
@@ -1785,7 +1768,24 @@ def main():
             logmod.error("backends", f"pytorch eager load failed: {msg}")
 
     print(f"http://0.0.0.0:{args.port}")
-    app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True)
+    app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True,
+            request_handler=_QuietWSGIRequestHandler)
+
+
+class _QuietWSGIRequestHandler(WSGIRequestHandler):
+    # Python 3.14 + werkzeug threaded dev server has a race where socketserver
+    # closes the connection in one thread while the handler is still reading
+    # from it in another, surfacing as OSError(EBADF) from recv_into. Browser
+    # preconnect/keep-alive churn triggers this constantly. Werkzeug already
+    # swallows ConnectionError/socket.timeout in handle(); EBADF is not in
+    # either bucket, so we extend the same idea narrowly.
+    def handle(self):
+        try:
+            super().handle()
+        except OSError as e:
+            if e.errno == errno.EBADF:
+                return
+            raise
 
 
 if __name__ == "__main__":

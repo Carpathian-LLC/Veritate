@@ -44,7 +44,6 @@
           text-transform:lowercase;display:none"></sup></h1>
   </div>
   <div class="right">
-    <a href="/multimind" style="color:var(--dim);font-size:11px;text-decoration:none;border-bottom:1px dashed var(--dim);display:none">multimind →</a>
     <a id="updateBanner" style="display:none;color:var(--warm);font-size:11px;text-decoration:none;border:1px solid var(--warm);padding:4px 9px;border-radius:3px;cursor:pointer;letter-spacing:.02em">update available</a>
     <a id="staleBinBanner" title="" style="display:none;color:var(--warm);font-size:11px;text-decoration:none;border:1px solid var(--warm);padding:4px 9px;border-radius:3px;cursor:pointer;letter-spacing:.02em;margin-left:6px">0 stale .bin</a>
     <div class="current-model">
@@ -1189,8 +1188,18 @@
             <div class="meta" style="font-size:10.5px;color:var(--dim)">Hashed machine id, OS/arch, uptime, restart and error counts, model count, model-name hash. No prompts, checkpoints, or source.</div>
             <div class="meta" id="heartbeatStatusLine" style="font-size:10.5px;color:var(--dim);line-height:1.55">
               machine id: <span id="heartbeatMachineId">.</span><br>
+              device id: <span id="heartbeatDeviceId">.</span><br>
               last send: <span id="heartbeatLastSend">never</span> &middot; restarts: <span id="heartbeatRestarts">0</span><br>
               total runtime: <span id="heartbeatRuntime">0s</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">
+              <label for="deviceNameInput" class="meta" style="font-size:10.5px;color:var(--dim)">device name <span style="color:var(--dim)">(optional, max 15 chars; defaults to 8-char hash)</span></label>
+              <div class="inline" style="gap:6px;flex-wrap:wrap">
+                <input type="text" id="deviceNameInput" maxlength="15" placeholder="e.g. lab-rig-01"
+                       style="flex:1;min-width:160px;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:inherit">
+                <button id="deviceNameSaveBtn" class="action" type="button">save</button>
+              </div>
+              <span id="deviceNameStatus" class="meta" style="font-size:10.5px"></span>
             </div>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="heartbeatSendBtn" class="action" type="button">send now</button>

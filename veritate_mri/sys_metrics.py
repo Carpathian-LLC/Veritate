@@ -10,7 +10,9 @@
 # - design rule: no subprocess call may block an http thread. adapter discovery
 #   (slow: system_profiler / Get-CimInstance) is background-warmed; live load
 #   queries (nvidia-smi / ioreg) are memoed for 1s.
+# veritate_mri/sys_metrics.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 import json
 import os
@@ -28,6 +30,9 @@ try:
     _PSUTIL_OK = True
 except ImportError:
     _PSUTIL_OK = False
+
+# ------------------------------------------------------------------------------------
+# Constants
 
 _PROC = psutil.Process(os.getpid()) if _PSUTIL_OK else None
 if _PROC is not None:
@@ -47,6 +52,8 @@ _MAC_LOAD_CACHE = (0.0, None)
 _INSTALLED_RAM = None  # bytes; one-shot at startup, doesn't change at runtime
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
+# ------------------------------------------------------------------------------------
+# Functions
 
 def _run(cmd, timeout=2.0):
     try:

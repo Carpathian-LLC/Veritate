@@ -11,7 +11,9 @@
 # - extended dumps: classroom (size + alive neurons), grades (suite A reading
 #   ppl per grade band), concepts (50-concept surprise probe). all three are
 #   checkpoint-time only; zero impact on the training step.
+# veritate_mri/checkpoint_probe.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 import argparse
 import heapq
@@ -26,8 +28,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+import logs as logmod
 from readers import paths
 
+# ------------------------------------------------------------------------------------
+# Constants
 
 PROBE_PROMPT = "Once upon a time, there was a little girl who"
 PROBE_TOP_K  = 8
@@ -92,6 +97,8 @@ DEFAULT_CORPUS_PATH      = CORPUS_CANDIDATES[0]
 
 _STORY_CACHE = {}
 
+# ------------------------------------------------------------------------------------
+# Functions
 
 def _resolve_corpus(corpus_path):
     """Return the first existing corpus path. Prefers caller-supplied path,
@@ -443,7 +450,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
         t_mem = time.time()
         stories = _load_probe_stories(cpath, MEMORY_PROBE_SEED, MEMORY_PROBE_STORIES, MEMORY_PROBE_MAX_STORY)
         memory_db = _build_memory_from_corpus(model, cap_ffn, stories, MEMORY_PROBE_TOPK)
-        print(f"  memory probe step {step}: {len(stories)} stories, {time.time() - t_mem:.1f}s")
+        logmod.info("probe", f"memory probe step {step}: {len(stories)} stories, {time.time() - t_mem:.1f}s")
 
         meta = {
             "kind": "meta",
@@ -687,7 +694,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
         with open(neuron_memory_path, "w", encoding="utf-8") as f:
             json.dump(nm_payload, f, ensure_ascii=False)
     except Exception as e:
-        print(f"  WARN: neuron_memory.json write failed: {e}", flush=True)
+        logmod.warn("probe", f"neuron_memory.json write failed: {e}")
 
     return out_path, len(frames), round(time.time() - t0, 3)
 
@@ -1711,7 +1718,7 @@ def dump_quant_kl(model, prompt: str, out_dir: str, step: int, n_levels: int = 1
 def _load_checkpoint(ckpt_path):
     sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
     from veritate.model import Veritate
-    s = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    s = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     cfg = dict(s.get("args") or {})
     sd = s["model"]
     step = int(s.get("step", 0))

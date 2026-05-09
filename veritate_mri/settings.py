@@ -9,7 +9,9 @@
 #   (or after a build adds new keys) _ensure_settings reconciles the live file
 #   against DEFAULTS, writing only missing keys. user values are preserved.
 # - DO NOT add a tracked default JSON. DEFAULTS in this file is canonical.
+# veritate_mri/settings.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 import json
 import os
@@ -17,7 +19,12 @@ import threading
 
 from readers.paths import REPO_ROOT
 
+# ------------------------------------------------------------------------------------
+# Constants
+
 SETTINGS_PATH = os.path.join(REPO_ROOT, "data", "mri_settings.json")
+
+DEVICE_NAME_MAX_LEN = 15
 
 DEFAULTS = {
     "pytorch_load_mode": "on_demand",
@@ -36,6 +43,7 @@ DEFAULTS = {
     "ai_endpoint_user": "",
     "ai_api_key_user": "",
     "last_acknowledged_build": 0,
+    "device_name": "",
 }
 
 # Build notices surface a modal in the dashboard for breaking-build changes the
@@ -49,6 +57,8 @@ BUILD_NOTICES = {
 _LOCK = threading.Lock()
 _CACHE = None
 
+# ------------------------------------------------------------------------------------
+# Functions
 
 def _ensure_settings():
     if not os.path.isfile(SETTINGS_PATH):
@@ -93,10 +103,26 @@ def pending_notices():
     ]
 
 
+def _validate(patch):
+    if "device_name" in patch:
+        v = patch["device_name"]
+        if v is None:
+            patch["device_name"] = ""
+        elif not isinstance(v, str):
+            raise ValueError("device_name must be a string")
+        else:
+            stripped = v.strip()
+            if len(stripped) > DEVICE_NAME_MAX_LEN:
+                raise ValueError(f"device_name must be {DEVICE_NAME_MAX_LEN} characters or fewer")
+            patch["device_name"] = stripped
+    return patch
+
+
 def update(patch):
     global _CACHE
     if not isinstance(patch, dict):
         return get()
+    patch = _validate(dict(patch))
     with _LOCK:
         cur = {**DEFAULTS, **_ensure_settings()}
         for k, v in patch.items():

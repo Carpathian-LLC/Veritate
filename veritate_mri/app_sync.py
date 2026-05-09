@@ -22,7 +22,6 @@
 
 import json
 import os
-import subprocess
 import threading
 import time
 
@@ -30,6 +29,7 @@ from readers import paths
 
 import logs as logmod
 import settings as settings_mod
+from git_runner import run_git as _git
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -52,8 +52,6 @@ ALL_CHANNELS = (CHANNEL_STABLE, CHANNEL_EXPERIMENTAL, CHANNEL_DEVELOPMENT)
 
 POLL_INTERVAL_SECS = 30 * 60
 POLL_FIRST_DELAY   = 60
-
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 _LOCK   = threading.RLock()
 _STATE_CACHE = None
@@ -100,27 +98,7 @@ def _update_state(patch):
 
 
 def _run_git(args, timeout=GIT_TIMEOUT_SECS):
-    env = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_ALLOW_PROTOCOL":  "https",
-        "GIT_ASKPASS":         "echo",
-    }
-    try:
-        r = subprocess.run(
-            ["git"] + list(args),
-            cwd=REPO_DIR,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-            creationflags=_NO_WINDOW,
-        )
-        return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
-    except FileNotFoundError:
-        return 127, "", "git executable not found on PATH"
-    except subprocess.TimeoutExpired:
-        return 124, "", f"git {' '.join(args)} timed out after {timeout}s"
+    return _git(args, REPO_DIR, timeout=timeout)
 
 
 def _is_repo():
