@@ -34,6 +34,8 @@ HRULE_RE    = re.compile(r"^-{3,}\s*$")
 ULIST_RE    = re.compile(r"^[-*]\s+(.*)$")
 OLIST_RE    = re.compile(r"^(\d+)\.\s+(.*)$")
 FENCE_RE    = re.compile(r"^```\s*([a-zA-Z0-9_\-]*)\s*$")
+QUOTE_RE    = re.compile(r"^>\s?(.*)$")
+TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
 
 INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 BOLD_RE        = re.compile(r"\*\*([^*]+)\*\*")
@@ -182,6 +184,7 @@ def render_markdown(text):
     in_para = []
     in_ul = False
     in_ol = False
+    quote_buf = []
 
     def flush_para():
         if in_para:
@@ -195,11 +198,17 @@ def render_markdown(text):
         if in_ol:
             out.append("</ol>"); in_ol = False
 
+    def flush_quote():
+        if quote_buf:
+            inner = render_markdown("\n".join(quote_buf))
+            out.append("<blockquote>" + inner + "</blockquote>")
+            quote_buf.clear()
+
     while i < len(lines):
         line = lines[i]
         m = FENCE_RE.match(line)
         if m:
-            flush_para(); close_lists()
+            flush_para(); close_lists(); flush_quote()
             lang = m.group(1) or ""
             j = i + 1
             buf = []
@@ -212,8 +221,22 @@ def render_markdown(text):
             continue
         stripped = line.strip()
         if not stripped:
-            flush_para(); close_lists()
+            flush_para(); close_lists(); flush_quote()
             i += 1
+            continue
+        m = QUOTE_RE.match(stripped)
+        if m:
+            flush_para(); close_lists()
+            quote_buf.append(m.group(1))
+            i += 1
+            continue
+        else:
+            flush_quote()
+        if _is_table_start(lines, i):
+            flush_para(); close_lists()
+            j, html_block = _render_table(lines, i)
+            out.append(html_block)
+            i = j
             continue
         m = HEADING_RE.match(stripped)
         if m:
@@ -246,8 +269,55 @@ def render_markdown(text):
         close_lists()
         in_para.append(stripped)
         i += 1
-    flush_para(); close_lists()
+    flush_para(); close_lists(); flush_quote()
     return "\n".join(out)
+
+
+def _is_table_start(lines, i):
+    if i + 1 >= len(lines): return False
+    head = lines[i].strip()
+    sep  = lines[i + 1].strip()
+    if "|" not in head: return False
+    return bool(TABLE_SEP_RE.match(sep))
+
+
+def _split_row(line):
+    s = line.strip()
+    if s.startswith("|"): s = s[1:]
+    if s.endswith("|"):   s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _render_table(lines, i):
+    head_cells = _split_row(lines[i])
+    sep_cells  = _split_row(lines[i + 1])
+    aligns = []
+    for c in sep_cells:
+        left  = c.startswith(":")
+        right = c.endswith(":")
+        if left and right: aligns.append("center")
+        elif right:        aligns.append("right")
+        else:              aligns.append("left")
+    while len(aligns) < len(head_cells): aligns.append("left")
+    j = i + 2
+    rows = []
+    while j < len(lines):
+        s = lines[j].strip()
+        if not s or "|" not in s: break
+        rows.append(_split_row(lines[j]))
+        j += 1
+    parts = ["<table>", "<thead><tr>"]
+    for k, c in enumerate(head_cells):
+        parts.append(f'<th style="text-align:{aligns[k]}">{_inline(c)}</th>')
+    parts.append("</tr></thead><tbody>")
+    for row in rows:
+        parts.append("<tr>")
+        for k, c in enumerate(row):
+            a = aligns[k] if k < len(aligns) else "left"
+            parts.append(f'<td style="text-align:{a}">{_inline(c)}</td>')
+        parts.append("</tr>")
+    parts.append("</tbody></table>")
+    return j, "".join(parts)
 
 
 def _inline(text):
@@ -261,10 +331,15 @@ def _inline(text):
     text = ITALIC_RE.sub(r"<em>\1</em>", text)
     def link_sub(m):
         href = m.group(2)
-        if not (href.startswith("http://") or href.startswith("https://")
-                or href.startswith("/") or href.startswith("#")):
-            return m.group(0)
-        return f'<a href="{href}" target="_blank" rel="noopener">{m.group(1)}</a>'
+        label = m.group(1)
+        if href.startswith("http://") or href.startswith("https://"):
+            return f'<a href="{href}" target="_blank" rel="noopener">{label}</a>'
+        if href.startswith("/") or href.startswith("#"):
+            return f'<a href="{href}">{label}</a>'
+        # Relative path inside the repo: keep the label visible, show
+        # the path muted alongside it. We don't link because the wiki
+        # is rendered in the dashboard, not on disk.
+        return f'<span class="wiki-xref">{label} <span class="wiki-xref-path">{href}</span></span>'
     text = LINK_RE.sub(link_sub, text)
     text = AUTOLINK_RE.sub(r'<a href="\1" target="_blank" rel="noopener">\1</a>', text)
     idx = [0]

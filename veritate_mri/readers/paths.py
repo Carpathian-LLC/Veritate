@@ -26,9 +26,12 @@ MRI_ROOT        = os.path.join(REPO_ROOT, "veritate_mri")
 GRADE_EVAL_ROOT = os.path.join(MRI_ROOT, "grade_eval")
 WIKI_ROOT       = os.path.join(MRI_ROOT, "wiki")
 ENGINE_ROOT     = os.path.join(REPO_ROOT, "veritate_engine")
-ENGINE_BIN      = os.path.join(ENGINE_ROOT, "bin")
-ENGINE_BUILD    = os.path.join(ENGINE_ROOT, "build")
-ENGINE_VERSIONS_JSON = os.path.join(ENGINE_ROOT, "engine_versions.json")
+# v1 is the primary (and only built) engine. v2 is an empty scratchpad folder
+# reserved for future engine experiments (see documentation/engine/v2.md).
+ENGINE_PRIMARY  = os.path.join(ENGINE_ROOT, "v1")
+ENGINE_BIN      = os.path.join(ENGINE_PRIMARY, "bin")
+ENGINE_BUILD    = os.path.join(ENGINE_PRIMARY, "build")
+ENGINE_VERSIONS_JSON = os.path.join(ENGINE_PRIMARY, "engine_versions.json")
 
 OS_WINDOWS = "windows"
 OS_LINUX   = "linux"
@@ -70,9 +73,13 @@ HOOK_ARTIFACTS = {
     "lens":       ("lens.npz",        "npz"),
     "classroom":  ("classroom.json",  "json"),
     "grades":     ("grades.json",     "json"),
+    "math":       ("math.json",       "json"),
+    "grammar":    ("grammar.json",    "json"),
+    "reasoning":  ("reasoning.json",  "json"),
     "concepts":   ("concepts.json",   "json"),
     "surprise":   ("surprise.json",   "json"),
     "quant_kl":   ("quant_kl.json",   "json"),
+    "writing_health": ("writing_health.json", "json"),
     "generation": ("generation.json", "json"),
 }
 

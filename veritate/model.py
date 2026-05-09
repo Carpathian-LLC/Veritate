@@ -37,11 +37,14 @@ class RMSNorm(nn.Module):
         self.qat    = False
 
     def forward(self, x):
-        d  = x.dtype
-        xf = x.float()
-        n  = xf.pow(2).mean(-1, keepdim=True)
-        w  = _qat.fake_quant_ln_weight(self.weight) if self.qat else self.weight
-        return (xf * torch.rsqrt(n + self.eps) * w).to(d)
+        # Compute the variance reduction in fp32 for numerical stability, but
+        # leave the activation in its incoming dtype (bf16 under autocast).
+        # Avoids casting the full [B, T, H] tensor up to fp32 and back, which
+        # is a memory-bandwidth bottleneck on Apple Silicon's unified memory.
+        n   = x.float().pow(2).mean(-1, keepdim=True)
+        inv = torch.rsqrt(n + self.eps).to(x.dtype)
+        w   = _qat.fake_quant_ln_weight(self.weight) if self.qat else self.weight
+        return x * inv * w
 
 
 class QuantLinear(nn.Linear):
@@ -67,12 +70,20 @@ class CausalSelfAttention(nn.Module):
         self.d    = hidden // heads
         self.qkv  = QuantLinear(hidden, 3 * hidden, bias=False)
         self.proj = QuantLinear(hidden, hidden,     bias=False)
+        self.qat = False
+        self.engine_faithful = False
 
     def forward(self, x):
         B, T, C = x.shape
         qkv = self.qkv(x).view(B, T, 3, self.h, self.d).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
+        if self.qat and self.engine_faithful:
+            q = _qat.fake_quant_act(q)
+            k = _qat.fake_quant_act(k)
+            v = _qat.fake_quant_act(v)
         out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        if self.qat and self.engine_faithful:
+            out = _qat.fake_quant_act(out)
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         return self.proj(out)
 
@@ -137,6 +148,12 @@ class Veritate(nn.Module):
 
     def set_qat(self, value):
         return _qat.set_qat(self, value)
+
+    def hook_spec(self):
+        # Canonical model is its own dumper view. Non-canonical models (MoE,
+        # workspace, etc.) override this to return an adapter that quacks
+        # like a canonical Veritate so the dumper walks one shape.
+        return self
 
     def embed(self, tokens):
         B, T = tokens.shape

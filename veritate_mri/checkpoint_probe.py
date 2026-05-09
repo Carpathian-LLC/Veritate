@@ -11,13 +11,16 @@
 # - extended dumps: classroom (size + alive neurons), grades (suite A reading
 #   ppl per grade band), concepts (50-concept surprise probe). all three are
 #   checkpoint-time only; zero impact on the training step.
+# veritate_mri/checkpoint_probe.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 import argparse
 import heapq
 import json
 import math
 import os
+import re
 import sys
 import time
 
@@ -25,8 +28,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+import logs as logmod
 from readers import paths
 
+# ------------------------------------------------------------------------------------
+# Constants
 
 PROBE_PROMPT = "Once upon a time, there was a little girl who"
 PROBE_TOP_K  = 8
@@ -47,8 +53,21 @@ ACTIVATION_INT8_SCALE= 32.0
 INT8_SAT_THRESHOLD   = 127.0 / ACTIVATION_INT8_SCALE
 
 GRADE_LEVELS    = ["prek", "k", "elem", "middle", "hs", "college", "phd"]
-GRADE_PPL_PASS  = 3.0
-GRADE_BYTES     = 4096
+GRADE_PPL_PASS  = 3.0     # absolute fallback when relative threshold can't be computed
+GRADE_PPL_RELATIVE_FACTOR = 1.5   # band passes if ppl < floor * factor (floor = best band ppl)
+GRADE_PPL_FLOOR_MIN = 1.5         # clamp the floor so an over-fit easy band can't make harder bands pass trivially
+GRADE_PPL_CEILING   = 32.0        # absolute sanity ceiling: above this the model is barely above random, nothing passes
+GRADE_BYTES     = 8192            # probe window per band; sources author at >=8 KB to give it room
+
+# smartness-meter axes beyond reading. each axis is a directory of jsonl
+# tier files under veritate_mri/grade_eval/<axis>/. tier order here drives
+# the dashboard ladder order.
+EVAL_ROOT       = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "grade_eval"))
+MATH_TIERS      = ["t1_arith1", "t2_arith2", "t3_algebra", "t4_word", "t5_multi"]
+GRAMMAR_TYPES   = ["sv_agreement", "articles", "tense", "word_order"]
+REASONING_TIERS = ["recall", "pattern", "deduction1", "deduction_n"]
+SCORE_PASS      = 0.80   # tier passes when accuracy >= this
+SCORE_EMERGING  = 0.50   # tier is "emerging" between this and SCORE_PASS
 
 GRADE_SOURCES = {
     "prek":    [(39784, "real_mother_goose"),         (24108, "the_three_bears")],
@@ -78,6 +97,8 @@ DEFAULT_CORPUS_PATH      = CORPUS_CANDIDATES[0]
 
 _STORY_CACHE = {}
 
+# ------------------------------------------------------------------------------------
+# Functions
 
 def _resolve_corpus(corpus_path):
     """Return the first existing corpus path. Prefers caller-supplied path,
@@ -429,7 +450,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
         t_mem = time.time()
         stories = _load_probe_stories(cpath, MEMORY_PROBE_SEED, MEMORY_PROBE_STORIES, MEMORY_PROBE_MAX_STORY)
         memory_db = _build_memory_from_corpus(model, cap_ffn, stories, MEMORY_PROBE_TOPK)
-        print(f"  memory probe step {step}: {len(stories)} stories, {time.time() - t_mem:.1f}s")
+        logmod.info("probe", f"memory probe step {step}: {len(stories)} stories, {time.time() - t_mem:.1f}s")
 
         meta = {
             "kind": "meta",
@@ -673,7 +694,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
         with open(neuron_memory_path, "w", encoding="utf-8") as f:
             json.dump(nm_payload, f, ensure_ascii=False)
     except Exception as e:
-        print(f"  WARN: neuron_memory.json write failed: {e}", flush=True)
+        logmod.warn("probe", f"neuron_memory.json write failed: {e}")
 
     return out_path, len(frames), round(time.time() - t0, 3)
 
@@ -825,7 +846,6 @@ def dump_grades(model, out_dir: str, step: int):
     model.eval()
 
     grades = {}
-    estimated = "none"
     for level in GRADE_LEVELS:
         bin_path = paths.grade_eval_path(level)
         if not os.path.isfile(bin_path):
@@ -838,7 +858,32 @@ def dump_grades(model, out_dir: str, step: int):
         ppl, n = _bytes_perplexity(model, raw, device)
         grades[level] = {"ppl": round(ppl, 4) if not math.isnan(ppl) else None,
                          "n_bytes": int(n)}
-        if estimated == "none" and ppl == ppl and ppl < GRADE_PPL_PASS:
+
+    # Threshold relative to the model's own floor: each model establishes its
+    # best ppl on whichever band suits its training distribution best, and a
+    # harder band counts as "passing" when its ppl is within a multiplicative
+    # factor of that floor. This self-calibrates per model size and per
+    # training-data distribution -- a 200m TinyStories model and a 1B web-
+    # scale model are no longer judged by the same absolute number.
+    # An absolute CEILING is also enforced: if the band's ppl is above the
+    # sanity ceiling, the model is barely above random there and the band
+    # cannot pass regardless of how the rest of the bands compare. This
+    # prevents an untrained model (ppl ~ 256 everywhere) from "passing phd".
+    valid_ppls = [g["ppl"] for g in grades.values()
+                  if g.get("ppl") is not None and g["ppl"] == g["ppl"]]
+    if valid_ppls:
+        floor = max(min(valid_ppls), GRADE_PPL_FLOOR_MIN)
+        threshold = floor * GRADE_PPL_RELATIVE_FACTOR
+    else:
+        floor = None
+        threshold = GRADE_PPL_PASS  # absolute fallback
+    estimated = "none"
+    for level in GRADE_LEVELS:
+        g = grades.get(level)
+        if not g or g.get("ppl") is None:
+            continue
+        # walk prek -> phd, take the HARDEST passing band (last overwrite wins).
+        if g["ppl"] < threshold and g["ppl"] < GRADE_PPL_CEILING:
             estimated = level
 
     if was_training: model.train()
@@ -847,9 +892,630 @@ def dump_grades(model, out_dir: str, step: int):
         "precision": _precision_tag(model),
         "grades":    grades,
         "estimated_reading_grade": estimated,
+        "ppl_floor":            round(floor, 4) if floor is not None else None,
+        "ppl_threshold":        round(threshold, 4),
+        "ppl_threshold_factor": GRADE_PPL_RELATIVE_FACTOR,
+        "ppl_ceiling":          GRADE_PPL_CEILING,
         "time_s":    round(time.time() - t0, 4),
     }
     path = os.path.join(out_dir, f"grades_step_{step}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+    return path
+
+
+# ------------------------------------------------------------------------------------
+# Writing-health probe.
+#
+# What this measures: structural quality of the model's own generated text.
+# What it does NOT measure: narrative sense, world knowledge, comprehension.
+# A passage can score perfect here and still be "the volcano married a sandwich"
+# nonsense -- math cannot detect that without a judge with world knowledge.
+#
+# Five mathematical proxies:
+#   1. self_ppl          -- byte-perplexity of the model on its own generation.
+#                           low = the model "stands behind" what it wrote;
+#                           rising = drift toward off-distribution output.
+#   2. distinct_n        -- unique n-grams / total n-grams (n=2,3,4 word-level).
+#                           catches mode-collapse and phrase loops.
+#   3. lex_chain_density -- fraction of content tokens (>3 chars) that recur
+#                           at least twice. proxy for entity/object tracking.
+#   4. pronoun_unbacked  -- fraction of pronouns whose closest preceding noun
+#                           is more than a 50-byte window away. broken anaphora.
+#   5. repeat_rate       -- fraction of consecutive duplicate words.
+#                           catches "the the the".
+#
+# The probe runs three fixed prompts and averages metrics across them. Output
+# also includes the raw generated bytes so the dashboard can display them
+# beside the scores -- a metric without an example is hard to read.
+
+WH_PROMPTS = [
+    "Once upon a time, ",
+    "The little girl saw a dog and ",
+    "There was a small ",
+]
+WH_MAX_NEW       = 400
+WH_TEMPERATURE   = 0.7
+WH_TOP_K         = 40
+WH_PRONOUN_WINDOW = 50
+WH_PRONOUNS = {
+    "he", "him", "his", "himself",
+    "she", "her", "hers", "herself",
+    "it", "its", "itself",
+    "they", "them", "their", "theirs", "themselves",
+    "this", "that", "these", "those",
+}
+# Common verbs/auxiliaries to filter out of "noun-like" candidates for the
+# pronoun-referent check. Without POS info this is the best we can do; any
+# word here is treated as NOT a candidate referent for a following pronoun.
+WH_VERB_STOPS = {
+    "is", "was", "are", "were", "be", "been", "being", "am",
+    "have", "has", "had", "having",
+    "do", "does", "did", "done", "doing",
+    "will", "would", "shall", "should", "may", "might", "must", "can", "could",
+    "said", "say", "says", "saying",
+    "went", "go", "goes", "going", "gone",
+    "came", "come", "comes", "coming",
+    "made", "make", "makes", "making",
+    "took", "take", "takes", "taking", "taken",
+    "got", "get", "gets", "getting", "gotten",
+    "saw", "see", "sees", "seeing", "seen",
+    "told", "tell", "tells", "telling",
+    "felt", "feel", "feels", "feeling",
+    "looked", "look", "looks", "looking",
+    "walked", "walk", "walks", "walking",
+    "ran", "run", "runs", "running",
+    "thought", "think", "thinks", "thinking",
+    "knew", "know", "knows", "knowing", "known",
+    "found", "find", "finds", "finding",
+    "wanted", "want", "wants", "wanting",
+    "asked", "ask", "asks", "asking",
+    "tried", "try", "tries", "trying",
+    "started", "start", "starts", "starting",
+    "stopped", "stop", "stops", "stopping",
+    "said", "told", "asked",
+    "very", "much", "more", "most", "many", "some", "such", "even", "just", "still",
+    "then", "than", "when", "where", "what", "who", "whom", "whose", "which", "while",
+    "with", "into", "onto", "from", "about", "above", "below", "before", "after", "during",
+    "also", "only", "well", "back", "down", "over", "again", "around",
+}
+# Cap on how many bigram-index loads we keep cached (per process). Each is
+# small (~3 MB) so this is generous; resets on process restart anyway.
+WH_PMI_CACHE_MAX = 8
+_WH_PMI_CACHE = {}  # corpus_path -> {tok2idx, uni_c, bi_lookup, n_tokens, n_bigrams, oov_penalty}
+
+
+def _wh_load_pmi_index(corpus_path: str):
+    """Load a corpus's bigram index. Returns the cached dict or None if the
+    corpus has no <stem>_bigrams.npz sidecar yet. Lazily caches in process
+    memory so subsequent checkpoints reuse the same index."""
+    if not corpus_path:
+        return None
+    abs_path = os.path.abspath(corpus_path)
+    if abs_path in _WH_PMI_CACHE:
+        return _WH_PMI_CACHE[abs_path]
+    if not os.path.isfile(abs_path):
+        return None
+    if abs_path.endswith(".bin"):
+        idx_path = abs_path[:-4] + "_bigrams.npz"
+    else:
+        idx_path = abs_path + ".bigrams.npz"
+    if not os.path.isfile(idx_path):
+        return None
+    try:
+        with np.load(idx_path, allow_pickle=False) as z:
+            vocab    = z["vocab"]
+            uni_c    = z["uni_c"]
+            bi_keys  = z["bi_keys"]
+            bi_c     = z["bi_c"]
+            n_toks   = int(z["n_tokens"])
+            n_bigs   = int(z["n_bigrams"])
+    except (OSError, ValueError, KeyError):
+        return None
+    tok2idx = {str(v): i for i, v in enumerate(vocab.tolist())}
+    bi_lookup = {int(k): int(c) for k, c in zip(bi_keys.tolist(), bi_c.tolist())}
+    # We use NORMALIZED PMI (NPMI), bounded to [-1, +1]:
+    #   NPMI(w1,w2) = PMI(w1,w2) / -log(p(w1,w2))
+    # +1 = perfect co-occurrence; 0 = independent; -1 = never together.
+    # Unseen pairs (either word OOV or bigram absent) get the floor of -1.
+    # Vanilla PMI is unbounded above and assigns spuriously high scores to
+    # rare-but-unsurprising pairs in big corpora, which makes word salad
+    # score higher than coherent prose -- NPMI fixes that.
+    cached = {
+        "tok2idx":     tok2idx,
+        "uni_c":       uni_c,
+        "bi_lookup":   bi_lookup,
+        "n_tokens":    n_toks,
+        "n_bigrams":   n_bigs,
+        "oov_penalty": -1.0,   # NPMI floor for unseen pairs
+        "idx_path":    idx_path,
+    }
+    if len(_WH_PMI_CACHE) >= WH_PMI_CACHE_MAX:
+        # cheap eviction: drop one entry
+        _WH_PMI_CACHE.pop(next(iter(_WH_PMI_CACHE)))
+    _WH_PMI_CACHE[abs_path] = cached
+    return cached
+
+
+def _wh_pmi_score(words: list, index) -> float:
+    """Mean Normalized PMI (NPMI) of adjacent word pairs in `words` against
+    `index`. NPMI is bounded in [-1, +1]:
+        +1 = perfect co-occurrence (words always appear together)
+         0 = statistically independent
+        -1 = never seen together (the OOV floor)
+    Higher = words flow together as the corpus does. Word-salad and
+    off-corpus generations land near -1; coherent prose lands +0.1..+0.5.
+    Returns nan if index is None or words has < 2 tokens."""
+    if index is None or len(words) < 2:
+        return float("nan")
+    tok2idx   = index["tok2idx"]
+    uni_c     = index["uni_c"]
+    bi_lookup = index["bi_lookup"]
+    n_toks    = max(index["n_tokens"], 1)
+    n_bigs    = max(index["n_bigrams"], 1)
+    oov_pen   = index["oov_penalty"]
+    npmis = []
+    for a, b in zip(words[:-1], words[1:]):
+        ia = tok2idx.get(a)
+        ib = tok2idx.get(b)
+        if ia is None or ib is None:
+            npmis.append(oov_pen)
+            continue
+        key = (ia << 32) | ib
+        c_ab = bi_lookup.get(key, 0)
+        if c_ab == 0:
+            npmis.append(oov_pen)
+            continue
+        c_a = int(uni_c[ia])
+        c_b = int(uni_c[ib])
+        if c_a <= 0 or c_b <= 0:
+            npmis.append(oov_pen)
+            continue
+        # p(w1,w2) over bigram total; p(w1), p(w2) over unigram total.
+        p_ab = c_ab / n_bigs
+        p_a  = c_a  / n_toks
+        p_b  = c_b  / n_toks
+        if p_ab <= 0 or p_a <= 0 or p_b <= 0:
+            npmis.append(oov_pen)
+            continue
+        pmi = math.log(p_ab / (p_a * p_b))
+        denom = -math.log(p_ab)
+        if denom <= 0:
+            npmis.append(oov_pen)
+            continue
+        npmi = pmi / denom
+        if npmi != npmi or npmi < -1.0:
+            npmi = -1.0
+        elif npmi > 1.0:
+            npmi = 1.0
+        npmis.append(npmi)
+    if not npmis:
+        return float("nan")
+    return sum(npmis) / len(npmis)
+
+
+def _wh_generate(model, prompt: str, device) -> str:
+    """Generate WH_MAX_NEW bytes from prompt using top-k temperature sampling.
+    Returns the generated suffix only (excludes the prompt)."""
+    prompt_bytes = (prompt or " ").encode("utf-8", errors="replace")
+    ids = torch.tensor([b for b in prompt_bytes], dtype=torch.long, device=device).unsqueeze(0)
+    seq = model.seq
+    out_bytes = bytearray()
+    for _ in range(WH_MAX_NEW):
+        ctx = ids[:, -seq:]
+        logits, _ = model(ctx)
+        last = logits[0, -1].float()
+        scaled = last / max(WH_TEMPERATURE, 1e-6)
+        sv, si = torch.topk(scaled, WH_TOP_K)
+        mask = torch.full_like(scaled, float("-inf"))
+        mask.scatter_(0, si, sv)
+        probs = F.softmax(mask, dim=-1)
+        nxt = int(torch.multinomial(probs, 1).item())
+        out_bytes.append(nxt)
+        ids = torch.cat([ids, torch.tensor([[nxt]], dtype=torch.long, device=device)], dim=1)
+    return out_bytes.decode("utf-8", errors="replace")
+
+
+def _wh_words(text: str) -> list:
+    """Lowercase ASCII word tokens. Discards numbers and punctuation."""
+    return re.findall(r"[a-z][a-z']*", text.lower())
+
+
+def _wh_distinct_n(words: list, n: int) -> float:
+    if len(words) < n:
+        return 0.0
+    grams = [tuple(words[i:i + n]) for i in range(len(words) - n + 1)]
+    if not grams:
+        return 0.0
+    return len(set(grams)) / len(grams)
+
+
+def _wh_lex_chain_density(words: list) -> float:
+    """Fraction of content tokens that recur at least twice. Content tokens =
+    length >= 3, not in the verb/aux/adverb stoplist, not a pronoun. This
+    catches short concrete nouns like "cat", "dog", "boy" that the previous
+    cutoff (>3) was rejecting, while still filtering out function words."""
+    content = [
+        w for w in words
+        if len(w) >= 3 and w not in WH_VERB_STOPS and w not in WH_PRONOUNS
+        and w not in {"the", "and", "but", "for", "not", "all", "any", "out", "now", "yes", "yet"}
+    ]
+    if not content:
+        return 0.0
+    counts = {}
+    for w in content:
+        counts[w] = counts.get(w, 0) + 1
+    recurring = sum(c for c in counts.values() if c >= 2)
+    return recurring / len(content)
+
+
+def _wh_repeat_rate(words: list) -> float:
+    if len(words) < 2:
+        return 0.0
+    dups = sum(1 for a, b in zip(words[:-1], words[1:]) if a == b)
+    return dups / (len(words) - 1)
+
+
+def _wh_pronoun_unbacked(text: str) -> float:
+    """Fraction of pronouns whose nearest preceding noun-like token is outside
+    the WH_PRONOUN_WINDOW byte window. "Noun-like" = length > 3, not a
+    pronoun, not in the verb/auxiliary/adverb stoplist, AND has at least one
+    capitalized form somewhere in the text (proxy for "this is a referrable
+    entity, not a generic verb"). The capitalized-anywhere heuristic catches
+    proper nouns like "Maya" but also gracefully accepts "the dog" because
+    "Dog" likely appears at sentence-start somewhere in the same passage when
+    the model is tracking it as a character.
+
+    This metric is coarse without a POS tagger; we accept that and document it.
+    What it reliably catches: passages where every pronoun appears with no
+    plausible referent at all in the prior window (early-training failure)."""
+    lowered = text.lower()
+    # pre-scan: which lowercase tokens appear capitalized at least once?
+    capitalized = set()
+    for m in re.finditer(r"\b([A-Za-z]+)\b", text):
+        w = m.group(1)
+        if w[0].isupper():
+            capitalized.add(w.lower())
+
+    pron_pos = []
+    for m in re.finditer(r"\b([a-z]+)\b", lowered):
+        if m.group(1) in WH_PRONOUNS:
+            pron_pos.append(m.start())
+    if not pron_pos:
+        return 0.0
+
+    noun_pos = []
+    for m in re.finditer(r"\b([a-z]+)\b", lowered):
+        w = m.group(1)
+        if len(w) <= 3:
+            continue
+        if w in WH_PRONOUNS or w in WH_VERB_STOPS:
+            continue
+        # Accept as a candidate referent if (a) it appears capitalized
+        # somewhere (proxy for entity), or (b) it is a long word (>= 5 chars,
+        # less likely to be a generic helper). This tightens the filter while
+        # keeping it a heuristic, not a parser.
+        if w in capitalized or len(w) >= 5:
+            noun_pos.append(m.start())
+    if not noun_pos:
+        return 1.0  # pronouns exist but no candidate referents anywhere -- all unbacked
+
+    unbacked = 0
+    for p in pron_pos:
+        prior = [n for n in noun_pos if n < p]
+        if not prior:
+            unbacked += 1
+            continue
+        if (p - prior[-1]) > WH_PRONOUN_WINDOW:
+            unbacked += 1
+    return unbacked / len(pron_pos)
+
+
+@torch.no_grad()
+def _wh_self_ppl(model, text: str, device) -> float:
+    raw = text.encode("utf-8", errors="replace")
+    if len(raw) < 2:
+        return float("nan")
+    ppl, _ = _bytes_perplexity(model, raw, device)
+    return ppl
+
+
+@torch.no_grad()
+def dump_writing_health(model, out_dir: str, step: int, corpus_path: str = None):
+    """Write writing_health_step_<N>.json with mathematical proxies for
+    writing structure quality, computed over WH_PROMPTS generations.
+
+    `corpus_path` enables PMI scoring: pass the same training corpus .bin so
+    the probe can load the matching <stem>_bigrams.npz sidecar. Build the
+    sidecar with `python veritate_mri/tools/build_bigram_index.py
+    --corpus <stem>`. If absent, PMI is null and the dashboard skips it.
+
+    NOT a measure of narrative sense, world-knowledge correctness, or
+    comprehension. The dashboard surfaces this caveat alongside the score."""
+    t0 = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+
+    pmi_index = _wh_load_pmi_index(corpus_path) if corpus_path else None
+
+    samples = []
+    for prompt in WH_PROMPTS:
+        gen = _wh_generate(model, prompt, device)
+        words = _wh_words(gen)
+        pmi_val = _wh_pmi_score(words, pmi_index)
+        metrics = {
+            "self_ppl":          round(_wh_self_ppl(model, gen, device), 4) if gen else None,
+            "distinct_2":        round(_wh_distinct_n(words, 2), 4),
+            "distinct_3":        round(_wh_distinct_n(words, 3), 4),
+            "distinct_4":        round(_wh_distinct_n(words, 4), 4),
+            "lex_chain_density": round(_wh_lex_chain_density(words), 4),
+            "repeat_rate":       round(_wh_repeat_rate(words), 4),
+            "pronoun_unbacked":  round(_wh_pronoun_unbacked(gen), 4),
+            "pmi":               (None if pmi_val != pmi_val else round(pmi_val, 4)),
+            "n_words":           len(words),
+            "n_bytes":           len(gen.encode("utf-8", errors="replace")),
+        }
+        samples.append({"prompt": prompt, "generation": gen, "metrics": metrics})
+
+    def _mean(key):
+        vs = [s["metrics"][key] for s in samples if s["metrics"].get(key) is not None]
+        if not vs:
+            return None
+        return round(sum(vs) / len(vs), 4)
+
+    aggregate = {
+        "self_ppl":          _mean("self_ppl"),
+        "distinct_2":        _mean("distinct_2"),
+        "distinct_3":        _mean("distinct_3"),
+        "distinct_4":        _mean("distinct_4"),
+        "lex_chain_density": _mean("lex_chain_density"),
+        "repeat_rate":       _mean("repeat_rate"),
+        "pronoun_unbacked":  _mean("pronoun_unbacked"),
+        "pmi":               _mean("pmi"),
+    }
+
+    if was_training: model.train()
+    out = {
+        "step":      int(step),
+        "precision": _precision_tag(model),
+        "samples":   samples,
+        "aggregate": aggregate,
+        "config": {
+            "prompts":         WH_PROMPTS,
+            "max_new":         WH_MAX_NEW,
+            "temperature":     WH_TEMPERATURE,
+            "top_k":           WH_TOP_K,
+            "pronoun_window":  WH_PRONOUN_WINDOW,
+            "corpus_path":     os.path.abspath(corpus_path) if corpus_path else None,
+            "pmi_index_path":  pmi_index["idx_path"] if pmi_index else None,
+            "pmi_corpus_size": pmi_index["n_tokens"] if pmi_index else None,
+        },
+        "caveat": (
+            "These are mathematical proxies for writing STRUCTURE only. "
+            "They detect mode collapse, repetition, broken anaphora, "
+            "off-distribution drift, and off-corpus word combinations. They "
+            "do NOT detect narrative nonsense, factual errors, or whether "
+            "the story makes sense. A passage scoring perfectly here can "
+            "still be incoherent at the world-knowledge level. That requires "
+            "a human or LLM judge."
+        ),
+        "time_s":    round(time.time() - t0, 4),
+    }
+    path = os.path.join(out_dir, f"writing_health_step_{step}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+    return path
+
+
+# ------------------------------------------------------------------------------------
+# Smartness-meter axes beyond reading: math, grammar, reasoning.
+# Shared scoring primitives, then three thin dump functions.
+
+def _load_jsonl(path):
+    if not os.path.isfile(path):
+        return []
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out
+
+
+@torch.no_grad()
+def _argmax_decode(model, prompt_bytes: bytes, max_new: int, device):
+    """Greedy-decode `max_new` bytes from the model after `prompt_bytes`.
+
+    Truncates the input context to model.seq tokens before each forward pass.
+    Stops early on newline so single-line answers don't bleed into noise.
+    """
+    seq = model.seq
+    arr = np.frombuffer(prompt_bytes, dtype=np.uint8)
+    if len(arr) == 0:
+        return b""
+    ids = torch.tensor(arr.copy(), dtype=torch.long, device=device).unsqueeze(0)
+    out = bytearray()
+    for _ in range(max_new):
+        x = ids[:, -seq:]
+        logits, _ = model(x)
+        nxt = int(logits[0, -1].argmax().item())
+        if nxt == 0x0A:  # newline = end of answer
+            break
+        out.append(nxt)
+        ids = torch.cat([ids, torch.tensor([[nxt]], device=device)], dim=1)
+    return bytes(out)
+
+
+def _extract_answer_token(decoded: bytes) -> str:
+    """Pull the first whitespace-delimited token from decoded bytes,
+    stripping common trailing punctuation. Used for math + reasoning scoring."""
+    s = decoded.decode("utf-8", errors="replace").strip()
+    if not s:
+        return ""
+    head = s.split()[0]
+    return head.rstrip(".,;:!?\"'")
+
+
+@torch.no_grad()
+def _score_qa_axis(model, axis_dir_name: str, tiers, device):
+    """Generic scorer for argmax-decode-and-string-match axes (math + reasoning).
+
+    Returns dict: {tier_name: {"correct": int, "total": int, "accuracy": float, "examples": [...]}}.
+    A few sample (prompt, expected, predicted) triples are kept per tier for
+    debugging; the dashboard does not display them but they are useful in JSON.
+    """
+    axis_dir = os.path.join(EVAL_ROOT, axis_dir_name)
+    out = {}
+    for tier in tiers:
+        items = _load_jsonl(os.path.join(axis_dir, f"{tier}.jsonl"))
+        if not items:
+            continue
+        correct = 0
+        examples = []
+        for it in items:
+            prompt = it.get("prompt", "")
+            answer = str(it.get("answer", "")).strip()
+            if not prompt or not answer:
+                continue
+            pb = prompt.encode("utf-8", errors="replace")
+            decoded = _argmax_decode(model, pb, max_new=max(8, len(answer) + 4), device=device)
+            pred = _extract_answer_token(decoded)
+            ok = pred == answer
+            if ok:
+                correct += 1
+            if len(examples) < 4:
+                examples.append({"prompt": prompt, "expected": answer, "predicted": pred, "ok": ok})
+        total = len(items)
+        out[tier] = {
+            "correct":  int(correct),
+            "total":    int(total),
+            "accuracy": round(correct / total, 4) if total else 0.0,
+            "examples": examples,
+        }
+    return out
+
+
+@torch.no_grad()
+def _grammar_pair_score(model, correct: str, incorrect: str, device):
+    """Mean per-byte NLL (nats) for each side of a pair. Lower is preferred."""
+    def _nll_mean(s):
+        b = s.encode("utf-8", errors="replace")
+        if len(b) < 2:
+            return float("nan")
+        arr = np.frombuffer(b, dtype=np.uint8)
+        seq = model.seq
+        chunk = torch.tensor(arr[:seq + 1].copy(), dtype=torch.long, device=device).unsqueeze(0)
+        x = chunk[:, :-1]
+        y = chunk[:, 1:]
+        logits, _ = model(x)
+        log_probs = F.log_softmax(logits.float(), dim=-1)
+        nll = -log_probs.gather(-1, y.unsqueeze(-1)).squeeze(-1)
+        return float(nll.mean().item())
+    nc = _nll_mean(correct)
+    ni = _nll_mean(incorrect)
+    return nc, ni
+
+
+@torch.no_grad()
+def dump_math(model, out_dir: str, step: int):
+    """Per-tier argmax-match accuracy on math problems."""
+    t0 = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+    tiers = _score_qa_axis(model, "math", MATH_TIERS, device)
+    if was_training: model.train()
+    out = {
+        "step":      int(step),
+        "precision": _precision_tag(model),
+        "tiers":     tiers,
+        "time_s":    round(time.time() - t0, 4),
+    }
+    path = os.path.join(out_dir, f"math_step_{step}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+    return path
+
+
+@torch.no_grad()
+def dump_reasoning(model, out_dir: str, step: int):
+    """Per-tier argmax-match accuracy on reasoning problems."""
+    t0 = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+    tiers = _score_qa_axis(model, "reasoning", REASONING_TIERS, device)
+    if was_training: model.train()
+    out = {
+        "step":      int(step),
+        "precision": _precision_tag(model),
+        "tiers":     tiers,
+        "time_s":    round(time.time() - t0, 4),
+    }
+    path = os.path.join(out_dir, f"reasoning_step_{step}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+    return path
+
+
+@torch.no_grad()
+def dump_grammar(model, out_dir: str, step: int):
+    """Per-type preference accuracy on grammar pairs.
+
+    For each pair, score both correct and incorrect sentences under the model
+    and count it correct when mean NLL on the correct sentence is lower.
+    """
+    t0 = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+
+    grammar_dir = os.path.join(EVAL_ROOT, "grammar")
+    types = {}
+    for typ in GRAMMAR_TYPES:
+        pairs = _load_jsonl(os.path.join(grammar_dir, f"{typ}.jsonl"))
+        if not pairs:
+            continue
+        correct_pref = 0
+        examples = []
+        for p in pairs:
+            cs = p.get("correct", "")
+            ic = p.get("incorrect", "")
+            if not cs or not ic:
+                continue
+            nc, ni = _grammar_pair_score(model, cs, ic, device)
+            ok = (nc < ni)  # lower NLL = preferred
+            if ok:
+                correct_pref += 1
+            if len(examples) < 4:
+                examples.append({"correct": cs, "incorrect": ic, "nll_correct": round(nc, 4),
+                                 "nll_incorrect": round(ni, 4), "preferred_correct": ok})
+        total = len(pairs)
+        types[typ] = {
+            "correct":  int(correct_pref),
+            "total":    int(total),
+            "accuracy": round(correct_pref / total, 4) if total else 0.0,
+            "examples": examples,
+        }
+
+    if was_training: model.train()
+    out = {
+        "step":      int(step),
+        "precision": _precision_tag(model),
+        "types":     types,
+        "time_s":    round(time.time() - t0, 4),
+    }
+    path = os.path.join(out_dir, f"grammar_step_{step}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False)
     return path
@@ -1052,8 +1718,11 @@ def dump_quant_kl(model, prompt: str, out_dir: str, step: int, n_levels: int = 1
 def _load_checkpoint(ckpt_path):
     sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
     from veritate.model import Veritate
-    s = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    cfg = s.get("args") or {}
+    s = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    cfg = dict(s.get("args") or {})
+    sd = s["model"]
+    step = int(s.get("step", 0))
+    del s  # drops optimizer state (~8 GB on 1B) before model construction
     required = ("vocab", "hidden", "layers", "ffn", "heads", "seq")
     missing = [k for k in required if k not in cfg]
     if missing:
@@ -1064,8 +1733,9 @@ def _load_checkpoint(ckpt_path):
         layers=cfg["layers"], ffn=cfg["ffn"],
         heads=cfg["heads"], seq=cfg["seq"],
     )
-    model.load_state_dict(s["model"], strict=False)
-    return model, int(s.get("step", 0))
+    model.load_state_dict(sd, strict=False)
+    del sd
+    return model, step
 
 
 def main():
@@ -1086,6 +1756,9 @@ def main():
     if args.all:
         print(f"wrote {dump_classroom(model, args.out_dir, step)}")
         print(f"wrote {dump_grades(model,    args.out_dir, step)}")
+        print(f"wrote {dump_math(model,      args.out_dir, step)}")
+        print(f"wrote {dump_grammar(model,   args.out_dir, step)}")
+        print(f"wrote {dump_reasoning(model, args.out_dir, step)}")
         print(f"wrote {dump_concepts(model,  args.out_dir, step)}")
         print(f"wrote {dump_surprise(model,  args.prompt, args.out_dir, step)}")
         print(f"wrote {dump_quant_kl(model,  args.prompt, args.out_dir, step)}")

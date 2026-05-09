@@ -22,7 +22,6 @@
 
 import json
 import os
-import subprocess
 import threading
 import time
 
@@ -30,6 +29,7 @@ from readers import paths
 
 import logs as logmod
 import settings as settings_mod
+from git_runner import run_git as _git
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -47,12 +47,11 @@ CHANNEL_BRANCHES = {
     CHANNEL_EXPERIMENTAL: "experimental",
     CHANNEL_DEVELOPMENT:  "dev",
 }
+BRANCH_TO_CHANNEL = {v: k for k, v in CHANNEL_BRANCHES.items()}
 ALL_CHANNELS = (CHANNEL_STABLE, CHANNEL_EXPERIMENTAL, CHANNEL_DEVELOPMENT)
 
 POLL_INTERVAL_SECS = 30 * 60
 POLL_FIRST_DELAY   = 60
-
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 _LOCK   = threading.RLock()
 _STATE_CACHE = None
@@ -99,27 +98,7 @@ def _update_state(patch):
 
 
 def _run_git(args, timeout=GIT_TIMEOUT_SECS):
-    env = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_ALLOW_PROTOCOL":  "https",
-        "GIT_ASKPASS":         "echo",
-    }
-    try:
-        r = subprocess.run(
-            ["git"] + list(args),
-            cwd=REPO_DIR,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-            creationflags=_NO_WINDOW,
-        )
-        return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
-    except FileNotFoundError:
-        return 127, "", "git executable not found on PATH"
-    except subprocess.TimeoutExpired:
-        return 124, "", f"git {' '.join(args)} timed out after {timeout}s"
+    return _git(args, REPO_DIR, timeout=timeout)
 
 
 def _is_repo():
@@ -216,11 +195,19 @@ def check():
         logmod.error("app-sync", f"fetch failed: {msg}")
         _update_state({"last_check_ts": time.time(), "last_check_ok": False, "last_check_msg": msg})
         return {"ok": False, "error": msg, "status": status()}
+    correction_msg = ""
+    cur = _current_branch()
+    if cur and cur in BRANCH_TO_CHANNEL:
+        mapped = BRANCH_TO_CHANNEL[cur]
+        if mapped != _channel():
+            settings_mod.update({"update_channel": mapped})
+            correction_msg = f"channel auto-switched to {mapped} (matches branch {cur!r})"
+            logmod.ok("app-sync", correction_msg)
     st = status()
     _update_state({
         "last_check_ts":  time.time(),
         "last_check_ok":  True,
-        "last_check_msg": "",
+        "last_check_msg": correction_msg,
         "behind":         st.get("behind"),
         "remote_branch":  st.get("channel_branch"),
     })

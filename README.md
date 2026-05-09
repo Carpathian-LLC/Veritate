@@ -2,12 +2,13 @@
 
 <br/>
 
-# &nbsp; V &nbsp;·&nbsp; E &nbsp;·&nbsp; R &nbsp;·&nbsp; I &nbsp;·&nbsp; T &nbsp;·&nbsp; A &nbsp;·&nbsp; T &nbsp;·&nbsp; E &nbsp;
+# V&nbsp;·&nbsp;E&nbsp;·&nbsp;R&nbsp;·&nbsp;I&nbsp;·&nbsp;T&nbsp;·&nbsp;A&nbsp;·&nbsp;T&nbsp;·&nbsp;E
 
 ***"truth"** in Latin*
 
-A hand-coded INT8 transformer inference engine in C and assembly.<br/>
-Every internal activation is tap-able at zero runtime cost.
+A hand-coded INT8 / ternary transformer inference engine in C and assembly.<br/>
+Every internal activation is tap-able at zero runtime cost.<br/>
+Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 throughput.
 
 <br/>
 
@@ -325,7 +326,7 @@ Three independent pieces.
 | Piece | What it is | Language | Runs on | Output |
 |---|---|---|---|---|
 | **[Plugins](plugins/readme.md)** | Training scripts + manifests. Each plugin trains, fine-tunes, or distills a model. | PyTorch | GPU | `models/<name>/checkpoints/` |
-| **[Inference engine](veritate_engine/)** | Loads converted INT8 weights, generates text. Hand-written C + architecture-specific assembly. | C + asm | CPU | tokens via stdin/stdout, sub-ms |
+| **[Inference engine](veritate_engine/)** | Loads converted INT8 or ternary weights, generates text. Hand-written C + architecture-specific assembly. | C + asm | CPU | tokens via stdin/stdout, sub-ms |
 | **[Project MRI](veritate_mri/)** | Web app to watch the model think while it generates. Visualization + debugging tool. | Flask + JS | CPU | live UI on [http://localhost:8001](http://localhost:8001) |
 
 <br/>
@@ -338,7 +339,7 @@ Three independent pieces.
 
 - `config.json`: shape + training hyperparams + canonical step
 - `checkpoints/`: PyTorch `.pt` snapshots at every saved step
-- `veritate.bin`: exported INT8 weights of the canonical step (loaded by the C engine)
+- `veritate.bin`: exported INT8 or ternary (`.bin` v9 / v11) weights of the canonical step (loaded by the C engine)
 
 **Naming convention:** `<corpus>_<size>_<precision>_<version>` &nbsp;·&nbsp; e.g. `children_classics_80m_bf16_v1`.
 

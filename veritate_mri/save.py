@@ -45,9 +45,13 @@ RENAME_MAP_TEMPLATE = {
     "lens_step_{step}.npz":       "lens.npz",
     "classroom_step_{step}.json": "classroom.json",
     "grades_step_{step}.json":    "grades.json",
+    "math_step_{step}.json":      "math.json",
+    "grammar_step_{step}.json":   "grammar.json",
+    "reasoning_step_{step}.json": "reasoning.json",
     "concepts_step_{step}.json":  "concepts.json",
     "surprise_step_{step}.json":  "surprise.json",
     "quant_kl_step_{step}.json":  "quant_kl.json",
+    "writing_health_step_{step}.json": "writing_health.json",
     "step_{step}.json":           "generation.json",
 }
 
@@ -201,7 +205,9 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     import torch
     from checkpoint_probe import (
         dump_probe, dump_classroom, dump_grades, dump_concepts,
-        dump_surprise, dump_quant_kl, dump_generation, PROBE_PROMPT,
+        dump_math, dump_grammar, dump_reasoning,
+        dump_surprise, dump_quant_kl, dump_generation,
+        dump_writing_health, PROBE_PROMPT,
     )
 
     _validate_name(name)
@@ -222,6 +228,13 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     if args is not None:      state["args"]      = args
     torch.save(state, ckpt_path)
     logmod.info("save", f"wrote checkpoint: {ckpt_path}")
+
+    # The dump suite walks a canonical Veritate. Non-canonical models (MoE,
+    # multimind sidecars) expose a hook_spec() that returns a canonical-shaped
+    # adapter; canonical models return self. Plain nn.Modules that haven't
+    # opted in fall back to themselves and may fail mid-dump — that's fine,
+    # the per-dump try/except below logs and continues.
+    view = model.hook_spec() if hasattr(model, "hook_spec") else model
 
     step_dir = paths.hook_step_dir(name, step)
     os.makedirs(step_dir, exist_ok=True)
@@ -255,13 +268,17 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
             ))
             skip.add("generation")
     dumps = [
-        ("probe",      lambda: dump_probe     (model, prompt, step_dir, step)),
-        ("classroom",  lambda: dump_classroom (model,         step_dir, step)),
-        ("grades",     lambda: dump_grades    (model,         step_dir, step)),
-        ("concepts",   lambda: dump_concepts  (model,         step_dir, step)),
-        ("surprise",   lambda: dump_surprise  (model, prompt, step_dir, step)),
-        ("quant_kl",   lambda: dump_quant_kl  (model, prompt, step_dir, step)),
-        ("generation", lambda: dump_generation(model, prompt, step_dir, step, corpus_path=corpus_path)),
+        ("probe",      lambda: dump_probe     (view, prompt, step_dir, step)),
+        ("classroom",  lambda: dump_classroom (view,         step_dir, step)),
+        ("grades",     lambda: dump_grades    (view,         step_dir, step)),
+        ("math",       lambda: dump_math      (view,         step_dir, step)),
+        ("grammar",    lambda: dump_grammar   (view,         step_dir, step)),
+        ("reasoning",  lambda: dump_reasoning (view,         step_dir, step)),
+        ("concepts",   lambda: dump_concepts  (view,         step_dir, step)),
+        ("surprise",   lambda: dump_surprise  (view, prompt, step_dir, step)),
+        ("quant_kl",   lambda: dump_quant_kl  (view, prompt, step_dir, step)),
+        ("writing_health", lambda: dump_writing_health(view,    step_dir, step, corpus_path=corpus_path)),
+        ("generation", lambda: dump_generation(view, prompt, step_dir, step, corpus_path=corpus_path)),
     ]
     cuda_avail = torch.cuda.is_available()
     for label, fn in dumps:

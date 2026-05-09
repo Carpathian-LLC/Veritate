@@ -31,8 +31,6 @@ Mechanics:
 
 This is a learned, continuously-updated summary embedding. It does not remember chapter 1 verbatim. It remembers the gist of chapter 1 in 512 floats, and the gist rides along into chapter 12.
 
-Spec at [docs/plans/multimodule_brain.md:46-59](../../../docs/plans/multimodule_brain.md#L46).
-
 ## layer 3: HDC memory (long-term store)
 
 Hyperdimensional Computing. The actual long-context play.
@@ -50,8 +48,6 @@ This is RAG with two twists:
 - The "documents" being retrieved are the model's own past hidden states, not raw text. Compressed semantic memory, not verbatim.
 - The retrieval index is an HDC binary store, not a vector DB. ~1 KB per memory. Stays inside the constraint #3 envelope: lives next to the checkpoint, not inside it.
 
-Spec at [docs/plans/multimodule_brain.md:111-120](../../../docs/plans/multimodule_brain.md#L111).
-
 ## layer 4: sleep cycles (consolidation)
 
 The cleanup process, offline.
@@ -66,8 +62,6 @@ Veritate version:
 
 Offline. Does not affect the 0.1 ms / byte decode budget.
 
-Spec at [docs/plans/IDEAS.md:311-325](../../../docs/plans/IDEAS.md#L311).
-
 ## putting it together: chapter 12 of a novel
 
 1. Tokenize the prompt to bytes, encode as HDC vector, query the store. Top-3 prior-chapter workspace gists come back. (microseconds)
@@ -81,8 +75,8 @@ The model never has the whole novel in attention. It has the current chapter plu
 ## status
 
 - RoPE: small upgrade, not yet done.
-- Workspace: planned in [multimodule_brain.md](../../../docs/plans/multimodule_brain.md), not built.
+- Workspace: planned, not built.
 - HDC memory: planned, not built.
-- Sleep cycles: vision-stage in [IDEAS.md](../../../docs/plans/IDEAS.md).
+- Sleep cycles: vision-stage.
 
 The 1B PoC currently in training is the language core only: layer 1 of the stack. The other layers come after it converges.

@@ -89,14 +89,17 @@ def load_c_trace(path):
 
 
 def pytorch_trace(checkpoint, prompt, real_len_pad=V_SEQ):
-    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    cfg = state.get("args", {})
+    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    cfg = dict(state.get("args", {}))
+    sd = state["model"]
+    del state  # drops optimizer state (~8 GB on 1B) before model construction
     model = Veritate(
         vocab=cfg.get("vocab", 256), hidden=cfg.get("hidden", 768),
         layers=cfg.get("layers", 12), ffn=cfg.get("ffn", 3072),
         heads=cfg.get("heads", 12), seq=cfg.get("seq", 256),
     )
-    model.load_state_dict(state["model"], strict=False)
+    model.load_state_dict(sd, strict=False)
+    del sd
     model.eval()
 
     prompt_bytes = prompt.encode("utf-8")

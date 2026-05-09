@@ -1,0 +1,39 @@
+{
+  "name": "Slot Table",
+  "description": "Inference-time notepad. Tracks recent named entities, gendered anchors, and the rolling byte window. Biases next-byte logits to suppress doc-boundary collapse, repetition loops, n-gram echoes, and wrong-gender pronoun completions. Boosts already-seen named entities at word-start.",
+  "kind": "decoder",
+  "params": {
+    "block_bytes": {
+      "default": [0],
+      "description": "byte values forced to -inf at every step; default blocks the corpus separator (NUL)."
+    },
+    "ngram_n": {
+      "default": 4,
+      "description": "n-gram window length used for repetition blocking. 0 disables."
+    },
+    "ngram_penalty": {
+      "default": 2.0,
+      "description": "logit subtracted from any byte that would extend the current (n-1)-byte suffix into an n-gram already seen in the window."
+    },
+    "rep_penalty": {
+      "default": 1.10,
+      "description": "softmax-style multiplicative penalty on bytes seen recently in the lookback window. 1.0 disables."
+    },
+    "rep_lookback": {
+      "default": 64,
+      "description": "how many recent bytes feed the repetition penalty."
+    },
+    "name_boost": {
+      "default": 0.5,
+      "description": "logit added to the first byte of any 'named X' entity at word-start (not sentence-start). 0 disables."
+    },
+    "pronoun_penalty": {
+      "default": 4.0,
+      "description": "logit subtracted from byte continuations that would complete a wrong-gender pronoun (he/she/his/her/etc.). 0 disables."
+    },
+    "window_bytes": {
+      "default": 256,
+      "description": "rolling-window size (bytes) over which all observations apply."
+    }
+  }
+}

@@ -13,6 +13,7 @@
 #   with the canonical Veritate class which now accepts per-layer ffn lists.
 # veritate_mri/pruning.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 import json
 import math
@@ -37,7 +38,7 @@ ACTIVITY_KEEP_MIN = 0.05  # never recommend pruning below 5% width
 
 
 # ------------------------------------------------------------------------------------
-# Activity measurement
+# Functions
 
 def measure_activity(model, corpus_path, n_samples=DEFAULT_SAMPLES,
                      seq_len=None, threshold=DEFAULT_THRESHOLD, seed=0):
@@ -106,9 +107,6 @@ def measure_activity(model, corpus_path, n_samples=DEFAULT_SAMPLES,
             "seq_len": seq_len, "threshold": float(threshold)}
 
 
-# ------------------------------------------------------------------------------------
-# Plan recommendation
-
 def recommend_plan(report, layers):
     """Take the per-layer alive_frac and bucket each layer into one of four
     actions: prune hard (25%), prune (50%), trim (70%), keep (100%). The cutoffs
@@ -129,8 +127,6 @@ def recommend_plan(report, layers):
     return plan
 
 
-# ------------------------------------------------------------------------------------
-# Width prune
 
 def apply_plan(model, scores, plan):
     """Build a pruned state_dict from `model` using per-unit `scores` and a
@@ -220,10 +216,10 @@ def main():
 
     src_ckpt = paths.checkpoint_path(args.source, args.step)
     print(f"loading source checkpoint: {{src_ckpt}}", flush=True)
-    s = torch.load(src_ckpt, map_location="cpu", weights_only=False)
-    cfg = s.get("args", {{}})
-
+    s = torch.load(src_ckpt, map_location="cpu", weights_only=True)
+    cfg = dict(s.get("args", {{}}))
     sd = s["model"]
+    del s  # drops optimizer state (~8 GB on 1B) before model construction
     layers = 1 + max(int(k.split(".")[1]) for k in sd if k.startswith("blocks."))
     ffn_per_layer = [sd[f"blocks.{{L}}.ff.up.weight"].shape[0] for L in range(layers)]
     vocab, hidden = sd["tok_emb.weight"].shape

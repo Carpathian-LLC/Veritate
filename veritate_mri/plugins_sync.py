@@ -7,18 +7,21 @@
 # - sync the plugins/ folder against its remote git repo. plugins/ is its own
 #   self-contained git repo, separate from the parent Veritate repo.
 # - status() reports remote, branch, head, and ahead/behind. local dirty state
-#   is not surfaced: pull is fast-forward-only, so git itself rejects pulls
-#   that would overwrite tracked edits, and untracked files are expected.
-# - sync() does fetch + ff-only pull, or clones if plugins/ is missing.
-# - never destructive: refuses to clone over a non-empty non-repo dir, refuses
-#   to pull if a plugin is currently running, refuses non-fast-forward merges.
+#   is not surfaced: untracked user content is expected.
+# - sync() does fetch + hard reset to origin/<branch>, or clones if plugins/ is
+#   missing. tracked files are forced to match upstream (this is a download,
+#   not a merge), so any local commits or edits to tracked files are discarded.
+#   untracked user content is preserved. this avoids the "diverging branches
+#   can't be fast-forwarded" failure mode that ff-only pulls hit whenever
+#   local history drifts from remote.
+# - still refuses to clone over a non-empty non-repo dir, and refuses to sync
+#   if a plugin is currently running.
 # veritate_mri/plugins_sync.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
 import os
 import shutil
-import subprocess
 import threading
 import time
 
@@ -26,6 +29,7 @@ from readers import paths
 
 import logs as logmod
 import plugin_runner
+from git_runner import run_git as _git
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -35,7 +39,6 @@ DEFAULT_BRANCH     = "main"
 GIT_TIMEOUT_SECS   = 120
 
 PLUGINS_DIR = paths.PLUGINS_ROOT
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 _LOCK = threading.RLock()
 _LAST = {
@@ -49,27 +52,7 @@ _LAST = {
 # Functions
 
 def _run_git(args, cwd, timeout=GIT_TIMEOUT_SECS):
-    env = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_ALLOW_PROTOCOL":  "https",
-        "GIT_ASKPASS":         "echo",
-    }
-    try:
-        r = subprocess.run(
-            ["git"] + list(args),
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-            creationflags=_NO_WINDOW,
-        )
-        return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
-    except FileNotFoundError:
-        return 127, "", "git executable not found on PATH"
-    except subprocess.TimeoutExpired:
-        return 124, "", f"git {' '.join(args)} timed out after {timeout}s"
+    return _git(args, cwd, timeout=timeout)
 
 
 def _is_repo(path):
@@ -179,15 +162,41 @@ def _clone(remote_url, branch):
 
 
 def _pull(branch):
-    code, so, se = _run_git(["pull", "--ff-only", "origin", branch], PLUGINS_DIR)
+    code, so, se = _run_git(["fetch", "origin", branch], PLUGINS_DIR)
     if code != 0:
-        msg = se or so or f"git pull --ff-only exit {code}"
-        logmod.error("plugins-sync", f"pull failed: {msg}")
+        msg = se or so or f"git fetch exit {code}"
+        logmod.error("plugins-sync", f"fetch failed: {msg}")
         _record("pull", False, msg)
         return {"ok": False, "error": msg}
-    logmod.ok("plugins-sync", f"pulled origin/{branch}: {so or 'already up to date'}")
-    _record("pull", True, so or "already up to date")
+    code, so, se = _run_git(["reset", "--hard", f"origin/{branch}"], PLUGINS_DIR)
+    if code != 0:
+        msg = se or so or f"git reset --hard exit {code}"
+        logmod.error("plugins-sync", f"reset failed: {msg}")
+        _record("pull", False, msg)
+        return {"ok": False, "error": msg}
+    logmod.ok("plugins-sync", f"synced to origin/{branch}: {so or 'ok'}")
+    _record("pull", True, so or f"synced to origin/{branch}")
     return {"ok": True, "action": "pull", "status": status()}
+
+
+def check():
+    """Refresh remote state without pulling. `git fetch origin <branch>` then
+    return the updated status. Read-only; does not mutate the working tree."""
+    if not _is_repo(PLUGINS_DIR):
+        return {"ok": False, "error": "plugins/ is not a git repo. clone via sync first.",
+                "status": status()}
+    branch = DEFAULT_BRANCH
+    code, so, _ = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], PLUGINS_DIR, timeout=10)
+    if code == 0 and so:
+        branch = so
+    code, so, se = _run_git(["fetch", "origin", branch], PLUGINS_DIR)
+    if code != 0:
+        msg = se or so or f"git fetch exit {code}"
+        logmod.error("plugins-sync", f"check failed: {msg}")
+        _record("check", False, msg)
+        return {"ok": False, "error": msg, "status": status()}
+    _record("check", True, f"fetched origin/{branch}")
+    return {"ok": True, "action": "check", "status": status()}
 
 
 def sync():

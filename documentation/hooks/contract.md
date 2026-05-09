@@ -6,6 +6,8 @@ API reference for the data the dashboard, MRI server, and external tools can pul
 
 All paths relative to `models/<name>/hooks/step_<N>/`. Every artifact below is produced by a single call to `veritate_mri/save.py::save(model, name, step, ...)`, exposed to plugins as `veritate.plugin.save.save`.
 
+`save.save()` calls `model.hook_spec()` and walks the returned object as if it were a canonical `Veritate`. Vanilla models return `self`; non-canonical models (MoE, sidecar adapters, future workspace / HDC modules) return a thin adapter that exposes canonical-shaped trace points. See [hook_spec contract](#hook_spec-contract) below.
+
 | file | producer | fields |
 |---|---|---|
 | `probe_step_<N>.json` | `dump_probe` | `step`, `precision`, `prompt`, `top_k`, `layers[]: {layer, neurons[]: {id, v}}` |
@@ -15,6 +17,7 @@ All paths relative to `models/<name>/hooks/step_<N>/`. Every artifact below is p
 | `concepts_step_<N>.json` | `dump_concepts` | `step`, `precision`, `concepts`, `top_k_per_layer`, `time_s` |
 | `surprise_step_<N>.json` | `dump_surprise` | `step`, `precision`, `prompt`, `tokens`, `surprise` (bits/byte per token), `time_s` |
 | `quant_kl_step_<N>.json` | `dump_quant_kl` | `step`, `precision`, `quant_kl_bits`, `n_levels`, `time_s` |
+| `writing_health_step_<N>.json` | `dump_writing_health` | `step`, `precision`, `samples[]: {prompt, generation, metrics}`, `aggregate`, `config`, `caveat`, `time_s`. Mathematical proxies for writing structure only (mode collapse, repetition, anaphora, off-corpus drift). Not a measure of narrative sense or factual correctness. |
 | `step_<N>.json` | `dump_generation` | `meta`, `frames[]` (each frame carries the full TFRM v7 field set below) |
 
 ## tfrm v7 frame fields (per generated token)
@@ -77,6 +80,29 @@ Atlas endpoints aggregate frames from the in-memory ring (live) or `step_<N>.jso
 | `GET /atlas/lifetime/<layer>/<index>?model=...` | neuron coordinate | per-step trajectory across `probe_step_<N>.json` (rank, magnitude, prompt-position) |
 | `GET /atlas/circuit?model=...` | model name | static `W_down[L] @ W_up[L+1]` neuron-to-neuron transfer matrix; computed once at model load, cached per model |
 | `GET /atlas/concepts_inverted?model=...&step=<N>` | model + step | `concepts_step_<N>.json::top_neurons` inverted into a neuron-keyed map |
+
+## hook_spec contract
+
+`save.save()` walks `model.hook_spec()`, not the raw model. The returned object must quack like a canonical `Veritate`:
+
+| attribute | type | meaning |
+|---|---|---|
+| `layers`, `heads`, `seq`, `vocab`, `hidden` | int | shape scalars |
+| `ffn` | int | per-layer FFN intermediate width |
+| `tok_emb` | `nn.Embedding` | token embedding (weight tied to `lm_head`) |
+| `lm_head` | module with `.weight` | final projection |
+| `n_out` | module | final RMSNorm |
+| `blocks` | `nn.ModuleList` | one entry per layer |
+| `blocks[L]` | module | forward `(x) -> x'`; pre/post hooks fire here for residual capture |
+| `blocks[L].n1`, `.attn`, `.n2` | modules | RMSNorm 1, attention, RMSNorm 2 (real underlying modules) |
+| `blocks[L].ff.up` | module | forward must return a `(B, T, ffn)` tensor (pre-GELU FFN intermediate). `.weight` must expose a real `(ffn, hidden)` weight tensor for direct-logit-attribution math. |
+| `blocks[L].ff.down` | module | `.weight` must expose a real `(hidden, ffn)` weight tensor; forward unused by the dumper. |
+| `forward(tokens, targets=None)` | callable | returns `(logits, loss)` 2-tuple, like canonical |
+| `named_parameters()`, `parameters()` | generators | classroom dump's L2-norm walk reads these |
+
+For canonical `Veritate`, `hook_spec()` returns `self`. For non-canonical models, return a small `nn.Module` adapter whose forward delegates to the real model and whose attributes proxy onto canonical-shaped trace points. The adapter is dump-only: the saved `.pt` still contains the real (non-canonical) state dict.
+
+Example: an MoE model whose per-block FFN has `n_experts` up/down projections plus a router exposes a routing-weighted `(B, T, ffn)` activation under `blocks[L].ff.up.forward()` and presents one canonical down-projection weight (typically expert 0's) under `blocks[L].ff.down.weight`. Per-expert traces are out of scope until the contract is extended.
 
 ## update obligation
 
