@@ -13,8 +13,15 @@
 # Imports:
 
 import json
+import ssl
 import urllib.error
 import urllib.request
+
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _SSL_CTX = ssl.create_default_context()
 
 import logs as logmod
 import settings as settings_mod
@@ -120,7 +127,7 @@ def _post_chat(endpoint, key, system_prompt, user_message):
         },
         method  = "POST",
     )
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECS) as resp:
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECS, context=_SSL_CTX) as resp:
         status = resp.status
         raw = resp.read().decode("utf-8", errors="replace")
     logmod.info(LOG_SOURCE, f"resp status={status} bytes={len(raw)}")
