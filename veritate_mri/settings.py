@@ -36,7 +36,7 @@ DEFAULTS = {
     "consent_modal_seen": False,
     "analytics_advanced_enabled": False,
     "update_channel": "stable",
-    "auto_reload_on_update": False,
+    "auto_reload_on_update": True,
     "ai_enabled": False,
     "ai_endpoint": "https://api.carpathian.ai/ai/v1/chat/completions",
     "ai_api_key": "cai_fnNpuo53DY8AMGqjuaRoYmpT8274cx6aYCuQR_w1F7w",
@@ -52,6 +52,7 @@ DEFAULTS = {
 # last_acknowledged_build >= the highest key.
 BUILD_NOTICES = {
     5: "Build 5 contains substantial engine changes. Please pull the latest source and fully restart the application; older runtime state may not be compatible. Requires a reinstall of requirements (pip install -r requirements.txt).",
+    6: "Build 6 reworks the in-app updater. The 'Update' button now overwrites local tracked source to match upstream so diverging branches and dirty trees no longer block updates; user data in data/, models/, and plugins/ is gitignored and untouched. If your repo is stuck from a previously failed update, delete and re-clone the Veritate repository (your data/, models/, and plugins/ folders carry over). Click the yellow 'reload python' button once after this update to load the new updater logic.",
 }
 
 _LOCK = threading.Lock()

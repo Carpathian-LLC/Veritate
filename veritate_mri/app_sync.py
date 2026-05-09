@@ -11,8 +11,13 @@
 #       development   -> dev
 # - status() reports current branch, channel, head, and behind count vs the
 #   channel's branch on origin. check() runs git fetch and refreshes behind.
-#   pull() does ff-only pull on the channel branch. switch_channel() runs a
-#   safe git checkout (refuses if working tree is dirty).
+#   pull() does fetch + hard reset to origin/<channel branch>. tracked source
+#   files are forced to match upstream (this is a download, not a merge), so
+#   any local commits or edits to tracked files are discarded. user data
+#   (data/, models/, plugins/) is gitignored and untouched. this avoids the
+#   "diverging branches can't be fast-forwarded" and dirty-tree failure modes
+#   that ff-only pulls hit whenever local history drifts. switch_channel()
+#   runs a safe git checkout (refuses if working tree is dirty).
 # - poll_loop() runs in the background and writes the latest behind count to
 #   data/app_sync_state.json. the dashboard polls /app/update_status to read
 #   it and (optionally) auto-triggers a soft reload when an update lands.
@@ -224,18 +229,20 @@ def pull():
                f"switch channel first.")
         logmod.warn("app-sync", msg)
         return {"ok": False, "error": msg}
-    if _is_dirty():
-        msg = "working tree has uncommitted changes; refusing to pull. commit or stash first."
-        logmod.warn("app-sync", msg)
-        return {"ok": False, "error": msg}
-    code, so, se = _run_git(["pull", "--ff-only", "origin", target])
+    code, so, se = _run_git(["fetch", "origin", target], timeout=GIT_TIMEOUT_SECS)
     if code != 0:
-        msg = se or so or f"git pull --ff-only exit {code}"
-        logmod.error("app-sync", f"pull failed: {msg}")
+        msg = se or so or f"git fetch exit {code}"
+        logmod.error("app-sync", f"fetch failed: {msg}")
         _update_state({"last_pull_ts": time.time(), "last_pull_ok": False, "last_pull_msg": msg})
         return {"ok": False, "error": msg}
-    logmod.ok("app-sync", f"pulled origin/{target}: {so or 'already up to date'}")
-    _update_state({"last_pull_ts": time.time(), "last_pull_ok": True, "last_pull_msg": so or "ok"})
+    code, so, se = _run_git(["reset", "--hard", f"origin/{target}"], timeout=GIT_TIMEOUT_SECS)
+    if code != 0:
+        msg = se or so or f"git reset --hard exit {code}"
+        logmod.error("app-sync", f"reset failed: {msg}")
+        _update_state({"last_pull_ts": time.time(), "last_pull_ok": False, "last_pull_msg": msg})
+        return {"ok": False, "error": msg}
+    logmod.ok("app-sync", f"synced to origin/{target}: {so or 'ok'}")
+    _update_state({"last_pull_ts": time.time(), "last_pull_ok": True, "last_pull_msg": so or f"synced to origin/{target}"})
     return {"ok": True, "status": status()}
 
 

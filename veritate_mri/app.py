@@ -408,7 +408,7 @@ def app_update_pull_route():
     res = app_sync_mod.pull()
     if res.get("ok") and body.get("reload"):
         try:
-            lifecycle.soft_reload(app.config)
+            lifecycle.restart(app.config)
         except Exception as e:
             res["reload_error"] = f"{type(e).__name__}: {e}"
     return res
@@ -1739,7 +1739,7 @@ def main():
     heartbeat_mod.start()
 
     def _app_sync_reload():
-        lifecycle.soft_reload(app.config)
+        lifecycle.restart(app.config)
     app_sync_mod.set_reload_hook(_app_sync_reload)
     app_sync_mod.start()
 

@@ -1,6 +1,6 @@
 {
   "channel": "development",
-  "build": 5,
+  "build": 6,
   "engine": "v2.2.0",
   "mri": "v0.2.0",
   "format": "v0.3.0",
