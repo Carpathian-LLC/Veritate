@@ -14,11 +14,14 @@
 
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
 import threading
 import time
+
+from readers.paths import REPO_ROOT
 
 try:
     import psutil
@@ -321,3 +324,64 @@ def snapshot():
         "gpus": _gpus(),
         "ts": time.time(),
     }
+
+
+# ------------------------------------------------------------------------------------
+# Saved system spec file. Captured on demand from the settings UI; future
+# features compare requirements against the user's machine without re-running
+# the (slow) adapter discovery commands. Lives under data/, gitignored.
+
+SPECS_PATH = os.path.join(REPO_ROOT, "data", "system_specs.json")
+
+
+def detect_specs():
+    """Cross-platform machine spec snapshot for the saved specs file.
+    Builds on snapshot() and adds static platform info (OS name+version,
+    Python version, CPU brand). Forces a synchronous adapter refresh so
+    GPU info is fresh when the user clicks 'detect'."""
+    _refresh_adapters()
+    snap = snapshot()
+    return {
+        "captured_at": int(time.time()),
+        "platform": {
+            "system":   platform.system() or "",
+            "release":  platform.release() or "",
+            "version":  platform.version() or "",
+            "machine":  platform.machine() or "",
+            "processor": platform.processor() or "",
+            "python":   platform.python_version(),
+        },
+        "cpu": {
+            "count_logical": int(_CPU_COUNT),
+            "count_physical": int(psutil.cpu_count(logical=False)) if _PSUTIL_OK else None,
+        },
+        "memory": {
+            "total_bytes":     int(snap.get("sys_mem_total") or 0) or None,
+            "available_bytes": int(snap.get("sys_mem_available") or 0) or None,
+        },
+        "gpus": snap.get("gpus") or [],
+    }
+
+
+def save_specs(specs):
+    os.makedirs(os.path.dirname(SPECS_PATH), exist_ok=True)
+    tmp = SPECS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(specs, f, indent=2)
+    os.replace(tmp, SPECS_PATH)
+
+
+def load_specs():
+    if not os.path.isfile(SPECS_PATH):
+        return None
+    try:
+        with open(SPECS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def detect_and_save():
+    specs = detect_specs()
+    save_specs(specs)
+    return specs

@@ -7,11 +7,15 @@
 # - sync the plugins/ folder against its remote git repo. plugins/ is its own
 #   self-contained git repo, separate from the parent Veritate repo.
 # - status() reports remote, branch, head, and ahead/behind. local dirty state
-#   is not surfaced: pull is fast-forward-only, so git itself rejects pulls
-#   that would overwrite tracked edits, and untracked files are expected.
-# - sync() does fetch + ff-only pull, or clones if plugins/ is missing.
-# - never destructive: refuses to clone over a non-empty non-repo dir, refuses
-#   to pull if a plugin is currently running, refuses non-fast-forward merges.
+#   is not surfaced: untracked user content is expected.
+# - sync() does fetch + hard reset to origin/<branch>, or clones if plugins/ is
+#   missing. tracked files are forced to match upstream (this is a download,
+#   not a merge), so any local commits or edits to tracked files are discarded.
+#   untracked user content is preserved. this avoids the "diverging branches
+#   can't be fast-forwarded" failure mode that ff-only pulls hit whenever
+#   local history drifts from remote.
+# - still refuses to clone over a non-empty non-repo dir, and refuses to sync
+#   if a plugin is currently running.
 # veritate_mri/plugins_sync.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -179,14 +183,20 @@ def _clone(remote_url, branch):
 
 
 def _pull(branch):
-    code, so, se = _run_git(["pull", "--ff-only", "origin", branch], PLUGINS_DIR)
+    code, so, se = _run_git(["fetch", "origin", branch], PLUGINS_DIR)
     if code != 0:
-        msg = se or so or f"git pull --ff-only exit {code}"
-        logmod.error("plugins-sync", f"pull failed: {msg}")
+        msg = se or so or f"git fetch exit {code}"
+        logmod.error("plugins-sync", f"fetch failed: {msg}")
         _record("pull", False, msg)
         return {"ok": False, "error": msg}
-    logmod.ok("plugins-sync", f"pulled origin/{branch}: {so or 'already up to date'}")
-    _record("pull", True, so or "already up to date")
+    code, so, se = _run_git(["reset", "--hard", f"origin/{branch}"], PLUGINS_DIR)
+    if code != 0:
+        msg = se or so or f"git reset --hard exit {code}"
+        logmod.error("plugins-sync", f"reset failed: {msg}")
+        _record("pull", False, msg)
+        return {"ok": False, "error": msg}
+    logmod.ok("plugins-sync", f"synced to origin/{branch}: {so or 'ok'}")
+    _record("pull", True, so or f"synced to origin/{branch}")
     return {"ok": True, "action": "pull", "status": status()}
 
 

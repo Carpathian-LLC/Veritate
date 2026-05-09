@@ -391,6 +391,16 @@ def sys_metrics_route():
     return sys_metrics.snapshot()
 
 
+@app.route("/sys/specs")
+def sys_specs_get():
+    return sys_metrics.load_specs() or {"detected": False}
+
+
+@app.route("/sys/detect", methods=["POST"])
+def sys_specs_detect():
+    return sys_metrics.detect_and_save()
+
+
 @app.route("/heartbeat/status")
 def heartbeat_status_route():
     return heartbeat_mod.status()
@@ -495,6 +505,11 @@ def settings_route():
                     logmod.error("backends", f"pytorch eager load on settings flip failed: {msg}")
         return out
     return settings_mod.get()
+
+
+@app.route("/settings/notices", methods=["GET"])
+def settings_notices_route():
+    return {"notices": settings_mod.pending_notices()}
 
 
 @app.route("/ai/ask", methods=["POST"])

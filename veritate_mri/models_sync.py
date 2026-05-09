@@ -10,9 +10,12 @@
 # - status() reports remote, branch, head, and ahead/behind. local dirty state
 #   is intentionally not surfaced: users will accumulate untracked checkpoints
 #   and hooks, and that is expected.
-# - sync() does fetch + ff-only pull, or clones if models/ is missing. it does
-#   not pre-check working-tree state; git itself refuses pulls that would
-#   overwrite tracked changes.
+# - sync() does fetch + hard reset to origin/<branch>, or clones if models/ is
+#   missing. tracked files are forced to match upstream (this is a download,
+#   not a merge), so any local commits or edits to tracked files are discarded.
+#   untracked user content (checkpoints, hooks) is preserved. this avoids the
+#   "diverging branches can't be fast-forwarded" failure mode that ff-only
+#   pulls hit whenever local history drifts from remote.
 # veritate_mri/models_sync.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -179,14 +182,20 @@ def _clone(remote_url, branch):
 
 
 def _pull(branch):
-    code, so, se = _run_git(["pull", "--ff-only", "origin", branch], MODELS_DIR)
+    code, so, se = _run_git(["fetch", "origin", branch], MODELS_DIR)
     if code != 0:
-        msg = se or so or f"git pull --ff-only exit {code}"
-        logmod.error("models-sync", f"pull failed: {msg}")
+        msg = se or so or f"git fetch exit {code}"
+        logmod.error("models-sync", f"fetch failed: {msg}")
         _record("pull", False, msg)
         return {"ok": False, "error": msg}
-    logmod.ok("models-sync", f"pulled origin/{branch}: {so or 'already up to date'}")
-    _record("pull", True, so or "already up to date")
+    code, so, se = _run_git(["reset", "--hard", f"origin/{branch}"], MODELS_DIR)
+    if code != 0:
+        msg = se or so or f"git reset --hard exit {code}"
+        logmod.error("models-sync", f"reset failed: {msg}")
+        _record("pull", False, msg)
+        return {"ok": False, "error": msg}
+    logmod.ok("models-sync", f"synced to origin/{branch}: {so or 'ok'}")
+    _record("pull", True, so or f"synced to origin/{branch}")
     return {"ok": True, "action": "pull", "status": status()}
 
 

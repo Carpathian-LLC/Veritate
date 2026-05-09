@@ -26,6 +26,7 @@ import uuid
 
 import logs as logmod
 import settings as settings_mod
+import sys_metrics
 from readers import paths, models as models_reader
 
 # ------------------------------------------------------------------------------------
@@ -35,13 +36,14 @@ HEARTBEAT_URL          = "https://api.carpathian.ai/webhook/veritate-heartbeat"
 HEARTBEAT_INTERVAL_SECS = 6 * 60 * 60
 HEARTBEAT_FIRST_DELAY   = 5 * 60
 HEARTBEAT_TIMEOUT_SECS  = 8.0
-HEARTBEAT_USER_AGENT    = "veritate-heartbeat/1"
+HEARTBEAT_USER_AGENT    = "veritate-heartbeat/2"
 
 STATE_PATH    = os.path.join(paths.REPO_ROOT, "data", "heartbeat_state.json")
 MACHINE_ID_LEN = 16
 MODELS_HASH_LEN = 12
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+TRAINING_EVENTS_PER_PING_MAX = 32
 
 _LOCK        = threading.Lock()
 _PROCESS_START = time.monotonic()
@@ -127,6 +129,27 @@ def record_error_tick():
     _update_state({"errors_pending": n})
 
 
+def record_training_event(model_name, arch, started_at=None):
+    """Append a training-start event to the pending queue. Drained on the
+    next heartbeat send when advanced telemetry is enabled; the build runner
+    calls this regardless of consent so flipping the toggle on later still
+    lets the next ping carry whatever has accumulated since."""
+    if not isinstance(model_name, str) or not model_name:
+        return
+    s = _state()
+    pend = s.get("pending_training_events") or []
+    if not isinstance(pend, list):
+        pend = []
+    pend.append({
+        "model":      model_name[:128],
+        "arch":       (arch or "")[:64],
+        "started_at": int(started_at if started_at is not None else time.time()),
+    })
+    if len(pend) > TRAINING_EVENTS_PER_PING_MAX * 4:
+        pend = pend[-TRAINING_EVENTS_PER_PING_MAX * 4:]
+    _update_state({"pending_training_events": pend})
+
+
 def _consume_errors():
     s = _state()
     n = int(s.get("errors_pending") or 0)
@@ -147,6 +170,25 @@ def set_training_provider(fn):
     or None when nothing is running. Output is sent verbatim if not None."""
     global _TRAINING_FN
     _TRAINING_FN = fn
+
+
+def _hw_block():
+    snap = sys_metrics.snapshot()
+    if not snap or not snap.get("available"):
+        return None
+    gpus_out = []
+    for g in (snap.get("gpus") or [])[:8]:
+        gpus_out.append({
+            "vendor":     g.get("vendor") or "",
+            "name":       (g.get("name") or "")[:96],
+            "integrated": bool(g.get("integrated")),
+            "vram_total": int(g.get("vram_total") or 0) or None,
+        })
+    return {
+        "cpu_count":       int(snap.get("cpu_count") or 0) or None,
+        "ram_total_bytes": int(snap.get("sys_mem_total") or 0) or None,
+        "gpus":            gpus_out,
+    }
 
 
 def _build_payload():
@@ -175,6 +217,14 @@ def _build_payload():
                 payload["training"] = t
         except Exception:
             pass
+    if bool(settings_mod.get().get("analytics_advanced_enabled")):
+        if not bool(s.get("hw_dump_sent")):
+            hw = _hw_block()
+            if hw is not None:
+                payload["hw"] = hw
+        pend = s.get("pending_training_events") or []
+        if isinstance(pend, list) and pend:
+            payload["trainings"] = pend[:TRAINING_EVENTS_PER_PING_MAX]
     return payload
 
 
@@ -196,13 +246,21 @@ def _post(payload):
 
 def _send_once():
     payload = _build_payload()
+    sent_trainings = payload.get("trainings") or []
+    sent_hw        = payload.get("hw") is not None
     try:
         status = _post(payload)
-        _update_state({
+        patch = {
             "last_send_ts":     int(time.time()),
             "last_send_status": int(status),
             "last_send_error":  None,
-        })
+        }
+        if sent_hw:
+            patch["hw_dump_sent"] = True
+        if sent_trainings:
+            remaining = (_state().get("pending_training_events") or [])[len(sent_trainings):]
+            patch["pending_training_events"] = remaining
+        _update_state(patch)
         return True
     except urllib.error.HTTPError as e:
         body_excerpt = ""

@@ -2234,6 +2234,61 @@ function closeQatHelpModal() {
     document.body.classList.remove("no-scroll");
   }
 }
+// Generic modal. Resolves with the value of the button the user clicked,
+// or null if dismissed (backdrop click / Escape / close button). Buttons:
+// [{label, value, primary?}]. Body is HTML.
+// Options:
+//   nonDismissable - disables backdrop click, Escape, and the X; user must
+//     click one of `buttons` to close.
+//   accent - CSS color (e.g. "var(--accent)") applied to box border, title,
+//     and header underline. Defaults to var(--line).
+//   align - "top" pins the box near the top of the viewport instead of
+//     vertically centering it.
+function showModal({ title, body, buttons, nonDismissable, accent, align }) {
+  return new Promise((resolve) => {
+    const root = document.createElement("div");
+    root.className = "modal-backdrop";
+    if (align === "top") {
+      root.style.alignItems = "flex-start";
+      root.style.paddingTop = "8vh";
+    }
+    const box = document.createElement("div");
+    box.className = "modal-box";
+    box.style.maxWidth = "560px";
+    if (accent) box.style.borderColor = accent;
+    const close = (val) => {
+      document.body.removeChild(root);
+      document.documentElement.classList.remove("no-scroll");
+      document.body.classList.remove("no-scroll");
+      document.removeEventListener("keydown", onKey);
+      resolve(val);
+    };
+    const onKey = (e) => { if (!nonDismissable && e.key === "Escape") close(null); };
+    const btnHtml = (buttons || []).map((b, i) =>
+      `<button data-i="${i}" class="${b.primary ? "go" : ""}" style="margin-left:8px">${escapeHtml(b.label)}</button>`
+    ).join("");
+    const headerStyle = accent ? ` style="border-bottom-color:${accent}"` : "";
+    const titleStyle  = accent ? ` style="color:${accent}"` : "";
+    const closeBtn    = nonDismissable ? "" : `<button data-close="1">×</button>`;
+    box.innerHTML = `
+      <div class="modal-header"${headerStyle}><h3${titleStyle}>${escapeHtml(title || "")}</h3>${closeBtn}</div>
+      <div style="font-size:12.5px;line-height:1.6;color:var(--text)">${body || ""}</div>
+      <div style="display:flex;justify-content:flex-end;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">${btnHtml}</div>
+    `;
+    root.appendChild(box);
+    document.body.appendChild(root);
+    document.documentElement.classList.add("no-scroll");
+    document.body.classList.add("no-scroll");
+    root.addEventListener("click", (e) => {
+      if (!nonDismissable && e.target === root) return close(null);
+      if (!nonDismissable && e.target.dataset && e.target.dataset.close === "1") return close(null);
+      const idx = e.target.dataset && e.target.dataset.i;
+      if (idx != null) close(buttons[parseInt(idx, 10)].value);
+    });
+    document.addEventListener("keydown", onKey);
+  });
+}
+
 $("modalClose").addEventListener("click", closeModal);
 $("neuronModal").addEventListener("click", (e) => { if (e.target.id === "neuronModal") closeModal(); });
 $("conceptModalClose").addEventListener("click", closeConceptModal);
@@ -5029,19 +5084,39 @@ function _trUpdateComposedName() {
   if (!corpus && !size && !precision && !version) { out.textContent = ""; return; }
   const corpusLeaf = corpus.includes(":") ? corpus.split(":").pop() : corpus;
   const parts = [corpusLeaf || "?", size || "?", precision || "?", version || "?"];
-  out.textContent = "→ " + parts.join("_");
+  out.textContent = parts.join("_");
 }
 
-// VRAM estimator for the train form. Computed from form values only.
-//   static = params × bytes-per-param (weights + grads + AdamW state)
-//   acts   = batch × seq × hidden × layers × 13 × bytes × bptt_window
-// Activation multiplier 13 is the per-layer slot count for stored residual,
-// qkv, and ffn intermediate tensors. No quadratic-in-seq attention term —
-// scaled_dot_product_attention uses FlashAttention which does not materialize
-// the score matrix. n_chunks sets the runtime memory horizon but not VRAM;
-// bptt_window controls how many chunks of activation graph stay live for
-// backward (1 = lowest VRAM but write-path frozen, 4 = balanced, n_chunks =
-// full BPTT and max VRAM). Falls back to 1 when bptt_window unset.
+// Memory estimator for the train form. Computed from form values + the
+// detected hw budget when available.
+//
+//   static = params × bytes-per-param
+//   acts   = batch × seq × hidden × layers × 13 × bpv × bptt_window
+//   total  = (static + acts) × 1.15  (PyTorch overhead pad)
+//
+// Bytes-per-param is always 16 for AdamW (fp32 weights + fp32 grads + fp32 m
+// + fp32 v) — autocast keeps weights/grads/optim in fp32 even when the
+// forward path runs in bf16. Earlier versions used 14 for bf16, which was
+// wrong and made the estimate read low. With 8-bit AdamW (MEGA only),
+// optimizer state drops to 2 bytes/param, total becomes 10.
+//
+// bpv (bytes per activation element) follows the autocast dtype: bf16 = 2,
+// fp32 = 4. Activations are saved in the autocast dtype.
+//
+// Activation multiplier 13 = per-layer count of stored residual, qkv, and
+// ffn intermediate tensors for the multimind transformer block. SDPA uses
+// FlashAttention so there is no quadratic attention term. n_chunks sets the
+// runtime memory horizon but not VRAM; bptt_window controls how many chunks
+// of activation graph stay live for backward (1 = lowest VRAM but write-path
+// frozen, 4 = balanced, n_chunks = full BPTT and max VRAM). Falls back to 1
+// when bptt_window unset. Activation checkpointing halves activations.
+//
+// Budget for the red/yellow warning comes from saved system_specs.json:
+// discrete GPU -> sum of vram_total. Integrated / unified memory (Apple
+// Silicon, integrated Intel) -> ram_total × 0.7 (leaves room for OS + other
+// processes). The estimate caps as a *warning*, not a guarantee — real
+// usage varies with sequence packing, KV cache, M3 adapter slot table,
+// MoE routing, QAT fake-quant overhead, and PyTorch fragmentation.
 const _TR_SIZE_PRESETS = {
   // multimind_m3 / m1 sizes (dense)
   "30m":  { layers: 10, hidden: 512,  ffn: 2048, heads: 8,  params: 31e6  },
@@ -5070,7 +5145,7 @@ const TRAINER_SCHEMA = {
   scratch: [
     // ---- required (every trainer) ----
     { name: "corpus",       type: "corpus", required: true,  label: "training data file",      help: "the file the model reads." },
-    { name: "size",         type: "str",    required: true,  label: "model size",              help: "bigger = smarter, slower, more VRAM. choices depend on plugin: m1/m3 use 30m..800m dense, mega uses 200m/850m/1b/1b5 MoE.", choices: ["30m","80m","120m","200m","400m","800m","850m","1b","1b5"] },
+    { name: "size",         type: "str",    required: true,  label: "model size",              help: "bigger = smarter, slower, more VRAM. choices depend on plugin: Multimind M1/M3 use 30m..800m dense, MEGA uses 200m/850m/1b/1b5 MoE.", choices: ["30m","80m","120m","200m","400m","800m","850m","1b","1b5"] },
     { name: "precision",    type: "str",    required: true,  label: "number precision",        help: "bf16 = half memory. fp32 = double memory.", choices: ["bf16","fp32"] },
     { name: "version",      type: "str",    required: true,  label: "version tag",             help: "label for this run; v1, v1b, v2a..." },
     { name: "description",  type: "text",   required: true,  label: "what this model is for",  help: "saved into the model's config.json." },
@@ -5078,7 +5153,7 @@ const TRAINER_SCHEMA = {
     { name: "total_steps",  type: "int",                     label: "total training steps",    help: "more = longer training, more learned." },
     { name: "batch_size",   type: "int",                     label: "batch size",              help: "higher = faster, more VRAM." },
     { name: "seq",          type: "int",                     label: "sequence length",         help: "higher = wider per-step view, more VRAM." },
-    { name: "n_chunks",     type: "int",                     label: "TBPTT chunks per step",   help: "higher = longer M3 memory horizon at runtime; activation VRAM scales with bptt_window, not n_chunks. More chunks = more compute per step." },
+    { name: "n_chunks",     type: "int",                     label: "TBPTT chunks per step",   help: "higher = more bytes seen per step (and on Multimind M3, a longer adapter memory horizon at runtime). Activation VRAM scales with bptt_window, not n_chunks. More chunks = more compute per step." },
     { name: "base_lr",      type: "float",                   label: "peak learning rate",      help: "higher = bigger weight updates (risk: divergence). type 0.0001 or 1e-4." },
     { name: "min_lr",       type: "float",                   label: "minimum learning rate",   help: "where the LR settles at the end. type 0.00001 or 1e-5." },
     { name: "warmup_steps", type: "int",                     label: "warmup steps",            help: "more = slower ramp from 0 to peak LR." },
@@ -5095,12 +5170,12 @@ const TRAINER_SCHEMA = {
     { name: "seed",         type: "int",                     label: "random seed",             help: "different seed = different random run." },
     // ---- experimental / test-model clusters (all ADVANCED) ----
     // Adapter cluster (M1 + M3)
-    { name: "rank",            type: "int",        advanced: true, label: "adapter rank",            help: "M3 only. higher = more memory capacity in the adapter." },
-    { name: "n_slots",         type: "int",        advanced: true, label: "schema slots",            help: "M1 only. number of named slot vectors in the working-memory table. 256 is the canonical doc value." },
-    { name: "alpha",           type: "float",      advanced: true, label: "adapter write alpha",     help: "M1/M3 only. higher = each token writes harder to memory." },
-    { name: "inject_layer",    type: "int",        advanced: true, label: "inject layer (-1=auto)",  help: "M1/M3 only. which layer the adapter attaches to. -1 = mid-stack." },
-    { name: "init_from",       type: "model_name", advanced: true, label: "init base from model",    help: "M1 only. load base weights from another model's latest checkpoint and train M1 adapter on top. New model named <init_from>_m1." },
-    { name: "bptt_window",     type: "int",        advanced: true, label: "BPTT window (chunks)",    help: "M1/M3 only. BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
+    { name: "rank",            type: "int",        advanced: true, label: "adapter rank",            help: "Multimind M3 trainer only (Hebbian-adapter architecture, not Apple Silicon). higher = more memory capacity in the adapter." },
+    { name: "n_slots",         type: "int",        advanced: true, label: "schema slots",            help: "Multimind M1 trainer only (slot-memory architecture, not Apple Silicon). number of named slot vectors in the working-memory table. 256 is the canonical doc value." },
+    { name: "alpha",           type: "float",      advanced: true, label: "adapter write alpha",     help: "Multimind M1/M3 trainers only (memory-adapter architectures, not Apple Silicon). higher = each token writes harder to memory." },
+    { name: "inject_layer",    type: "int",        advanced: true, label: "inject layer (-1=auto)",  help: "Multimind M1/M3 trainers only (memory-adapter architectures, not Apple Silicon). which layer the adapter attaches to. -1 = mid-stack." },
+    { name: "init_from",       type: "model_name", advanced: true, label: "init base from model",    help: "Multimind M1 trainer only (slot-memory architecture, not Apple Silicon). load base weights from another model's latest checkpoint and train M1 adapter on top. New model named <init_from>_m1." },
+    { name: "bptt_window",     type: "int",        advanced: true, label: "BPTT window (chunks)",    help: "TBPTT-using trainers (Veritate base + Multimind M1/M3 — this is a training-loop knob, not Apple Silicon). BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
     // MEGA cluster (ternary + MoE moonshot)
     { name: "quant_mode",      type: "str",        advanced: true, label: "weight quant mode",       help: "MEGA only. int8 (1 byte/param), int4 (0.5 bytes, 2x density), or ternary (BitNet b1.58, ~0.2 bytes, 5x density — fits 1B+ in 96 MB L3).", choices: ["int8","int4","ternary"] },
     { name: "n_experts",       type: "int",        advanced: true, label: "MoE experts",             help: "MEGA only. number of FFN experts per block. Total params scale linearly. Only top-k of these fire per byte at decode time." },
@@ -5109,7 +5184,7 @@ const TRAINER_SCHEMA = {
     // ---- checkboxes (all together at the end) ----
     { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "trades ~30% slower compute for ~50% less activation VRAM. Recommended on tight VRAM budgets." },
     { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "train with quantization-aware fake-quant in the forward pass. The quant scheme is INT8 by default; MEGA additionally honors quant_mode (int8/int4/ternary). Result exports to a v9 binary that runs on the C engine." },
-    { name: "freeze_base",   type: "bool", featured: true, advanced: true,  label: "freeze base",                help: "M1 only. if checked, only the adapter trains; base stays exactly as init_from. Cleanest when starting from a converged base." },
+    { name: "freeze_base",   type: "bool", featured: true, advanced: true,  label: "freeze base",                help: "Multimind M1 trainer only (slot-memory architecture, not Apple Silicon). if checked, only the adapter trains; base stays exactly as init_from. Cleanest when starting from a converged base." },
     { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "MEGA only. INT8 optimizer state via bitsandbytes. Cuts m+v memory ~75%. Required to fit 1B-class MoE on 12 GB VRAM." },
   ],
   continue: [
@@ -5118,7 +5193,7 @@ const TRAINER_SCHEMA = {
     // ---- standard training loop ----
     { name: "total_steps",  type: "int",                        label: "total training steps",  help: "extend or shorten the run. existing value comes from the model's config." },
     { name: "batch_size",   type: "int",                        label: "batch size",            help: "higher = faster, more VRAM." },
-    { name: "n_chunks",     type: "int",                        label: "TBPTT chunks per step", help: "higher = longer M3 memory horizon at runtime; activation VRAM scales with bptt_window, not n_chunks. More chunks = more compute per step." },
+    { name: "n_chunks",     type: "int",                        label: "TBPTT chunks per step", help: "higher = more bytes seen per step (and on Multimind M3, a longer adapter memory horizon at runtime). Activation VRAM scales with bptt_window, not n_chunks. More chunks = more compute per step." },
     { name: "base_lr",      type: "float",                      label: "peak learning rate",    help: "higher = bigger weight updates. lower this for fine-tuning. type 0.0001 or 1e-4." },
     { name: "min_lr",       type: "float",                      label: "minimum learning rate", help: "where the LR settles at the end. type 0.00001 or 1e-5." },
     { name: "warmup_steps", type: "int",                        label: "warmup steps",          help: "more = slower ramp from 0 to peak LR. usually irrelevant on resume since you start above 0." },
@@ -5133,7 +5208,7 @@ const TRAINER_SCHEMA = {
     { name: "eval_every",   type: "int",                        label: "eval every",            help: "lower = more frequent validation runs." },
     { name: "eval_iters",   type: "int",                        label: "eval batches",          help: "higher = more accurate validation loss, slower eval." },
     // ---- experimental / test-model knobs (ADVANCED) ----
-    { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "M1/M3 only. BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
+    { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "TBPTT-using trainers (Veritate base + Multimind M1/M3 — this is a training-loop knob, not Apple Silicon). BPTT = how many chunks of past activations the gradient looks back through. 1 = write-path frozen (will not train), 4 = balanced, n_chunks = full backpropagation through time (max VRAM, slowest)." },
     // ---- checkboxes (all together at the end) ----
     { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "trades ~30% slower compute for ~50% less activation VRAM. Recommended on tight VRAM budgets." },
     { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "fine-tune the source model into a new <source>_qat model with quantization-aware training. Use a low lr (1e-5). Result exports cleanly to the C engine." },
@@ -5172,9 +5247,21 @@ function _trEnsureContinueCfg(name) {
   return null;
 }
 
-function _trUpdateVramEstimate() {
-  const out = _trEl("trainVramEst");
-  if (!out) return;
+// Cached system specs for the estimator and auto-optimize. Populated lazily
+// on first call; refreshed by /sys/detect handler.
+let _sysSpecsCache = null;
+function _trMemoryBudget() {
+  const s = _sysSpecsCache;
+  if (!s || !s.platform) return null;
+  const gpus = s.gpus || [];
+  const discrete = gpus.find(g => g && !g.integrated && g.vram_total);
+  if (discrete) return { bytes: discrete.vram_total, label: discrete.name || "GPU", kind: "vram" };
+  const ramTotal = (s.memory && s.memory.total_bytes) || null;
+  if (ramTotal) return { bytes: Math.round(ramTotal * 0.7), label: "unified memory", kind: "unified" };
+  return null;
+}
+
+function _trEstimateMemory() {
   let size        = _trArgVal("size");
   let precision   = _trArgVal("precision");
   let seq         = parseInt(_trArgVal("seq"), 10);
@@ -5182,6 +5269,8 @@ function _trUpdateVramEstimate() {
   const bpttRaw   = parseInt(_trArgVal("bptt_window"), 10);
   const ckpt      = _trArgEl("use_act_ckpt");
   const ckptOn    = ckpt && ckpt.type === "checkbox" && ckpt.checked;
+  const a8        = _trArgEl("use_8bit_adam");
+  const adam8On   = a8 && a8.type === "checkbox" && a8.checked;
 
   if (!size || !precision || !seq) {
     const resumeName = _trArgVal("resume");
@@ -5198,23 +5287,150 @@ function _trUpdateVramEstimate() {
   }
 
   const sz = _TR_SIZE_PRESETS[size];
-  if (!sz || !batch || !seq) { out.textContent = ""; return; }
+  if (!sz || !batch || !seq) return null;
 
   const bpv = precision === "bf16" ? 2 : 4;
-  const bytesPerParam = precision === "bf16" ? 14 : 16;
+  const bytesPerParam = adam8On ? 10 : 16;
   const bpttWindow = Math.max(1, isNaN(bpttRaw) ? 1 : bpttRaw);
 
   const staticBytes = sz.params * bytesPerParam;
   let actBytes = batch * seq * sz.hidden * sz.layers * 13 * bpv * bpttWindow;
   if (ckptOn) actBytes *= 0.5;
-  const total = staticBytes + actBytes;
+  const totalRaw = staticBytes + actBytes;
+  const total = Math.round(totalRaw * 1.15);
+  return { staticBytes, actBytes, total, ckptOn, adam8On, size, precision, seq, batch, bpttWindow };
+}
 
+function _trUpdateVramEstimate() {
+  const out = _trEl("trainVramEst");
+  if (!out) return;
+  const est = _trEstimateMemory();
+  if (!est) { out.textContent = ""; return; }
   const fmt = (b) => b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : (b / 1e6).toFixed(0) + " MB";
+
+  const budget = _trMemoryBudget();
+  let badgeColor = "var(--warm)", budgetSuffix = "";
+  if (budget) {
+    const ratio = est.total / budget.bytes;
+    if (ratio >= 0.95)      badgeColor = "var(--hot)";
+    else if (ratio >= 0.7)  badgeColor = "var(--warm)";
+    else                    badgeColor = "var(--data-pos)";
+    const pct = (ratio * 100).toFixed(0);
+    budgetSuffix = ` <span style="color:${badgeColor}">of ${fmt(budget.bytes)} ${budget.label} (${pct}%)</span>`;
+  }
+
   out.innerHTML =
-    `<b style="color:var(--warm)">estimated</b>` +
-    ` <b style="color:var(--text)">≈ ${fmt(total)} VRAM</b>` +
-    ` <span style="color:var(--dim)">(static ${fmt(staticBytes)} + activations ${fmt(actBytes)}` +
-    `${ckptOn ? ", act-ckpt on" : ""})</span>`;
+    `<b style="color:${badgeColor}">estimated</b>` +
+    ` <b style="color:var(--text)">≈ ${fmt(est.total)}</b>${budgetSuffix}` +
+    ` <span style="color:var(--dim)">(static ${fmt(est.staticBytes)} + acts ${fmt(est.actBytes)}` +
+    `${est.ckptOn ? ", act-ckpt" : ""}${est.adam8On ? ", 8bit-adam" : ""}, +15% overhead)</span>`;
+}
+
+// Auto-pick training settings. Gated by Advanced telemetry consent + a
+// detected sys_specs file. Fills batch_size, base_lr, use_act_ckpt, and
+// (when total_steps is set) warmup_steps + log/eval/ckpt cadence. Leaves
+// total_steps and architecture-specific knobs to the manifest defaults
+// or the user. The Veritate trainers do not implement gradient
+// accumulation, so batch_size is the effective batch.
+function _trUpdateAutoOptimizeVisibility() {
+  const row = $("trainAutoOptimizeRow");
+  if (!row) return;
+  const consent = !!(settingsState.current && settingsState.current.analytics_advanced_enabled);
+  const haveSpecs = !!(_sysSpecsCache && _sysSpecsCache.platform);
+  row.style.display = (consent && haveSpecs) ? "flex" : "none";
+}
+
+function _trSetArgVal(name, val) {
+  const el = _trArgEl(name);
+  if (!el) return false;
+  if (el.type === "checkbox") { el.checked = !!val; }
+  else { el.value = val; }
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+  el.dispatchEvent(new Event("input",  { bubbles: true }));
+  return true;
+}
+
+function _trAutoOptimize() {
+  const status = $("trainAutoOptimizeStatus");
+  const setStatus = (msg, color) => { if (status) { status.textContent = msg; status.style.color = color || "var(--dim)"; } };
+
+  const budget = _trMemoryBudget();
+  if (!budget) { setStatus("no system specs detected — run Detect my system first.", "var(--hot)"); return; }
+
+  const plugin  = trainState.selected;
+  const defs    = (plugin && plugin.manifest && plugin.manifest.defaults) || {};
+  const manifestBatch = parseInt(defs.batch_size, 10) || 8;
+  const manifestLR    = parseFloat(defs.base_lr) || 6e-4;
+
+  // Memory-fit search. Start from manifest batch (already tuned per
+  // architecture) and only adjust to fit hardware: shrink if over budget,
+  // grow if there is comfortable headroom. Trainers do not implement
+  // gradient accumulation so batch_size is the effective batch.
+  const tryEstimate = (batch, ckpt) => {
+    const bEl = _trArgEl("batch_size");
+    const cEl = _trArgEl("use_act_ckpt");
+    const prevB = bEl ? bEl.value : null;
+    const prevC = cEl && cEl.type === "checkbox" ? cEl.checked : null;
+    if (bEl) bEl.value = batch;
+    if (cEl) cEl.checked = !!ckpt;
+    const e = _trEstimateMemory();
+    if (bEl && prevB !== null) bEl.value = prevB;
+    if (cEl && prevC !== null) cEl.checked = prevC;
+    return e;
+  };
+
+  const TARGET_RATIO = 0.75;     // aim for ~75% of budget
+  const TIGHT_RATIO  = 0.92;     // anything above this is "too tight"
+  const HEADROOM_RATIO = 0.45;   // anything below means there is room to grow
+
+  let targetBatch = manifestBatch;
+  let actCkpt = !!defs.use_act_ckpt;
+
+  // Step 1: shrink if manifest at current ckpt setting overshoots.
+  let est = tryEstimate(targetBatch, actCkpt);
+  while (est && est.total > budget.bytes * TIGHT_RATIO && (targetBatch > 1 || !actCkpt)) {
+    if (!actCkpt) {
+      actCkpt = true;            // try act_ckpt before halving
+    } else if (targetBatch > 1) {
+      targetBatch = Math.max(1, Math.floor(targetBatch / 2));
+    } else {
+      break;
+    }
+    est = tryEstimate(targetBatch, actCkpt);
+  }
+
+  // Step 2: if still way under budget at current settings, try doubling
+  // batch (cap at 4× manifest to avoid extreme lr scaling).
+  const batchCap = manifestBatch * 4;
+  let growEst = est;
+  while (growEst && growEst.total < budget.bytes * HEADROOM_RATIO && targetBatch * 2 <= batchCap) {
+    const next = targetBatch * 2;
+    const probe = tryEstimate(next, actCkpt);
+    if (!probe || probe.total > budget.bytes * TARGET_RATIO) break;
+    targetBatch = next;
+    growEst = probe;
+  }
+
+  // sqrt scaling rule for lr.
+  const lrScale = Math.sqrt(targetBatch / manifestBatch);
+  const newLR = +(manifestLR * lrScale).toPrecision(2);
+
+  _trSetArgVal("batch_size",    targetBatch);
+  _trSetArgVal("base_lr",       newLR);
+  _trSetArgVal("use_act_ckpt",  actCkpt);
+
+  // Cadence + warmup as % of total_steps. total_steps is user-owned;
+  // if it's empty we don't touch the time-based knobs.
+  const totalSteps = parseInt(_trArgVal("total_steps"), 10);
+  if (totalSteps > 0) {
+    _trSetArgVal("warmup_steps", Math.max(50,  Math.round(totalSteps * 0.03)));
+    _trSetArgVal("log_every",    Math.max(10,  Math.round(totalSteps * 0.001)));
+    _trSetArgVal("eval_every",   Math.max(100, Math.round(totalSteps * 0.05)));
+    _trSetArgVal("ckpt_every",   Math.max(200, Math.round(totalSteps * 0.10)));
+  }
+
+  _trUpdateVramEstimate();
+  setStatus(`set: batch=${targetBatch}, lr=${newLR}, act_ckpt=${actCkpt ? "on" : "off"}${totalSteps > 0 ? ", warmup/eval/ckpt scaled to total_steps" : " (set total_steps then re-run for warmup/eval/ckpt)"}.`, "var(--data-pos)");
 }
 
 function _trUpdateStepCascades() {
@@ -5349,8 +5565,7 @@ function _trRenderForm() {
   if (descEl) descEl.textContent = p.manifest.description || "";
   const introEl = _trEl("trainFormIntro");
   if (introEl) {
-    const reqLabels = _trArgsForPlugin(p).filter(a => a.required).map(a => a.label || a.name);
-    introEl.innerHTML = `<b>${_trEsc(p.manifest.name || p.id)}</b> needs the following details. fields with <span style="color:var(--hot)">*</span> are required.`;
+    introEl.innerHTML = `<b>${_trEsc(p.manifest.name || p.id)}</b> &middot; <span style="color:var(--hot)">*</span> required.`;
   }
   // Responsive grid: small fields auto-pack into columns; wide types (text/path)
   // and bool span the full row. Inline `style` keeps it self-contained — no
@@ -5867,8 +6082,8 @@ function _applySettingsToUI(s) {
   $("hudDetailed").checked = !!s.hud_detailed;
   $("hudDetailed").disabled = !s.hud_enabled;
   _applyHudVisibility(!!s.hud_enabled, !!s.hud_detailed);
-  const hb = $("heartbeatEnable");
-  if (hb) hb.checked = !!s.heartbeat_enabled;
+  const adv = $("analyticsAdvancedEnable");
+  if (adv) adv.checked = !!s.analytics_advanced_enabled;
   const ch = s.update_channel || "stable";
   document.querySelectorAll('input[name="updateChannel"]').forEach(r => {
     r.checked = (r.value === ch);
@@ -6010,7 +6225,7 @@ function _saveSettings(patch) {
   fetch("/settings", { method: "POST", headers: { "Content-Type": "application/json" },
                        body: JSON.stringify(patch) })
     .then(r => r.json())
-    .then(s => { settingsState.current = s; _applySettingsToUI(s); _sysPollEnsure(); })
+    .then(s => { settingsState.current = s; _applySettingsToUI(s); _sysPollEnsure(); _trUpdateAutoOptimizeVisibility(); })
     .catch(() => {})
     .finally(() => { settingsState.saving = false; });
 }
@@ -6048,7 +6263,6 @@ function _lifecycleWaitForServer(label) {
 }
 
 function _lifecycleSoftReload() {
-  if (!confirm("Soft reload the Python server? Active training keeps running; the new server will reattach to it. The C engine subprocess will be closed and respawn on demand.")) return;
   const label = $("lifecycleStatus");
   _lifecycleSetButtonsDisabled(true);
   if (label) { label.textContent = "soft reloading..."; label.style.color = "var(--data-pos)"; }
@@ -6075,7 +6289,6 @@ function _lifecycleSoftReload() {
 }
 
 function _lifecycleRestart() {
-  if (!confirm("Reload Python? The C engine and PyTorch backend will be unloaded and the launcher will re-exec. Active training keeps running and the new server reattaches to it.")) return;
   const label = $("lifecycleStatus");
   _lifecycleSetButtonsDisabled(true);
   if (label) { label.textContent = "reloading python..."; label.style.color = "var(--warm)"; }
@@ -6485,13 +6698,112 @@ function _pollBuildStatus() {
   }).catch(() => {});
 }
 
+function _renderSysSpecs(s) {
+  const view = $("sysSpecsView");
+  if (!view) return;
+  if (!s || s.detected === false || !s.platform) {
+    view.textContent = "not detected yet";
+    view.style.color = "var(--dim)";
+    return;
+  }
+  const fmtBytes = (b) => {
+    if (!b) return "?";
+    const gb = b / (1024 ** 3);
+    return gb >= 1 ? gb.toFixed(1) + " GB" : (b / (1024 ** 2)).toFixed(0) + " MB";
+  };
+  const p = s.platform || {}, cpu = s.cpu || {}, mem = s.memory || {};
+  const gpuLines = (s.gpus || []).map(g => {
+    const tag = g.integrated ? "integrated" : "discrete";
+    const vram = g.vram_total ? " &middot; " + fmtBytes(g.vram_total) + " VRAM" : "";
+    return `<div>${escapeHtml(g.name || g.vendor || "GPU")} <span style="color:var(--dim)">(${tag}${vram})</span></div>`;
+  }).join("") || `<div style="color:var(--dim)">no GPU detected</div>`;
+  view.innerHTML = `
+    <div>${escapeHtml(p.system || "?")} ${escapeHtml(p.release || "")} (${escapeHtml(p.machine || "?")}) &middot; Python ${escapeHtml(p.python || "?")}</div>
+    <div>${cpu.count_logical || "?"} logical cores${cpu.count_physical ? " (" + cpu.count_physical + " physical)" : ""} &middot; ${fmtBytes(mem.total_bytes)} RAM</div>
+    ${gpuLines}
+    <div style="color:var(--dim);margin-top:4px">captured ${new Date((s.captured_at || 0) * 1000).toLocaleString()}</div>
+  `;
+  view.style.color = "var(--text)";
+}
+
+async function showConsentModal({ allowDecline }) {
+  const body = `
+    <div style="display:grid;gap:10px">
+      <div style="padding:10px 14px;background:#0f1218;border-radius:3px">
+        <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:4px">
+          Heartbeat <span style="font-size:10.5px;color:var(--dim);font-weight:400;margin-left:6px">required &middot; every 6h</span>
+        </div>
+        <div style="font-size:11.5px;color:var(--text);line-height:1.55">
+          Hashed machine id, OS, uptime, restart and error counts, model count. Lets us see Veritate is alive in the wild.
+        </div>
+        <div style="font-size:11px;color:var(--dim);line-height:1.5;margin-top:4px">
+          No prompts, checkpoints, or source.
+        </div>
+      </div>
+      <div style="padding:10px 14px;background:#0f1218;border-radius:3px">
+        <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:4px">
+          Hardware &amp; training <span style="font-size:10.5px;color:var(--dim);font-weight:400;margin-left:6px">optional</span>
+        </div>
+        <div style="font-size:11.5px;color:var(--text);line-height:1.55">
+          Once per machine: CPU, RAM, GPU specs &mdash; tells us what to support next. Per training run: model name, size, arch, precision, batch size, total steps &mdash; tells us what the community trains.
+        </div>
+        <div style="font-size:11px;color:var(--warm);line-height:1.5;margin-top:4px">
+          The platform sends your hardware specs once and it's never repeated. No weights, datasets, or training metrics are sent. This helps us support more platforms.
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--dim);text-align:center;margin-top:2px">change any time in Settings &rsaquo; Advanced telemetry</div>
+    </div>
+  `;
+  const buttons = [
+    { label: "Heartbeat only", value: "decline" },
+    { label: "Share hardware", value: "accept", primary: true },
+  ];
+  const choice = await showModal({ title: "Data Consent", body, buttons });
+  if (choice == null && !allowDecline) return;
+  const advanced = (choice === "accept");
+  _saveSettings({ analytics_advanced_enabled: advanced, consent_modal_seen: true });
+}
+
+async function showBuildNoticesIfAny() {
+  let notices = [];
+  try {
+    const r = await fetch("/settings/notices");
+    const j = await r.json();
+    notices = Array.isArray(j.notices) ? j.notices : [];
+  } catch (_) { return; }
+  if (!notices.length) return;
+  const items = notices.map(n =>
+    `<p style="margin:0 0 10px">${escapeHtml(n.message)}</p>`
+  ).join("");
+  const body = `<div style="font-size:13px;line-height:1.55">${items}</div>`;
+  const maxBuild = notices.reduce((m, n) => Math.max(m, n.build || 0), 0);
+  const title = notices.length === 1
+    ? `Build ${notices[0].build} notice`
+    : `Build notices (through build ${maxBuild})`;
+  await showModal({
+    title,
+    body,
+    buttons: [{ label: "Got it", value: "ack", primary: true }],
+    nonDismissable: true,
+    accent: "var(--accent)",
+    align: "top",
+  });
+  _saveSettings({ last_acknowledged_build: maxBuild });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   fetch("/settings").then(r => r.json()).then(s => {
     settingsState.current = s;
     settingsState.loaded = true;
     _applySettingsToUI(s);
     _sysPollEnsure();
+    _trUpdateAutoOptimizeVisibility();
+    if (!s.consent_modal_seen) showConsentModal({ allowDecline: false });
+    else showBuildNoticesIfAny();
   }).catch(() => {});
+
+  const autoBtn = $("trainAutoOptimizeBtn");
+  if (autoBtn) autoBtn.addEventListener("click", _trAutoOptimize);
 
   document.querySelectorAll('input[name="pytorchMode"]').forEach(r => {
     r.addEventListener("change", () => {
@@ -6517,10 +6829,24 @@ document.addEventListener("DOMContentLoaded", () => {
   if (hudDet) hudDet.addEventListener("change", () => {
     _saveSettings({ hud_detailed: hudDet.checked });
   });
-  const hb = $("heartbeatEnable");
-  if (hb) hb.addEventListener("change", () => {
-    _saveSettings({ heartbeat_enabled: hb.checked });
+  const adv = $("analyticsAdvancedEnable");
+  if (adv) adv.addEventListener("change", () => {
+    _saveSettings({ analytics_advanced_enabled: adv.checked });
   });
+  const reviewBtn = $("reviewConsentBtn");
+  if (reviewBtn) reviewBtn.addEventListener("click", () => { showConsentModal({ allowDecline: true }); });
+  const detectBtn = $("sysDetectBtn");
+  if (detectBtn) detectBtn.addEventListener("click", () => {
+    detectBtn.disabled = true;
+    const prev = detectBtn.textContent;
+    detectBtn.textContent = "detecting…";
+    fetch("/sys/detect", { method: "POST" })
+      .then(r => r.json())
+      .then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoOptimizeVisibility(); })
+      .catch(() => {})
+      .finally(() => { detectBtn.disabled = false; detectBtn.textContent = prev; });
+  });
+  fetch("/sys/specs").then(r => r.json()).then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoOptimizeVisibility(); }).catch(() => {});
   const hbBtn = $("heartbeatSendBtn");
   if (hbBtn) hbBtn.addEventListener("click", () => {
     const lab = $("heartbeatSendStatus");
