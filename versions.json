@@ -1,5 +1,5 @@
 {
-  "channel": "development",
+  "channel": "experimental",
   "build": 5,
   "engine": "v2.2.0",
   "mri": "v0.2.0",
