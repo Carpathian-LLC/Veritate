@@ -43,7 +43,7 @@ DEFAULTS = {
 # user must read/do; quiet builds add nothing here. Dismissed by setting
 # last_acknowledged_build >= the highest key.
 BUILD_NOTICES = {
-    5: "Build 5 contains substantial engine changes. Please pull the latest source and fully restart the application; older runtime state may not be compatible.",
+    5: "Build 5 contains substantial engine changes. Please pull the latest source and fully restart the application; older runtime state may not be compatible. Requires a reinstall of requirements (pip install -r requirements.txt).",
 }
 
 _LOCK = threading.Lock()

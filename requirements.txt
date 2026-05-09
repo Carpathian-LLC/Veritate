@@ -3,4 +3,5 @@ numpy
 flask
 torch
 psutil
+certifi
 pytest>=7.0

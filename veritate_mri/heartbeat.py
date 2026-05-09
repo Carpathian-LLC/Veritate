@@ -18,11 +18,18 @@ import json
 import os
 import platform
 import socket
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
+
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _SSL_CTX = ssl.create_default_context()
 
 import logs as logmod
 import settings as settings_mod
@@ -240,7 +247,7 @@ def _post(payload):
             "X-Machine-Id":  payload.get("machine_id") or "",
         },
     )
-    with urllib.request.urlopen(req, timeout=HEARTBEAT_TIMEOUT_SECS) as resp:
+    with urllib.request.urlopen(req, timeout=HEARTBEAT_TIMEOUT_SECS, context=_SSL_CTX) as resp:
         return resp.status
 
 

@@ -5383,7 +5383,25 @@ function _trAutoOptimize() {
   const TIGHT_RATIO  = 0.92;     // anything above this is "too tight"
   const HEADROOM_RATIO = 0.45;   // anything below means there is room to grow
 
-  let targetBatch = manifestBatch;
+  // Apple MPS (unified memory) indexes tensor elements with int32 inside
+  // MPSGraph. Any single tensor with > INT_MAX (2^31 - 1) elements crashes
+  // backward with "MPSGraph does not support tensor dims larger than
+  // INT_MAX". The largest tensor in this trainer is the attention scores
+  // (B * heads * T * T). Cap batch_size so that stays comfortably below
+  // INT_MAX even with a precision/grad-graph safety margin.
+  const MPS_INT_MAX = 2147483647;
+  const MPS_SAFETY  = 0.85;
+  const sizePreset  = _TR_SIZE_PRESETS[_trArgVal("size")];
+  const seqVal      = parseInt(_trArgVal("seq"), 10);
+  let mpsBatchCap = Infinity;
+  if (budget.kind === "unified" && sizePreset && sizePreset.heads && seqVal > 0) {
+    const perBatch = sizePreset.heads * seqVal * seqVal;
+    if (perBatch > 0) {
+      mpsBatchCap = Math.max(1, Math.floor((MPS_INT_MAX * MPS_SAFETY) / perBatch));
+    }
+  }
+
+  let targetBatch = Math.min(manifestBatch, mpsBatchCap);
   let actCkpt = !!defs.use_act_ckpt;
 
   // Step 1: shrink if manifest at current ckpt setting overshoots.
@@ -5401,7 +5419,7 @@ function _trAutoOptimize() {
 
   // Step 2: if still way under budget at current settings, try doubling
   // batch (cap at 4× manifest to avoid extreme lr scaling).
-  const batchCap = manifestBatch * 4;
+  const batchCap = Math.min(manifestBatch * 4, mpsBatchCap);
   let growEst = est;
   while (growEst && growEst.total < budget.bytes * HEADROOM_RATIO && targetBatch * 2 <= batchCap) {
     const next = targetBatch * 2;
@@ -5430,7 +5448,9 @@ function _trAutoOptimize() {
   }
 
   _trUpdateVramEstimate();
-  setStatus(`set: batch=${targetBatch}, lr=${newLR}, act_ckpt=${actCkpt ? "on" : "off"}${totalSteps > 0 ? ", warmup/eval/ckpt scaled to total_steps" : " (set total_steps then re-run for warmup/eval/ckpt)"}.`, "var(--data-pos)");
+  const mpsCapHit = (mpsBatchCap !== Infinity) && (targetBatch >= mpsBatchCap);
+  const mpsNote   = mpsCapHit ? ", capped by MPS attention-tensor INT_MAX limit" : "";
+  setStatus(`set: batch=${targetBatch}, lr=${newLR}, act_ckpt=${actCkpt ? "on" : "off"}${mpsNote}${totalSteps > 0 ? ", warmup/eval/ckpt scaled to total_steps" : " (set total_steps then re-run for warmup/eval/ckpt)"}.`, "var(--data-pos)");
 }
 
 function _trUpdateStepCascades() {
