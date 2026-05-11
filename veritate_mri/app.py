@@ -1907,6 +1907,11 @@ def generate():
     # shape constraint. Both are PyTorch-backend-only.
     fast_mode     = (request.args.get("fast", "") or "").strip().lower()
     constrained_v = (request.args.get("constrained", "") or "").strip()
+    try:
+        adaptive_threshold = float(request.args.get("adaptive_threshold", "0.8"))
+    except ValueError:
+        adaptive_threshold = 0.8
+    adaptive_threshold = max(0.0, min(1.0, adaptive_threshold))
 
     if backend == "c":
         if app.config.get("C_SUBPROCESS") is None:
@@ -1954,8 +1959,8 @@ def generate():
             logmod.error("constrained", f"build failed: {type(e).__name__}: {e}")
             return ({"error": f"constrained: {type(e).__name__}: {e}"}, 400)
 
-    if fast_mode and fast_mode not in ("kv", "mtp", "mtp-verify"):
-        return ({"error": f"unknown fast mode: {fast_mode!r}. Allowed: kv, mtp, mtp-verify."}, 400)
+    if fast_mode and fast_mode not in ("kv", "mtp", "mtp-verify", "adaptive"):
+        return ({"error": f"unknown fast mode: {fast_mode!r}. Allowed: kv, mtp, mtp-verify, adaptive."}, 400)
 
     def stream_pt():
         with brain.lock:
@@ -1965,7 +1970,8 @@ def generate():
                     gen = brain.stream_fast(prompt, mode=fast_mode,
                                             temperature=temperature,
                                             top_k_sample=top_k, max_new=max_new,
-                                            addons_chain=chain, constraint=constraint)
+                                            addons_chain=chain, constraint=constraint,
+                                            adaptive_threshold=adaptive_threshold)
                 else:
                     gen = brain.stream(prompt, temperature, top_k, max_new,
                                        addons_chain=chain, constraint=constraint)

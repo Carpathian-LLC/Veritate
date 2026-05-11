@@ -815,7 +815,8 @@ class Brain:
     # uses; this is opt-in via /generate?fast=kv|mtp.
 
     def stream_fast(self, prompt, mode="kv", temperature=0.7, top_k_sample=40,
-                    max_new=200, addons_chain=None, constraint=None):
+                    max_new=200, addons_chain=None, constraint=None,
+                    adaptive_threshold=0.8):
         m = self.model
         seq = m.seq
         if not prompt:
@@ -838,11 +839,12 @@ class Brain:
 
         has_mtp     = hasattr(m, "mtp") and hasattr(m, "n_predict") and int(getattr(m, "n_predict", 1)) > 1
         mtp_modes = ("mtp", "mtp-verify")
+        valid_modes = ("kv", "mtp", "mtp-verify", "adaptive")
         if mode in mtp_modes and not has_mtp:
             yield {"kind": "error", "message": f"fast={mode} requires a model with an MTP head (Veritate800M)"}
             return
-        if mode not in ("kv", "mtp", "mtp-verify"):
-            yield {"kind": "error", "message": f"unknown fast mode: {mode!r}. Allowed: kv, mtp, mtp-verify."}
+        if mode not in valid_modes:
+            yield {"kind": "error", "message": f"unknown fast mode: {mode!r}. Allowed: {', '.join(valid_modes)}."}
             return
 
         yield {
@@ -854,11 +856,16 @@ class Brain:
             "fast_mode": mode,
             "prompt": prompt,
             "prompt_bytes": list(prompt_bytes),
+            "adaptive_threshold": adaptive_threshold if mode == "adaptive" else None,
         }
 
         if mode == "kv":
             yield from self._stream_fast_kv(prompt_bytes, temperature, top_k_sample,
                                             max_new, addons_chain, constraint)
+        elif mode == "adaptive":
+            yield from self._stream_fast_adaptive(prompt_bytes, temperature, top_k_sample,
+                                                  max_new, addons_chain, constraint,
+                                                  threshold=adaptive_threshold)
         elif mode == "mtp":
             yield from self._stream_fast_mtp(prompt_bytes, temperature, top_k_sample,
                                              max_new, addons_chain, constraint)
@@ -1122,6 +1129,122 @@ class Brain:
                 if constraint is not None and constraint.done():
                     yield {"kind": "stop", "reason": "constraint complete"}
                     return
+
+    def _stream_fast_adaptive(self, prompt_bytes, temperature, top_k_sample, max_new,
+                              addons_chain, constraint, threshold=0.8):
+        """Per-position adaptive depth (LayerSkip-style). For each byte:
+          - Walk blocks one at a time. After each block, project the residual
+            through the FINAL RMSNorm + tied LM head (logit-lens).
+          - Compute top-1 probability over vocab.
+          - If top-1 >= threshold, EXIT EARLY. Use the logit-lens-projected
+            logits to sample the next byte.
+          - If we walk all blocks without crossing the threshold, use the
+            final-layer output (canonical forward).
+
+        S44 measured ~32% mean compute savings on the 85M with this policy.
+        This is NOT byte-exact vs full-depth decode — the early-exit logits
+        come from an intermediate residual that wasn't trained to produce
+        the final distribution. Quality regression depends on threshold.
+        Use mode='kv' for byte-exact decode; this mode trades quality for
+        speed.
+
+        Emits {kind: 'fast_byte', byte, layers_used, top1_prob, ms_per_byte}.
+        """
+        m = self.model
+        seq = m.seq
+
+        # Detect model variant: canonical Veritate uses `pos_emb` and the
+        # tied lm_head; RoPE variants use rope_cos/rope_sin; 800M routes
+        # byte-0 through mtp.lm_head. For adaptive we use the same projection
+        # head the FINAL forward would use, so the logit-lens at any layer
+        # is comparable to the final output.
+        is_rope = hasattr(m, "rope_cos") and hasattr(m, "rope_sin")
+        is_800m = is_rope and hasattr(m, "mtp")
+
+        # Pre-cache the final-norm + lm_head projection. For 800M this is
+        # (n_out) then (mtp.norms[0], mtp.transforms[0], mtp.lm_head); for
+        # canonical Veritate / VeritateRoPE it's (n_out, lm_head).
+        def project(residual):
+            x = m.n_out(residual)
+            if is_800m:
+                head0 = m.mtp.norms[0](m.mtp.transforms[0](x))
+                return m.mtp.lm_head(head0)
+            return m.lm_head(x)
+
+        ids_full = list(prompt_bytes)
+        produced = 0
+        layers_used_hist = []
+
+        while produced < max_new:
+            window = ids_full[-seq:]
+            ids = torch.tensor([window], dtype=torch.long)
+            t0 = time.perf_counter()
+
+            # Embed + per-block walk with early exit
+            with torch.no_grad():
+                if is_rope:
+                    # Extend rope cache if needed
+                    if ids.size(1) > m.rope_cos.size(0):
+                        m.extend_rope(ids.size(1))
+                    x = m.embed(ids)
+                else:
+                    # Canonical Veritate: tok_emb + pos_emb
+                    T = ids.size(1)
+                    positions = torch.arange(T, device=ids.device).unsqueeze(0)
+                    x = m.tok_emb(ids) + m.pos_emb(positions)
+
+                exit_layer = m.layers
+                final_logits = None
+                for L, blk in enumerate(m.blocks):
+                    if is_rope:
+                        x = blk(x, m.rope_cos, m.rope_sin)
+                    else:
+                        x = blk(x)
+                    # Check confidence at this layer. Project the last
+                    # position only — that's the next-byte prediction.
+                    last_residual = x[:, -1:, :]
+                    lens_logits = project(last_residual)[0, 0]
+                    probs = F.softmax(lens_logits, dim=-1)
+                    top1 = float(probs.max())
+                    if top1 >= threshold and L + 1 < m.layers:
+                        exit_layer = L + 1
+                        final_logits = lens_logits
+                        break
+                else:
+                    # Walked all layers; use final output
+                    final_logits = project(x[:, -1:, :])[0, 0]
+
+            step_ms = (time.perf_counter() - t0) * 1000
+            layers_used_hist.append(exit_layer)
+
+            nxt = self._sample_one(final_logits, temperature, top_k_sample,
+                                   addons_chain, constraint)
+            if nxt is None:
+                yield {"kind": "stop", "reason": "constraint allowed no bytes"}
+                return
+
+            ids_full.append(nxt)
+            produced += 1
+            if addons_chain is not None:
+                addons_chain.observe(nxt)
+            if constraint is not None:
+                constraint.step(nxt)
+
+            # Running savings stat
+            avg_layers = sum(layers_used_hist) / len(layers_used_hist)
+            compute_saved = (1.0 - avg_layers / m.layers)
+
+            yield {
+                "kind": "fast_byte", "byte": int(nxt),
+                "ms_per_byte": round(step_ms, 2),
+                "layers_used": int(exit_layer),
+                "total_layers": int(m.layers),
+                "compute_saved_so_far": round(compute_saved, 3),
+                "threshold": float(threshold),
+            }
+            if constraint is not None and constraint.done():
+                yield {"kind": "stop", "reason": "constraint complete"}
+                return
 
 
 # ------------------------------------------------------------------------------------
