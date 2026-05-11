@@ -17,11 +17,18 @@
 
 import io
 import os
+import ssl
 import tarfile
 import threading
 import time
 import urllib.error
 import urllib.request
+
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _SSL_CTX = ssl.create_default_context()
 
 from readers import paths
 
@@ -88,7 +95,7 @@ def status():
 def _download_tarball(branch):
     url = _tarball_url(branch)
     req = urllib.request.Request(url, headers={"User-Agent": "veritate-mri/sync"})
-    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_S) as resp:
+    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_S, context=_SSL_CTX) as resp:
         code = getattr(resp, "status", 200)
         if code != 200:
             raise RuntimeError(f"http {code} from {url}")

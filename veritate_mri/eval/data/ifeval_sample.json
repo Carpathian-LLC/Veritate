@@ -1,0 +1,24 @@
+{
+  "_source": "Hand-written sample prompts in the spirit of Google IFEval (Zhou et al., 2023). For the full benchmark (~541 prompts, 25 rule families), download from https://huggingface.co/datasets/google/IFEval and convert each `instruction_id_list` + `kwargs` entry into the `rules` schema below. The full ruleset and reference checkers live in https://github.com/google-research/google-research/tree/master/instruction_following_eval.",
+  "_license_note": "Hand-written placeholder prompts for the smoke / scaffold test only.",
+  "items": [
+    {
+      "prompt": "Return a JSON object with a single key 'answer' whose value is the string 'yes'. Output only the JSON, nothing else.",
+      "rules": [
+        {"name": "json"}
+      ]
+    },
+    {
+      "prompt": "Write exactly three sentences about a cat.",
+      "rules": [
+        {"name": "sentence_count", "count": 3}
+      ]
+    },
+    {
+      "prompt": "Describe a sunny day without using the letter 'e' anywhere in your response.",
+      "rules": [
+        {"name": "forbidden_letter", "letter": "e"}
+      ]
+    }
+  ]
+}

@@ -631,7 +631,17 @@ def pruning_report():
         layers = 1 + max(int(k.split(".")[1]) for k in sd if k.startswith("blocks."))
         ffn_per_layer = [sd[f"blocks.{L}.ff.up.weight"].shape[0] for L in range(layers)]
         vocab, hidden = sd["tok_emb.weight"].shape
-        seq = sd["pos_emb.weight"].shape[0]
+        # Handle both canonical (has pos_emb.weight) and RoPE-only / Veritate800M
+        # checkpoints (no pos_emb; seq comes from training args).
+        is_800m = "pos_emb.weight" not in sd and any(k.startswith("mtp.transforms.") for k in sd)
+        if "pos_emb.weight" in sd:
+            seq = sd["pos_emb.weight"].shape[0]
+        else:
+            seq = int(cfg.get("seq") or 0)
+            if seq <= 0:
+                return ({"ok": False,
+                         "error": "checkpoint has no pos_emb.weight and no seq in args; "
+                                  "cannot infer sequence length."}, 400)
         heads = int(cfg.get("heads") or 0)
         if heads <= 0 or hidden % heads != 0:
             target = max(1, hidden // 64)
@@ -640,9 +650,24 @@ def pruning_report():
                 heads = h
                 break
         ffn_arg = ffn_per_layer if len(set(ffn_per_layer)) > 1 else ffn_per_layer[0]
-        m = Veritate(vocab=vocab, hidden=hidden, layers=layers, ffn=ffn_arg,
-                     heads=heads, seq=seq)
-        m.load_state_dict(sd, strict=True)
+        # Dispatch to the right model class. Veritate800M's FFN layout matches
+        # canonical Veritate (blocks.{L}.ff.up/.down), so width-pruning analysis
+        # works against either; only construction differs.
+        if is_800m:
+            plugin_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "plugins", "veritate_800m"))
+            if plugin_dir not in sys.path:
+                sys.path.insert(0, plugin_dir)
+            from plugin import Veritate800M  # type: ignore
+            n_predict = int(cfg.get("n_predict") or 4)
+            rope_base = float(cfg.get("rope_base") or 10000.0)
+            m = Veritate800M(vocab=vocab, hidden=hidden, layers=layers, ffn=ffn_arg,
+                             heads=heads, seq=seq,
+                             n_predict=n_predict, rope_base=rope_base)
+            m.load_state_dict(sd, strict=False)  # rope_cos/sin are non-persistent buffers
+        else:
+            m = Veritate(vocab=vocab, hidden=hidden, layers=layers, ffn=ffn_arg,
+                         heads=heads, seq=seq)
+            m.load_state_dict(sd, strict=True)
         m.eval()
 
         corpus_stem = (cfg.get("corpus") or "").strip()
@@ -724,7 +749,15 @@ def pruning_generate_plugin():
         layers = 1 + max(int(k.split(".")[1]) for k in sd if k.startswith("blocks."))
         ffn_per_layer = [sd[f"blocks.{L}.ff.up.weight"].shape[0] for L in range(layers)]
         vocab, hidden = sd["tok_emb.weight"].shape
-        seq = sd["pos_emb.weight"].shape[0]
+        is_800m = "pos_emb.weight" not in sd and any(k.startswith("mtp.transforms.") for k in sd)
+        if "pos_emb.weight" in sd:
+            seq = sd["pos_emb.weight"].shape[0]
+        else:
+            seq = int(cfg.get("seq") or 0)
+            if seq <= 0:
+                return ({"ok": False,
+                         "error": "checkpoint has no pos_emb.weight and no seq in args; "
+                                  "cannot infer sequence length."}, 400)
         heads = int(cfg.get("heads") or 0)
         if heads <= 0 or hidden % heads != 0:
             target = max(1, hidden // 64)
@@ -732,9 +765,21 @@ def pruning_generate_plugin():
                             key=lambda d: (abs(d - target), -d)):
                 heads = h; break
         ffn_arg = ffn_per_layer if len(set(ffn_per_layer)) > 1 else ffn_per_layer[0]
-        m = Veritate(vocab=vocab, hidden=hidden, layers=layers, ffn=ffn_arg,
-                     heads=heads, seq=seq)
-        m.load_state_dict(sd, strict=True)
+        if is_800m:
+            plugin_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "plugins", "veritate_800m"))
+            if plugin_dir not in sys.path:
+                sys.path.insert(0, plugin_dir)
+            from plugin import Veritate800M  # type: ignore
+            n_predict = int(cfg.get("n_predict") or 4)
+            rope_base = float(cfg.get("rope_base") or 10000.0)
+            m = Veritate800M(vocab=vocab, hidden=hidden, layers=layers, ffn=ffn_arg,
+                             heads=heads, seq=seq,
+                             n_predict=n_predict, rope_base=rope_base)
+            m.load_state_dict(sd, strict=False)
+        else:
+            m = Veritate(vocab=vocab, hidden=hidden, layers=layers, ffn=ffn_arg,
+                         heads=heads, seq=seq)
+            m.load_state_dict(sd, strict=True)
         m.eval()
 
         corpus_stem = (cfg.get("corpus") or "").strip()
@@ -1009,6 +1054,281 @@ def run_surprise(name):
     if not _safe_name(name) or not models.exists(name): return ("not found", 404)
     body, status = _surprise_atlas(name)
     return body, status
+
+
+# ------------------------------------------------------------------------------------
+# Deep eval (real MMLU / HellaSwag / IFEval accuracy, not the perplexity-grade proxy).
+#
+# Two routes:
+#   GET  /run/<name>/eval_deep         -> list cached results (lightweight summary)
+#   POST /run/<name>/eval_deep         -> run one or more suites synchronously,
+#                                         persist to models/<name>/eval_deep/, return
+#
+# Runs on demand only (no scheduler). The endpoint reuses the same `Brain` backend
+# the dashboard already loads for inference — when training is on MPS, the eval
+# will briefly share that device on user demand. The 800M training is hot on MPS;
+# for evals you want to keep away from training, run the dashboard's PyTorch
+# backend on CPU (default) before clicking the button.
+# ------------------------------------------------------------------------------------
+
+EVAL_DEEP_SUBDIR = "eval_deep"
+
+
+def _eval_deep_dir(name):
+    return os.path.join(paths.model_dir(name), EVAL_DEEP_SUBDIR)
+
+
+def _eval_deep_summary(blob):
+    """Distill a full eval report down to the per-suite headline numbers the
+    dashboard wants in its list view.
+
+    Accepts two on-disk shapes:
+      - `{"suite": "<name>", "step": N, "report": {...}}`  (current writer:
+        one suite per file)
+      - `{"suites": {"<name>": {...}, ...}}`               (legacy aggregate)
+    """
+    if not isinstance(blob, dict):
+        return []
+    if "report" in blob and isinstance(blob["report"], dict) and "suite" in blob:
+        sub = {blob["suite"]: blob["report"]}
+    else:
+        sub = blob.get("suites", {}) or {}
+    out = []
+    for suite_name, s in sub.items():
+        if not isinstance(s, dict): continue
+        # IFEval reports pass_rate; we also mirror it as `accuracy` from the
+        # suite itself, so a single field works for everyone.
+        acc = s.get("accuracy")
+        if acc is None: acc = s.get("pass_rate")
+        out.append({
+            "suite": suite_name,
+            "n":     s.get("n"),
+            "acc":   acc,
+            "elapsed_s": s.get("elapsed_s"),
+            "by_subject": s.get("by_subject"),
+            "by_rule":    s.get("by_rule"),
+            "accuracy_letter": s.get("accuracy_letter"),
+            "accuracy_text":   s.get("accuracy_text"),
+        })
+    return out
+
+
+@app.route("/run/<path:name>/eval_deep", methods=["GET"])
+def run_eval_deep_list(name):
+    """List all cached deep-eval results for a model."""
+    if not _safe_name(name) or not models.exists(name):
+        return ({"error": "model not found"}, 404)
+    root = _eval_deep_dir(name)
+    out = []
+    if os.path.isdir(root):
+        for fn in sorted(os.listdir(root)):
+            if not fn.endswith(".json"): continue
+            # Filename convention: <suite>_step_<N>.json
+            base = fn[:-5]
+            suite = None; step = None
+            if "_step_" in base:
+                try:
+                    s, st = base.rsplit("_step_", 1)
+                    suite = s
+                    step  = int(st)
+                except Exception:
+                    pass
+            fp = os.path.join(root, fn)
+            try:
+                with open(fp, "r", encoding="utf-8") as f:
+                    blob = json.load(f)
+            except Exception as e:
+                logmod.warn("eval_deep", f"failed to read {fp}: {e}")
+                continue
+            try: mtime = os.path.getmtime(fp)
+            except OSError: mtime = 0
+            for s_entry in _eval_deep_summary(blob):
+                out.append({
+                    "suite":   s_entry["suite"] or suite,
+                    "step":    step,
+                    "file":    fn,
+                    "mtime":   mtime,
+                    "n":       s_entry["n"],
+                    "acc":     s_entry["acc"],
+                    "elapsed_s": s_entry["elapsed_s"],
+                    "by_subject": s_entry["by_subject"],
+                    "by_rule":    s_entry["by_rule"],
+                    "accuracy_letter": s_entry["accuracy_letter"],
+                    "accuracy_text":   s_entry["accuracy_text"],
+                })
+    out.sort(key=lambda r: (r["mtime"] or 0), reverse=True)
+    return {"name": name, "results": out}
+
+
+# Shared status board for in-flight deep-eval runs. Keyed by (name, step) tuple.
+# Read by /run/<name>/eval_deep/status; updated by the worker thread.
+_EVAL_DEEP_STATE = {"runs": {}, "lock": threading.Lock()}
+
+
+def _eval_state_key(name, step):
+    return f"{name}::{int(step)}"
+
+
+def _eval_state_set(name, step, **kwargs):
+    key = _eval_state_key(name, step)
+    with _EVAL_DEEP_STATE["lock"]:
+        prev = _EVAL_DEEP_STATE["runs"].get(key, {})
+        prev.update(kwargs)
+        _EVAL_DEEP_STATE["runs"][key] = prev
+
+
+def _eval_state_get(name, step):
+    key = _eval_state_key(name, step)
+    with _EVAL_DEEP_STATE["lock"]:
+        return dict(_EVAL_DEEP_STATE["runs"].get(key, {}))
+
+
+@app.route("/run/<path:name>/eval_deep/status")
+def run_eval_deep_status(name):
+    step_s = request.args.get("step")
+    try: step = int(step_s) if step_s is not None else None
+    except Exception: step = None
+    if step is None:
+        # Latest checkpoint
+        step = checkpoints.latest_step(name)
+        if step is None:
+            return ({"running": False, "error": "no checkpoints"}, 200)
+    return _eval_state_get(name, step) or {"running": False}
+
+
+def _resolve_eval_brain(name, step, threads):
+    """Try to reuse the dashboard's already-loaded Brain when it matches. If
+    not, load a fresh Brain through the same dispatcher Brain() uses; the
+    caller is responsible for the runtime cost. Returns (brain, source) where
+    source is "reused" or "loaded"."""
+    cur_brain = app.config.get("BRAIN")
+    cur_name  = app.config.get("BRAIN_MODEL")
+    cur_step  = app.config.get("BRAIN_STEP")
+    if cur_brain is not None and cur_name == name and int(cur_step or -1) == int(step):
+        return cur_brain, "reused"
+    brain, n_, s_ = _load_pytorch_brain(name, step, threads)
+    # Don't promote the freshly-loaded brain to the global slot — the eval is
+    # a one-shot user action and we don't want to evict whatever the user has
+    # loaded for inference. We do still hold a reference for the duration of
+    # the run via the local; it falls out of scope after.
+    return brain, "loaded"
+
+
+@app.route("/run/<path:name>/eval_deep", methods=["POST"])
+def run_eval_deep_post(name):
+    """Trigger a deep eval. JSON body:
+       { "suite": "mmlu" | "hellaswag" | "ifeval" | "all" | comma-list,
+         "step":  <int> | null (latest),
+         "limit": <int> | null,
+         "mmlu_mode": "letter" | "text" | "both" (default text) }
+    """
+    if not _safe_name(name) or not models.exists(name):
+        return ({"error": "model not found"}, 404)
+    body = request.get_json(silent=True) or {}
+    suite = body.get("suite") or "mmlu"
+    if isinstance(suite, list):
+        suites = [str(x).lower() for x in suite]
+    else:
+        s = str(suite).lower().strip()
+        if s == "all":
+            suites = ["mmlu", "hellaswag", "ifeval"]
+        else:
+            suites = [t.strip() for t in s.split(",") if t.strip()]
+    valid = {"mmlu", "hellaswag", "ifeval"}
+    suites = [s for s in suites if s in valid]
+    if not suites:
+        return ({"error": f"no valid suites in {body.get('suite')!r}; expected one of {sorted(valid)} or 'all'"}, 400)
+
+    step = body.get("step")
+    if step in (None, "", "latest"):
+        step = checkpoints.latest_step(name)
+    if step is None:
+        return ({"error": f"no checkpoints under models/{name}/"}, 400)
+    try: step = int(step)
+    except Exception: return ({"error": f"bad step: {step!r}"}, 400)
+
+    limit       = body.get("limit")
+    mmlu_mode   = body.get("mmlu_mode") or "text"
+    ifeval_maxn = int(body.get("ifeval_max_new") or 256)
+    threads     = int(body.get("threads") or app.config.get("DEFAULT_THREADS") or auto_thread_count())
+
+    # Resolve / load the Brain. This may briefly contend with training on MPS
+    # — that's the documented trade for a user-triggered run.
+    t_load0 = time.time()
+    try:
+        brain, source = _resolve_eval_brain(name, step, threads)
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        logmod.error("eval_deep", f"load failed for {name} step {step}: {msg}")
+        return ({"error": msg}, 500)
+    load_secs = time.time() - t_load0
+    logmod.ok("eval_deep", f"brain ready ({source}) for {name} step {step} in {load_secs:.1f}s")
+
+    # Reserve state for status polling.
+    _eval_state_set(name, step,
+                    running=True, started=time.time(),
+                    suites=suites, source=source, error=None,
+                    progress={s: {"i": 0, "n": None} for s in suites},
+                    current_suite=None, finished=None)
+
+    def _progress(suite_name, i, n):
+        _eval_state_set(name, step,
+                        current_suite=suite_name,
+                        progress_update={"suite": suite_name, "i": i, "n": n})
+        # Also update the per-suite dict
+        st = _eval_state_get(name, step)
+        prog = st.get("progress") or {}
+        prog[suite_name] = {"i": i, "n": n}
+        _eval_state_set(name, step, progress=prog)
+
+    # Run synchronously. The user can wait; the dashboard shows a spinner.
+    # Holding brain.lock guards against concurrent Brain mutations (e.g. ablation).
+    # Import under the `eval` package; veritate_mri/ is already on sys.path.
+    from eval.run_eval import run_suites_on_model
+    out_dir = _eval_deep_dir(name)
+    os.makedirs(out_dir, exist_ok=True)
+    written_files = []
+    suite_results = {}
+    try:
+        with brain.lock:
+            report = run_suites_on_model(
+                brain.model,
+                suites=suites,
+                limit=limit,
+                mmlu_mode=mmlu_mode,
+                ifeval_max_new=ifeval_maxn,
+                verbose=False,
+                progress_cb=_progress,
+            )
+        suite_results = report.get("suites", {}) or {}
+        # Persist one JSON per suite so the GET list can index them cleanly.
+        for suite_name, s_report in suite_results.items():
+            payload = {
+                "name":   name,
+                "step":   step,
+                "suite":  suite_name,
+                "report": s_report,
+            }
+            fn = f"{suite_name}_step_{step}.json"
+            fp = os.path.join(out_dir, fn)
+            with open(fp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, default=str)
+            written_files.append(fn)
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        logmod.error("eval_deep", f"run failed for {name} step {step}: {msg}")
+        _eval_state_set(name, step, running=False, error=msg, finished=time.time())
+        return ({"error": msg}, 500)
+
+    _eval_state_set(name, step, running=False, finished=time.time(),
+                    error=None, files=written_files)
+    return {
+        "name":   name,
+        "step":   step,
+        "suites": list(suite_results.keys()),
+        "files":  written_files,
+        "report": suite_results,
+    }
 
 
 @app.route("/timelines")
@@ -1583,6 +1903,10 @@ def generate():
     ablate_neuron = int(request.args.get("ablate_neuron", "-1"))
     addons_csv    = request.args.get("addons", "")
     addons_sel    = [s.strip() for s in addons_csv.split(",") if s.strip()]
+    # Build-7 additions: fast-decode mode (KV cache / MTP head) and output-
+    # shape constraint. Both are PyTorch-backend-only.
+    fast_mode     = (request.args.get("fast", "") or "").strip().lower()
+    constrained_v = (request.args.get("constrained", "") or "").strip()
 
     if backend == "c":
         if app.config.get("C_SUBPROCESS") is None:
@@ -1622,11 +1946,30 @@ def generate():
             logmod.error("addons", f"build_chain failed: {type(e).__name__}: {e}")
             return ({"error": f"addons: {type(e).__name__}: {e}"}, 400)
 
+    constraint = None
+    if constrained_v:
+        try:
+            constraint = _build_constraint(constrained_v)
+        except Exception as e:
+            logmod.error("constrained", f"build failed: {type(e).__name__}: {e}")
+            return ({"error": f"constrained: {type(e).__name__}: {e}"}, 400)
+
+    if fast_mode and fast_mode not in ("kv", "mtp", "mtp-verify"):
+        return ({"error": f"unknown fast mode: {fast_mode!r}. Allowed: kv, mtp, mtp-verify."}, 400)
+
     def stream_pt():
         with brain.lock:
             try:
                 brain.set_ablation(ablate_layer, ablate_neuron)
-                for ev in brain.stream(prompt, temperature, top_k, max_new, addons_chain=chain):
+                if fast_mode:
+                    gen = brain.stream_fast(prompt, mode=fast_mode,
+                                            temperature=temperature,
+                                            top_k_sample=top_k, max_new=max_new,
+                                            addons_chain=chain, constraint=constraint)
+                else:
+                    gen = brain.stream(prompt, temperature, top_k, max_new,
+                                       addons_chain=chain, constraint=constraint)
+                for ev in gen:
                     ev["backend"] = "pytorch"
                     yield f"data: {json.dumps(ev)}\n\n"
                 yield "event: done\ndata: {}\n\n"
@@ -1637,6 +1980,50 @@ def generate():
 
     return Response(stream_pt(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+_VOCAB_PRESETS = {
+    "ascii":      set(range(0x20, 0x7f)) | {0x09, 0x0a, 0x0d},
+    "alpha":      set(range(0x41, 0x5b)) | set(range(0x61, 0x7b)),
+    "lower":      set(range(0x61, 0x7b)),
+    "upper":      set(range(0x41, 0x5b)),
+    "alnum":      set(range(0x30, 0x3a)) | set(range(0x41, 0x5b)) | set(range(0x61, 0x7b)),
+    "digits":     set(range(0x30, 0x3a)),
+}
+
+_STOP_PRESETS = {
+    "newline":          b"\n",
+    "double_newline":   b"\n\n",
+    "eos":              b"</s>",
+}
+
+
+def _build_constraint(spec):
+    """Build a decode-time Constraint from a `constrained=` query-param value.
+
+    Supported forms:
+      "json"                  -> any JSON value, grammar-valid by construction
+      "vocab:<preset>"        -> ascii, alpha, lower, upper, alnum, digits
+      "stop:<preset>"         -> newline, double_newline, eos
+      "stop:text:<literal>"   -> halt after the literal UTF-8 text is emitted
+    """
+    from decode import JSONConstraint, VocabConstraint, StopOnConstraint
+    s = spec.strip()
+    if s == "json":
+        return JSONConstraint()
+    if s.startswith("vocab:"):
+        name = s[len("vocab:"):].strip()
+        if name not in _VOCAB_PRESETS:
+            raise ValueError(f"unknown vocab preset {name!r}; allowed: {sorted(_VOCAB_PRESETS)}")
+        return VocabConstraint(_VOCAB_PRESETS[name])
+    if s.startswith("stop:"):
+        rest = s[len("stop:"):]
+        if rest.startswith("text:"):
+            return StopOnConstraint(rest[len("text:"):].encode("utf-8"))
+        if rest not in _STOP_PRESETS:
+            raise ValueError(f"unknown stop preset {rest!r}; allowed: {sorted(_STOP_PRESETS)}")
+        return StopOnConstraint(_STOP_PRESETS[rest])
+    raise ValueError(f"unknown constrained spec: {spec!r}")
 
 
 def _resolve_pytorch_model(name):

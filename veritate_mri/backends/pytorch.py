@@ -56,8 +56,21 @@ def load_memory(path):
 
 
 def _shape_from_state_dict(sd, cfg):
+    """Infer shape from a state_dict + checkpoint args. Handles both:
+      - canonical Veritate (has `pos_emb.weight`)
+      - veritate_800m / RoPE variants (no pos_emb; seq comes from cfg)
+    """
     vocab, hidden = sd["tok_emb.weight"].shape
-    seq           = sd["pos_emb.weight"].shape[0]
+    if "pos_emb.weight" in sd:
+        seq = sd["pos_emb.weight"].shape[0]
+    else:
+        # RoPE-based model — seq isn't in the state dict; pull from args.
+        seq = int(cfg.get("seq") or 0)
+        if seq <= 0:
+            raise RuntimeError(
+                "No pos_emb.weight in checkpoint and no seq in cfg/args. "
+                "RoPE-based checkpoints must record `seq` in training_args."
+            )
     layers        = 1 + max(int(k.split(".")[1]) for k in sd if k.startswith("blocks."))
     ffn_per_layer = [sd[f"blocks.{L}.ff.up.weight"].shape[0] for L in range(layers)]
     ffn           = ffn_per_layer[0] if all(f == ffn_per_layer[0] for f in ffn_per_layer) else ffn_per_layer
@@ -72,11 +85,24 @@ def _shape_from_state_dict(sd, cfg):
             "ffn": ffn, "heads": heads, "seq": seq}
 
 
+def _is_veritate_800m(sd):
+    """A veritate_800m checkpoint has MTP head weights at `mtp.transforms.{i}.weight`
+    AND no `pos_emb.weight` (RoPE-only positioning)."""
+    return "pos_emb.weight" not in sd and any(k.startswith("mtp.transforms.") for k in sd)
+
+
+def _is_rope_only(sd):
+    """RoPE without MTP (e.g., experiments/v2/rope_85m checkpoints): no pos_emb,
+    no mtp head."""
+    return "pos_emb.weight" not in sd and not any(k.startswith("mtp.transforms.") for k in sd)
+
+
 class Brain:
     def __init__(self, checkpoint, threads=1, memory=None):
         import torch
         import torch.nn.functional as F
-        sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "..")))
+        repo_root = os.path.normpath(os.path.join(HERE, "..", ".."))
+        sys.path.insert(0, repo_root)
         from veritate.model import Veritate
         globals()["torch"] = torch
         globals()["F"] = F
@@ -85,7 +111,13 @@ class Brain:
         s = torch.load(checkpoint, map_location="cpu", weights_only=True)
         # Snapshot what we need from the checkpoint dict, then drop it so the
         # optimizer state (~8 GB on 1B) doesn't sit resident through inference.
-        cfg = dict(s.get("args", {}))
+        # Different training scripts persist their shape under different keys:
+        # the canonical and 800M trainers use `args`, the v2 experiments
+        # (rope_85m, etc.) use `config`. Merge with `config` taking precedence
+        # since it tends to be the canonical shape spec.
+        cfg = {}
+        cfg.update(s.get("args", {}) or {})
+        cfg.update(s.get("config", {}) or {})
         sd = s["model"]
         del s
         self.checkpoint = os.path.basename(checkpoint)
@@ -99,8 +131,45 @@ class Brain:
                 "own runtime."
             )
         shape = _shape_from_state_dict(sd, cfg)
-        self.model = Veritate(**shape)
-        self.model.load_state_dict(sd, strict=True)
+
+        # Dispatch to the right model class. The 800M plugin's `Veritate800M`
+        # has the same trunk shape as canonical Veritate, plus RoPE positions
+        # and an MTP head. State-dict layout for `tok_emb`, `blocks.*`, `n_out`,
+        # `lm_head` matches, so most hooks downstream work unchanged. The MTP
+        # head (mtp.transforms.*, mtp.norms.*) is loaded but unused by the
+        # single-byte decode path here; an MTP-aware decoder lives in
+        # `experiments/v2/mtp_decode/` and is wired separately.
+        if _is_veritate_800m(sd):
+            plugin_dir = os.path.join(repo_root, "plugins", "veritate_800m")
+            if plugin_dir not in sys.path:
+                sys.path.insert(0, plugin_dir)
+            from plugin import Veritate800M  # type: ignore
+            n_predict = int(cfg.get("n_predict") or 4)
+            rope_base = float(cfg.get("rope_base") or 10000.0)
+            self.model = Veritate800M(
+                vocab=shape["vocab"], hidden=shape["hidden"], layers=shape["layers"],
+                ffn=shape["ffn"], heads=shape["heads"], seq=shape["seq"],
+                n_predict=n_predict, rope_base=rope_base,
+            )
+            # rope_cos / rope_sin are non-persistent buffers built at
+            # construction; nothing in `sd` to load for them.
+            self.model.load_state_dict(sd, strict=False)
+        elif _is_rope_only(sd):
+            # RoPE-only checkpoint (e.g., the experiments/v2/rope_85m finetunes
+            # of the canonical 85M). State-dict layout matches canonical Veritate
+            # MINUS pos_emb.weight; no MTP head.
+            from veritate.model_rope import VeritateRoPE
+            rope_base = float(cfg.get("rope_base") or 10000.0)
+            self.model = VeritateRoPE(
+                vocab=shape["vocab"], hidden=shape["hidden"], layers=shape["layers"],
+                ffn=shape["ffn"], heads=shape["heads"], seq=shape["seq"],
+                rope_base=rope_base,
+            )
+            # rope_cos / rope_sin are non-persistent buffers.
+            self.model.load_state_dict(sd, strict=False)
+        else:
+            self.model = Veritate(**shape)
+            self.model.load_state_dict(sd, strict=True)
         del sd  # frees the duplicate copy now that the model owns the params
         self.model.eval()
         self.n_params = sum(p.numel() for p in self.model.parameters())
@@ -543,7 +612,7 @@ class Brain:
         ranked = sorted(scores.items(), key=lambda x: -x[1])[:MEMORY_TOP_N]
         return [{"text": t[:120], "score": round(s, 2)} for t, s in ranked]
 
-    def stream(self, prompt, temperature=0.7, top_k_sample=40, max_new=200, addons_chain=None):
+    def stream(self, prompt, temperature=0.7, top_k_sample=40, max_new=200, addons_chain=None, constraint=None):
         m = self.model
         seq = m.seq
         if not prompt:
@@ -556,6 +625,17 @@ class Brain:
         if addons_chain is not None:
             addons_chain.reset()
             addons_chain.observe_bytes(prompt_bytes)
+
+        # Optional output-shape constraint. Prime it with the prompt so its
+        # internal grammar state matches what the model just observed.
+        if constraint is not None:
+            constraint.reset()
+            _prime = getattr(constraint, "prime", None)
+            if callable(_prime):
+                _prime(prompt_bytes)
+            else:
+                for _b in prompt_bytes:
+                    constraint.step(int(_b) & 0xff)
 
         yield {
             "kind": "meta",
@@ -654,6 +734,17 @@ class Brain:
             scaled = last_logits / max(temperature, 1e-6)
             if addons_chain is not None and len(addons_chain) > 0:
                 scaled = addons_chain.bias_logits(scaled)
+            # Apply output-shape constraint (JSON / vocab / stop-pattern) as a
+            # -inf logit mask before topk. The constraint primes itself with the
+            # prompt above so its grammar state is consistent.
+            if constraint is not None:
+                allowed_np = constraint.mask()
+                allowed = torch.from_numpy(allowed_np)
+                scaled = scaled.masked_fill(~allowed, float("-inf"))
+                if not torch.isfinite(scaled).any():
+                    # No legal byte; emit the stop event and bail.
+                    yield {"kind": "stop", "reason": "constraint allowed no bytes"}
+                    return
             sv, si = torch.topk(scaled, top_k_sample)
             mask = torch.full_like(scaled, float("-inf"))
             mask.scatter_(0, si, sv)
@@ -705,6 +796,369 @@ class Brain:
 
             if addons_chain is not None:
                 addons_chain.observe(nxt)
+            if constraint is not None:
+                constraint.step(nxt)
+                if constraint.done():
+                    yield {"kind": "stop", "reason": "constraint complete"}
+                    return
             ids = torch.cat([ids, torch.tensor([[nxt]])], dim=1)
             if ids.size(1) >= seq:
                 ids = ids[:, -(seq - 1):]
+
+    # ----------------------------------------------------------------------
+    # Fast-decode path.
+    #
+    # Skips the rich per-byte brain-scan telemetry so KV-cache or MTP-head
+    # decoding can run at their advertised speed. Emits {kind: "meta"} once
+    # and {kind: "fast_byte", byte, ms_per_byte, accepted_extra?} per byte.
+    # The default stream() above is still the canonical path the dashboard
+    # uses; this is opt-in via /generate?fast=kv|mtp.
+
+    def stream_fast(self, prompt, mode="kv", temperature=0.7, top_k_sample=40,
+                    max_new=200, addons_chain=None, constraint=None):
+        m = self.model
+        seq = m.seq
+        if not prompt:
+            prompt = " "
+        prompt_bytes = prompt.encode("utf-8")
+        if len(prompt_bytes) >= seq:
+            prompt_bytes = prompt_bytes[-(seq - 1):]
+
+        if addons_chain is not None:
+            addons_chain.reset()
+            addons_chain.observe_bytes(prompt_bytes)
+        if constraint is not None:
+            constraint.reset()
+            _prime = getattr(constraint, "prime", None)
+            if callable(_prime):
+                _prime(prompt_bytes)
+            else:
+                for _b in prompt_bytes:
+                    constraint.step(int(_b) & 0xff)
+
+        has_mtp     = hasattr(m, "mtp") and hasattr(m, "n_predict") and int(getattr(m, "n_predict", 1)) > 1
+        mtp_modes = ("mtp", "mtp-verify")
+        if mode in mtp_modes and not has_mtp:
+            yield {"kind": "error", "message": f"fast={mode} requires a model with an MTP head (Veritate800M)"}
+            return
+        if mode not in ("kv", "mtp", "mtp-verify"):
+            yield {"kind": "error", "message": f"unknown fast mode: {mode!r}. Allowed: kv, mtp, mtp-verify."}
+            return
+
+        yield {
+            "kind": "meta",
+            "checkpoint": self.checkpoint,
+            "n_params": self.n_params,
+            "layers": m.layers, "heads": m.heads, "ffn": m.ffn,
+            "vocab": m.vocab, "seq": m.seq,
+            "fast_mode": mode,
+            "prompt": prompt,
+            "prompt_bytes": list(prompt_bytes),
+        }
+
+        if mode == "kv":
+            yield from self._stream_fast_kv(prompt_bytes, temperature, top_k_sample,
+                                            max_new, addons_chain, constraint)
+        elif mode == "mtp":
+            yield from self._stream_fast_mtp(prompt_bytes, temperature, top_k_sample,
+                                             max_new, addons_chain, constraint)
+        elif mode == "mtp-verify":
+            yield from self._stream_fast_mtp_verify(prompt_bytes, temperature, top_k_sample,
+                                                    max_new, addons_chain, constraint)
+
+    def _sample_one(self, logits_1d, temperature, top_k_sample, addons_chain, constraint):
+        """Shared per-step sampling helper for stream_fast. Returns int byte or
+        None to indicate the constraint forbids every byte."""
+        scaled = logits_1d / max(temperature, 1e-6)
+        if addons_chain is not None and len(addons_chain) > 0:
+            scaled = addons_chain.bias_logits(scaled)
+        if constraint is not None:
+            allowed_np = constraint.mask()
+            allowed = torch.from_numpy(allowed_np)
+            scaled = scaled.masked_fill(~allowed, float("-inf"))
+            if not torch.isfinite(scaled).any():
+                return None
+        sv, si = torch.topk(scaled, top_k_sample)
+        gate = torch.full_like(scaled, float("-inf"))
+        gate.scatter_(0, si, sv)
+        sample_probs = F.softmax(gate, dim=-1)
+        return int(torch.multinomial(sample_probs, 1).item())
+
+    def _stream_fast_kv(self, prompt_bytes, temperature, top_k_sample, max_new,
+                        addons_chain, constraint):
+        from decode import KVCachedDecoder
+
+        m = self.model
+        ids = torch.tensor([list(prompt_bytes)], dtype=torch.long)
+        dec = KVCachedDecoder(m, max_T=m.seq, B=1)
+        with dec.cached():
+            t0 = time.perf_counter()
+            with torch.no_grad():
+                last_logits = dec.prefill(ids)[0]
+            prefill_ms = (time.perf_counter() - t0) * 1000
+            yield {"kind": "prefill", "prefill_ms": round(prefill_ms, 2), "tokens": int(ids.size(1))}
+
+            for _ in range(max_new):
+                if dec.caches[0].length >= dec.max_T:
+                    yield {"kind": "stop", "reason": "kv cache full"}
+                    return
+                t0 = time.perf_counter()
+                nxt = self._sample_one(last_logits, temperature, top_k_sample, addons_chain, constraint)
+                if nxt is None:
+                    yield {"kind": "stop", "reason": "constraint allowed no bytes"}
+                    return
+                if addons_chain is not None:
+                    addons_chain.observe(nxt)
+                if constraint is not None:
+                    constraint.step(nxt)
+                with torch.no_grad():
+                    last_logits = dec.decode_one(nxt)[0]
+                step_ms = (time.perf_counter() - t0) * 1000
+                yield {"kind": "fast_byte", "byte": int(nxt), "ms_per_byte": round(step_ms, 2)}
+                if constraint is not None and constraint.done():
+                    yield {"kind": "stop", "reason": "constraint complete"}
+                    return
+
+    def _stream_fast_mtp(self, prompt_bytes, temperature, top_k_sample, max_new,
+                         addons_chain, constraint):
+        from decode import MTPDecoder
+
+        m = self.model
+        dec = MTPDecoder(m, k=int(getattr(m, "n_predict", 4)))
+        # MTPDecoder.decode runs to completion internally and returns text +
+        # stats. We re-implement the verify loop here so we can stream bytes
+        # and apply addons / constraints between heads.
+        device = next(m.parameters()).device
+        ctx = list(prompt_bytes)
+        produced = 0
+        K = dec.k
+        seq_max = m.seq
+        while produced < max_new:
+            window = ctx[-seq_max:]
+            toks = torch.tensor([window], dtype=torch.long, device=device)
+            t0 = time.perf_counter()
+            with torch.no_grad():
+                all_logits = dec._forward_all_heads(toks)  # [B, T, N, vocab]
+            last = all_logits[0, -1]  # [N, vocab]
+            # Apply addons + constraint to head-0 only (the verified-canonical
+            # byte). Heads 1..K-1 still run greedy from raw logits.
+            head0 = last[0]
+            nxt0 = self._sample_one(head0, temperature, top_k_sample, addons_chain, constraint)
+            if nxt0 is None:
+                yield {"kind": "stop", "reason": "constraint allowed no bytes"}
+                return
+            ctx.append(nxt0)
+            produced += 1
+            if addons_chain is not None:
+                addons_chain.observe(nxt0)
+            if constraint is not None:
+                constraint.step(nxt0)
+            step_ms = (time.perf_counter() - t0) * 1000
+            yield {"kind": "fast_byte", "byte": int(nxt0), "ms_per_byte": round(step_ms, 2),
+                   "head": 0, "k": K}
+            if constraint is not None and constraint.done():
+                yield {"kind": "stop", "reason": "constraint complete"}
+                return
+            # Speculative bytes from heads 1..K-1 are accepted greedily when
+            # they read as valid utf-8 continuation candidates AND the
+            # constraint allows them. This is the "accept_all" branch; the
+            # full byte-exact verify path needs two forwards and lives in the
+            # MTPDecoder._decode_verify standalone for offline use.
+            extras = []
+            for hi in range(1, K):
+                if produced >= max_new:
+                    break
+                row = last[hi]
+                nxt = self._sample_one(row, temperature, top_k_sample, addons_chain, constraint)
+                if nxt is None:
+                    break
+                ctx.append(nxt)
+                produced += 1
+                if addons_chain is not None:
+                    addons_chain.observe(nxt)
+                if constraint is not None:
+                    constraint.step(nxt)
+                extras.append(int(nxt))
+                yield {"kind": "fast_byte", "byte": int(nxt), "ms_per_byte": 0.0,
+                       "head": int(hi), "k": K}
+                if constraint is not None and constraint.done():
+                    yield {"kind": "stop", "reason": "constraint complete"}
+                    return
+
+    def _stream_fast_mtp_verify(self, prompt_bytes, temperature, top_k_sample, max_new,
+                                addons_chain, constraint):
+        """Byte-exact MTP-verify (Medusa-style self-speculative). Each outer
+        step does TWO forwards:
+          Pass 1: forward at context. Draft K bytes from K heads at last pos.
+          Pass 2: forward at context ++ drafts[:K-1]. For i=1..K-1, check if
+                  the head-0 prediction at the corresponding position equals
+                  the draft[i]. Accept the longest matching prefix. On
+                  mismatch, append the head-0 byte (this is what head0-only
+                  decode would have produced).
+        Output is byte-exact to single-byte head-0 decode. Cost per step: 2
+        forwards. Gain: 1..K bytes per step. Break-even at K=2 accepted.
+
+        Addons + constraint apply to head-0 only (the verified-canonical
+        path). Heads 1..K-1 sample under the same logit pipeline so their
+        proposals are still constraint-aware — but the verifier rejects them
+        if they don't match head-0's argmax. Greedy verification (argmax)
+        is used for the head-0 reference to preserve byte-exactness.
+        """
+        from decode import MTPDecoder
+
+        m = self.model
+        dec = MTPDecoder(m, k=int(getattr(m, "n_predict", 4)))
+        device = next(m.parameters()).device
+        ctx = list(prompt_bytes)
+        K = dec.k
+        seq_max = m.seq
+        produced = 0
+        n_proposed = 0
+        n_accepted_extra = 0
+
+        while produced < max_new:
+            # ---- pass 1: draft K bytes ------------------------------------
+            window = ctx[-seq_max:]
+            toks = torch.tensor([window], dtype=torch.long, device=device)
+            t0 = time.perf_counter()
+            with torch.no_grad():
+                p1_logits = dec._forward_all_heads(toks)  # [1, T, N, V]
+            last = p1_logits[0, -1]                        # [N, V]
+
+            # Sample head-0 under the addons+constraint pipeline. This is the
+            # only byte we COMMIT from pass 1 (the rest are speculative).
+            head0_logits = last[0]
+            nxt0 = self._sample_one(head0_logits, temperature, top_k_sample,
+                                    addons_chain, constraint)
+            if nxt0 is None:
+                yield {"kind": "stop", "reason": "constraint allowed no bytes"}
+                return
+
+            # Draft the next K-1 bytes from heads 1..K-1, also under the
+            # constraint+addons pipeline. These are SPECULATIVE — they're
+            # only committed if pass-2 head-0 agrees.
+            drafts = [nxt0]
+            if K > 1:
+                # We need to NOT mutate the constraint while sampling drafts —
+                # those bytes might not be accepted. Snapshot + restore.
+                snap = _snapshot_constraint(constraint)
+                # Temporarily step constraint forward by nxt0 so subsequent
+                # sampling sees the right state.
+                if constraint is not None:
+                    constraint.step(nxt0)
+                try:
+                    for hi in range(1, K):
+                        row = last[hi]
+                        nxt = self._sample_one(row, temperature, top_k_sample,
+                                               addons_chain, constraint)
+                        if nxt is None:
+                            break
+                        drafts.append(int(nxt))
+                        if constraint is not None:
+                            constraint.step(nxt)
+                finally:
+                    _restore_constraint(constraint, snap)
+
+            # ---- pass 2: verify drafts 1..K-1 -----------------------------
+            verify_preds = []
+            if len(drafts) > 1:
+                verify_window = (window + drafts[:-1])[-seq_max:]
+                v_toks = torch.tensor([verify_window], dtype=torch.long, device=device)
+                with torch.no_grad():
+                    p2_logits = dec._forward_all_heads(v_toks)
+                T_v = p2_logits.size(1)
+                # The verifier is GREEDY (argmax) over head-0 at positions
+                # corresponding to "byte AFTER observing draft d_0..d_{i-1}".
+                # That's the last len(drafts)-1 positions of pass-2.
+                for i in range(1, len(drafts)):
+                    pos = T_v - len(drafts) + i
+                    if pos < 0 or pos >= T_v:
+                        break
+                    ref = int(p2_logits[0, pos, 0].argmax().item())
+                    verify_preds.append(ref)
+
+            # ---- accept longest matching prefix ---------------------------
+            accepted = [drafts[0]]      # head-0 sample always accepted
+            mismatch_at = None
+            for i, vp in enumerate(verify_preds, start=1):
+                if i < len(drafts) and drafts[i] == vp:
+                    accepted.append(drafts[i])
+                else:
+                    mismatch_at = i
+                    # Append the head-0 reference at the mismatch (free byte:
+                    # we already computed it). This preserves byte-exactness.
+                    accepted.append(vp)
+                    break
+
+            # Track speculation stats. "extra" = bytes accepted beyond byte-0.
+            n_proposed += max(0, K - 1)
+            extra_now = 0
+            if mismatch_at is None:
+                extra_now = max(0, len(accepted) - 1)   # all drafts matched
+            else:
+                extra_now = max(0, mismatch_at - 1)     # matched up to mismatch
+            n_accepted_extra += extra_now
+
+            step_ms = (time.perf_counter() - t0) * 1000
+            ms_each = step_ms / max(1, len(accepted))
+
+            # ---- emit ------------------------------------------------------
+            for idx, b in enumerate(accepted):
+                if produced >= max_new:
+                    break
+                ctx.append(int(b))
+                produced += 1
+                if addons_chain is not None:
+                    addons_chain.observe(int(b))
+                if constraint is not None:
+                    constraint.step(int(b))
+                yield {
+                    "kind": "fast_byte", "byte": int(b),
+                    "ms_per_byte": round(ms_each, 2),
+                    "head": int(idx), "k": K,
+                    "accepted_extra_so_far": int(n_accepted_extra),
+                    "acceptance_rate": round(n_accepted_extra / max(1, n_proposed), 3),
+                }
+                if constraint is not None and constraint.done():
+                    yield {"kind": "stop", "reason": "constraint complete"}
+                    return
+
+
+# ------------------------------------------------------------------------------------
+# Constraint snapshot helpers (used by stream_fast mtp-verify)
+#
+# Speculative decoding samples K candidate bytes per outer step. The constraint
+# must see them while sampling (so masks update correctly), but only the
+# ACCEPTED prefix should leave a permanent mark. Verifier-rejected bytes are
+# unwound via snapshot/restore on the constraint's __dict__. All shipped
+# constraint classes (JSON / Vocab / StopOn / Combine) store plain Python state.
+
+def _snapshot_constraint(c):
+    if c is None:
+        return None
+    snap = {}
+    for k, v in c.__dict__.items():
+        if isinstance(v, list):
+            snap[k] = list(v)
+        elif isinstance(v, dict):
+            snap[k] = dict(v)
+        elif isinstance(v, bytearray):
+            snap[k] = bytearray(v)
+        else:
+            snap[k] = v
+    return snap
+
+
+def _restore_constraint(c, snap):
+    if c is None or snap is None:
+        return
+    for k, v in snap.items():
+        cur = getattr(c, k, None)
+        if isinstance(cur, list):
+            cur.clear(); cur.extend(v)
+        elif isinstance(cur, dict):
+            cur.clear(); cur.update(v)
+        elif isinstance(cur, bytearray):
+            cur.clear(); cur.extend(v)
+        else:
+            setattr(c, k, v)

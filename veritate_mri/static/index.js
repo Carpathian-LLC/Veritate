@@ -61,8 +61,9 @@ function colorRamp(t) {
   return `rgb(${r},${g},${b})`;
 }
 
-// region-aware color ramp: cool blue for sensory (L0-L3),
-// warm orange for association (L4-L8), hot red for output (L9-L11)
+// region-aware color ramp: cool blue for the first third (sensory),
+// warm orange for the middle third (association), hot red for the last
+// third (output). Bounds adapt to the loaded model via _regionBounds(n).
 function regionRamp(t, layer) {
   t = Math.max(0, Math.min(1, t));
   const region = regionLabel(layer).cls;
@@ -845,8 +846,13 @@ function drawDecisiveness(c, ctx, decisiveness) {
   const padL = 28, padR = 12, padT = 22, padB = 20;
   const plotW = w - padL - padR, plotH = h - padT - padB;
   const barW = plotW / L;
-  // region band: tinted backgrounds + region labels
-  const senseN = 4, assocN = 5, outputN = L - senseN - assocN;
+  // region band: tinted backgrounds + region labels. Bounds scale with the
+  // actual model's layer count (1/3 sensory, 1/3 association, 1/3 output)
+  // so 12-layer, 28-layer, and 50-layer models all label cleanly.
+  const _rb = _regionBounds(L);
+  const senseN  = _rb.sense_end + 1;
+  const assocN  = _rb.assoc_end - _rb.sense_end;
+  const outputN = L - _rb.assoc_end - 1;
   ctx.fillStyle = "rgba(93, 200, 255, 0.06)";
   ctx.fillRect(padL, padT, barW * senseN, plotH);
   ctx.fillStyle = "rgba(255, 174, 93, 0.06)";
@@ -869,7 +875,9 @@ function drawDecisiveness(c, ctx, decisiveness) {
   for (let l = 0; l < L; l++) {
     const t = decisiveness[l] / max;
     const barH = Math.max(1, plotH * t);
-    const region = l <= 3 ? "#5dc8ff" : l <= 8 ? "#ffae5d" : "#ff5d5d";
+    const region = l <= _rb.sense_end ? "#5dc8ff"
+                 : l <= _rb.assoc_end ? "#ffae5d"
+                 :                      "#ff5d5d";
     ctx.fillStyle = region;
     ctx.globalAlpha = 0.7;
     ctx.fillRect(padL + l * barW + 2, padT + plotH - barH, barW - 4, barH);
@@ -909,11 +917,18 @@ function drawLens(elId, lens, finalByte) {
     </div>`;
   }
 
-  // region band labels
+  // region band labels — bounds scale with the model's layer count.
+  // Width flex values match each band's actual layer count so the labels
+  // sit above the right rows for 12-layer, 28-layer, etc.
+  const _rbLens   = _regionBounds(lens.length);
+  const _senseN   = _rbLens.sense_end + 1;
+  const _assocN   = _rbLens.assoc_end - _rbLens.sense_end;
+  const _outN     = lens.length - _rbLens.assoc_end - 1;
+  const _range    = (a, c) => a === c ? `L${a}` : `L${a}–L${c}`;
   const regionBand = `<div style="display:flex;font-size:9px;letter-spacing:.12em;color:var(--dim);margin-bottom:4px;padding-left:30px">
-    <span style="flex:4;color:var(--cool)">L0–L3 SENSORY</span>
-    <span style="flex:5;color:var(--warm)">L4–L8 ASSOCIATION</span>
-    <span style="flex:3;color:var(--hot)">L9–L11 OUTPUT</span>
+    <span style="flex:${_senseN};color:var(--cool)">${_range(0, _rbLens.sense_end)} SENSORY</span>
+    <span style="flex:${_assocN};color:var(--warm)">${_range(_rbLens.sense_end + 1, _rbLens.assoc_end)} ASSOCIATION</span>
+    <span style="flex:${_outN};color:var(--hot)">${_range(_rbLens.assoc_end + 1, lens.length - 1)} OUTPUT</span>
   </div>`;
 
   let rows = "";
@@ -1198,7 +1213,13 @@ $("go").addEventListener("click", () => {
   if (ablBadge && ablLayer >= 0 && ablNeuron >= 0) ablBadge.textContent = `ablated L${ablLayer} N${ablNeuron}`;
   const addonsSel = collectSelectedAddons();
   const addonsParam = addonsSel.length ? `&addons=${encodeURIComponent(addonsSel.join(","))}` : "";
-  const url = `/generate?prompt=${encodeURIComponent(prompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}`;
+  // Build-7 additions: fast mode (KV / MTP) skips the rich per-byte telemetry
+  // for ~10x decode speedup; constrained masks the output to a grammar.
+  const fastSel = ($("genFastMode") || { value: "" }).value;
+  const fastParam = (fastSel && fastSel !== "off") ? `&fast=${encodeURIComponent(fastSel)}` : "";
+  const constrainedSel = ($("genConstrained") || { value: "" }).value;
+  const constrainedParam = (constrainedSel && constrainedSel !== "off") ? `&constrained=${encodeURIComponent(constrainedSel)}` : "";
+  const url = `/generate?prompt=${encodeURIComponent(prompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}`;
   evtSrc = new EventSource(url);
   const t0 = performance.now();
   evtSrc.onmessage = (e) => {
@@ -1216,6 +1237,30 @@ $("go").addEventListener("click", () => {
       live = false;
       if (frames.length > 0) setReplayMode("ready");
       console.warn("[/generate] backend error event:", ev);
+      return;
+    }
+    if (ev.kind === "prefill") {
+      $("liveStats").innerHTML = `<span class="stat">prefill <b>${ev.prefill_ms.toFixed(1)}</b> ms over <b>${ev.tokens}</b> tokens</span>`;
+      return;
+    }
+    if (ev.kind === "stop") {
+      const reason = ev.reason || "stopped";
+      $("liveStats").innerHTML += ` <span class="stat" style="color:var(--warm)">stop: ${reason}</span>`;
+      return;
+    }
+    if (ev.kind === "fast_byte") {
+      // Fast mode (KV / MTP). No brain-scan telemetry on these bytes; just
+      // accumulate the byte for the response panel and the throughput meter.
+      generatedBytes.push(ev.byte);
+      const dt = (performance.now() - t0) / 1000;
+      const fastLbl = ev.head != null ? ` <span class="stat" style="color:var(--cool)">head ${ev.head}/${ev.k}</span>` : "";
+      $("liveStats").innerHTML = `
+        <span class="stat"><b>${generatedBytes.length}</b> bytes</span>
+        <span class="stat"><b>${(generatedBytes.length/dt).toFixed(1)}</b> b/s</span>
+        <span class="stat"><b>${(ev.ms_per_byte ?? 0).toFixed(1)}</b> ms/byte (fast)</span>
+        ${fastLbl}
+      `;
+      renderResponse();
       return;
     }
     if (ev.kind === "token") {
@@ -1979,30 +2024,36 @@ $("goReplayL").addEventListener("click", () => {
 // NEURON CLICK-TO-INSPECT MODAL
 // ============================================================
 function regionDescription(layerNum) {
-  if (layerNum <= 3) {
+  // Bounds scale with the current model's layer count (1/3 sensory, 1/3
+  // association, 1/3 output). The descriptive text adapts the cited layer
+  // range so the tooltip never claims "L0-L3" on a 28-layer model.
+  const b = _regionBounds(_layerCount);
+  const rng = (a, c) => a === c ? `L${a}` : `L${a}–L${c}`;
+  if (layerNum <= b.sense_end) {
     return {
       cls: "b-sense",
       name: "sensory cortex",
-      blurb: "<b>L0–L3 process raw input features.</b> Bytes, n-grams, basic patterns: \"is this byte a vowel\", \"did we just see a space\", \"are we inside quotes\". A neuron firing here usually responds to a specific surface character or short prefix.",
+      blurb: `<b>${rng(0, b.sense_end)} process raw input features.</b> Bytes, n-grams, basic patterns: "is this byte a vowel", "did we just see a space", "are we inside quotes". A neuron firing here usually responds to a specific surface character or short prefix.`,
     };
   }
-  if (layerNum <= 8) {
+  if (layerNum <= b.assoc_end) {
     return {
       cls: "b-assoc",
       name: "association cortex",
-      blurb: "<b>L4–L8 combine lower-level features into concepts.</b> Word boundaries, syntax, parts of speech, semantic categories. A neuron firing here usually responds to a meaning or grammatical role rather than a specific letter.",
+      blurb: `<b>${rng(b.sense_end + 1, b.assoc_end)} combine lower-level features into concepts.</b> Word boundaries, syntax, parts of speech, semantic categories. A neuron firing here usually responds to a meaning or grammatical role rather than a specific letter.`,
     };
   }
   return {
     cls: "b-out",
     name: "prefrontal / output",
-    blurb: "<b>L9–L11 commit to the next byte.</b> They project all the accumulated context into a specific byte prediction. A neuron firing here votes hard for or against specific bytes; this is where the actual choice gets made.",
+    blurb: `<b>${rng(b.assoc_end + 1, _layerCount - 1)} commit to the next byte.</b> They project all the accumulated context into a specific byte prediction. A neuron firing here votes hard for or against specific bytes; this is where the actual choice gets made.`,
   };
 }
 
 function regionChipClass(layerNum) {
-  if (layerNum <= 3) return "region-sense";
-  if (layerNum <= 8) return "region-assoc";
+  const b = _regionBounds(_layerCount);
+  if (layerNum <= b.sense_end) return "region-sense";
+  if (layerNum <= b.assoc_end) return "region-assoc";
   return "region-output";
 }
 
@@ -2564,10 +2615,25 @@ function plotTrainSeries(canvas, ctx, series, opts) {
     if (p.y > yMax) yMax = p.y;
   }
   if (!isFinite(xMin)) return;
+  // Capture the raw data range before yMinFloor / yMaxCeil widen it. yAutoFit
+  // uses this to decide when the data lives well below the fixed ceiling and
+  // the chart should zoom in instead.
+  const dataMax = yMax;
   // optional fixed y bounds. opts.yMinFloor lowers yMin to at most this value
   // (useful for "anchor the chart at ppl 1.0"), opts.yMaxCeil raises yMax.
   if (typeof opts.yMinFloor === "number") yMin = Math.min(yMin, opts.yMinFloor);
   if (typeof opts.yMaxCeil  === "number") yMax = Math.max(yMax, opts.yMaxCeil);
+  // opts.yAutoFit: zoom the y-axis to dataMax * (opts.yAutoPad || 1.25) when
+  // the data sits well below the ceiling. Threshold lines that fall above the
+  // visible frame turn into top-edge "↑ above chart" labels. This is the fix
+  // for the early-training clumping on the reading-level + writing-health
+  // charts: when every series is at 5-15%, a hard 0..100 frame compresses
+  // them into a single visual band along the baseline.
+  if (opts.yAutoFit && isFinite(dataMax)) {
+    const pad = Number(opts.yAutoPad) > 0 ? Number(opts.yAutoPad) : 1.25;
+    const fitted = Math.max(dataMax * pad, dataMax + 0.02);
+    if (fitted < yMax) yMax = fitted;
+  }
   // optional x bounds — used to reserve x-axis room for future checkpoints
   // so the chart layout doesn't shift each time a probe lands.
   if (typeof opts.xMinFloor === "number") xMin = Math.min(xMin, opts.xMinFloor);
@@ -2607,9 +2673,18 @@ function plotTrainSeries(canvas, ctx, series, opts) {
   }
   // optional horizontal threshold lines, e.g. ppl 3.0 = fluent.
   // shape: opts.thresholdLines = [{ y, color, label, lineDash }]
+  // Thresholds that fall above the visible y range get rendered as compact
+  // "label (off chart, y=X)" annotations at the top edge so the user still
+  // sees the goal without forcing the y-axis to extend that far.
   if (Array.isArray(opts.thresholdLines)) {
     ctx.save();
+    const offChartLabels = [];
     for (const t of opts.thresholdLines) {
+      if (t.y > yMax + 1e-9) {
+        offChartLabels.push(t);
+        continue;
+      }
+      if (t.y < yMin - 1e-9) continue;
       const y = yS(t.y);
       ctx.strokeStyle = t.color || "#5dff9b";
       ctx.lineWidth = 1;
@@ -2624,6 +2699,18 @@ function plotTrainSeries(canvas, ctx, series, opts) {
         ctx.font = "10px ui-monospace,monospace";
         ctx.fillText(t.label, W - padR - 6 - ctx.measureText(t.label).width, y - 3);
       }
+    }
+    // Stack the off-chart annotations at the top right, one per line so they
+    // don't overlap. Color matches the threshold color.
+    ctx.setLineDash([]);
+    ctx.font = "10px ui-monospace,monospace";
+    let yCursor = padT + 11;
+    for (const t of offChartLabels) {
+      const lbl = `${t.label || "threshold"}  ↑ above chart`;
+      ctx.fillStyle = t.color || "#5dff9b";
+      const w = ctx.measureText(lbl).width;
+      ctx.fillText(lbl, W - padR - 6 - w, yCursor);
+      yCursor += 12;
     }
     ctx.restore();
   }
@@ -3318,6 +3405,22 @@ function render_pruning_report(refs, r) {
 
 function render_confidence_evo(refs, run, steps, confByStep) {
   const have = steps.filter(s => s.lens && confByStep[s.step]);
+  // Update the hover/status line so the user can tell "no data" from "data
+  // missing for some reason" — used to silently render an empty chart.
+  const hoverEl = refs.confCanvas && refs.confCanvas.id ? $(refs.confCanvas.id + "Hover") : null;
+  if (hoverEl) {
+    const total = steps.length;
+    const withLens = steps.filter(s => s.lens).length;
+    if (total === 0) {
+      hoverEl.textContent = "no checkpoints yet — chart fills in as training progresses";
+    } else if (withLens === 0) {
+      hoverEl.textContent = `${total} checkpoint${total === 1 ? "" : "s"} but none have lens.npz — dump suite may be skipping lens`;
+    } else if (have.length < withLens) {
+      hoverEl.textContent = `${have.length}/${withLens} lens files loaded successfully (check console for fetch errors)`;
+    } else {
+      hoverEl.textContent = `${have.length} checkpoint${have.length === 1 ? "" : "s"} plotted — hover to inspect`;
+    }
+  }
   if (have.length === 0) {
     plotTrainSeries(refs.confCanvas, refs.confCtx, []);
     return;
@@ -3329,11 +3432,14 @@ function render_confidence_evo(refs, run, steps, confByStep) {
   // normalize margin to roughly [0,1] for co-plotting (margin can range wide). divide by max abs.
   const maxAbs = margin.reduce((m, p) => Math.max(m, Math.abs(p.y)), 1);
   const marginN = margin.map(p => ({ x: p.x, y: p.y / maxAbs }));
+  // Pass `dots: true` so a single-checkpoint chart still shows visible dots
+  // (the line-only path needs >=2 points to draw anything — that previously
+  // made early-training runs look broken).
   plotTrainSeries(refs.confCanvas, refs.confCtx, [
-    { points: marginN,     color: "#5dc8ff", lw: 1.5 },
-    { points: entropy,     color: "#ffae5d", lw: 1.5 },
-    { points: consistency, color: "#5dff9b", lw: 2   },
-    { points: stab,        color: "#ff5d9b", lw: 1.5 },
+    { points: marginN,     color: "#5dc8ff", lw: 1.5, dots: true },
+    { points: entropy,     color: "#ffae5d", lw: 1.5, dots: true },
+    { points: consistency, color: "#5dff9b", lw: 2,   dots: true },
+    { points: stab,        color: "#ff5d9b", lw: 1.5, dots: true },
   ]);
 }
 
@@ -3582,6 +3688,13 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   plotTrainSeries(canvas, ctx, series, {
     yMinFloor: 0,
     yMaxCeil:  108,                       // headroom so the FLUENT label at y=100 isn't clipped
+    // Early in training every band sits at 5-15% fluency; the 0..100 frame
+    // compresses them into a clump along the baseline. yAutoFit zooms the
+    // y-axis to dataMax * 1.3 when the data is well below the ceiling, and
+    // the FLUENT / EMERGING thresholds become top-edge "↑ above chart"
+    // labels until the model climbs into their range.
+    yAutoFit: true,
+    yAutoPad: 1.30,
     xMinFloor: 0,
     xMaxCeil:  totalSteps || undefined,
     yTitle: "fluency % (higher = better)",
@@ -4121,12 +4234,11 @@ function render_writing_health(refs, run, writingSteps, writingByStep, haveCheck
   }
 
   let html = "";
-  // PMI no-index hint (one short line).
+  // Silently omit the PMI metric when no bigram index exists for this corpus.
+  // The legend below still renders the other writing-health metrics; PMI just
+  // doesn't appear. (Previously this surfaced a developer CLI command to end
+  // users, which was confusing and not actionable from the dashboard.)
   const cfg = latest.config || {};
-  if (cfg.corpus_path && !cfg.pmi_index_path) {
-    const stem = (cfg.corpus_path.match(/([^\\\/]+)_train\.bin$/) || [null, "<corpus>"])[1];
-    html += `<div class="meta" style="margin:0 0 10px;font-size:11px">PMI disabled (no bigram index). Build with: <code>python veritate_mri/tools/build_bigram_index.py --corpus ${escapeHtml(stem)}</code></div>`;
-  }
 
   // Legend colors avoid green/yellow/orange/red (those mean status: good/close/bad).
   // Picked for high mutual contrast: hot pink, electric cyan, deep violet, magenta,
@@ -4227,6 +4339,12 @@ function render_writing_health(refs, run, writingSteps, writingByStep, haveCheck
     plotTrainSeries(canvas, ctx, series, {
       yMinFloor: 0,
       yMaxCeil:  1.08,
+      // Same anti-clumping fix as the reading-level chart: zoom y to the
+      // current data range so early-training scores (0.05-0.15 territory)
+      // spread out vertically. IDEAL=1.0 turns into a top-edge marker until
+      // the model gets close.
+      yAutoFit: true,
+      yAutoPad: 1.30,
       xMinFloor: 0,
       xMaxCeil:  totalSteps || undefined,
       yTitle:    "score (1.0 = ideal, 0 = untrained)",
@@ -4371,7 +4489,307 @@ async function loadClassroomFor(state, refs, run) {
 
 // thin wrappers — the existing call sites stay unchanged.
 function loadClassroomForRun(run)      { return loadClassroomFor(classroomState,  classroomRefsT, run); }
-function loadClassroomForLearning(run) { return loadClassroomFor(classroomStateL, classroomRefsL, run); }
+function loadClassroomForLearning(run) {
+  const p = loadClassroomFor(classroomStateL, classroomRefsL, run);
+  // The deep-eval panel lives in the Learning tab. Refresh its checkpoint
+  // picker + cached results whenever the timeline selection changes.
+  refreshDeepEvalForRun(run);
+  return p;
+}
+
+// ------------------------------------------------------------------------------
+// Deep eval panel (real MMLU / HellaSwag / IFEval accuracy, on demand).
+// ------------------------------------------------------------------------------
+
+const deepEvalState = {
+  run:     null,
+  results: [],        // raw list from GET /run/<name>/eval_deep
+  running: false,
+};
+
+function _deepEvalSuiteColor(acc) {
+  // 25% = random baseline for 4-way MCQ. >0.5 green, 0.25-0.5 amber, <0.25 red.
+  if (acc == null || isNaN(acc)) return "var(--text-dim)";
+  if (acc >= 0.50) return "#5dff9b";
+  if (acc >= 0.25) return "#ffd35d";
+  return "#ff7d5d";
+}
+
+function _deepEvalSuiteBg(acc) {
+  if (acc == null || isNaN(acc)) return "transparent";
+  if (acc >= 0.50) return "rgba(93,255,155,0.10)";
+  if (acc >= 0.25) return "rgba(255,211,93,0.10)";
+  return "rgba(255,125,93,0.10)";
+}
+
+// scale class -> per-suite expected accuracy band for a well-tuned byte-level model.
+// numbers track the HTML "rough expected bands" copy in the deep-eval panel.
+const DEEP_EVAL_BANDS = {
+  "<100M":      { label: "~85M class",     mmlu: [0.25, 0.28], hellaswag: [0.28, 0.35], ifeval: [0.00, 0.05] },
+  "100M-400M":  { label: "~300M class",    mmlu: [0.28, 0.32], hellaswag: [0.35, 0.45], ifeval: [0.00, 0.10] },
+  "400M-1.5B":  { label: "~800M-1B class", mmlu: [0.30, 0.40], hellaswag: [0.45, 0.60], ifeval: [0.10, 0.25] },
+  ">=1.5B":     { label: "~7B class",      mmlu: [0.40, 0.55], hellaswag: [0.55, 0.75], ifeval: [0.25, 0.50] },
+};
+
+function _deepEvalScaleClass(nParams) {
+  if (!nParams || !isFinite(nParams)) return null;
+  if (nParams < 100e6)   return DEEP_EVAL_BANDS["<100M"];
+  if (nParams < 400e6)   return DEEP_EVAL_BANDS["100M-400M"];
+  if (nParams < 1.5e9)   return DEEP_EVAL_BANDS["400M-1.5B"];
+  return DEEP_EVAL_BANDS[">=1.5B"];
+}
+
+function _deepEvalExpectedBand(suite) {
+  const cfg = (typeof classroomStateL !== "undefined" && classroomStateL) ? classroomStateL.config : null;
+  if (!cfg || !cfg.shape) return null;
+  const pc = compute_param_count(cfg.shape);
+  if (!pc) return null;
+  const band = _deepEvalScaleClass(pc.total);
+  if (!band) return null;
+  const key = (suite === "mmlu") ? "mmlu" : (suite === "hellaswag") ? "hellaswag" : (suite === "ifeval") ? "ifeval" : null;
+  if (!key) return null;
+  const range = band[key];
+  if (!range) return null;
+  return { lo: range[0], hi: range[1], label: band.label, nParams: pc.total };
+}
+
+function _deepEvalRenderResults(results) {
+  const root = document.getElementById("deepEvalResults");
+  if (!root) return;
+  if (!results || results.length === 0) {
+    root.innerHTML = `<span class="meta">no cached results &mdash; pick suites and click run</span>`;
+    return;
+  }
+  let html = "";
+  for (const r of results) {
+    const isMMLU      = r.suite === "mmlu";
+    const isHellaSwag = r.suite === "hellaswag";
+    const isIFEval    = r.suite === "ifeval";
+    const acc = r.acc;
+    const col = _deepEvalSuiteColor(acc);
+    const bg  = _deepEvalSuiteBg(acc);
+    const accPct = (acc == null) ? "—" : `${(acc * 100).toFixed(1)}%`;
+    const stepLbl = (r.step == null) ? "?" : r.step;
+    const baselineLbl = (isMMLU || isHellaSwag) ? "chance 25%" : "rule-based pass rate";
+    const elapsedStr = (r.elapsed_s == null) ? "" : `${Number(r.elapsed_s).toFixed(1)}s`;
+    html += `<div style="background:${bg};border:1px solid var(--line);border-radius:4px;padding:10px 12px;margin-bottom:10px">`;
+    html += `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">`;
+    html += `  <b style="font-size:14px;text-transform:uppercase;letter-spacing:0.5px">${r.suite}</b>`;
+    html += `  <span class="meta">step ${stepLbl} &middot; n=${r.n ?? "?"} &middot; ${elapsedStr}</span>`;
+    html += `</div>`;
+    const band = _deepEvalExpectedBand(r.suite);
+    let bandPill = "";
+    if (band) {
+      const loPct = (band.lo * 100).toFixed(0);
+      const hiPct = (band.hi * 100).toFixed(0);
+      let inBand = "";
+      if (acc != null && !isNaN(acc)) {
+        if (acc >= band.lo && acc <= band.hi)      inBand = ` <span style="color:#5dff9b">&middot; in band</span>`;
+        else if (acc > band.hi)                    inBand = ` <span style="color:#5dff9b">&middot; above band</span>`;
+        else if (acc < band.lo && acc >= band.lo*0.85) inBand = ` <span style="color:#ffd35d">&middot; just below band</span>`;
+        else                                       inBand = ` <span style="color:#ff7d5d">&middot; below band</span>`;
+      }
+      bandPill = `<span class="meta" style="margin-left:10px;font-size:11px">expected ${loPct}-${hiPct}% (${band.label})${inBand}</span>`;
+    }
+    html += `<div style="display:flex;align-items:baseline;gap:6px">`;
+    html += `  <div style="font-size:24px;font-weight:600;color:${col};line-height:1.1">${accPct}</div>`;
+    html += `  ${bandPill}`;
+    html += `</div>`;
+    html += `<div class="meta" style="font-size:10.5px">${baselineLbl}`;
+    if (isMMLU && r.accuracy_letter != null && r.accuracy_text != null) {
+      html += ` &middot; text=${(r.accuracy_text*100).toFixed(1)}% letter=${(r.accuracy_letter*100).toFixed(1)}%`;
+    }
+    html += `</div>`;
+    // MMLU subject breakdown: top 5 + bottom 5
+    if (isMMLU && r.by_subject) {
+      const subs = Object.entries(r.by_subject).map(([k, v]) => ({
+        subject: k, n: v.n, acc: v.acc,
+      }));
+      subs.sort((a, b) => b.acc - a.acc);
+      const top5 = subs.slice(0, 5);
+      const bot5 = subs.slice(-5).reverse();
+      html += `<div style="margin-top:8px;display:flex;gap:18px;flex-wrap:wrap;font-size:11px">`;
+      html += `<div><b style="color:#5dff9b">top 5 subjects</b><br>`;
+      for (const s of top5) {
+        html += `&nbsp;${(s.acc*100).toFixed(0)}% &middot; ${s.subject} <span class="meta">(n=${s.n})</span><br>`;
+      }
+      html += `</div>`;
+      html += `<div><b style="color:#ff7d5d">bottom 5 subjects</b><br>`;
+      for (const s of bot5) {
+        html += `&nbsp;${(s.acc*100).toFixed(0)}% &middot; ${s.subject} <span class="meta">(n=${s.n})</span><br>`;
+      }
+      html += `</div>`;
+      html += `</div>`;
+    }
+    // IFEval rule breakdown
+    if (isIFEval && r.by_rule) {
+      const rules = Object.entries(r.by_rule);
+      if (rules.length > 0) {
+        html += `<div style="margin-top:8px;font-size:11px"><b>per-rule pass rate</b><br>`;
+        for (const [name, v] of rules) {
+          html += `&nbsp;${(v.pass_rate*100).toFixed(0)}% &middot; ${name} <span class="meta">(n=${v.n})</span><br>`;
+        }
+        html += `</div>`;
+      }
+    }
+    // Raw JSON (collapsed)
+    const raw = JSON.stringify({
+      suite: r.suite, step: r.step, n: r.n, acc: r.acc, elapsed_s: r.elapsed_s,
+      by_subject: r.by_subject, by_rule: r.by_rule,
+      accuracy_letter: r.accuracy_letter, accuracy_text: r.accuracy_text,
+    }, null, 2);
+    html += `<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">raw json</summary><pre style="font-size:10.5px;max-height:280px;overflow:auto;background:rgba(0,0,0,0.30);padding:8px;border-radius:3px;margin:6px 0 0 0">${raw.replace(/</g,"&lt;")}</pre></details>`;
+    html += `</div>`;
+  }
+  root.innerHTML = html;
+}
+
+function _deepEvalPopulateStepPicker(run) {
+  const sel = document.getElementById("deepEvalStep");
+  if (!sel) return;
+  // Pull the checkpoint list from classroomStateL (probe index, already loaded
+  // for the Learning tab) and union with whatever steps we have cached results for.
+  let steps = [];
+  if (classroomStateL.run === run && Array.isArray(classroomStateL.steps)) {
+    steps = classroomStateL.steps.map(s => s.step).filter(s => s != null);
+  }
+  const seen = new Set(steps);
+  for (const r of deepEvalState.results) {
+    if (r.step != null && !seen.has(r.step)) { seen.add(r.step); steps.push(r.step); }
+  }
+  steps.sort((a, b) => a - b);
+  const prev = sel.value;
+  let opts = `<option value="">latest</option>`;
+  for (const s of steps) {
+    opts += `<option value="${s}">step ${s}</option>`;
+  }
+  sel.innerHTML = opts;
+  if (prev && steps.includes(parseInt(prev, 10))) {
+    sel.value = prev;
+  }
+}
+
+async function refreshDeepEvalForRun(run) {
+  deepEvalState.run = run;
+  deepEvalState.results = [];
+  const statusEl  = document.getElementById("deepEvalStatus");
+  const resultsEl = document.getElementById("deepEvalResults");
+  if (statusEl)  statusEl.textContent = "";
+  if (resultsEl) resultsEl.innerHTML  = `<span class="meta">loading cached results…</span>`;
+  _deepEvalPopulateStepPicker(run);
+  if (!run) {
+    if (resultsEl) resultsEl.innerHTML = `<span class="meta">pick a timeline first</span>`;
+    return;
+  }
+  try {
+    const r = await fetch(`/run/${encodeURIComponent(run)}/eval_deep?` + Date.now(), { cache: "no-store" });
+    if (r.ok) {
+      const d = await r.json();
+      deepEvalState.results = d.results || [];
+    }
+  } catch (e) {
+    console.warn("eval_deep list fetch", e);
+  }
+  _deepEvalPopulateStepPicker(run);
+  _deepEvalRenderResults(deepEvalState.results);
+}
+
+async function _deepEvalPollStatus(run, step) {
+  const statusEl = document.getElementById("deepEvalStatus");
+  try {
+    const url = `/run/${encodeURIComponent(run)}/eval_deep/status?step=${encodeURIComponent(step)}&_=${Date.now()}`;
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d || !d.running) return;
+    const prog = d.progress || {};
+    const cur  = d.current_suite || "preparing";
+    let bits = [];
+    for (const [name, v] of Object.entries(prog)) {
+      if (!v) continue;
+      const i = v.i ?? 0, n = v.n;
+      bits.push(`${name}=${i}${n ? "/" + n : ""}`);
+    }
+    if (statusEl) statusEl.textContent = `running ${cur} (${bits.join(", ") || "starting"})…`;
+  } catch (e) {}
+}
+
+async function runDeepEval() {
+  const run = deepEvalState.run;
+  if (!run) {
+    alert("pick a timeline before running deep eval");
+    return;
+  }
+  if (deepEvalState.running) return;
+  const suites = [];
+  if (document.getElementById("deepEvalMMLU").checked) suites.push("mmlu");
+  if (document.getElementById("deepEvalHS").checked)   suites.push("hellaswag");
+  if (document.getElementById("deepEvalIF").checked)   suites.push("ifeval");
+  if (suites.length === 0) {
+    alert("check at least one suite (MMLU / HellaSwag / IFEval)");
+    return;
+  }
+  const stepSel = document.getElementById("deepEvalStep");
+  const stepRaw = stepSel ? stepSel.value : "";
+  const step = (stepRaw === "" || stepRaw == null) ? null : parseInt(stepRaw, 10);
+  const limRaw = (document.getElementById("deepEvalLimit") || {}).value;
+  const limit = (limRaw === "" || limRaw == null) ? null : parseInt(limRaw, 10);
+
+  const statusEl = document.getElementById("deepEvalStatus");
+  const btn      = document.getElementById("deepEvalRun");
+  deepEvalState.running = true;
+  if (btn) btn.disabled = true;
+  // Rough wall-time estimate for the spinner copy.
+  const estMin = suites.length * (limit && limit <= 100 ? 2 : 10);
+  if (statusEl) statusEl.innerHTML = `<span style="color:var(--accent)">running ${suites.join(", ")}… (est. ~${estMin} min, please wait)</span>`;
+
+  const pollHandle = setInterval(() => _deepEvalPollStatus(run, step ?? "latest"), 1500);
+
+  let report = null, err = null;
+  try {
+    const body = { suite: suites, step, limit };
+    const r = await fetch(`/run/${encodeURIComponent(run)}/eval_deep`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const txt = await r.text();
+      try { err = (JSON.parse(txt) || {}).error || txt; }
+      catch (_) { err = txt; }
+    } else {
+      report = await r.json();
+    }
+  } catch (e) {
+    err = String(e);
+  } finally {
+    clearInterval(pollHandle);
+    deepEvalState.running = false;
+    if (btn) btn.disabled = false;
+  }
+  if (err) {
+    if (statusEl) statusEl.innerHTML = `<span style="color:var(--hot)">error: ${err}</span>`;
+    return;
+  }
+  if (statusEl) statusEl.innerHTML = `<span style="color:#5dff9b">done &middot; ${(report.suites || []).join(", ")}</span>`;
+  // Refresh from the persisted index so we render the same way as cached loads.
+  await refreshDeepEvalForRun(run);
+}
+
+function _bindDeepEvalControls() {
+  const btn = document.getElementById("deepEvalRun");
+  if (btn && !btn.dataset._deepEvalBound) {
+    btn.dataset._deepEvalBound = "1";
+    btn.addEventListener("click", () => { runDeepEval(); });
+  }
+}
+if (typeof document !== "undefined") {
+  if (document.readyState !== "loading") {
+    _bindDeepEvalControls();
+  } else {
+    document.addEventListener("DOMContentLoaded", _bindDeepEvalControls);
+  }
+}
 
 // poll: re-check probe step count for the active live-training run. cheap json fetch.
 // only triggers a full classroom reload when new lens/probe dumps have appeared.
@@ -6274,7 +6692,7 @@ function _renderUpdateStatus(st) {
     }
   }
   const pull = $("updatePullBtn");
-  if (pull) pull.disabled = !(st.update_available && !st.dirty);
+  if (pull) pull.disabled = !st.update_available;
   const banner = $("updateBanner");
   if (banner) {
     if (st.update_available) {

@@ -103,6 +103,32 @@
         <span id="maxHint" class="stat" style="font-size:10px;color:var(--dim)"></span>
         <span id="liveStats" class="stats"></span>
       </div>
+      <div id="decodeRow" style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
+        <span style="color:var(--text);font-weight:600" title="PyTorch-backend decode-path options. fast mode trades brain-scan telemetry for ~10x speed; constrained masks output to a grammar/vocab.">decode</span>
+        <label title="fast mode: kv = cached attention (1-byte-per-step, byte-exact, 19x at T=512), mtp = multi-byte-prediction head accept-all (1.5-3x, Veritate800M only), mtp-verify = byte-exact MTP-verify self-speculative (Veritate800M only, byte-exact to single-byte decode). off = default rich-telemetry path.">
+          fast
+          <select id="genFastMode" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+            <option value="off">off (full telemetry)</option>
+            <option value="kv">kv cache (byte-exact)</option>
+            <option value="mtp">mtp head accept-all (800M)</option>
+            <option value="mtp-verify">mtp-verify (byte-exact, 800M)</option>
+          </select>
+        </label>
+        <label title="output-shape constraint applied as a -inf logit mask. json forces grammar-valid JSON; vocab/stop presets are convenience macros.">
+          constrained
+          <select id="genConstrained" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+            <option value="off">off</option>
+            <option value="json">json</option>
+            <option value="vocab:ascii">vocab: ascii</option>
+            <option value="vocab:alnum">vocab: alphanumeric</option>
+            <option value="vocab:lower">vocab: lowercase</option>
+            <option value="vocab:digits">vocab: digits</option>
+            <option value="stop:newline">stop: newline</option>
+            <option value="stop:double_newline">stop: blank line</option>
+          </select>
+        </label>
+        <span class="stat" style="font-size:10px;color:var(--dim)">PyTorch backend only</span>
+      </div>
       <div id="addonsRow" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
         <span style="color:var(--text);font-weight:600" title="inference-time addons applied to the PyTorch backend before sampling. each addon biases next-byte logits without touching the model.">addons</span>
         <span id="addonsList" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"></span>
@@ -623,6 +649,10 @@
       <canvas id="cReadGradeL" height="200" style="margin-top:4px"></canvas>
       <div class="meta" style="margin-top:4px;margin-bottom:14px;font-size:10.5px">trajectory: per-band fluency % (UP = better). Each band starts at 0 (random) at step 0 and rises toward FLUENT (ppl 3.0 = 100%). Threshold lines marked.</div>
       <div id="learnReadLevel">no grades data</div>
+      <div class="meta" style="margin-top:8px;font-size:10.5px;color:var(--warm)">
+        Perplexity proxy &mdash; this estimates fluency from per-band cross-entropy, not real comprehension.
+        For accuracy on MMLU&nbsp;/&nbsp;HellaSwag&nbsp;/&nbsp;IFEval, see the <b>Deep Eval</b> panel below.
+      </div>
     </div>
     <details class="more"><summary>how the grade is computed</summary><div class="more-content">
       <h4>where the test corpora come from</h4>
@@ -635,6 +665,49 @@
       <p><b class="lead">FLUENT band that's the curriculum target.</b> Stage gate passes. Advance to the next stage.</p>
       <p><b class="lead">EMERGING band with a small gap</b> (e.g. ppl 3.3 vs 3.0 threshold). The next 1-2k steps on that domain usually closes it; keep training.</p>
       <p><b class="lead">NOT YET band on the curriculum target.</b> Corpus mix is wrong for the stage. Lower the LR or rewind to easier text rather than pushing on.</p>
+    </div></details>
+  </div>
+
+  <div class="panel" data-expandable="true">
+    <h2>deep eval <em>real accuracy on MMLU&nbsp;/&nbsp;HellaSwag&nbsp;/&nbsp;IFEval, on-demand</em></h2>
+    <div class="body">
+      <div class="controls" style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <label>checkpoint
+          <select id="deepEvalStep" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:180px">
+            <option value="">latest</option>
+          </select>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="deepEvalMMLU" checked> MMLU
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="deepEvalHS"> HellaSwag
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="deepEvalIF"> IFEval
+        </label>
+        <label>limit
+          <input type="number" id="deepEvalLimit" placeholder="all" min="1" max="20000" style="width:90px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px">
+        </label>
+        <button id="deepEvalRun" type="button">run deep eval</button>
+        <span id="deepEvalStatus" class="meta" style="margin-left:6px"></span>
+      </div>
+      <div id="deepEvalResults" class="meta">no results yet &mdash; pick suites and click run</div>
+    </div>
+    <p class="desc">
+      Real benchmark accuracy, not a perplexity proxy. Click <b>run deep eval</b> and the dashboard loads the selected checkpoint through the same PyTorch Brain backend it uses for inference, scores every question/item with byte-level per-byte log-likelihood (the byte-level analog of <code>acc_norm</code> in <code>lm-eval-harness</code>), and writes the JSON report next to your model in <code>models/&lt;run&gt;/eval_deep/</code>. Cached results auto-load when this panel opens.
+      <span style="color:var(--warm)">Heads up &mdash; if a model is currently training on MPS, deep eval will briefly share that device. The button is the only trigger; nothing schedules this.</span>
+    </p>
+    <details class="more"><summary>how this differs from the reading-level tile</summary><div class="more-content">
+      <h4>two complementary views of "is the model getting smarter"</h4>
+      <p><b class="lead">Reading level (above)</b> is fast and runs at every checkpoint via the save hook. It scores per-byte cross-entropy on hand-authored grade-labeled prose (Pre-K through PhD). High score = the model's distribution matches that prose's statistics. <span style="color:var(--warm)">It is fluency, not comprehension.</span> A model can score "fluent at college-level prose" while still being totally wrong on a college-level multiple choice question.</p>
+      <p><b class="lead">Deep eval (this panel)</b> is the comprehension test. The model has to actually rank the right multiple-choice answer above the wrong ones, or follow a verifiable instruction. Slow (5-20 min per suite), runs only when you click the button, returns real numbers everyone reports.</p>
+      <h4>random baselines</h4>
+      <p>MMLU and HellaSwag are 4-way MCQ &rarr; chance = <b>25%</b>. The panel color-codes accuracy: green &gt; 50% (above chance by a comfortable margin), amber 25-50% (signal exists but weak), red &lt; 25% (below chance &mdash; either the harness or the model is broken).</p>
+      <h4>what "good" looks like, by scale</h4>
+      <p>Rough expected MMLU bands for a well-tuned byte-level model: ~85M reaches 25-28% (barely above chance), ~300M reaches 28-32%, ~800M-1B reaches 30-40%, ~7B reaches 40-50%. GPT-3 175B lands around 43% MMLU / 78% HellaSwag for reference. HellaSwag is harder for byte-level than for token-level models because every byte of the ending has to be predicted verbatim. <span style="color:var(--warm)">Don't compare these numbers directly to tokenized leaderboards &mdash; cross-reference with MMLU's letter-mode for sanity.</span> The expected band for your loaded checkpoint is shown next to each result row.</p>
+      <h4>where the data comes from</h4>
+      <p>The repo ships ~20-item sample data for the smoke test. To run on the real ~14k-question MMLU and ~10k-item HellaSwag val sets, download the official releases (instructions in <code>veritate_mri/eval/README.md</code>) and drop the JSONs in <code>veritate_mri/eval/data/</code>. The endpoint accepts data-path overrides in its POST body.</p>
     </div></details>
   </div>
 

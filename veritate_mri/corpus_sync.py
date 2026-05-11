@@ -33,11 +33,18 @@ import hashlib
 import json
 import os
 import shutil
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
 import zipfile
+
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _SSL_CTX = ssl.create_default_context()
 
 from readers import paths
 
@@ -188,7 +195,7 @@ def _fetch_remote_catalog(url):
         return [], "no catalog URL configured"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Veritate-MRI"})
-        with urllib.request.urlopen(req, timeout=CATALOG_FETCH_TIMEOUT_SECS) as resp:
+        with urllib.request.urlopen(req, timeout=CATALOG_FETCH_TIMEOUT_SECS, context=_SSL_CTX) as resp:
             raw = resp.read()
         data = json.loads(raw.decode("utf-8"))
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
@@ -284,7 +291,7 @@ def _download(url, dest_path, stem, kind):
     started = time.time()
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Veritate-MRI"})
-        with urllib.request.urlopen(req, timeout=CATALOG_FETCH_TIMEOUT_SECS) as resp:
+        with urllib.request.urlopen(req, timeout=CATALOG_FETCH_TIMEOUT_SECS, context=_SSL_CTX) as resp:
             total = None
             try:
                 total = int(resp.headers.get("Content-Length") or 0) or None

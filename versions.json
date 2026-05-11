@@ -1,8 +1,8 @@
 {
   "channel": "development",
-  "build": 6,
-  "engine": "v2.2.0",
-  "mri": "v0.2.0",
-  "format": "v0.3.0",
-  "plugins": "v0.1.1"
+  "build": 7,
+  "engine": "v1.2.0",
+  "mri": "v1.3.0",
+  "format": "v1.3.0",
+  "plugins": "v1.1.1"
 }
