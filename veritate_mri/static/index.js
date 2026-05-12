@@ -6647,6 +6647,7 @@ const TRAINER_SCHEMA = {
     { name: "eval_iters",   type: "int",                        label: "eval batches",          help: "more = more accurate val loss." },
     // ---- experimental / test-model knobs (ADVANCED) ----
     { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "BPTT depth. 1 = frozen, 4 = balanced, n_chunks = full." },
+    { name: "quant_mode",   type: "str", advanced: true,        label: "weight quant mode",     help: "active only when QAT enabled. int8 (default), int4, or ternary (BitNet 1.58).", choices: ["int8","int4","ternary"] },
     // ---- checkboxes (all together at the end) ----
     { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "~30% slower for ~50% less activation VRAM." },
     { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "QAT fine-tune into a new <source>_qat model. use lr ~1e-5." },
@@ -6661,17 +6662,18 @@ const TRAINER_SCHEMA = {
 // declares that aren't in the schema get a generic synthesized entry so any
 // new plugin renders correctly without a dashboard code change.
 function _trArgsForPlugin(p) {
-  if (!p || !p.manifest) return [];
+  // Schema is the SOURCE OF TRUTH for which fields render. Manifest defaults
+  // ONLY pre-fill values — they no longer gate visibility. This means every
+  // standard training field (QAT, act_ckpt, LR schedule, batch_size, etc.)
+  // appears on every plugin's form. Plugins that don't support a particular
+  // feature silently ignore the flag (their argparse uses parse_known_args).
+  // To add a new option to every trainer, add it to the schema below; no
+  // need to touch any manifest.
   const sch  = TRAINER_SCHEMA[trainState.flow] || [];
-  const defs = p.manifest.defaults || {};
-  const byName = Object.create(null);
-  for (const a of sch) byName[a.name] = a;
-  const used = new Set();
-  const out = [];
+  const defs = (p && p.manifest && p.manifest.defaults) || {};
+  const seen = new Set();
+  const out  = [];
 
-  // Synthesize a schema entry from a manifest default whose type is inferred
-  // from the value. Used when the plugin declares a knob the dashboard has
-  // never heard of.
   const _synth = (name, val) => {
     let inferredType = "str";
     if (typeof val === "boolean") inferredType = "bool";
@@ -6684,9 +6686,6 @@ function _trArgsForPlugin(p) {
     };
   };
 
-  // Auto-expand a fixed-choice dropdown when the manifest default isn't in
-  // the schema's static list. Keeps known plugins clean while letting new
-  // ones declare any value without touching the dashboard.
   const _withDefault = (base, defaultVal) => {
     const o = Object.assign({}, base, { default: defaultVal });
     if (Array.isArray(o.choices) && defaultVal !== undefined) {
@@ -6698,21 +6697,21 @@ function _trArgsForPlugin(p) {
     return o;
   };
 
-  // 1. Required fields first, in schema order, picking up manifest defaults
-  //    where present.
+  // 1. Render every schema field, in schema order. Manifest supplies the
+  //    default value when present, otherwise it's empty.
   for (const a of sch) {
-    if (!a.required) continue;
-    used.add(a.name);
+    seen.add(a.name);
     out.push(_withDefault(a, defs[a.name]));
   }
 
-  // 2. Non-required fields in MANIFEST declaration order. If the schema knows
-  //    the field, use its label/help/type; otherwise synthesize one.
+  // 2. Manifest-declared knobs the schema doesn't know about still render
+  //    (synthesized from the default's type) so plugins can ship one-off
+  //    custom args without a dashboard code change. If a field belongs on
+  //    every trainer, add it to the schema instead of relying on this.
   for (const name of Object.keys(defs)) {
-    if (used.has(name)) continue;
-    used.add(name);
-    const a = byName[name] || _synth(name, defs[name]);
-    out.push(_withDefault(a, defs[name]));
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push(_withDefault(_synth(name, defs[name]), defs[name]));
   }
   return out;
 }
