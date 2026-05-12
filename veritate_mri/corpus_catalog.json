@@ -33,6 +33,22 @@
       "recommended_max_params": 50000000
     },
     {
+      "stem": "fineweb_edu",
+      "label": "FineWeb-Edu (sample-10BT)",
+      "description": "Educational subset of FineWeb (HuggingFaceFW). The 10B-token sample shard, ~5 GB streamed. Sized for Chinchilla-optimal training of 50M-500M parameter byte-level models.",
+      "format": "hf_dataset",
+      "hf_dataset": "HuggingFaceFW/fineweb-edu",
+      "hf_config": "sample-10BT",
+      "hf_split_train": "train",
+      "hf_text_column": "text",
+      "max_bytes_train": 5368709120,
+      "val_split_ratio": 0.005,
+      "size_train": 5368709120,
+      "size_val": 26843545,
+      "recommended_min_params": 50000000,
+      "recommended_max_params": 500000000
+    },
+    {
       "stem": "wikitext103",
       "label": "WikiText-103",
       "description": "Curated Wikipedia article subset (Salesforce, raw). ~500 MB streamed. Good fit for 30M-200M parameter models.",
