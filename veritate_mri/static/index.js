@@ -6663,28 +6663,16 @@ const TRAINER_SCHEMA = {
 // new plugin renders correctly without a dashboard code change.
 function _trArgsForPlugin(p) {
   // Schema is the SOURCE OF TRUTH for which fields render. Manifest defaults
-  // ONLY pre-fill values — they no longer gate visibility. This means every
-  // standard training field (QAT, act_ckpt, LR schedule, batch_size, etc.)
-  // appears on every plugin's form. Plugins that don't support a particular
-  // feature silently ignore the flag (their argparse uses parse_known_args).
-  // To add a new option to every trainer, add it to the schema below; no
-  // need to touch any manifest.
+  // ONLY pre-fill values — they never decide visibility, and they never
+  // summon form fields the schema didn't list. If a plugin needs a knob on
+  // the form, add it to TRAINER_SCHEMA. Manifest fields the schema doesn't
+  // know about are still honored by the plugin process (its argparse reads
+  // manifest defaults at startup) — they just don't render as form rows.
+  // Result: continue tabs show only relevant training-loop knobs, scratch
+  // tabs show shape + loop knobs, no ghost rows from shape args that are
+  // locked on continue.
   const sch  = TRAINER_SCHEMA[trainState.flow] || [];
   const defs = (p && p.manifest && p.manifest.defaults) || {};
-  const seen = new Set();
-  const out  = [];
-
-  const _synth = (name, val) => {
-    let inferredType = "str";
-    if (typeof val === "boolean") inferredType = "bool";
-    else if (typeof val === "number") inferredType = Number.isInteger(val) ? "int" : "float";
-    return {
-      name: name,
-      type: inferredType,
-      label: name.replace(/_/g, " "),
-      help: "",
-    };
-  };
 
   const _withDefault = (base, defaultVal) => {
     const o = Object.assign({}, base, { default: defaultVal });
@@ -6697,23 +6685,7 @@ function _trArgsForPlugin(p) {
     return o;
   };
 
-  // 1. Render every schema field, in schema order. Manifest supplies the
-  //    default value when present, otherwise it's empty.
-  for (const a of sch) {
-    seen.add(a.name);
-    out.push(_withDefault(a, defs[a.name]));
-  }
-
-  // 2. Manifest-declared knobs the schema doesn't know about still render
-  //    (synthesized from the default's type) so plugins can ship one-off
-  //    custom args without a dashboard code change. If a field belongs on
-  //    every trainer, add it to the schema instead of relying on this.
-  for (const name of Object.keys(defs)) {
-    if (seen.has(name)) continue;
-    seen.add(name);
-    out.push(_withDefault(_synth(name, defs[name]), defs[name]));
-  }
-  return out;
+  return sch.map(a => _withDefault(a, defs[a.name]));
 }
 
 const _TR_CONTINUE_CFG_CACHE = {};
