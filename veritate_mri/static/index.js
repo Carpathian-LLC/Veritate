@@ -6278,13 +6278,34 @@ function _trArgVal(name) {
   return el.value;
 }
 
+// Mirrors readers.models.slugify_user_name on the backend so the preview is
+// what the backend will actually create.
+function _trSlugify(s) {
+  let out = "";
+  for (const ch of (s || "").trim().toLowerCase()) {
+    if ((ch >= "a" && ch <= "z") || (ch >= "0" && ch <= "9")) out += ch;
+    else if (ch === " " || ch === "-" || ch === "_" || ch === ".") out += "_";
+  }
+  while (out.includes("__")) out = out.replaceAll("__", "_");
+  return out.replace(/^_+|_+$/g, "");
+}
+
 function _trUpdateComposedName() {
   const out = _trEl("trainComposedName");
   if (!out) return;
-  const corpus    = _trArgVal("corpus");
+  const name      = _trArgVal("name");
   const size      = _trArgVal("size");
+  const corpus    = _trArgVal("corpus");
   const precision = _trArgVal("precision");
   const version   = _trArgVal("version");
+  // Preferred: <slug>_<size> when the user has typed a name.
+  if (name && size) {
+    const slug = _trSlugify(name);
+    out.textContent = slug ? `${slug}_${size}` : "";
+    return;
+  }
+  // Fall back to legacy preview so the field still gives feedback before the
+  // user has filled in the new name field.
   if (!corpus && !size && !precision && !version) { out.textContent = ""; return; }
   const corpusLeaf = corpus.includes(":") ? corpus.split(":").pop() : corpus;
   const parts = [corpusLeaf || "?", size || "?", precision || "?", version || "?"];
@@ -6349,11 +6370,12 @@ const _TR_SIZE_PRESETS = {
 const TRAINER_SCHEMA = {
   scratch: [
     // ---- required (every trainer) ----
+    { name: "name",         type: "str",    required: true,  label: "model name",               help: "your name for this model; the model size is auto-appended to make the on-disk folder (e.g. 'chatty_otter' becomes 'chatty_otter_85m')." },
     { name: "corpus",       type: "corpus", required: true,  label: "training data file",      help: "the file the model reads." },
     { name: "size",         type: "str",    required: true,  label: "model size",               help: "bigger = smarter, slower, more VRAM.", choices: ["30m","80m","85m","120m","200m","400m","800m","850m","1b","1b5"] },
     { name: "precision",    type: "str",    required: true,  label: "number precision",         help: "bf16 = half memory; fp32 = double.", choices: ["bf16","fp32"] },
-    { name: "version",      type: "str",    required: true,  label: "version tag",              help: "label for this run (v1, v2a, ...)." },
-    { name: "description",  type: "text",   required: true,  label: "what this model is for",   help: "saved into the model config." },
+    { name: "version",      type: "str",                     label: "version tag (optional)",   help: "free-form revision label (v1, v2a, ...); shows up in the description, not the folder name." },
+    { name: "description",  type: "text",                    label: "what this model is for",   help: "saved into the model config. If left blank, auto-filled from corpus/size/precision/version/variant." },
     // ---- standard training loop ----
     { name: "total_steps",  type: "int",                     label: "total training steps",     help: "more = longer training." },
     { name: "batch_size",   type: "int",                     label: "batch size",               help: "higher = faster, more VRAM." },
@@ -6952,6 +6974,18 @@ function _trCollectArgs() {
     else if (a.type === "float")      out[a.name] = parseFloat(el.value);
     else if (a.type === "model_step") out[a.name] = parseInt(el.value, 10);
     else                              out[a.name] = el.value;
+  }
+  // Auto-build a description from the spec if the user left it blank.
+  // The plugin's save.require_description() insists on a non-empty string;
+  // we satisfy it here with the same info that used to live in the model name.
+  if (!out.description || !String(out.description).trim()) {
+    const spec = [];
+    if (out.corpus)    spec.push(`corpus=${out.corpus}`);
+    if (out.size)      spec.push(`size=${out.size}`);
+    if (out.precision) spec.push(`precision=${out.precision}`);
+    if (out.version)   spec.push(`version=${out.version}`);
+    if (out.variant)   spec.push(`variant=${out.variant}`);
+    if (spec.length) out.description = spec.join(" ");
   }
   return out;
 }
@@ -7895,7 +7929,30 @@ function _pluginsCheckTrigger() {
     .finally(() => { if (btn) btn.disabled = false; });
 }
 
+// Returns the running model name if a trainer is active, else "".
+// Used to gate destructive operations (plugin/model downloads) that overwrite
+// files the trainer holds open — on Windows this kills the run with a file-lock
+// error; on POSIX the process keeps the old inode but the next restart picks up
+// the new (possibly incompatible) code.
+function _activeTrainingName() {
+  const r = trainState && trainState.running;
+  if (!r || r.status !== "running") return "";
+  return r.model || r.name || "the active run";
+}
+
 function _pluginsUpdateTrigger() {
+  const active = _activeTrainingName();
+  if (active) {
+    const ok = confirm(
+      `Training is active: ${active}.\n\n` +
+      `Downloading plugins will overwrite plugin.py files on disk. On Windows ` +
+      `this typically kills the run immediately; even on macOS/Linux a restart ` +
+      `or auto-resume will pick up the new code, which may be incompatible with ` +
+      `the running model.\n\n` +
+      `Stop training first (recommended), or click OK to download anyway.`
+    );
+    if (!ok) return;
+  }
   const btn = $("pluginsUpdateBtn");
   const lab = $("pluginsSyncStatus");
   if (btn) btn.disabled = true;
@@ -7958,6 +8015,18 @@ function _modelsCheckTrigger() {
 }
 
 function _modelsUpdateTrigger() {
+  const active = _activeTrainingName();
+  if (active) {
+    const ok = confirm(
+      `Training is active: ${active}.\n\n` +
+      `Downloading models will overwrite checkpoint and config files on disk. ` +
+      `If the running trainer writes to one of those files mid-download you'll ` +
+      `get a corrupted checkpoint, and even a clean download may stomp the ` +
+      `live run's own next checkpoint.\n\n` +
+      `Stop training first (recommended), or click OK to download anyway.`
+    );
+    if (!ok) return;
+  }
   const btn = $("modelsUpdateBtn");
   const lab = $("modelsSyncStatus");
   if (btn) btn.disabled = true;

@@ -67,7 +67,29 @@ def _validate_name(name):
         )
 
 
-def compose_name(corpus, size, precision, version):
+def compose_name(*args, **kwargs):
+    """Compose the canonical model dir name.
+
+    Preferred form:    compose_name(user_name, size)
+                       -> "<slug>_<size>"           (e.g. "chatty_otter_85m")
+    Legacy form:       compose_name(corpus, size, precision, version)
+                       -> "<corpus>_<size>_<precision>_<version>"
+
+    The user_name is slugified (lowercased, non-alnum -> '_'). The legacy form
+    is kept so older plugins / pruning.py keep working unchanged.
+    """
+    from readers import models as _models  # local import: avoid circular at module load
+    if "name" in kwargs or len(args) == 2:
+        name = kwargs.get("name", args[0] if args else "")
+        size = kwargs.get("size", args[1] if len(args) > 1 else "")
+        slug = _models.slugify_user_name(name)
+        if not slug:
+            raise ValueError("compose_name: empty user name after slugify")
+        if not isinstance(size, str) or not size.strip():
+            raise ValueError("compose_name: size required (e.g. '85m', '1b')")
+        return NAME_SEP.join([slug, size.strip()])
+    # Legacy 4-arg form.
+    corpus, size, precision, version = args
     leaf = corpus.rsplit(":", 1)[-1] if ":" in corpus else corpus
     return NAME_SEP.join([leaf, size, precision, version])
 
@@ -139,17 +161,26 @@ def hash_corpus(stem):
 
 
 def _auto_description(name, args):
+    """Build a one-line spec string from the training args. This is what the
+    user used to read off the model name (e.g. fineweb_edu_85m_bf16_v1_sparse);
+    it now lives in the description, leaving the name free for a human label."""
     parts = [name]
-    shape = args.get("shape") if isinstance(args, dict) else None
-    if isinstance(shape, dict):
-        parts.append(f"layers={shape.get('layers','?')} hidden={shape.get('hidden','?')} ffn={shape.get('ffn','?')} heads={shape.get('heads','?')} seq={shape.get('seq','?')}")
-    elif isinstance(args, dict) and args.get("layers"):
-        parts.append(f"layers={args.get('layers')} hidden={args.get('hidden')} ffn={args.get('ffn')} heads={args.get('heads')} seq={args.get('seq')}")
     if isinstance(args, dict):
+        spec = []
+        c = args.get("corpus_train") or args.get("corpus")
+        if c:                          spec.append(f"corpus={os.path.basename(str(c))}")
+        if args.get("size"):           spec.append(f"size={args['size']}")
+        if args.get("precision"):      spec.append(f"precision={args['precision']}")
+        if args.get("version"):        spec.append(f"version={args['version']}")
+        if args.get("variant"):        spec.append(f"variant={args['variant']}")
+        if spec: parts.append(" ".join(spec))
+        shape = args.get("shape") if isinstance(args.get("shape"), dict) else None
+        if shape:
+            parts.append(f"layers={shape.get('layers','?')} hidden={shape.get('hidden','?')} ffn={shape.get('ffn','?')} heads={shape.get('heads','?')} seq={shape.get('seq','?')}")
+        elif args.get("layers"):
+            parts.append(f"layers={args.get('layers')} hidden={args.get('hidden')} ffn={args.get('ffn')} heads={args.get('heads')} seq={args.get('seq')}")
         if args.get("training"):    parts.append(str(args["training"]))
         if args.get("from_model"):  parts.append(f"warm-start from {args['from_model']}")
-        c = args.get("corpus_train") or args.get("corpus")
-        if c:                       parts.append(f"corpus={os.path.basename(str(c))}")
         if args.get("total_steps"): parts.append(f"total_steps={args['total_steps']}")
         if args.get("base_lr"):     parts.append(f"base_lr={args['base_lr']}")
         if args.get("seed") is not None: parts.append(f"seed={args['seed']}")

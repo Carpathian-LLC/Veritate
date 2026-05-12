@@ -18,23 +18,41 @@ from . import paths
 # ------------------------------------------------------------------------------------
 # Constants
 
-# Model dir name = <corpus>_<size>_<precision>_<version>[_<variant>]. The corpus
-# segment may itself contain underscores (e.g. "children_classics",
-# "general_fiction"); the next three segments are unambiguous because <size> is
-# digits+m|b, <precision> is [a-z0-9]+, and <version> starts with v. The
-# optional trailing <variant> tags adapter/QAT derivatives (e.g. "_qat", "_m1",
-# "_m3"); it must start with a letter so it can't be confused with a version
-# segment. Greedy matching backtracks until the fixed trailing segments fit,
-# leaving the rest as <corpus>.
-NAME_RE = re.compile(
+# Two accepted shapes:
+#   (legacy) <corpus>_<size>_<precision>_<version>[_<variant>] — kept so existing
+#            models like "fineweb_edu_800m_bf16_v1" still validate.
+#   (new)    <user_slug>_<size> — the user picks any slug; the form auto-appends
+#            <size> (e.g. "chatty_otter_85m"). Spec details (corpus, precision,
+#            version, variant) move into the description.
+NAME_RE_LEGACY = re.compile(
     r"^[a-z0-9]+(?:_[a-z0-9]+)*_[0-9]+[mb]_[a-z0-9]+_v[0-9]+[a-z]?(?:_[a-z][a-z0-9]*)?$"
+)
+NAME_RE_USER = re.compile(
+    r"^[a-z0-9]+(?:_[a-z0-9]+)*_[0-9]+[mb]$"
 )
 
 # ------------------------------------------------------------------------------------
 # Functions
 
 def is_valid_name(name):
-    return bool(NAME_RE.match(name or ""))
+    n = name or ""
+    return bool(NAME_RE_USER.match(n) or NAME_RE_LEGACY.match(n))
+
+
+def slugify_user_name(text):
+    """Lowercase, strip diacritics-ish, collapse whitespace/dashes to '_',
+    keep only [a-z0-9_], collapse repeats, trim leading/trailing '_'."""
+    s = (text or "").strip().lower()
+    out = []
+    for ch in s:
+        if ch.isalnum():
+            out.append(ch)
+        elif ch in (" ", "-", "_", "."):
+            out.append("_")
+    s = "".join(out)
+    while "__" in s:
+        s = s.replace("__", "_")
+    return s.strip("_")
 
 
 def exists(name):

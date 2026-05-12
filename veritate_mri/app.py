@@ -70,6 +70,13 @@ def auto_thread_count():
     return max(1, min(THREADS_AUTO_MAX, physical))
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
+# Preserve JSON key insertion order in responses (Flask 2.2 default is True,
+# Flask 3+ default is False; pin explicitly so plugin manifests render in the
+# order their authors wrote them regardless of Flask version).
+try:
+    app.json.sort_keys = False
+except AttributeError:
+    app.config["JSON_SORT_KEYS"] = False
 app.config["BRAIN"] = None
 app.config["C_EXE"] = None
 app.config["C_MODEL"] = None
@@ -564,6 +571,23 @@ def plugins_run():
     if not plugin_id:
         return ({"ok": False, "error": "missing 'id'"}, 400)
     args = body.get("args") or {}
+    # Refuse name collisions on fresh runs. Continue/resume flows pass an
+    # explicit "resume" arg and are exempt — they target an existing model dir
+    # by design. The dashboard sends only the form's `name` field; we slugify
+    # and compose <slug>_<size> the same way the plugin does.
+    if not (args.get("resume") or args.get("base_ckpt")):
+        user_name = (args.get("name") or "").strip()
+        size      = (args.get("size") or "").strip()
+        if user_name and size:
+            slug = models.slugify_user_name(user_name)
+            if slug:
+                composed = f"{slug}_{size}"
+                if models.exists(composed):
+                    return ({
+                        "ok": False,
+                        "error": f"model '{composed}' already exists. pick a different name "
+                                 "or use Continue Training to extend the existing run.",
+                    }, 409)
     return plugin_runner.start(plugin_id, args)
 
 
