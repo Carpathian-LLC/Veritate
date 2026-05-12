@@ -7985,9 +7985,41 @@ function _corpusRenderCatalog(data) {
       parts.push(`<span style="color:var(--hot)">remote catalog unreachable: ${_corpusEsc(err)}</span> <span style="color:var(--warm)">— using local catalog only.</span>`);
     }
     if (data.hf_required && !data.hf_available) {
-      parts.push(`<span style="color:var(--hot)">HuggingFace 'datasets' library not installed — most corpora cannot install until you run <code>pip install -r requirements.txt</code></span>`);
+      const probe = data.hf_probe || {};
+      const exe = probe.executable ? _corpusEsc(probe.executable) : "this Python";
+      const cmd = probe.install_command || "pip install -r requirements.txt";
+      const why = probe.error ? ` <span style="color:var(--dim)">(${_corpusEsc(probe.error)})</span>` : "";
+      parts.push(
+        `<span style="color:var(--hot)">HuggingFace 'datasets' library not importable in <code>${exe}</code>${why}.</span>` +
+        ` <button id="corpusInstallDepsBtn" type="button" style="background:var(--warm);color:#000;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px">Install required packages</button>` +
+        ` <span style="color:var(--dim)">— or run manually: <code>${_corpusEsc(cmd)}</code></span>`
+      );
     }
     statusEl.innerHTML = parts.join("<br>");
+    const installBtn = document.getElementById("corpusInstallDepsBtn");
+    if (installBtn) {
+      installBtn.addEventListener("click", async () => {
+        installBtn.disabled = true;
+        installBtn.textContent = "Installing… (up to a few minutes)";
+        try {
+          const res = await fetch("/corpus/library/install_deps", { method: "POST" });
+          const out = await res.json();
+          if (out.ok) {
+            installBtn.textContent = "Installed — refreshing…";
+            setTimeout(() => location.reload(), 800);
+          } else {
+            installBtn.disabled = false;
+            installBtn.textContent = "Install failed — see console";
+            console.error("install_deps failed:", out);
+            alert("Install failed (exit " + out.returncode + "). See browser console for full stderr.");
+          }
+        } catch (e) {
+          installBtn.disabled = false;
+          installBtn.textContent = "Install failed — see console";
+          console.error(e);
+        }
+      });
+    }
   }
 
   if (!data.corpora || data.corpora.length === 0) {

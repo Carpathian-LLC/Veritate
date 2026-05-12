@@ -937,6 +937,15 @@ def corpus_library_install():
     return corpus_sync.install(body)
 
 
+@app.route("/corpus/library/install_deps", methods=["POST"])
+def corpus_library_install_deps():
+    """Run `<this-python> -m pip install -r requirements.txt` in a subprocess.
+    Guaranteed to land in the same Python that's running this Flask process,
+    so `import datasets` succeeds immediately after — no restart, no PATH
+    detective work for the user, no platform-specific instructions."""
+    return corpus_sync.install_hf_deps()
+
+
 @app.route("/corpus/library/uninstall", methods=["POST"])
 def corpus_library_uninstall():
     body = request.get_json(silent=True) or {}

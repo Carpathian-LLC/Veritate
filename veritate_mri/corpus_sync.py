@@ -262,14 +262,15 @@ def catalog():
         entry["progress"] = _PROGRESS.get(stem)
         out.append(entry)
 
-    has_hf = hf_available()
+    probe = hf_probe()
     has_hf_entries = any(c["format"] == "hf_dataset" for c in out)
     return {
         "ok":              True,
         "catalog_url":     catalog_url,
         "catalog_status":  {"ok": remote_err is None and bool(catalog_url), "error": remote_err},
-        "hf_available":    has_hf,
+        "hf_available":    probe["available"],
         "hf_required":     has_hf_entries,
+        "hf_probe":        probe,
         "user_sources":    list(user_sources),
         "corpora":         out,
         "last":            dict(_LAST),
@@ -326,14 +327,109 @@ def _download(url, dest_path, stem, kind):
 
 
 def hf_available():
-    """True when the HuggingFace `datasets` library is importable. Cheap probe
-    used by the dashboard to surface a one-line warning when the user's venv
-    is missing deps for any catalog entry with format='hf_dataset'."""
+    """True when the HuggingFace `datasets` library is importable in this
+    process. Cheap probe."""
     try:
         import datasets  # noqa: F401
         return True
     except ImportError:
         return False
+
+
+def hf_probe():
+    """Rich version of hf_available() — returns the running Python's
+    executable path, whether `datasets` is importable in THIS process, the
+    exact ImportError message if not, and a platform-correct install command
+    that points at the same interpreter. Used by the dashboard to surface a
+    fix that always lands in the right site-packages regardless of how Flask
+    was launched (system python / venv / py launcher / Microsoft-Store stub /
+    Conda / etc)."""
+    import sys
+    info = {
+        "available":      False,
+        "executable":     sys.executable,
+        "version":        sys.version.split(" ", 1)[0],
+        "platform":       sys.platform,
+        "error":          None,
+        "install_command": _suggest_install_command(),
+    }
+    try:
+        import datasets  # noqa: F401
+        info["available"] = True
+        info["datasets_version"] = getattr(__import__("datasets"), "__version__", None)
+    except ImportError as e:
+        info["error"] = str(e)
+    except Exception as e:
+        info["error"] = f"{type(e).__name__}: {e}"
+    return info
+
+
+def _suggest_install_command():
+    """Build the most-likely-to-work `pip install` command for the current
+    interpreter. Uses sys.executable so the install lands in the same Python
+    Flask is running in, regardless of platform or launcher."""
+    import sys
+    import shlex
+    exe = sys.executable
+    # Quote the path if it contains spaces (very common on Windows).
+    if " " in exe and not exe.startswith('"'):
+        exe = f'"{exe}"'
+    return f"{exe} -m pip install -r requirements.txt"
+
+
+def install_hf_deps(extra_packages=None):
+    """Run `<sys.executable> -m pip install -r requirements.txt` (plus any
+    extra_packages) as a subprocess and return {ok, stdout, stderr, returncode,
+    command}. Because we use sys.executable, the install always lands in the
+    Python that's running this Flask process — `import datasets` will succeed
+    immediately after this returns ok=True, no restart needed."""
+    import subprocess
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.normpath(os.path.join(here, ".."))
+    requirements_path = os.path.join(repo_root, "requirements.txt")
+    if not os.path.isfile(requirements_path):
+        return {
+            "ok": False,
+            "command": None,
+            "stdout": "",
+            "stderr": f"requirements.txt not found at {requirements_path}",
+            "returncode": -1,
+        }
+    cmd = [sys.executable, "-m", "pip", "install", "-r", requirements_path]
+    if extra_packages:
+        cmd.extend(extra_packages)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if proc.returncode == 0:
+            # Newly-installed packages may not be visible to imports cached at
+            # process start. Flush the finder caches so the next hf_probe()
+            # in this same Flask process sees the install without restart.
+            import importlib
+            importlib.invalidate_caches()
+        return {
+            "ok":         proc.returncode == 0,
+            "command":    " ".join(cmd),
+            "stdout":     proc.stdout[-4000:] if proc.stdout else "",
+            "stderr":     proc.stderr[-4000:] if proc.stderr else "",
+            "returncode": proc.returncode,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "ok":         False,
+            "command":    " ".join(cmd),
+            "stdout":     "",
+            "stderr":     "pip install timed out after 600s",
+            "returncode": -1,
+        }
+    except Exception as e:
+        return {
+            "ok":         False,
+            "command":    " ".join(cmd),
+            "stdout":     "",
+            "stderr":     f"{type(e).__name__}: {e}",
+            "returncode": -1,
+        }
 
 
 def _extract_zip_largest_member(zip_path):
