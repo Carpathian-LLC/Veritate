@@ -229,6 +229,57 @@ def _rename_dumps(step_dir, step):
             os.replace(src, dst_path)
 
 
+def truncate_train_csv_at(name, resume_step):
+    """Remove rows where step > resume_step from models/<name>/train.csv.
+
+    Called by plugin trainers immediately after loading a checkpoint, BEFORE
+    the training loop starts. Resuming from step_<N>.pt means everything that
+    was logged after step N never made it to disk — those rows are stale and
+    will be retrained, producing different loss values. Leaving them in place
+    creates duplicate step numbers that confuse the dashboard's loss curve and
+    training-health widget.
+
+    Returns the number of rows removed (0 if no truncation was needed). The
+    header row is always preserved if the file existed."""
+    _validate_name(name)
+    p = paths.train_csv_path(name)
+    if not os.path.isfile(p):
+        return 0
+    try:
+        with open(p, "r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    except OSError:
+        return 0
+    if not rows:
+        return 0
+    header, body = rows[0], rows[1:]
+    kept   = []
+    dropped = 0
+    for r in body:
+        if not r: continue
+        try:
+            s = int(r[0])
+        except (ValueError, IndexError):
+            kept.append(r)
+            continue
+        if s > int(resume_step):
+            dropped += 1
+        else:
+            kept.append(r)
+    if dropped == 0:
+        return 0
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        for r in kept:
+            w.writerow(r)
+    os.replace(tmp, p)
+    logmod.info("save", f"truncated {dropped} stale row(s) from train.csv after resume from step {resume_step}")
+    return dropped
+
+
 def append_train_row(name, step, split, loss, lr=None, grad_norm=None,
                      tok_per_s=None, wall_s=None, seed=None):
     """Append one row to models/<name>/train.csv. Writes header if file is new."""

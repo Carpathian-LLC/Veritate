@@ -8078,13 +8078,8 @@ function _pluginsUpdateTrigger() {
     .then(res => {
       if (res.ok || res.results) {
         const r = res.results || {};
-        const parts = [];
-        if (r.installed?.length) parts.push(`${r.installed.length} installed`);
-        if (r.updated?.length)   parts.push(`${r.updated.length} updated`);
-        if (r.skipped?.length)   parts.push(`${r.skipped.length} skipped`);
-        if (r.errors?.length)    parts.push(`${r.errors.length} errors`);
         if (lab) {
-          lab.textContent = parts.length ? parts.join(", ") : "done";
+          lab.textContent = _syncResultSummary(r);
           lab.style.color = (r.errors && r.errors.length) ? "var(--hot)" : "var(--data-pos)";
         }
         _pluginsRefreshStatus();
@@ -8174,13 +8169,8 @@ function _modelsUpdateTrigger() {
     .then(res => {
       if (res.ok || res.results) {
         const r = res.results || {};
-        const parts = [];
-        if (r.installed?.length) parts.push(`${r.installed.length} installed`);
-        if (r.updated?.length)   parts.push(`${r.updated.length} updated`);
-        if (r.skipped?.length)   parts.push(`${r.skipped.length} skipped`);
-        if (r.errors?.length)    parts.push(`${r.errors.length} errors`);
         if (lab) {
-          lab.textContent = parts.length ? parts.join(", ") : "done";
+          lab.textContent = _syncResultSummary(r);
           lab.style.color = (r.errors && r.errors.length) ? "var(--hot)" : "var(--data-pos)";
         }
         _modelsRefreshStatus();
@@ -8245,13 +8235,36 @@ function _syncShortSha(s) {
   return (s || "").slice(0, 8);
 }
 
+// Split "veritate_85m/plugin.py" -> {parent: "veritate_85m", file: "plugin.py"}
+// for the row layout and the confirm dialog. Files at the root (no slash) get
+// parent: "" and file: <whole path>.
+function _syncSplitPath(p) {
+  const i = (p || "").lastIndexOf("/");
+  if (i < 0) return { parent: "", file: p || "" };
+  return { parent: p.slice(0, i), file: p.slice(i + 1) };
+}
+
 // Build the per-row HTML — the action buttons depend on the file's state.
 // `scope` is "plugins" or "models". The buttons fire _syncFilesAction.
+//
+// Layout is intentionally two-line so long paths can never slip past the
+// state/action column:
+//   line 1:  <parent-dir-tag> <filename, breaks anywhere if needed>
+//   line 2:  <state badge> · <size> <flex spacer> <action buttons>
 function _syncFileRowHtml(scope, row) {
   const meta = SYNC_STATE_META[row.state] || { color: "var(--dim)", badge: row.state, title: row.state };
+  const sp = _syncSplitPath(row.path);
   const isLarge = scope === "models" && row.large;
   const sizeBadge = isLarge ? ` <span style="color:var(--warm);font-size:10px">LARGE</span>` : "";
-  const sizeText = row.size ? ` · ${_syncFmtBytes(row.size)}` : "";
+  const sizeText = row.size ? `${_syncFmtBytes(row.size)}` : "";
+  // SHAs are debug info — hide inline, expose via tooltip on the state badge.
+  const shaTip = [
+    row.remote_sha ? `remote ${_syncShortSha(row.remote_sha)}` : "",
+    row.local_sha  ? `local ${_syncShortSha(row.local_sha)}`   : "",
+    row.synced_sha ? `synced ${_syncShortSha(row.synced_sha)}` : "",
+  ].filter(Boolean).join(" · ");
+  const badgeTitle = shaTip ? `${meta.title} (${shaTip})` : meta.title;
+
   let actions = "";
   if (row.state === "missing") {
     actions = `<button class="action" data-sync-action="install"
@@ -8275,16 +8288,23 @@ function _syncFileRowHtml(scope, row) {
                        data-sync-path="${_syncEsc(row.path)}"
                        title="record locally; sync ignores from now on">adopt</button>`;
   }
-  const remoteSha = row.remote_sha ? `<span title="remote sha" style="color:var(--dim);font-size:10px">r ${_syncShortSha(row.remote_sha)}</span>` : "";
-  const localSha  = row.local_sha  ? `<span title="local sha"  style="color:var(--dim);font-size:10px">l ${_syncShortSha(row.local_sha)}</span>` : "";
+
+  const parentTag = sp.parent
+    ? `<span style="color:var(--dim);font-size:10px;margin-right:6px;flex-shrink:0">${_syncEsc(sp.parent)}/</span>`
+    : "";
+
   return `<div class="sync-row" data-sync-path="${_syncEsc(row.path)}"
-              style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:10.5px">
-    <div style="min-width:0;display:flex;flex-direction:column;gap:1px">
-      <code style="color:var(--text);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_syncEsc(row.path)}${sizeBadge}</code>
-      <span style="color:var(--dim);font-size:10px">${remoteSha} ${localSha}${sizeText}</span>
+              style="display:flex;flex-direction:column;gap:3px;padding:6px 0;border-bottom:1px solid var(--line);font-size:10.5px;min-width:0">
+    <div style="display:flex;align-items:baseline;gap:0;min-width:0;flex-wrap:wrap">
+      ${parentTag}
+      <code style="color:var(--text);font-size:11px;font-weight:600;word-break:break-all;min-width:0">${_syncEsc(sp.file)}${sizeBadge}</code>
     </div>
-    <span style="color:${meta.color};white-space:nowrap" title="${_syncEsc(meta.title)}">${meta.badge}</span>
-    <span class="inline" style="gap:4px;flex-wrap:wrap;justify-content:flex-end">${actions}</span>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0">
+      <span style="color:${meta.color};white-space:nowrap;font-size:10.5px" title="${_syncEsc(badgeTitle)}">${meta.badge}</span>
+      ${sizeText ? `<span style="color:var(--dim);font-size:10px">${sizeText}</span>` : ""}
+      <span style="flex:1"></span>
+      <span class="inline" style="gap:4px;flex-wrap:wrap;justify-content:flex-end">${actions}</span>
+    </div>
   </div>`;
 }
 
@@ -8357,15 +8377,58 @@ function _syncRenderPanel(scope, data) {
   }
 
   panel.innerHTML = header + body;
+  // Build a path -> row lookup so the click handler can show parent dir +
+  // size + sha context in the confirm dialog without re-searching the DOM.
+  const rowByPath = {};
+  for (const r of rows) rowByPath[r.path] = r;
   panel.querySelectorAll("button[data-sync-action]").forEach(btn => {
     btn.addEventListener("click", () => {
       const action = btn.getAttribute("data-sync-action");
       const path   = btn.getAttribute("data-sync-path");
       const warn   = btn.getAttribute("data-sync-warn") === "1";
-      if (warn && !confirm(`This will overwrite your local edits to:\n\n  ${path}\n\nContinue?`)) return;
-      _syncFilesAction(scope, path, action);
+      if (warn && !_syncConfirmDestructive(scope, action, path, rowByPath[path])) return;
+      _syncFilesAction(scope, path, action, rowByPath[path]);
     });
   });
+}
+
+// Concrete, contextual confirm. Shows which plugin/model the file belongs to,
+// its size, and exactly what will change — so the user reads what they're
+// about to overwrite BEFORE clicking OK, not after.
+function _syncConfirmDestructive(scope, action, path, row) {
+  const sp = _syncSplitPath(path);
+  const lines = [];
+  const scopeLabel = scope === "plugins" ? "plugin" : "model";
+  if (sp.parent) {
+    lines.push(`File:    ${sp.file}`);
+    lines.push(`Inside:  ${sp.parent}   (${scopeLabel})`);
+  } else {
+    lines.push(`File:    ${path}`);
+  }
+  if (row && row.size) lines.push(`Size:    ${_syncFmtBytes(row.size)}`);
+  if (row && row.local_sha && row.remote_sha) {
+    lines.push(`Local:   ${_syncShortSha(row.local_sha)}`);
+    lines.push(`Remote:  ${_syncShortSha(row.remote_sha)}`);
+  }
+  let what = "";
+  if (action === "force") {
+    what = `Your local edits will be OVERWRITTEN with the upstream version.\n` +
+           `This cannot be undone from inside Veritate.`;
+  } else if (action === "update") {
+    what = `Your local copy will be replaced with the upstream version.`;
+  } else if (action === "install") {
+    what = `The file will be downloaded and installed.`;
+  } else if (action === "adopt") {
+    what = `Veritate will record your local copy as the new baseline. No file ` +
+           `will be overwritten; future syncs will treat this version as ` +
+           `"current" until either side changes again.`;
+  }
+  return confirm(
+    `${action.toUpperCase()}\n\n` +
+    lines.join("\n") + `\n\n` +
+    what + `\n\n` +
+    `Continue?`
+  );
 }
 
 function _syncFilesFetch(scope) {
@@ -8385,11 +8448,40 @@ function _syncFilesFetch(scope) {
     });
 }
 
-function _syncFilesAction(scope, path, action) {
+// Compose a human status line from the server's results dict. Names files
+// when 1-3 are affected; collapses to "<n> updated" past that.
+function _syncResultSummary(results) {
+  const r = results || {};
+  const pick = (arr) => (arr || []).map(x => x.path || x).filter(Boolean);
+  const groups = [
+    ["installed", pick(r.installed)],
+    ["updated",   pick(r.updated)],
+    ["forced",    pick(r.forced)],
+    ["adopted",   pick(r.adopted)],
+    ["skipped",   pick(r.skipped)],
+    ["errors",    pick(r.errors)],
+  ].filter(([_, paths]) => paths.length > 0);
+  if (!groups.length) return "done";
+  const parts = groups.map(([label, paths]) => {
+    if (paths.length === 1) {
+      return `${label} ${paths[0]}`;
+    }
+    if (paths.length <= 3) {
+      return `${label} ${paths.join(", ")}`;
+    }
+    return `${paths.length} ${label}`;
+  });
+  return parts.join(" · ");
+}
+
+function _syncFilesAction(scope, path, action, row) {
   if (_syncState[scope].inflight) return;
   _syncState[scope].inflight = true;
   const lab = $(scope + "SyncStatus");
-  if (lab) { lab.textContent = `${action} ${path}…`; lab.style.color = "var(--warm)"; }
+  // Up-front status names the file being changed and what's happening.
+  const sp = _syncSplitPath(path);
+  const ctx = sp.parent ? `${sp.parent}/${sp.file}` : sp.file;
+  if (lab) { lab.textContent = `${action} ${ctx}…`; lab.style.color = "var(--warm)"; }
   const body = JSON.stringify({ actions: { [path]: action } });
   // Models with large downloads: kick off the progress poller so the user
   // sees byte counters as the file streams.
@@ -8399,16 +8491,9 @@ function _syncFilesAction(scope, path, action) {
     .then(res => {
       if (lab) {
         if (res.ok) {
-          const r = res.results || {};
-          const parts = [];
-          if (r.installed?.length) parts.push(`${r.installed.length} installed`);
-          if (r.updated?.length)   parts.push(`${r.updated.length} updated`);
-          if (r.forced?.length)    parts.push(`${r.forced.length} forced`);
-          if (r.adopted?.length)   parts.push(`${r.adopted.length} adopted`);
-          if (r.skipped?.length)   parts.push(`${r.skipped.length} skipped`);
-          if (r.errors?.length)    parts.push(`${r.errors.length} errors`);
-          lab.textContent = parts.length ? parts.join(", ") : "done";
-          lab.style.color = (r.errors && r.errors.length) ? "var(--hot)" : "var(--data-pos)";
+          lab.textContent = _syncResultSummary(res.results);
+          lab.style.color = (res.results && res.results.errors && res.results.errors.length)
+                          ? "var(--hot)" : "var(--data-pos)";
         } else {
           lab.textContent = `failed: ${res.error || "unknown"}`;
           lab.style.color = "var(--hot)";
