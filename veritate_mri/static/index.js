@@ -7991,7 +7991,7 @@ function _corpusRenderCatalog(data) {
       const why = probe.error ? ` <span style="color:var(--dim)">(${_corpusEsc(probe.error)})</span>` : "";
       parts.push(
         `<span style="color:var(--hot)">HuggingFace 'datasets' library not importable in <code>${exe}</code>${why}.</span>` +
-        ` <button id="corpusInstallDepsBtn" type="button" style="background:var(--warm);color:#000;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px">Install required packages</button>` +
+        ` <button id="corpusInstallDepsBtn" type="button" class="go" style="font-size:11px;padding:3px 10px">Install required packages</button>` +
         ` <span style="color:var(--dim)">— or run manually: <code>${_corpusEsc(cmd)}</code></span>`
       );
     }
