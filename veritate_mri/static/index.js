@@ -6621,6 +6621,13 @@ const TRAINER_SCHEMA = {
   continue: [
     // ---- required ----
     { name: "resume",       type: "model_name", required: true, label: "model to continue", help: "previously-trained model; its config sets shape, corpus, adapter." },
+    // ---- optional corpus override ----
+    // The resume-target's config.json holds the original corpus, and
+    // apply_resume_overrides() restores it when this field is left blank
+    // (see veritate_800m/plugin.py: a flag passed on the CLI suppresses the
+    // config-replay). Picking a different stem here swaps the training data
+    // for the continued run without changing model shape.
+    { name: "corpus",       type: "corpus",                     label: "training data (optional override)", help: "leave blank to keep the original corpus this model was trained on. Pick a different file to switch corpora on this continued run (e.g. domain fine-tune)." },
     // ---- standard training loop ----
     { name: "total_steps",  type: "int",                        label: "total training steps",  help: "extend or shorten the run." },
     { name: "batch_size",   type: "int",                        label: "batch size",            help: "higher = faster, more VRAM." },
