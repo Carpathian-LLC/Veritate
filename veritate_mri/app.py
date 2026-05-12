@@ -47,6 +47,11 @@ import app_sync as app_sync_mod
 import addons as addons_mod
 import threading
 
+from agent.rag import build_rag_prefix, crude_compressor, make_word_ppl_compressor
+from agent.tools.retriever import make_tool as _make_rag_tool
+from agent.tools import build_default_toolbox
+from agent.loop import AgentLoop
+
 # ------------------------------------------------------------------------------------
 # Constants
 
@@ -1019,7 +1024,7 @@ def run_classroom(name):
         return ({"name": name, "model_dir": False, "items": []}, 404)
     items = []
     for s in hooks.list_steps(name):
-        for kind in ("classroom", "grades", "math", "grammar", "reasoning", "concepts", "writing_health"):
+        for kind in ("classroom", "grades", "math", "grammar", "reasoning", "concepts", "writing_health", "reading_comprehension"):
             if hooks.artifact_exists(name, s, kind):
                 items.append({"kind": kind, "step": s, "file": f"{kind}_step_{s}.json"})
     items.sort(key=lambda r: (r["step"], r["kind"]))
@@ -1370,7 +1375,7 @@ def timeline_file_compat(name, fname):
     if fname == "timeline.json":
         return run_timeline(name)
     import re
-    m = re.match(r"^(probe|classroom|grades|math|grammar|reasoning|concepts|surprise|quant_kl|writing_health)_step_(\d+)\.json$", fname)
+    m = re.match(r"^(probe|classroom|grades|math|grammar|reasoning|concepts|surprise|quant_kl|writing_health|reading_comprehension)_step_(\d+)\.json$", fname)
     if m:
         data = hooks.load_artifact(name, int(m.group(2)), m.group(1))
         if data is None: return ("artifact not found", 404)
@@ -1573,6 +1578,39 @@ def c_models_index():
 
 
 
+@app.route("/pytorch-models")
+def pytorch_models_index():
+    # PyTorch loads .pt checkpoints directly — no .bin needed. So this list
+    # is "any model with at least one saved checkpoint", which is the right
+    # universe for the Generation tab's model picker when backend=pytorch.
+    out = []
+    cur_model = app.config.get("BRAIN_MODEL") or app.config.get("DEFAULT_MODEL")
+    for name in models.list_models():
+        step = checkpoints.latest_step(name)
+        if step is None:
+            continue
+        try: cfg = cfg_reader.load(name) or {}
+        except Exception: cfg = {}
+        plugin = (cfg.get("plugin") or "").strip()
+        n_params = cfg.get("n_params_total")
+        shape = cfg.get("shape") or {}
+        try: mtime = os.path.getmtime(checkpoints.path_for(name, step))
+        except OSError: mtime = 0
+        out.append({
+            "name":        name,
+            "step":        int(step),
+            "is_current":  name == cur_model,
+            "plugin":      plugin,
+            "n_params":    int(n_params) if n_params else None,
+            "hidden":      shape.get("hidden"),
+            "layers":      shape.get("layers"),
+            "description": cfg_reader.description(name) or "",
+            "mtime":       mtime,
+        })
+    out.sort(key=lambda r: -r["mtime"])
+    return {"models": out}
+
+
 @app.route("/c-config", methods=["POST"])
 def c_config():
     body = request.get_json(silent=True) or {}
@@ -1684,9 +1722,28 @@ def backends_pytorch():
             logmod.ok("backends", "pytorch unloaded")
         return backends_status()
     if action == "load":
+        body_model = body.get("model")
+        body_step  = body.get("step")
+        did_swap   = False
         if app.config.get("BRAIN") is not None:
-            return backends_status()
-        name = body.get("model") or app.config.get("DEFAULT_MODEL")
+            # Already loaded. If the caller asked for the same (or didn't
+            # specify), this is a no-op. If they asked for a different model
+            # or step, swap by clearing the current brain and falling through
+            # to the normal load path.
+            cur_m = app.config.get("BRAIN_MODEL")
+            cur_s = app.config.get("BRAIN_STEP")
+            same  = (not body_model) or (
+                body_model == cur_m and
+                (body_step is None or int(body_step) == int(cur_s or 0))
+            )
+            if same:
+                return backends_status()
+            logmod.info("backends", f"pytorch swap: {cur_m} step {cur_s} -> {body_model} step {body_step or 'latest'}")
+            app.config["BRAIN"] = None
+            app.config["BRAIN_MODEL"] = None
+            app.config["BRAIN_STEP"]  = None
+            did_swap = True
+        name = body_model or app.config.get("DEFAULT_MODEL")
         if not name or not models.exists(name):
             name = _resolve_pytorch_model("auto")
             if name is not None:
@@ -1694,7 +1751,9 @@ def backends_pytorch():
                 app.config["DEFAULT_STEP"]  = checkpoints.latest_step(name)
         if not name or not models.exists(name):
             return ({"ok": False, "error": "no models with checkpoints under models/. train one first or pass an explicit model name."}, 400)
-        step = body.get("step") or app.config.get("DEFAULT_STEP") or checkpoints.latest_step(name)
+        # On a swap, the previous DEFAULT_STEP belongs to the old model — don't
+        # reuse it as a fallback for the new one. Always re-resolve from disk.
+        step = body_step or (None if did_swap else app.config.get("DEFAULT_STEP")) or checkpoints.latest_step(name)
         if step is None:
             return ({"ok": False, "error": f"no checkpoints under models/{name}/"}, 400)
         threads = int(body.get("threads") or app.config.get("DEFAULT_THREADS") or auto_thread_count())
@@ -1917,15 +1976,23 @@ def generate():
         if app.config.get("C_SUBPROCESS") is None:
             blocked = app.config.get("C_BLOCKED_REASON")
             if blocked == "qat_required":
-                bm = app.config.get("C_BLOCKED_MODEL") or "(unknown)"
-                return ({"error": f"model '{bm}' is not QAT-trained — C engine cannot run it (would produce gibberish). Use the PyTorch backend or retrain with qat_enabled=true.", "reason": "qat_required"}, 503)
-            try:
-                bins = sum(1 for n in models.list_models() if binr.exists(n))
-            except Exception:
-                bins = 0
-            if bins == 0:
-                return ({"error": "no exported model available. Train a model and export it to .bin first (Training tab → export to .bin)."}, 503)
-            return ({"error": "c engine not loaded. POST /backends/c {action: load} first."}, 503)
+                bm  = app.config.get("C_BLOCKED_MODEL") or "(unknown)"
+                msg = (f"Model '{bm}' is not QAT-trained — C engine cannot run it. "
+                       f"Switch to the PyTorch backend or retrain with qat_enabled=true.")
+            else:
+                try:
+                    bins = sum(1 for n in models.list_models() if binr.exists(n))
+                except Exception:
+                    bins = 0
+                msg = ("No exported .bin available. Train a model and export it first, "
+                       "or switch to the PyTorch backend." if bins == 0
+                       else "C engine not loaded. Pick a model from the dropdown.")
+            # Stream the error inside SSE so EventSource.onmessage sees it.
+            def stream_err():
+                yield "data: " + json.dumps({"kind": "error", "message": msg}) + "\n\n"
+                yield "event: done\ndata: {}\n\n"
+            return Response(stream_err(), mimetype="text/event-stream",
+                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         def stream_c():
             try:
                 for ev in _c_engine_stream(prompt, max_new, temperature=temperature, top_k=top_k,
@@ -1935,12 +2002,30 @@ def generate():
                 yield "event: done\ndata: {}\n\n"
             except GeneratorExit:
                 return
+            except Exception as e:
+                logmod.error("generate", f"c-engine stream failed: {type(e).__name__}: {e}")
+                try:
+                    yield "data: " + json.dumps({
+                        "kind": "error",
+                        "message": f"c-engine: {type(e).__name__}: {e}",
+                    }) + "\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                except Exception:
+                    pass
         return Response(stream_c(), mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     brain = app.config["BRAIN"]
     if brain is None:
-        return ({"error": "pytorch backend not loaded. POST /backends/pytorch {action: load} first."}, 503)
+        # Stream the error inside the SSE so the UI can render it. Returning a
+        # plain 503 here causes EventSource.onerror with no detail — the user
+        # sees a hung "thinking..." with no explanation.
+        def stream_err():
+            yield "data: " + json.dumps({"kind": "error",
+                "message": "PyTorch backend not loaded. Pick a model from the dropdown and try again."}) + "\n\n"
+            yield "event: done\ndata: {}\n\n"
+        return Response(stream_err(), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     app.config["BRAIN_LAST_USED"] = time.time()
 
     chain = None
@@ -1962,18 +2047,86 @@ def generate():
     if fast_mode and fast_mode not in ("kv", "mtp", "mtp-verify", "adaptive"):
         return ({"error": f"unknown fast mode: {fast_mode!r}. Allowed: kv, mtp, mtp-verify, adaptive."}, 400)
 
+    rag_path  = (request.args.get("rag", "") or "").strip()
+    rag_k     = request.args.get("rag_k", "")
+    rag_press = (request.args.get("rag_compress", "") or "").strip().lower()
+    rag_cfg = None
+    if rag_path:
+        try:
+            rag_top_k = max(1, min(int(rag_k), 16)) if rag_k else 3
+        except (TypeError, ValueError):
+            return ({"error": "rag_k must be an integer 1..16"}, 400)
+        # rag_press grammar:
+        #   "" / "off"          -> no compression
+        #   "crude"             -> heuristic sentence skim (no model call)
+        #   "word_ppl"          -> word-level PPL compression, default keep=0.5
+        #   "word_ppl:<frac>"   -> same, explicit keep_frac in (0, 1]
+        rp = rag_press.split(":", 1) if rag_press else [""]
+        rp_kind = rp[0]
+        if rp_kind not in ("", "off", "crude", "word_ppl"):
+            return ({"error": f"unknown rag_compress: {rag_press!r}. Allowed: off, crude, word_ppl[:keep_frac]."}, 400)
+        rp_keep = None
+        if rp_kind == "word_ppl" and len(rp) == 2:
+            try:
+                rp_keep = float(rp[1])
+                if not (0.0 < rp_keep <= 1.0):
+                    raise ValueError
+            except ValueError:
+                return ({"error": "word_ppl keep_frac must be a float in (0, 1]"}, 400)
+        try:
+            tool, abs_corpus = _get_rag_tool(rag_path)
+        except Exception as e:
+            return ({"error": f"rag: {type(e).__name__}: {e}"}, 400)
+        rag_cfg = {
+            "tool":        tool,
+            "abs_corpus":  abs_corpus,
+            "top_k":       rag_top_k,
+            "rp_kind":     rp_kind,
+            "rp_keep":     rp_keep,
+            "raw_label":   rag_press or "off",
+        }
+
     def stream_pt():
         with brain.lock:
             try:
                 brain.set_ablation(ablate_layer, ablate_neuron)
+                effective_prompt = prompt
+                if rag_cfg is not None:
+                    try:
+                        hits_raw = rag_cfg["tool"].call({"query": prompt, "k": rag_cfg["top_k"]})
+                    except Exception as e:
+                        yield f"data: {json.dumps({'kind': 'error', 'message': f'rag retrieve: {type(e).__name__}: {e}'})}\n\n"
+                        return
+                    passages, hits_meta = _parse_rag_hits(hits_raw)
+                    if rag_cfg["rp_kind"] == "crude":
+                        compressor = crude_compressor
+                    elif rag_cfg["rp_kind"] == "word_ppl":
+                        keep = rag_cfg["rp_keep"] if rag_cfg["rp_keep"] is not None else 0.5
+                        compressor = make_word_ppl_compressor(brain, keep_frac=keep)
+                    else:
+                        compressor = None
+                    effective_prompt = build_rag_prefix(prompt, passages, compressor=compressor)
+                    # Cap inline prefix at 8 KB so SSE payload stays bounded
+                    prefix_view = effective_prompt if len(effective_prompt) <= 8192 \
+                                  else effective_prompt[:8192] + " ... [trimmed]"
+                    yield ("data: " + json.dumps({
+                        "kind":         "rag",
+                        "backend":      "pytorch",
+                        "corpus":       rag_cfg["abs_corpus"],
+                        "top_k":        rag_cfg["top_k"],
+                        "hits":         hits_meta,
+                        "prefix_bytes": len(effective_prompt.encode("utf-8")),
+                        "prefix_text":  prefix_view,
+                        "compress":     rag_cfg["raw_label"],
+                    }) + "\n\n")
                 if fast_mode:
-                    gen = brain.stream_fast(prompt, mode=fast_mode,
+                    gen = brain.stream_fast(effective_prompt, mode=fast_mode,
                                             temperature=temperature,
                                             top_k_sample=top_k, max_new=max_new,
                                             addons_chain=chain, constraint=constraint,
                                             adaptive_threshold=adaptive_threshold)
                 else:
-                    gen = brain.stream(prompt, temperature, top_k, max_new,
+                    gen = brain.stream(effective_prompt, temperature, top_k, max_new,
                                        addons_chain=chain, constraint=constraint)
                 for ev in gen:
                     ev["backend"] = "pytorch"
@@ -1981,10 +2134,103 @@ def generate():
                 yield "event: done\ndata: {}\n\n"
             except GeneratorExit:
                 return
+            except Exception as e:
+                # Surface model-side exceptions as an SSE error event instead
+                # of letting the stream close silently. The UI's onerror has
+                # no HTTP status to read, so without this the user sees a
+                # hung "thinking..." with no explanation.
+                logmod.error("generate", f"pytorch stream failed: {type(e).__name__}: {e}")
+                try:
+                    yield "data: " + json.dumps({
+                        "kind": "error",
+                        "message": f"generation failed: {type(e).__name__}: {e}",
+                    }) + "\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                except Exception:
+                    pass
             finally:
                 brain.set_ablation(-1, -1)
 
     return Response(stream_pt(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/agent/stream")
+def agent_stream():
+    """Full-glass agent trace stream (I58). Runs the AgentLoop and emits
+    every parsed turn event over SSE: turn_start / thought / action /
+    observation / answer / schema_err / stop.
+
+    Query params:
+      prompt              user input (required)
+      corpus              optional BM25 corpus path (registers `retrieve` tool)
+      fs_root             optional filesystem-read root (registers `fs_read` tool)
+      max_turns           default 6
+      best_of_n           default 1
+      temperature, top_k  decode knobs (default 0.7, 40)
+      seed                base seed (default 0)
+    """
+    user_input  = request.args.get("prompt", "")
+    if not user_input:
+        return ({"error": "prompt is required"}, 400)
+    brain = app.config.get("BRAIN")
+    if brain is None:
+        def stream_err():
+            yield "data: " + json.dumps({"kind": "error",
+                "message": "PyTorch backend not loaded. Pick a model from the dropdown and try again."}) + "\n\n"
+            yield "event: stop\ndata: {}\n\n"
+        return Response(stream_err(), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    try:
+        max_turns   = max(1, min(int(request.args.get("max_turns", "6")), 16))
+        best_of_n   = max(1, min(int(request.args.get("best_of_n", "1")), 8))
+        temperature = float(request.args.get("temperature", "0.7"))
+        top_k       = int(request.args.get("top_k", "40"))
+        seed        = int(request.args.get("seed", "0"))
+    except (TypeError, ValueError) as e:
+        return ({"error": f"bad query param: {type(e).__name__}: {e}"}, 400)
+    corpus_path = (request.args.get("corpus", "") or "").strip() or None
+    fs_root     = (request.args.get("fs_root", "") or "").strip() or None
+    if corpus_path and not os.path.exists(os.path.expanduser(corpus_path)):
+        return ({"error": f"corpus path does not exist: {corpus_path}"}, 400)
+    if fs_root and not os.path.isdir(os.path.expanduser(fs_root)):
+        return ({"error": f"fs_root must be an existing directory: {fs_root}"}, 400)
+    try:
+        toolbox = build_default_toolbox(corpus_path=corpus_path, fs_root=fs_root)
+    except Exception as e:
+        return ({"error": f"toolbox: {type(e).__name__}: {e}"}, 400)
+    # Optional explicit tool whitelist: keep only the named tools that are
+    # actually registered. Unknown names are dropped silently — the UI may
+    # request tools that this request can't provide (e.g. "retrieve" with no
+    # corpus path), and rejecting the whole request would be hostile.
+    tools_csv = (request.args.get("tools", "") or "").strip()
+    if tools_csv:
+        wanted = {t.strip() for t in tools_csv.split(",") if t.strip()}
+        available = set(toolbox.names())
+        toolbox._tools = {n: t for n, t in toolbox._tools.items() if n in wanted and n in available}
+        if not toolbox._tools:
+            return ({"error": "no usable tools — none of the requested tools are registered (retrieve needs a corpus; fs_read needs a folder)"}, 400)
+    loop = AgentLoop(brain, toolbox, max_turns=max_turns,
+                     temperature=temperature, top_k_sample=top_k,
+                     best_of_n=best_of_n, seed_base=seed)
+
+    def stream_agent():
+        try:
+            with brain.lock:
+                yield ("data: " + json.dumps({"kind": "agent_meta",
+                                                "tools": toolbox.names(),
+                                                "max_turns": max_turns,
+                                                "best_of_n": best_of_n}) + "\n\n")
+                for ev in loop.run_streaming(user_input):
+                    yield "data: " + json.dumps(ev) + "\n\n"
+                yield "event: done\ndata: {}\n\n"
+        except GeneratorExit:
+            return
+        except Exception as e:
+            yield ("data: " + json.dumps({"kind": "error",
+                                           "message": f"{type(e).__name__}: {e}"}) + "\n\n")
+
+    return Response(stream_agent(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
@@ -2002,6 +2248,90 @@ _STOP_PRESETS = {
     "double_newline":   b"\n\n",
     "eos":              b"</s>",
 }
+
+
+# RAG tool cache. Keyed by (abs_path, file_signature) so on-disk edits
+# rebuild the index instead of serving stale chunks. _make_rag_tool() does
+# real I/O + tokenization; we don't want to redo it per request.
+_RAG_TOOL_CACHE = {}
+_RAG_CACHE_LOCK = threading.Lock()
+_RAG_CACHE_MAX  = 8
+
+
+def _rag_path_signature(path):
+    """Stable signature of a corpus path: (max_mtime, total_bytes) over the
+    text files we'd index. Cheap to compute; invalidates on any edit."""
+    if os.path.isfile(path):
+        st = os.stat(path)
+        return (st.st_mtime, st.st_size)
+    max_mt = 0.0
+    total  = 0
+    for dirpath, _, fnames in os.walk(path):
+        for fn in fnames:
+            if not fn.lower().endswith((".txt", ".md", ".rst", ".text")):
+                continue
+            try:
+                st = os.stat(os.path.join(dirpath, fn))
+            except OSError:
+                continue
+            if st.st_mtime > max_mt:
+                max_mt = st.st_mtime
+            total += st.st_size
+    return (max_mt, total)
+
+
+def _get_rag_tool(corpus_path):
+    """Cached BM25 tool for `corpus_path`. Validates path exists, normalizes
+    it, and rebuilds the index on disk-edit detection."""
+    abs_path = os.path.abspath(os.path.expanduser(corpus_path))
+    if not os.path.exists(abs_path):
+        raise ValueError(f"rag corpus path does not exist: {abs_path}")
+    sig = _rag_path_signature(abs_path)
+    key = (abs_path, sig)
+    with _RAG_CACHE_LOCK:
+        tool = _RAG_TOOL_CACHE.get(key)
+        if tool is not None:
+            return tool, abs_path
+        tool = _make_rag_tool(abs_path)
+        _RAG_TOOL_CACHE[key] = tool
+        # Evict any other cached signatures for the same path
+        for k in list(_RAG_TOOL_CACHE.keys()):
+            if k != key and k[0] == abs_path:
+                _RAG_TOOL_CACHE.pop(k, None)
+        # Bound cache size
+        while len(_RAG_TOOL_CACHE) > _RAG_CACHE_MAX:
+            _RAG_TOOL_CACHE.pop(next(iter(_RAG_TOOL_CACHE)))
+    return tool, abs_path
+
+
+def _parse_rag_hits(formatted):
+    """Parse the retriever Tool's text output into (passages, meta).
+    Tool output format per line block: '[src @off] (score 1.23) <preview>'.
+    Empty passages on 'no matches' or 'error:'."""
+    if not formatted or formatted.startswith("error") or formatted == "no matches":
+        return [], []
+    passages, meta = [], []
+    for block in formatted.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        src = ""
+        if block.startswith("[") and "]" in block:
+            head, _, rest = block[1:].partition("]")
+            src = head.strip()
+            block = rest.strip()
+        score = 0.0
+        if block.startswith("(score "):
+            score_s, _, body = block[len("(score "):].partition(") ")
+            try:
+                score = float(score_s)
+            except ValueError:
+                pass
+            block = body
+        passages.append(block)
+        meta.append({"src": src, "score": score,
+                     "preview": (block[:120] + ("…" if len(block) > 120 else ""))})
+    return passages, meta
 
 
 def _build_constraint(spec):
@@ -2174,13 +2504,33 @@ def main():
     sys_metrics.warm()
 
     def _heartbeat_training():
+        # Enriched training payload: plugin id + started_at, plus model name
+        # and shape/params pulled from the model's config.json. The heartbeat
+        # tier logic decides which of these fields actually ship (analytics
+        # tier: full block; minimal: only "training_active" presence).
         st = plugin_runner.state()
         if not st or st.get("status") != plugin_runner.STATUS_RUNNING:
             return None
-        return {
-            "plugin_id": st.get("plugin_id"),
+        out = {
+            "plugin_id":  st.get("plugin_id"),
             "started_at": st.get("started_at"),
         }
+        args = st.get("args") or {}
+        if isinstance(args, dict):
+            name = args.get("name") or args.get("model")
+            if name and models.exists(name):
+                try:
+                    cfg = cfg_reader.load(name) or {}
+                    shape = cfg.get("shape") or {}
+                    out["model_name"] = name
+                    out["n_params"]   = int(cfg.get("n_params_total") or 0) or None
+                    keep = ("hidden", "layers", "ffn", "heads", "seq", "n_predict", "rope_base")
+                    summary = {k: shape[k] for k in keep if k in shape}
+                    if summary:
+                        out["shape"] = summary
+                except Exception:
+                    pass
+        return out
     heartbeat_mod.set_training_provider(_heartbeat_training)
     heartbeat_mod.start()
 
@@ -2189,29 +2539,37 @@ def main():
     app_sync_mod.set_reload_hook(_app_sync_reload)
     app_sync_mod.start()
 
-    try:
-        s = settings_mod.get()
-        step = app.config.get("DEFAULT_STEP")
-        if s.get("pytorch_load_mode") == "always" and name is not None and step is not None:
-            brain, name, step = _load_pytorch_brain(name, step, threads)
-            app.config["BRAIN"] = brain
-            app.config["BRAIN_MODEL"] = name
-            app.config["BRAIN_STEP"]  = int(step)
-            app.config["DEFAULT_MODEL"] = name
-            app.config["DEFAULT_STEP"]  = int(step)
-            app.config["BRAIN_LAST_USED"] = time.time()
-            app.config["BRAIN_LAST_ERROR"] = None
-            logmod.ok("backends", f"pytorch eager-loaded: {name} step {step} ({brain.n_params:,} params)")
-    except Exception as e:
-        msg = f"{type(e).__name__}: {e}"
-        app.config["BRAIN_LAST_ERROR"] = msg
-        # MoE / non-vanilla models: Brain raises a known RuntimeError that
-        # is not a real failure -- the dashboard should fall back to the C
-        # engine for these. Log calmly instead of as ERROR.
-        if isinstance(e, RuntimeError) and "PyTorch inference is not enabled" in str(e):
-            logmod.warn("backends", f"pytorch backend skipped for {name}: non-vanilla architecture (use C engine)")
-        else:
-            logmod.error("backends", f"pytorch eager load failed: {msg}")
+    # Eager-load the pytorch backend OFF the main thread so app.run() starts
+    # serving immediately. Only fires when settings say `always`; in the
+    # default `on_demand` mode the brain loads when the user actually clicks
+    # Generate, and idle-watcher unloads it after inactivity.
+    if (settings_mod.get().get("pytorch_load_mode") == "always"
+            and app.config.get("DEFAULT_MODEL") is not None
+            and app.config.get("DEFAULT_STEP")  is not None):
+        def _eager_load():
+            try:
+                app.config["PYTORCH_PENDING"] = True
+                n, st = app.config["DEFAULT_MODEL"], app.config["DEFAULT_STEP"]
+                brain, n2, st2 = _load_pytorch_brain(n, st, threads)
+                app.config["BRAIN"] = brain
+                app.config["BRAIN_MODEL"] = n2
+                app.config["BRAIN_STEP"]  = int(st2)
+                app.config["DEFAULT_MODEL"] = n2
+                app.config["DEFAULT_STEP"]  = int(st2)
+                app.config["BRAIN_LAST_USED"] = time.time()
+                app.config["BRAIN_LAST_ERROR"] = None
+                logmod.ok("backends", f"pytorch eager-loaded: {n2} step {st2} ({brain.n_params:,} params)")
+            except Exception as e:
+                msg = f"{type(e).__name__}: {e}"
+                app.config["BRAIN_LAST_ERROR"] = msg
+                cur = app.config.get("DEFAULT_MODEL")
+                if isinstance(e, RuntimeError) and "PyTorch inference is not enabled" in str(e):
+                    logmod.warn("backends", f"pytorch backend skipped for {cur}: non-vanilla architecture (use C engine)")
+                else:
+                    logmod.error("backends", f"pytorch eager load failed: {msg}")
+            finally:
+                app.config["PYTORCH_PENDING"] = False
+        threading.Thread(target=_eager_load, name="pytorch-eager-load", daemon=True).start()
 
     print(f"http://0.0.0.0:{args.port}")
     app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True,

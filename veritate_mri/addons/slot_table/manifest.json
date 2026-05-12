@@ -1,6 +1,6 @@
 {
   "name": "Slot Table",
-  "description": "Inference-time notepad. Tracks recent named entities, gendered anchors, and the rolling byte window. Biases next-byte logits to suppress doc-boundary collapse, repetition loops, n-gram echoes, and wrong-gender pronoun completions. Boosts already-seen named entities at word-start.",
+  "description": "Suppresses repetition and wrong-gender pronouns; boosts named entities.",
   "kind": "decoder",
   "params": {
     "block_bytes": {

@@ -1189,8 +1189,300 @@ function collectSelectedAddons() {
 
 loadAddons();
 
+// ---- rag panel + agent panel + chat history helpers ----
+function _esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+const EMPTY_PALE = "color:var(--warm);font-style:italic;padding:6px 4px";
+
+function _genMode() {
+  const r = document.querySelector('input[name="genMode"]:checked');
+  return r ? r.value : "chat";
+}
+
+function resetRagPanel() {
+  const wrap = $("ragPanel"); if (!wrap) return;
+  wrap.style.display = "none";
+  const hits = $("ragHits"); if (hits) hits.innerHTML = "";
+  const pre  = $("ragPrefix"); if (pre)  pre.textContent = "";
+  const meta = $("ragPanelMeta"); if (meta) meta.textContent = "";
+}
+function showRagEmpty(reason) {
+  const wrap = $("ragPanel"); if (!wrap) return;
+  wrap.style.display = "";
+  const hits = $("ragHits");
+  if (hits) hits.innerHTML = `<div style="${EMPTY_PALE}">${_esc(reason)}</div>`;
+  const meta = $("ragPanelMeta"); if (meta) meta.textContent = "—";
+  const pre  = $("ragPrefix"); if (pre) pre.textContent = "";
+}
+function renderRagEvent(ev) {
+  const wrap = $("ragPanel"); if (!wrap) return;
+  wrap.style.display = "";
+  const meta = $("ragPanelMeta");
+  if (meta) meta.textContent = `${(ev.hits || []).length}/${ev.top_k} hits · prefix ${ev.prefix_bytes}B · ${ev.compress}`;
+  const hitsEl = $("ragHits");
+  if (hitsEl) {
+    hitsEl.innerHTML = (ev.hits || []).map((h, i) => `
+      <div style="background:#0a0c12;padding:4px 6px;border-radius:3px">
+        <div style="display:flex;justify-content:space-between;color:var(--dim);font-size:10px">
+          <span>#${i + 1} ${_esc(h.src || "")}</span>
+          <span>score ${h.score.toFixed(2)}</span>
+        </div>
+        <div style="color:var(--text);margin-top:2px">${_esc(h.preview || "")}</div>
+      </div>
+    `).join("");
+  }
+  const pre = $("ragPrefix");
+  if (pre) pre.textContent = ev.prefix_text || "";
+}
+function resetAgentPanel() {
+  const wrap = $("agentPanel"); if (wrap) wrap.style.display = "none";
+  const tl = $("agentTimeline"); if (tl) tl.innerHTML = "";
+  const meta = $("agentPanelMeta"); if (meta) meta.textContent = "";
+}
+function showAgentEmpty(reason) {
+  const wrap = $("agentPanel"); if (!wrap) return;
+  wrap.style.display = "";
+  const tl = $("agentTimeline");
+  if (tl) tl.innerHTML = `<div style="${EMPTY_PALE}">${_esc(reason)}</div>`;
+  const meta = $("agentPanelMeta"); if (meta) meta.textContent = "—";
+}
+
+// ---- chat history (localStorage) ----
+const CHAT_KEY = "veritate_chat_history_v1";
+function loadChatHistory() {
+  try { return JSON.parse(localStorage.getItem(CHAT_KEY) || "[]"); }
+  catch (_) { return []; }
+}
+function saveChatHistory(msgs) {
+  try { localStorage.setItem(CHAT_KEY, JSON.stringify(msgs.slice(-100))); }
+  catch (_) {}
+}
+function renderChatHistory() {
+  const wrap = $("chatHistory");
+  if (!wrap) return;
+  const msgs = loadChatHistory();
+  if (!msgs.length) {
+    wrap.innerHTML = "";
+    wrap.style.display = "none";
+    return;
+  }
+  if (_genMode() === "chat") wrap.style.display = "";
+  wrap.innerHTML = msgs.map(m => `
+    <div style="margin-bottom:6px">
+      <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:0.5px">${_esc(m.role)}</div>
+      <div style="color:var(--text);white-space:pre-wrap">${_esc(m.text)}</div>
+    </div>
+  `).join("");
+  wrap.scrollTop = wrap.scrollHeight;
+}
+function pushChatMessage(role, text) {
+  const msgs = loadChatHistory();
+  msgs.push({ role, text, ts: Date.now() });
+  saveChatHistory(msgs);
+  renderChatHistory();
+}
+function clearChatHistory() {
+  saveChatHistory([]);
+  renderChatHistory();
+}
+
+// ---- mode toggle wiring ----
+function applyGenMode() {
+  const mode = _genMode();
+  const isChat = (mode === "chat");
+  const chat = $("chatHistory");
+  if (chat && !isChat) chat.style.display = "none";
+  const agentRow = $("agentRow");
+  if (agentRow) agentRow.style.display = isChat ? "" : "none";
+  const agentPanel = $("agentPanel");
+  if (agentPanel && !isChat) agentPanel.style.display = "none";
+  const promptBox = $("prompt");
+  if (promptBox) {
+    promptBox.placeholder = isChat
+      ? 'Ask a question, e.g. "what is the Eiffel Tower\'s height?"'
+      : "Start a sentence, the model finishes it…";
+    promptBox.rows = isChat ? 2 : 3;
+  }
+  const hint = $("promptModeHint");
+  if (hint) hint.textContent = isChat
+    ? "ask the model a question. answers go in the conversation below."
+    : "type the start of a sentence. the model autocompletes byte-by-byte.";
+  if (isChat) renderChatHistory();
+}
+document.querySelectorAll('input[name="genMode"]').forEach(r => {
+  r.addEventListener("change", applyGenMode);
+});
+applyGenMode();
+function appendAgentEvent(ev) {
+  const wrap = $("agentPanel"); if (!wrap) return;
+  wrap.style.display = "";
+  const tl = $("agentTimeline"); if (!tl) return;
+  const meta = $("agentPanelMeta");
+  const row = document.createElement("div");
+  row.style.cssText = "background:#0a0c12;padding:4px 6px;border-radius:3px";
+  if (ev.kind === "turn_start") {
+    row.innerHTML = `<span style="color:var(--dim)">turn ${ev.turn}</span>`;
+  } else if (ev.kind === "thought") {
+    row.innerHTML = `<span style="color:var(--cool)">think</span> <span style="color:var(--text)">${_esc(ev.text)}</span>`;
+  } else if (ev.kind === "action") {
+    row.innerHTML = `<span style="color:var(--warm)">tool</span> <code>${_esc(ev.tool)}</code> <span style="color:var(--dim)">${_esc(JSON.stringify(ev.args))}</span>`;
+  } else if (ev.kind === "observation") {
+    const head = (ev.text || "").slice(0, 280);
+    row.innerHTML = `<span style="color:var(--cool)">obs</span> <span style="color:var(--text)">${_esc(head)}${ev.text && ev.text.length > 280 ? "…" : ""}</span>`;
+  } else if (ev.kind === "answer") {
+    row.innerHTML = `<span style="color:var(--good,#7ec47e)">answer</span> <span style="color:var(--text)">${_esc(ev.text)}</span>`;
+  } else if (ev.kind === "schema_err") {
+    row.innerHTML = `<span style="color:var(--hot)">err</span> <span style="color:var(--text)">${_esc(ev.error || "")}</span>`;
+  } else if (ev.kind === "agent_meta") {
+    row.innerHTML = `<span style="color:var(--dim)">tools: ${_esc((ev.tools || []).join(", "))}</span>`;
+  } else if (ev.kind === "stop") {
+    if (meta) meta.textContent = `${ev.reason} · ${ev.turns} turns · ${ev.total_elapsed_s.toFixed(2)}s`;
+    return;
+  } else {
+    return;
+  }
+  tl.appendChild(row);
+  tl.scrollTop = tl.scrollHeight;
+}
+
+// Hide/show RAG panel based on whether the corpus is set right now
+(function _toggleRagPanelOnInputChange() {
+  const ci = $("ragCorpus");
+  if (!ci) return;
+  const sync = () => {
+    if (!ci.value.trim()) resetRagPanel();
+  };
+  ci.addEventListener("input", sync);
+  sync();
+})();
+
 // ---- generation ----
-$("go").addEventListener("click", () => {
+function _resetGenButton() {
+  $("go").disabled = false; $("go").dataset.generating = "";
+  $("stop").disabled = true; _applyGenerateGate();
+  if (typeof _GenThink !== "undefined") _GenThink.stop();
+}
+
+// Generation "thinking" typewriter — same typing feel as the Ask Aki loader,
+// scoped to the inline panel under the prompt. Uses identical char/hold/pause
+// constants so the two indicators look and pace the same.
+const _GenThink = (() => {
+  const PHRASES = [
+    "thinking really hard",
+    "warming up the model",
+    "tokenizing prompt",
+    "running prefill",
+    "shaping logits",
+    "picking the next byte",
+    "cracking knuckles",
+    "consulting the napkin",
+    "running the numbers",
+    "squinting at the matrix",
+    "asking the smart layer",
+    "checking my notes",
+    "doing the long division",
+    "rifling through the drawer",
+    "sounding it out",
+  ];
+  // Identical to _AI's typer constants so the pacing matches exactly.
+  const CHAR_BASE_MS  = 55, CHAR_JITTER  = 70;
+  const PAUSE_CHANCE  = 0.07;
+  const PAUSE_MIN_MS  = 140, PAUSE_MAX_MS  = 360;
+  const HOLD_MIN_MS   = 2200, HOLD_MAX_MS   = 3600;
+  // Floor on visible time + CSS fade so the typer never flash-and-vanishes
+  // when the first byte arrives ~100ms after click.
+  const MIN_VISIBLE_MS = 1600;
+  const FADE_MS = 280;
+  let el = null, timer = null, fadeTimer = null, hideTimer = null;
+  let order = [], cursor = 0, startedAt = 0;
+  function _rand(a, b) { return a + Math.random() * (b - a); }
+  function _shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+  function _esc(s) { return s.replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
+  function _typeChar(text, idx, after) {
+    if (idx > text.length) {
+      timer = setTimeout(after, _rand(HOLD_MIN_MS, HOLD_MAX_MS));
+      return;
+    }
+    el.innerHTML = _esc(text.slice(0, idx)) + '<span class="ai-caret"></span>';
+    let delay = CHAR_BASE_MS + Math.random() * CHAR_JITTER;
+    if (Math.random() < PAUSE_CHANCE) delay += _rand(PAUSE_MIN_MS, PAUSE_MAX_MS);
+    timer = setTimeout(() => _typeChar(text, idx + 1, after), delay);
+  }
+  function _next() {
+    if (cursor >= order.length) { order = _shuffle(PHRASES); cursor = 0; }
+    const p = order[cursor++];
+    el.innerHTML = '<span class="ai-caret"></span>';
+    _typeChar(p, 0, _next);
+  }
+  let state = "idle"; // idle | typing | error
+  function _clearTimers() {
+    if (timer)     { clearTimeout(timer);     timer = null; }
+    if (fadeTimer) { clearTimeout(fadeTimer); fadeTimer = null; }
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+  }
+  function start() {
+    el = $("genThinking"); if (!el) return;
+    _clearTimers();
+    el.classList.remove("fading", "error");
+    el.innerHTML = "";
+    el.style.display = "";
+    order = _shuffle(PHRASES); cursor = 0;
+    startedAt = Date.now();
+    state = "typing";
+    _next();
+  }
+  function stop() {
+    const e = $("genThinking");
+    if (!e) return;
+    // Keep error state visible — don't fade it away.
+    if (state === "error") return;
+    if (e.style.display === "none") { _clearTimers(); return; }
+    if (fadeTimer || hideTimer) return;
+    const elapsed = Date.now() - startedAt;
+    const delay   = Math.max(0, MIN_VISIBLE_MS - elapsed);
+    // Keep typing through the min-visible window + fade so the wind-down
+    // never freezes; only kill the type chain at the final hide.
+    fadeTimer = setTimeout(() => {
+      e.classList.add("fading");
+      hideTimer = setTimeout(() => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        e.innerHTML = "";
+        e.style.display = "none";
+        e.classList.remove("fading");
+        fadeTimer = null; hideTimer = null;
+        state = "idle";
+      }, FADE_MS);
+    }, delay);
+  }
+  function showError(msg) {
+    el = $("genThinking"); if (!el) return;
+    _clearTimers();
+    el.classList.remove("fading");
+    el.classList.add("error");
+    el.style.display = "";
+    el.textContent = msg || "generation failed";
+    state = "error";
+  }
+  function clearError() {
+    const e = $("genThinking"); if (!e) return;
+    if (state !== "error") return;
+    state = "idle";
+    e.classList.remove("error");
+    e.innerHTML = "";
+    e.style.display = "none";
+  }
+  return { start, stop, showError, clearError };
+})();
+
+$("go").addEventListener("click", async () => {
   if (evtSrc) { evtSrc.close(); evtSrc = null; }
   if (replay.timer) { clearInterval(replay.timer); replay.timer = null; }
   frames = []; generatedBytes = []; currentFrame = -1; live = true;
@@ -1202,10 +1494,40 @@ $("go").addEventListener("click", () => {
   promptBytes = Array.from(new TextEncoder().encode(prompt));
 
   renderResponse();
-  $("liveStats").innerHTML = `<span class="stat">thinking...</span>`;
+  $("liveStats").innerHTML = "";
+  _GenThink.start();
   $("go").disabled = true; $("go").dataset.generating = "1"; $("stop").disabled = false;
 
   const backend = $("backend").value;
+
+  // Auto-load the PyTorch backend if it isn't loaded yet. Chat mode always
+  // uses BRAIN (agent loop); complete mode uses it only when backend=pytorch.
+  // The idle watcher may have unloaded it, or the user may never have
+  // explicitly loaded it. Use the model currently selected in the picker;
+  // fall back to whatever the server picks via "auto".
+  const needsBrain = (_genMode() === "chat") || (backend === "pytorch");
+  if (needsBrain) {
+    await _pollBackends();
+    if (!backendsState.pytorch.loaded) {
+      const sel = $("cModel");
+      const v = sel && sel.value;
+      // Picker values are pytorch model names only when backend=pytorch.
+      // Under backend=c the values are .bin paths, so fall back to "auto".
+      const usePicker = (backend === "pytorch") && v;
+      const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+      const step = opt && opt.dataset.step ? parseInt(opt.dataset.step, 10) : null;
+      try {
+        await (usePicker ? postPytorchSwap(v, step) : _toggleBackend("pytorch", "load"));
+      } catch (_) {}
+      await _pollBackends();
+      if (!backendsState.pytorch.loaded) {
+        const err = backendsState.lastError || "model failed to load — pick a model from the dropdown and try again";
+        _GenThink.showError(`PyTorch not loaded: ${err}`);
+        _resetGenButton();
+        return;
+      }
+    }
+  }
   const ablLayer  = parseInt(($("ablLayer")  || {value:"-1"}).value, 10);
   const ablNeuron = parseInt(($("ablNeuron") || {value:"-1"}).value, 10);
   const ablBadge  = $("ablBadge");
@@ -1219,21 +1541,109 @@ $("go").addEventListener("click", () => {
   const fastParam = (fastSel && fastSel !== "off") ? `&fast=${encodeURIComponent(fastSel)}` : "";
   const constrainedSel = ($("genConstrained") || { value: "" }).value;
   const constrainedParam = (constrainedSel && constrainedSel !== "off") ? `&constrained=${encodeURIComponent(constrainedSel)}` : "";
-  const url = `/generate?prompt=${encodeURIComponent(prompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}`;
+  const ragCorpus = (($("ragCorpus") || { value: "" }).value || "").trim();
+  const ragK = (($("ragK") || { value: "" }).value || "").trim();
+  const ragCompress = (($("ragCompress") || { value: "off" }).value || "off").trim();
+  let ragParam = "";
+  resetRagPanel();
+  if (ragCorpus) {
+    ragParam = `&rag=${encodeURIComponent(ragCorpus)}`;
+    if (ragK) ragParam += `&rag_k=${encodeURIComponent(ragK)}`;
+    if (ragCompress && ragCompress !== "off") ragParam += `&rag_compress=${encodeURIComponent(ragCompress)}`;
+  }
+  const ragStatEl = $("ragStat"); if (ragStatEl) ragStatEl.textContent = ragCorpus ? "indexing..." : "";
+
+  // Mode: chat with tools (agent loop) or plain text completion
+  const mode = _genMode();
+  resetAgentPanel();
+  if (mode === "chat") {
+    pushChatMessage("you", prompt);
+    const checkedTools = Array.from(document.querySelectorAll(".agentTool"))
+      .filter(cb => cb.checked).map(cb => cb.dataset.tool);
+    if (checkedTools.length === 0) {
+      // chat with no tools selected — still readable in history, but warn
+      showAgentEmpty("No tools selected. Check one in Advanced → tools to let the model use them, or switch to autocomplete mode.");
+    } else {
+      const fsRoot = (($("agentFsRoot") || { value: "" }).value || "").trim();
+      const maxT = parseInt(($("agentMaxTurns") || { value: "6" }).value, 10) || 6;
+      const bon  = parseInt(($("agentBestOf")   || { value: "1" }).value, 10) || 1;
+      const corpusQ = ragCorpus ? `&corpus=${encodeURIComponent(ragCorpus)}` : "";
+      const fsQ = fsRoot ? `&fs_root=${encodeURIComponent(fsRoot)}` : "";
+      const toolsQ = `&tools=${encodeURIComponent(checkedTools.join(","))}`;
+      const aurl = `/agent/stream?prompt=${encodeURIComponent(prompt)}&temperature=${temp}&top_k=${topk}&max_turns=${maxT}&best_of_n=${bon}${corpusQ}${fsQ}${toolsQ}`;
+      evtSrc = new EventSource(aurl);
+      let agentGotAnswer = false;
+      evtSrc.onmessage = (e) => {
+        if (!e.data) return;
+        const ev = JSON.parse(e.data);
+        appendAgentEvent(ev);
+        if (ev.kind === "answer") {
+          agentGotAnswer = true;
+          _GenThink.stop();
+          generatedBytes = Array.from(new TextEncoder().encode(ev.text));
+          renderResponse();
+          pushChatMessage("model", ev.text);
+        }
+        if (ev.kind === "error") {
+          _GenThink.showError(ev.message || "stream error");
+        }
+        if (ev.kind === "stop") {
+          // Agent loop ran but never emitted an answer — the underlying model
+          // likely isn't agent-trained (its outputs don't parse into Thought/
+          // Action/Answer). Tell the user instead of leaving them blank.
+          if (!agentGotAnswer) {
+            const reason = ev.reason ? ` (${ev.reason})` : "";
+            _GenThink.showError(`Agent loop ended without an answer${reason}. This model isn't agent-trained — switch to autocomplete mode.`);
+          }
+          _resetGenButton();
+        }
+      };
+      evtSrc.addEventListener("stop", () => {
+        evtSrc?.close(); evtSrc = null;
+        if (!agentGotAnswer) {
+          _GenThink.showError("Agent loop ended without an answer. Switch to autocomplete mode.");
+        }
+        _resetGenButton();
+      });
+      evtSrc.onerror = () => {
+        try { evtSrc.close(); } catch (_) {}
+        evtSrc = null;
+        // If nothing visible was produced, surface that as an error so the
+        // user isn't left staring at a vanished spinner.
+        if (generatedBytes.length === 0) {
+          _GenThink.showError("agent stream failed — re-check backend/model selection");
+          _pollBackends();
+        }
+        _resetGenButton();
+      };
+      return;
+    }
+  }
+
+  const url = `/generate?prompt=${encodeURIComponent(prompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}${ragParam}`;
   evtSrc = new EventSource(url);
   const t0 = performance.now();
   evtSrc.onmessage = (e) => {
     if (!e.data) return;
     const ev = JSON.parse(e.data);
     if (ev.kind === "meta") { setMeta(ev); return; }
+    if (ev.kind === "rag") {
+      const rs = $("ragStat");
+      if (rs) {
+        const hits = (ev.hits || []);
+        rs.textContent = `${hits.length}/${ev.top_k} hits · ${ev.prefix_bytes}B`;
+      }
+      renderRagEvent(ev);
+      return;
+    }
     if (ev.kind === "error") {
       // backend signaled an error mid-stream (e.g., c-engine pipe desync,
       // pytorch oom). surface it instead of silently hanging.
       const msg = ev.message || "(no message)";
-      $("liveStats").innerHTML = `<span class="stat" style="color:var(--hot)">stream error: ${msg}</span>`;
+      _GenThink.showError(msg);
       try { evtSrc.close(); } catch (_) {}
       evtSrc = null;
-      $("go").disabled = false; $("go").dataset.generating = ""; $("stop").disabled = true; _applyGenerateGate();
+      _resetGenButton();
       live = false;
       if (frames.length > 0) setReplayMode("ready");
       console.warn("[/generate] backend error event:", ev);
@@ -1251,6 +1661,7 @@ $("go").addEventListener("click", () => {
     if (ev.kind === "fast_byte") {
       // Fast mode (KV / MTP). No brain-scan telemetry on these bytes; just
       // accumulate the byte for the response panel and the throughput meter.
+      _GenThink.stop();
       generatedBytes.push(ev.byte);
       const dt = (performance.now() - t0) / 1000;
       const fastLbl = ev.head != null ? ` <span class="stat" style="color:var(--cool)">head ${ev.head}/${ev.k}</span>` : "";
@@ -1264,6 +1675,7 @@ $("go").addEventListener("click", () => {
       return;
     }
     if (ev.kind === "token") {
+      _GenThink.stop();
       frames.push(ev);
       generatedBytes.push(ev.byte);
       // bound memory on long generations: drop the oldest 1024 frames once we
@@ -1294,13 +1706,20 @@ $("go").addEventListener("click", () => {
   };
   evtSrc.addEventListener("done", () => {
     evtSrc?.close(); evtSrc = null;
-    $("go").disabled = false; $("go").dataset.generating = ""; $("stop").disabled = true; _applyGenerateGate();
+    _resetGenButton();
     live = false; renderResponse();
     setReplayMode("ready");
   });
   evtSrc.onerror = () => {
     evtSrc?.close(); evtSrc = null;
-    $("go").disabled = false; $("go").dataset.generating = ""; $("stop").disabled = true; _applyGenerateGate();
+    // If we never received any bytes, the server most likely returned an
+    // HTTP error before the stream opened (503 = backend not loaded, etc.).
+    // EventSource doesn't expose the status, so surface a hint and re-poll.
+    if (frames.length === 0 && generatedBytes.length === 0) {
+      _GenThink.showError("generation stream failed — re-check backend/model selection");
+      _pollBackends();
+    }
+    _resetGenButton();
     if (frames.length > 0) setReplayMode("ready");
   };
 });
@@ -1484,11 +1903,49 @@ function refreshQatWarning() {
   else     { el.style.display = "none"; tx.textContent = ""; }
 }
 
-function applyBackendUI() {
+function applyBackendUI(opts) {
+  const skipPicker = !!(opts && opts.skipPicker);
   const isC = $("backend").value === "c";
-  $("cModel").disabled = !isC || $("cModel").options.length === 0;
+  // Adornments only meaningful when picking a .bin (C engine):
+  const fl = $("followLatest"); if (fl && fl.parentElement) fl.parentElement.style.display = isC ? "" : "none";
+  const cs = $("cConfigStatus"); if (cs) cs.style.display = isC ? "" : "none";
+  // Picker is shared but its contents depend on backend.
+  if (!skipPicker) refreshModelPicker();
   refreshQatWarning();
   if (typeof _applyGenerateGate === "function") _applyGenerateGate();
+}
+
+function refreshModelPicker() {
+  return ($("backend").value === "c") ? refreshCModels() : refreshPytorchModels();
+}
+
+function refreshPytorchModels() {
+  return fetch("/pytorch-models").then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }).then(d => {
+    const sel = $("cModel");
+    sel.innerHTML = "";
+    if (!d.models || !d.models.length) {
+      fillSelectFallback("cModel", "no trained checkpoints");
+      sel.disabled = true;
+      return;
+    }
+    for (const m of d.models) {
+      const o = document.createElement("option");
+      const plugin = m.plugin ? `[${m.plugin}] ` : "";
+      const params = m.n_params ? ` · ${(m.n_params / 1e6).toFixed(0)}M` : "";
+      o.value = m.name;
+      o.dataset.step = String(m.step);
+      o.textContent = `${plugin}${m.name} (step ${m.step}${params})`;
+      o.title = m.description || "";
+      if (m.is_current) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.disabled = false;
+  }).catch(err => {
+    fillSelectFallback("cModel", `endpoint missing — restart server (${err.message || err})`);
+  });
 }
 
 function fillSelectFallback(selId, text) {
@@ -1507,7 +1964,9 @@ function refreshCModels() {
     const sel = $("cModel");
     sel.innerHTML = "";
     if (!d.models || !d.models.length) {
-      fillSelectFallback("cModel", "no veritate.bin found"); return;
+      fillSelectFallback("cModel", "no veritate.bin found");
+      sel.disabled = true;
+      return;
     }
     for (const m of d.models) {
       const o = document.createElement("option");
@@ -1522,6 +1981,7 @@ function refreshCModels() {
       if (m.is_current) o.selected = true;
       sel.appendChild(o);
     }
+    sel.disabled = false;
     refreshQatWarning();
   }).catch(err => {
     fillSelectFallback("cModel", `endpoint missing — restart server (${err.message || err})`);
@@ -1566,10 +2026,41 @@ function postCConfig(body) {
 }
 
 $("cModel").addEventListener("change", () => {
-  refreshQatWarning();
-  const v = $("cModel").value;
-  if (v) postCConfig({model: v});
+  const sel = $("cModel");
+  const v = sel.value;
+  if (!v) return;
+  if ($("backend").value === "c") {
+    refreshQatWarning();
+    postCConfig({model: v});
+  } else {
+    const opt = sel.selectedOptions[0];
+    const step = opt && opt.dataset.step ? parseInt(opt.dataset.step, 10) : null;
+    postPytorchSwap(v, step);
+  }
 });
+
+function postPytorchSwap(name, step) {
+  backendsState.busy = true;
+  backendsState.lastError = "";
+  _renderBackendState();
+  const body = step ? { action: "load", model: name, step } : { action: "load", model: name };
+  return fetch("/backends/pytorch", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  }).then(r => r.json().catch(() => ({ error: `http ${r.status}` })))
+    .then(d => {
+      if (d && d.error) backendsState.lastError = String(d.error);
+      return _waitUntilSettled("pytorch");
+    })
+    .then(() => fetch("/meta").then(r => r.json()).then(setMeta).catch(() => {}))
+    .catch(err => {
+      backendsState.busy = false;
+      backendsState.lastError = String(err && err.message || err);
+      _renderBackendState();
+    });
+}
+
 $("backend").addEventListener("change", applyBackendUI);
 
 // "follow latest" — poll /c-models every 15s; if a fresher mtime than what's
@@ -1597,7 +2088,100 @@ $("followLatest").addEventListener("change", () => {
   if ($("followLatest").checked) pollFollowLatest();
 });
 
-refreshCModels().then(applyBackendUI);
+// Generation tab preferences — persist controls across page refreshes so the
+// user doesn't lose backend choice, model pick, prompt, temp/top_k, RAG corpus,
+// tool selection, etc. on every reload.
+const _GenPrefs = (() => {
+  const KEY = "veritate.genPrefs.v1";
+  // [elementId, attribute]. cModel is restored in a second pass because its
+  // option list is fetched async. Prompt textarea is deliberately omitted —
+  // it's transient input, not a preference.
+  const FIELDS = [
+    ["backend", "value"],
+    ["cModel", "value"],
+    ["followLatest", "checked"],
+    ["temp", "value"],
+    ["topk", "value"],
+    ["maxnew", "value"],
+    ["ablLayer", "value"],
+    ["ablNeuron", "value"],
+    ["genFastMode", "value"],
+    ["genConstrained", "value"],
+    ["ragCorpus", "value"],
+    ["ragK", "value"],
+    ["ragCompress", "value"],
+    ["agentFsRoot", "value"],
+    ["agentMaxTurns", "value"],
+    ["agentBestOf", "value"],
+  ];
+  function _load() {
+    try { return JSON.parse(localStorage.getItem(KEY) || "{}") || {}; }
+    catch (_) { return {}; }
+  }
+  function _save(p) {
+    try { localStorage.setItem(KEY, JSON.stringify(p)); } catch (_) {}
+  }
+  function saveAll() {
+    const p = {};
+    for (const [id, attr] of FIELDS) {
+      const el = $(id);
+      if (el) p[id] = el[attr];
+    }
+    const mode = document.querySelector("input[name=genMode]:checked");
+    if (mode) p.genMode = mode.value;
+    p.agentTools = Array.from(document.querySelectorAll(".agentTool"))
+      .filter(c => c.checked).map(c => c.dataset.tool);
+    _save(p);
+  }
+  function applyStatic() {
+    const p = _load();
+    if (!p || !Object.keys(p).length) return;
+    for (const [id, attr] of FIELDS) {
+      if (id === "cModel") continue;
+      const el = $(id);
+      if (!el || p[id] === undefined || p[id] === null) continue;
+      if (attr === "checked") el.checked = !!p[id];
+      else el.value = p[id];
+    }
+    if (p.genMode) {
+      const r = document.querySelector(`input[name=genMode][value="${p.genMode}"]`);
+      if (r) r.checked = true;
+    }
+    if (Array.isArray(p.agentTools)) {
+      document.querySelectorAll(".agentTool").forEach(c => {
+        c.checked = p.agentTools.includes(c.dataset.tool);
+      });
+    }
+  }
+  function applyModelPick() {
+    const p = _load();
+    if (!p || !p.cModel) return;
+    const sel = $("cModel");
+    if (!sel) return;
+    if (!Array.from(sel.options).some(o => o.value === p.cModel)) return;
+    if (sel.value === p.cModel) return;
+    sel.value = p.cModel;
+    sel.dispatchEvent(new Event("change"));
+  }
+  function wireListeners() {
+    for (const [id] of FIELDS) {
+      const el = $(id);
+      if (el) el.addEventListener("change", saveAll);
+    }
+    document.querySelectorAll("input[name=genMode], .agentTool").forEach(c =>
+      c.addEventListener("change", saveAll));
+  }
+  return { applyStatic, applyModelPick, wireListeners };
+})();
+
+_GenPrefs.applyStatic();
+refreshModelPicker().then(() => {
+  _GenPrefs.applyModelPick();
+  // skipPicker: avoid a redundant fetch that could race the swap triggered
+  // by applyModelPick's dispatched change event.
+  applyBackendUI({ skipPicker: true });
+  _GenPrefs.wireListeners();
+});
 
 fetch("/meta").then(r => r.json()).then(m => {
   const opt = $("backend").querySelector('option[value="c"]');
@@ -2643,11 +3227,20 @@ function plotTrainSeries(canvas, ctx, series, opts) {
     yMin = Math.log10(yMin);
     yMax = Math.log10(yMax + 0.01);
   }
+  // logX: log10(x + 1) so step=0 (random-init anchor) maps to 0 cleanly and
+  // the early steps spread out instead of clumping near the left edge.
+  if (opts.logX) {
+    xMin = Math.log10(Math.max(xMin, 0) + 1);
+    xMax = Math.log10(Math.max(xMax, 0) + 1);
+  }
   const xR = xMax - xMin || 1, yR = yMax - yMin || 1;
   const padL = opts.yTitle ? 64 : 50, padR = 12, padT = 8, padB = 22;
   const tickX = opts.yTitle ? 18 : 4;
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const xS = x => padL + ((x - xMin) / xR) * plotW;
+  const xS = x => {
+    const v = opts.logX ? Math.log10(Math.max(x, 0) + 1) : x;
+    return padL + ((v - xMin) / xR) * plotW;
+  };
   const yS = y => {
     const v = opts.logY ? Math.log10(Math.max(y, 0.01)) : y;
     return padT + plotH - ((v - yMin) / yR) * plotH;
@@ -2668,8 +3261,10 @@ function plotTrainSeries(canvas, ctx, series, opts) {
   for (let i = 0; i <= 5; i++) {
     const x = padL + (plotW * i / 5);
     const v = xMin + (xR * i / 5);
+    // logX: xMin/xMax/v live in log space; invert to real step count for labels.
+    const real = opts.logX ? (Math.pow(10, v) - 1) : v;
     ctx.fillStyle = "#6f7480";
-    ctx.fillText(Math.round(v).toLocaleString(), x - 16, H - 6);
+    ctx.fillText(Math.round(real).toLocaleString(), x - 16, H - 6);
   }
   // optional horizontal threshold lines, e.g. ppl 3.0 = fluent.
   // shape: opts.thresholdLines = [{ y, color, label, lineDash }]
@@ -2983,6 +3578,7 @@ const classroomRefsT = {
   conceptsId:      "trainConcepts",
   conceptsHoverId: "trainConceptsHover",
   writingHealthId: "trainWritingHealth",
+  readingCompId:   "trainReadingComp",
 };
 const classroomRefsL = {
   sizeMeterId: "learnSizeMeter",
@@ -3002,6 +3598,7 @@ const classroomRefsL = {
   pruneTitleId:    "pruneTitle",
   pruneSubtitleId: "pruneSubtitle",
   writingHealthId: "learnWritingHealth",
+  readingCompId:   "learnReadingComp",
 };
 
 function makeClassroomState() {
@@ -3024,6 +3621,8 @@ function makeClassroomState() {
     conceptsByStep: {},            // step -> {concepts:{name:{surprise_bits}}}
     writingSteps:   [],            // sorted ints, steps with writing_health_step_*.json
     writingByStep:  {},            // step -> writing_health record
+    compSteps:      [],            // sorted ints, steps with reading_comprehension_step_*.json
+    compByStep:     {},            // step -> {bands:{level:{accuracy,n_correct,n_scored}}, overall_accuracy, ...}
     loaded:       false,
   };
 }
@@ -3554,7 +4153,7 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   const ctx = refs.readGradeCtx;
   if (!gradesSteps || gradesSteps.length === 0) {
     root.innerHTML = haveCheckpoints
-      ? `<span style="color:var(--hot)">Reading-level grading is not configured for this run.</span>`
+      ? `<span style="color:var(--hot)">Register-fluency probe is not configured for this run.</span>`
       : `<span style="color:var(--warm)">No checkpoint yet.</span>`;
     plotTrainSeries(canvas, ctx, []);
     return;
@@ -3582,17 +4181,17 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   }
 
   let html = "";
-  // disclaimer: this metric measures vocabulary/prose-style familiarity, NOT
-  // comprehension or generation. byte-ppl over a passage tells you whether the
-  // model recognizes the words and local syntactic patterns of that register;
-  // it doesn't say the model can answer questions about the text, write at
-  // that level, or maintain long-range coherence. surface this up front so the
-  // label "reading level" isn't read as "intelligence level".
+  // disclaimer: this metric is a register-NLL fluency proxy, not comprehension.
+  // FKGL targets the syntactic shape of prose (sentence length, syllables),
+  // not cognitive difficulty — formulaic PhD-abstract phrasing can score
+  // *lower* ppl than short high-entropy Pre-K sentences. Low ppl on a band
+  // means the model has seen prose like that, not that it understands it.
   html += `<div class="desc" style="margin:0 0 10px;padding:8px 10px;border-left:3px solid var(--warm);background:rgba(255,170,80,0.06);font-size:11.5px;line-height:1.45">
-    <b style="color:var(--warm)">What this measures &mdash; and what it doesn't.</b>
-    This score reflects <b>which words and prose patterns the model knows</b>, not what it understands.
-    It's the model being <i>read to</i>: at each byte we measure how predictable the next byte is. Low ppl on a college passage means the model has seen text like that before, not that it grasps college-level concepts.
-    It does <b>not</b> measure: comprehension (the model is never asked a question about the passage), long-range coherence over paragraphs, or generation flow (writing at that level). It only measures local familiarity with the prose register.
+    <b style="color:var(--warm)">Fluency proxy &mdash; not comprehension.</b>
+    Per-band byte cross-entropy on hand-authored passages across 7 prose registers (Pre-K &rarr; PhD).
+    Low ppl means the model recognizes the words and local patterns of that register, not that it understands the text.
+    Caveat: the band labels target Flesch-Kincaid (syntactic difficulty), not cognitive difficulty &mdash; formulaic academic prose often scores lower ppl than short high-entropy Pre-K sentences.
+    For real comprehension, see the <b>Deep Eval</b> panel (MMLU&nbsp;/&nbsp;HellaSwag&nbsp;/&nbsp;IFEval).
   </div>`;
   // ladder rows: every band, with state badge + ppl + gap-to-fluent. corpus
   // source is folded into the leftmost cell so the eval-text origin sits next
@@ -3604,9 +4203,9 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   const fluentPpl = gradeFluentPpl(latest);
   const emergingPpl = gradeEmergingPpl(latest);
   if (typeof latest.ppl_threshold === "number" && typeof latest.ppl_floor === "number") {
-    html += `<div class="desc" style="margin:0 0 10px;font-size:11px;color:var(--dim)">Threshold for this checkpoint: <b style="color:var(--text)">ppl &lt; ${fluentPpl.toFixed(2)}</b> (model floor ${latest.ppl_floor.toFixed(2)} &times; ${(latest.ppl_threshold_factor || GRADE_EMERGING_FACTOR).toFixed(2)}). Bands above ppl ${GRADE_PPL_CEILING} are blocked regardless &mdash; that's the random-output sanity ceiling.</div>`;
+    html += `<div class="desc" style="margin:0 0 10px;font-size:11px;color:var(--dim)">Reference line for this checkpoint: <b style="color:var(--text)">ppl ${fluentPpl.toFixed(2)}</b> (model floor ${latest.ppl_floor.toFixed(2)} &times; ${(latest.ppl_threshold_factor || GRADE_EMERGING_FACTOR).toFixed(2)}). Bands above ppl ${GRADE_PPL_CEILING} are clamped &mdash; that's the random-output ceiling. ppl 1.0 = perfect, ppl 256 = random.</div>`;
   }
-  html += `<div style="display:grid;grid-template-columns:150px minmax(120px, 280px) 110px 150px;gap:6px 12px;font-size:11.5px;align-items:center">`;
+  html += `<div style="display:grid;grid-template-columns:150px minmax(120px, 280px) 200px;gap:6px 12px;font-size:11.5px;align-items:center">`;
   for (const g of GRADE_ORDER) {
     const e = latest.grades[g];
     const lbl = GRADE_LABEL[g];
@@ -3621,31 +4220,27 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
       <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(corpus)} &middot; ${sentLen}</div>
     </div>`;
     if (!e || typeof e.ppl !== "number") {
-      html += `${labelCell}<div style="grid-column:span 3"><span class="meta">no data</span></div>`;
+      html += `${labelCell}<div style="grid-column:span 2"><span class="meta">no data</span></div>`;
       continue;
     }
     const ppl = e.ppl;
-    const passed = ppl < fluentPpl && ppl < GRADE_PPL_CEILING;
-    const emerging = !passed && ppl < emergingPpl && ppl < GRADE_PPL_CEILING;
-    // bar: log-scale progress from random (ppl 256) to fluent (per-checkpoint).
+    // Color encodes distance from the per-checkpoint reference, but the label
+    // no longer reads as a competence verdict — it's a quick "this band is
+    // ahead/at/behind the run-wide reference" tint. Numbers below carry the
+    // actual signal.
+    const belowRef     = ppl < fluentPpl && ppl < GRADE_PPL_CEILING;
+    const nearRef      = !belowRef && ppl < emergingPpl && ppl < GRADE_PPL_CEILING;
     const LOG_RANDOM = Math.log(256), LOG_FLUENT = Math.log(fluentPpl);
     const fluencyPct = Math.max(2, Math.min(100, ((LOG_RANDOM - Math.log(Math.max(ppl, 1))) / (LOG_RANDOM - LOG_FLUENT)) * 100));
-    const color = passed ? "#5dff9b" : (emerging ? "var(--warm)" : "var(--hot)");
-    const fluentTip   = `FLUENT: ppl < ${fluentPpl.toFixed(2)} (under ${(Math.log2(fluentPpl)).toFixed(1)} bits/byte uncertainty). ppl 1.0 = perfect, ppl 256 = random.`;
-    const emergingTip = `EMERGING: ppl ${fluentPpl.toFixed(2)} - ${emergingPpl.toFixed(2)}. Lower is better.`;
-    const notYetTip   = `NOT YET: ppl > ${emergingPpl.toFixed(2)}. Red bands = prose styles the model rarely sees in training, not harder content.`;
-    const badge = passed
-      ? `<span class="case" style="background:#103025;color:#5dff9b" title="${fluentTip}">FLUENT</span>`
-      : (emerging
-        ? `<span class="case b-mid" title="${emergingTip}">EMERGING</span>`
-        : `<span class="case" style="background:#330a0a;color:#ff7d5d" title="${notYetTip}">NOT YET</span>`);
-    const gap = passed
-      ? `ppl <b style="color:#5dff9b">${ppl.toFixed(2)}</b> <span class="meta">&lt; ${fluentPpl.toFixed(2)}</span>`
-      : `ppl <b style="color:var(--hot)">${ppl.toFixed(2)}</b> <span class="meta">+${(ppl - fluentPpl).toFixed(2)} over</span>`;
+    const color = belowRef ? "#5dff9b" : (nearRef ? "var(--warm)" : "var(--hot)");
+    const pplColor = belowRef ? "#5dff9b" : (nearRef ? "var(--warm)" : "var(--hot)");
+    const deltaTxt = belowRef
+      ? `<span class="meta">${(fluentPpl - ppl).toFixed(2)} below ref</span>`
+      : `<span class="meta">+${(ppl - fluentPpl).toFixed(2)} over ref</span>`;
+    const pplCell = `<div style="text-align:right" title="ppl = exp(mean cross-entropy per byte). ${(Math.log2(Math.max(ppl,1))).toFixed(2)} bits/byte. ppl 1.0 = perfect, ppl 256 = random.">ppl <b style="color:${pplColor};font-size:13px">${ppl.toFixed(2)}</b> ${deltaTxt}</div>`;
     html += `${labelCell}
       ${renderProgressBar(fluencyPct, color, [{ pct: 91, opacity: 0.28 }])}
-      <div style="text-align:left">${badge}</div>
-      <div style="text-align:right">${gap}</div>`;
+      ${pplCell}`;
   }
   html += `</div>`;
 
@@ -3687,20 +4282,24 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   const totalSteps = (config && config.training_args && config.training_args.total_steps) || null;
   plotTrainSeries(canvas, ctx, series, {
     yMinFloor: 0,
-    yMaxCeil:  108,                       // headroom so the FLUENT label at y=100 isn't clipped
-    // Early in training every band sits at 5-15% fluency; the 0..100 frame
-    // compresses them into a clump along the baseline. yAutoFit zooms the
-    // y-axis to dataMax * 1.3 when the data is well below the ceiling, and
-    // the FLUENT / EMERGING thresholds become top-edge "↑ above chart"
-    // labels until the model climbs into their range.
+    yMaxCeil:  108,                       // headroom so the ppl 3.0 reference at y=100 isn't clipped
+    // Early in training every band sits at 5-15%; the 0..100 frame compresses
+    // them into a clump along the baseline. yAutoFit zooms y to dataMax * 1.3
+    // when the data is well below the ceiling, and the ppl reference lines
+    // become top-edge "↑ above chart" labels until the model climbs into range.
     yAutoFit: true,
     yAutoPad: 1.30,
     xMinFloor: 0,
     xMaxCeil:  totalSteps || undefined,
-    yTitle: "fluency % (higher = better)",
+    // Log-x so the early-checkpoint cluster spreads out instead of bunching
+    // at the left edge. Uses log10(step+1) so the random-init anchor at x=0
+    // sits at the origin and the ratio gap between step 100 and step 1000
+    // gets the same visual width as 1000 -> 10000.
+    logX: true,
+    yTitle: "byte-NLL score (higher = lower ppl on the band)",
     thresholdLines: [
-      { y: 100, color: "#5dff9b", label: "FLUENT (ppl 3.0)", lineDash: [4, 3] },
-      { y: 91,  color: "#ffae5d", label: "EMERGING (ppl 4.5)", lineDash: [3, 4] },
+      { y: 100, color: "#5dff9b", label: "ppl 3.0 reference", lineDash: [4, 3] },
+      { y: 91,  color: "#ffae5d", label: "ppl 4.5",            lineDash: [3, 4] },
     ],
   });
 }
@@ -4347,12 +4946,172 @@ function render_writing_health(refs, run, writingSteps, writingByStep, haveCheck
       yAutoPad: 1.30,
       xMinFloor: 0,
       xMaxCeil:  totalSteps || undefined,
+      // Match the reading-level chart: log-x spreads the early checkpoints out
+      // so the first few probes don't pile up against the left axis.
+      logX: true,
       yTitle:    "score (1.0 = ideal, 0 = untrained)",
       thresholdLines: [
         { y: 1.0, color: "#5dff9b", label: "IDEAL", lineDash: [4, 3] },
       ],
     });
   }
+}
+
+// ---------- reading comprehension ----------------------------------------
+//
+// Per-band 4-way MCQ contextual-completion accuracy. Two modes shown
+// side-by-side so the saturation signal is visible:
+//
+//   easy: local-context completion. Distractors share register + length.
+//         Chance = 25%. Small models progress here; large models with strong
+//         local n-gram statistics will saturate without genuinely reading.
+//
+//   hard: long-range entity reference. Correct word's prior occurrence is
+//         >= 100 bytes back; trailing context contains no copy of the answer;
+//         distractors are other recurring entities from the same passage.
+//         Local n-grams give no edge -- only long-range attention can win.
+//         Chance = 25%. The honest "can it read" signal.
+//
+// The gap (easy - hard) is the saturation diagnostic. When easy is near 100%
+// but hard sits near chance, the model has learned register statistics but
+// has not built passage-level representations -- exactly the failure mode
+// where a large model "maxes out" the easy probe while generating poorly.
+function _renderCompBandRow(g, e, accLabel) {
+  const lbl = GRADE_LABEL[g];
+  const age = GRADE_AGE[g];
+  const corpus = GRADE_CORPUS[g];
+  const corpusFull = GRADE_CORPUS_FULL[g];
+  const sentLen = GRADE_SENT_LEN[g];
+  const swatch = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${GRADE_BAND_COLOR[g]};margin-right:6px;vertical-align:middle"></span>`;
+  const labelCell = `<div style="text-align:right" title="${escapeHtml(corpusFull)}">
+    <b>${swatch}${lbl}</b>
+    <div class="meta" style="font-size:10px">${age}</div>
+    <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(corpus)} &middot; ${sentLen}</div>
+  </div>`;
+  if (!e || typeof e.accuracy !== "number") {
+    return `${labelCell}<div style="grid-column:span 2"><span class="meta">no ${accLabel} data</span></div>`;
+  }
+  const acc = e.accuracy;
+  let color;
+  if (acc >= 0.55)      color = "#5dff9b";
+  else if (acc >= 0.32) color = "var(--warm)";
+  else                  color = "var(--hot)";
+  const pct = Math.max(2, Math.min(100, acc * 100));
+  const tip = `${accLabel}: ${e.n_correct}/${e.n_scored} correct. Chance = 25% (4-way MCQ).`;
+  const accCell = `<div style="text-align:right" title="${tip}">acc <b style="color:${color};font-size:13px">${(acc * 100).toFixed(1)}%</b> <span class="meta">${e.n_correct}/${e.n_scored}</span></div>`;
+  return `${labelCell}
+    ${renderProgressBar(pct, color, [{ pct: 25, opacity: 0.4 }])}
+    ${accCell}`;
+}
+
+function _renderCompTrajectory(canvasId, compSteps, compByStep, modeKey, config) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const bandSeries = GRADE_ORDER.map(g => ({ g, points: [{ x: 0, y: 0.25 }] }));
+  for (const step of compSteps) {
+    const r = compByStep[step];
+    if (!r || !r.modes || !r.modes[modeKey] || !r.modes[modeKey].bands) continue;
+    const bands = r.modes[modeKey].bands;
+    for (const s of bandSeries) {
+      const e = bands[s.g];
+      if (e && typeof e.accuracy === "number") {
+        s.points.push({ x: step, y: e.accuracy });
+      }
+    }
+  }
+  const series = bandSeries
+    .filter(s => s.points.length > 1)
+    .map(s => ({ points: s.points, color: GRADE_BAND_COLOR[s.g], lw: 1.5, dots: true }));
+  const totalSteps = (config && config.training_args && config.training_args.total_steps) || null;
+  plotTrainSeries(canvas, ctx, series, {
+    yMinFloor: 0,
+    yMaxCeil:  1.05,
+    yAutoFit:  true,
+    yAutoPad:  1.25,
+    xMinFloor: 0,
+    xMaxCeil:  totalSteps || undefined,
+    logX:      true,
+    yTitle:    "accuracy (chance = 0.25)",
+    thresholdLines: [
+      { y: 0.25, color: "#9aa0ad", label: "chance",       lineDash: [2, 4] },
+      { y: 0.50, color: "#5dff9b", label: "above-chance", lineDash: [4, 3] },
+    ],
+  });
+}
+
+function render_reading_comprehension(refs, run, compSteps, compByStep, haveCheckpoints, config) {
+  const root = $(refs.readingCompId);
+  if (!root) return;
+  if (!compSteps || compSteps.length === 0) {
+    root.innerHTML = haveCheckpoints
+      ? `<span style="color:var(--hot)">Reading-comprehension probe not yet recorded for this run.</span>`
+      : `<span style="color:var(--warm)">No checkpoint yet.</span>`;
+    return;
+  }
+  const latestStep = compSteps[compSteps.length - 1];
+  const latest = compByStep[latestStep];
+  if (!latest) {
+    root.innerHTML = `<span class="meta">reading_comprehension_step_${latestStep}.json missing</span>`;
+    return;
+  }
+  // Backwards compat: pre-v2 artifacts only have top-level "bands"/"overall_accuracy"
+  // (easy mode). Synthesize the modes view from those if "modes" is absent.
+  const modes = latest.modes || {
+    easy: {
+      bands: latest.bands || {},
+      overall_accuracy: latest.overall_accuracy,
+      n_items_total: latest.n_items_total || 0,
+    },
+  };
+  const easy = modes.easy;
+  const hard = modes.hard;
+  const easyOverall = easy && easy.overall_accuracy != null ? easy.overall_accuracy : null;
+  const hardOverall = hard && hard.overall_accuracy != null ? hard.overall_accuracy : null;
+  const gap = (easyOverall != null && hardOverall != null) ? (easyOverall - hardOverall) : null;
+
+  // Top banner: overall numbers + the saturation diagnostic.
+  let html = `<div class="desc" style="margin:0 0 10px;padding:8px 10px;border-left:3px solid #5dc8ff;background:rgba(93,200,255,0.06);font-size:11.5px;line-height:1.45">
+    <b style="color:#5dc8ff">Reading comprehension &mdash; two modes, chance = 25% for both.</b>
+    <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:6px;font-size:12px">
+      <span><b>Easy (local context):</b> <b style="color:var(--text)">${easyOverall != null ? (easyOverall * 100).toFixed(1) + "%" : "n/a"}</b> <span class="meta">on ${easy ? easy.n_items_total || 0 : 0} items</span></span>
+      <span><b>Hard (long-range reference):</b> <b style="color:var(--text)">${hardOverall != null ? (hardOverall * 100).toFixed(1) + "%" : "n/a"}</b> <span class="meta">on ${hard ? hard.n_items_total || 0 : 0} items</span></span>
+      ${gap != null ? `<span><b>Saturation gap:</b> <b style="color:${gap > 0.35 ? "var(--hot)" : (gap > 0.15 ? "var(--warm)" : "#5dff9b")};">${(gap * 100).toFixed(1)} pp</b> <span class="meta">(easy &minus; hard)</span></span>` : ""}
+    </div>
+    <div style="margin-top:6px;color:var(--dim);font-size:11px">
+      Easy uses 4 register-matched distractors and short context, so strong local n-gram knowledge is enough &mdash; it saturates fast on large models. Hard requires resolving a callback to an entity introduced &gt;=100 bytes earlier with the answer absent from the trailing 60 bytes &mdash; local statistics alone cannot disambiguate the 4 same-passage candidates. <b>A large saturation gap (easy high, hard near chance) is the honest "the model has fluent register stats but is not really reading" signal.</b>
+    </div>
+  </div>`;
+
+  // Two side-by-side ladders. CSS grid -- each column is a (label, bar, acc) triplet.
+  html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:10px">`;
+  for (const [modeLabel, modeKey, modeData] of [["EASY", "easy", easy], ["HARD", "hard", hard]]) {
+    html += `<div>`;
+    html += `<div style="font-size:11px;margin-bottom:6px;letter-spacing:.05em;color:var(--dim)"><b style="color:var(--text)">${modeLabel}</b> &middot; ${modeKey === "easy" ? "local context completion" : "long-range entity reference"}</div>`;
+    if (!modeData || !modeData.bands) {
+      html += `<div class="meta">no ${modeKey} data</div></div>`;
+      continue;
+    }
+    html += `<div style="display:grid;grid-template-columns:130px minmax(80px, 1fr) 130px;gap:5px 8px;font-size:11px;align-items:center">`;
+    for (const g of GRADE_ORDER) {
+      html += _renderCompBandRow(g, modeData.bands[g], modeKey);
+    }
+    html += `</div></div>`;
+  }
+  html += `</div>`;
+
+  // Two trajectories, also side-by-side.
+  html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">`;
+  html += `<div><div class="meta" style="font-size:10.5px;margin-bottom:2px">trajectory &middot; EASY</div>
+           <canvas id="${refs.readingCompId}_traj_easy" height="180" style="width:100%;height:180px;background:rgba(255,255,255,.02);border-radius:4px"></canvas></div>`;
+  html += `<div><div class="meta" style="font-size:10.5px;margin-bottom:2px">trajectory &middot; HARD</div>
+           <canvas id="${refs.readingCompId}_traj_hard" height="180" style="width:100%;height:180px;background:rgba(255,255,255,.02);border-radius:4px"></canvas></div>`;
+  html += `</div>`;
+
+  root.innerHTML = html;
+
+  _renderCompTrajectory(`${refs.readingCompId}_traj_easy`, compSteps, compByStep, "easy", config);
+  _renderCompTrajectory(`${refs.readingCompId}_traj_hard`, compSteps, compByStep, "hard", config);
 }
 
 // load classroom panels for a model name into the supplied (state, refs) pair.
@@ -4378,6 +5137,8 @@ async function loadClassroomFor(state, refs, run) {
   state.reasoningByStep = {};
   state.conceptsSteps = [];
   state.conceptsByStep = {};
+  state.compSteps = [];
+  state.compByStep = {};
   $(refs.sizeMeterId).innerHTML = `<span class="meta">loading…</span>`;
   $(refs.lensDriftId).innerHTML = `<span class="meta">loading…</span>`;
   if (refs.readLevelId) $(refs.readLevelId).innerHTML = `<span class="meta">loading…</span>`;
@@ -4408,6 +5169,7 @@ async function loadClassroomFor(state, refs, run) {
   const reasoningFiles = classroomItems.filter(it => it.kind === "reasoning");
   const conceptsFiles  = classroomItems.filter(it => it.kind === "concepts");
   const writingFiles   = classroomItems.filter(it => it.kind === "writing_health");
+  const compFiles      = classroomItems.filter(it => it.kind === "reading_comprehension");
   if (steps.length === 0) {
     $(refs.lensDriftId).innerHTML = `<span style="color:var(--warm)">No checkpoint yet.</span>`;
     plotTrainSeries(refs.confCanvas, refs.confCtx, []);
@@ -4484,6 +5246,15 @@ async function loadClassroomFor(state, refs, run) {
   }));
   state.writingSteps = Object.keys(state.writingByStep).map(s => parseInt(s, 10)).sort((a, b) => a - b);
   if (refs.writingHealthId) render_writing_health(refs, run, state.writingSteps, state.writingByStep, steps.length > 0, state.config);
+  // reading comprehension
+  await Promise.all(compFiles.map(async it => {
+    try {
+      const r = await fetch(`/timeline/${encodeURIComponent(run)}/${encodeURIComponent(it.file)}?` + Date.now(), { cache: "no-store" });
+      if (r.ok) state.compByStep[it.step] = await r.json();
+    } catch (e) { console.warn("reading_comprehension fetch", it.step, e); }
+  }));
+  state.compSteps = Object.keys(state.compByStep).map(s => parseInt(s, 10)).sort((a, b) => a - b);
+  if (refs.readingCompId) render_reading_comprehension(refs, run, state.compSteps, state.compByStep, steps.length > 0, state.config);
   state.loaded = true;
 }
 
@@ -6591,6 +7362,8 @@ function _applySettingsToUI(s) {
   _applyHudVisibility(!!s.hud_enabled, !!s.hud_detailed);
   const adv = $("analyticsAdvancedEnable");
   if (adv) adv.checked = !!s.analytics_advanced_enabled;
+  const errs = $("heartbeatSendErrorsEnable");
+  if (errs) errs.checked = (s.heartbeat_send_errors !== false);
   const ch = s.update_channel || "stable";
   document.querySelectorAll('input[name="updateChannel"]').forEach(r => {
     r.checked = (r.value === ch);
@@ -6697,7 +7470,7 @@ function _renderUpdateStatus(st) {
   if (banner) {
     if (st.update_available) {
       banner.style.display = "";
-      banner.textContent = `update available · ${st.behind} new commit${st.behind === 1 ? "" : "s"} on ${st.channel}`;
+      banner.textContent = `update available · ${st.behind} new commit${st.behind === 1 ? "" : "s"} on ${st.branch || st.channel}`;
     } else {
       banner.style.display = "none";
     }
@@ -7749,6 +8522,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if (adv) adv.addEventListener("change", () => {
     _saveSettings({ analytics_advanced_enabled: adv.checked });
   });
+  const errs = $("heartbeatSendErrorsEnable");
+  if (errs) errs.addEventListener("change", () => {
+    _saveSettings({ heartbeat_send_errors: errs.checked });
+  });
   const reviewBtn = $("reviewConsentBtn");
   if (reviewBtn) reviewBtn.addEventListener("click", () => { showConsentModal({ allowDecline: true }); });
   const detectBtn = $("sysDetectBtn");
@@ -8671,4 +9448,55 @@ const _AI = (() => {
   return { ask, applyEnabled };
 })();
 window.ai_ask = _AI.ask;
+
+(function _emptyStateMonitor() {
+  function _bodyHasRealText(body) {
+    const txt = (body.textContent || "");
+    if (/\d/.test(txt)) return true;
+    const cleaned = txt.replace(/[\s–—\-:]+/g, "");
+    if (cleaned.length === 0) return false;
+    if (/^(confidence|letter|ms|surprise|uncertainty|frame|model|step|loss)+$/i.test(cleaned)) return false;
+    return cleaned.length > 8;
+  }
+  function _canvasHasPixels(c) {
+    try {
+      const w = c.width, h = c.height;
+      if (!w || !h) return false;
+      const ctx = c.getContext("2d");
+      const step = Math.max(1, Math.floor(Math.min(w, h) / 6));
+      let firstAlpha = -1, varied = false;
+      for (let y = 0; y < h; y += step) {
+        for (let x = 0; x < w; x += step) {
+          const d = ctx.getImageData(x, y, 1, 1).data;
+          if (d[3] > 0) {
+            const rgb = (d[0] << 16) | (d[1] << 8) | d[2];
+            if (firstAlpha === -1) firstAlpha = rgb;
+            else if (rgb !== firstAlpha) { varied = true; break; }
+          }
+        }
+        if (varied) break;
+      }
+      return varied;
+    } catch (_) {
+      return false;
+    }
+  }
+  function _isPopulated(body) {
+    if (_bodyHasRealText(body)) return true;
+    for (const c of body.querySelectorAll("canvas")) {
+      if (_canvasHasPixels(c)) return true;
+    }
+    if (body.querySelector("img, svg, table tr, li")) return true;
+    return false;
+  }
+  function refresh() {
+    document.querySelectorAll(".panel .body").forEach(body => {
+      const populated = _isPopulated(body);
+      body.classList.toggle("no-data-captured", !populated);
+    });
+  }
+  refresh();
+  setInterval(refresh, 1000);
+  window._emptyStateRefresh = refresh;
+})();
 

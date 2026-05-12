@@ -921,6 +921,227 @@ def dump_grades(model, out_dir: str, step: int):
 
 
 # ------------------------------------------------------------------------------------
+# Reading-comprehension probe.
+#
+# What this measures: can the model use passage-level context to pick the
+# correct content word from 4 same-passage candidates? Chance = 25% (4-way MCQ).
+# All distractors come from the same passage as the correct word and are
+# filtered to similar byte length, so register/style/syntax fluency cannot
+# disambiguate -- only context-driven semantic prediction can.
+#
+# What it does NOT measure: full reading comprehension in the human sense
+# (no question is asked about the passage; the model is never tested on recall
+# of explicit facts). It is a contextual-prediction proxy that is materially
+# harder than the register-NLL fluency tile.
+#
+# Per-item scoring:
+#   * For each of {correct, *distractors}: score_sequence(prefix, candidate)
+#     returns mean per-byte log-likelihood.
+#   * Pick the candidate with the highest mean log-likelihood (= lowest NLL).
+#   * Item is correct if argmax == correct.
+#
+# Aggregate: per-band accuracy (correct / n_items). Overall = items-weighted
+# mean across bands. Chance is 0.25 across the board. Bigram-only models tend
+# to cluster around 0.30-0.35 from local cues; genuine context use shows up
+# as 0.50+ on easier bands.
+#
+# Probe data lives at veritate_mri/grade_eval/comprehension_<band>.json;
+# build with veritate_mri/tools/build_comprehension_probe.py.
+
+COMPREHENSION_LEVELS = GRADE_LEVELS    # share grade ordering with the fluency tile
+COMPREHENSION_MODES  = ("easy", "hard")  # easy = local context; hard = long-range entity reference
+
+
+def _comprehension_path(level: str, mode: str = "easy") -> str:
+    fname = f"comprehension_{level}.json" if mode == "easy" else f"comprehension_hard_{level}.json"
+    return os.path.join(EVAL_ROOT, fname)
+
+
+def _score_candidates_for_prefix(model, prompt_bytes: bytes,
+                                  candidate_bytes_list: list[bytes], device) -> list[float]:
+    """Mean per-byte log-likelihood for each candidate conditioned on the same
+    prefix. All N candidates share the prefix, so we batch them into a single
+    forward pass: a (N, P + max_C) tensor with each row holding (prefix + cand_i)
+    right-padded so positions past cand_i are arbitrary (we never read them).
+    Returns one float per candidate; NaN if a candidate failed to fit.
+
+    Batched scoring is the bottleneck reduction the comprehension probe needed:
+    4 candidates per item -> 1 forward instead of 4. ~4x wall reduction.
+    """
+    if not candidate_bytes_list:
+        return []
+    P = len(prompt_bytes)
+    if P == 0:
+        prompt_bytes = b"\x00"
+        P = 1
+    max_seq = getattr(model, "seq", None) or (P + max(len(c) for c in candidate_bytes_list))
+
+    # Length-cap each candidate to what the model can hold given the prefix.
+    cand_lens = [len(c) for c in candidate_bytes_list]
+    max_C = max(cand_lens)
+    # If prefix + longest candidate overflows, left-truncate the prefix so the
+    # longest candidate still has at least 1 byte of context.
+    effective_P = P
+    if P + max_C > max_seq:
+        effective_P = max(1, max_seq - max_C)
+        prompt_bytes = prompt_bytes[-effective_P:]
+    # Build a uniform (N, effective_P + max_C) batch. For each row we pad
+    # candidate bytes with the candidate's last byte (or 0 if empty) so out-of-
+    # range positions still produce valid logits; we never read those positions.
+    N = len(candidate_bytes_list)
+    pad_target = effective_P + max_C
+    ids = torch.zeros((N, pad_target), dtype=torch.long, device=device)
+    prompt_ids = torch.tensor(list(prompt_bytes), dtype=torch.long, device=device)
+    for i, cand in enumerate(candidate_bytes_list):
+        if not cand:
+            cand_pad = bytes([0]) * max_C
+        else:
+            cand_pad = bytes(cand) + bytes([cand[-1]]) * (max_C - len(cand))
+        cand_ids = torch.tensor(list(cand_pad), dtype=torch.long, device=device)
+        ids[i, :effective_P] = prompt_ids
+        ids[i, effective_P:effective_P + max_C] = cand_ids
+    with torch.no_grad():
+        out = model(ids)
+        logits = out[0] if isinstance(out, (tuple, list)) else out          # (N, T, V)
+    # Per-row, slice positions [effective_P - 1 .. effective_P - 1 + C_i) to
+    # get logits predicting cand bytes [0..C_i). Targets are cand bytes.
+    results = []
+    for i, cand in enumerate(candidate_bytes_list):
+        C = cand_lens[i]
+        if C == 0:
+            results.append(float("nan"))
+            continue
+        pred_logits = logits[i, effective_P - 1 : effective_P - 1 + C, :]   # (C, V)
+        targets     = ids[i, effective_P : effective_P + C]                  # (C,)
+        log_probs   = F.log_softmax(pred_logits.float(), dim=-1)
+        gathered    = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+        results.append(float(gathered.sum().item() / C))
+    return results
+
+
+def _score_mode_for_level(model, device, level: str, mode: str) -> dict | None:
+    """Score one (mode, level) pair. Returns {accuracy, n_correct, n_scored} or
+    None if the probe file is missing/empty. Shared by easy + hard modes."""
+    path = _comprehension_path(level, mode)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            probe = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    items = probe.get("items") or []
+    if not items:
+        return None
+
+    n_correct = 0
+    n_scored  = 0
+    for item in items:
+        prefix = item.get("prefix_bytes", "")
+        correct = item.get("correct", "")
+        distractors = item.get("distractors") or []
+        if not correct or len(distractors) < 1:
+            continue
+        try:
+            prompt_b = prefix.encode("utf-8")
+        except (AttributeError, UnicodeEncodeError):
+            continue
+        candidates = [correct] + list(distractors)
+        cand_bytes_list = []
+        ok = True
+        for cand in candidates:
+            try:
+                cb = cand.encode("utf-8")
+            except (AttributeError, UnicodeEncodeError):
+                ok = False; break
+            if not cb:
+                ok = False; break
+            cand_bytes_list.append(cb)
+        if not ok:
+            continue
+        scores = _score_candidates_for_prefix(model, prompt_b, cand_bytes_list, device)
+        if any(math.isnan(s) for s in scores):
+            continue
+        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        n_scored += 1
+        if best_idx == 0:
+            n_correct += 1
+    if n_scored == 0:
+        return None
+    return {
+        "accuracy":  round(n_correct / n_scored, 4),
+        "n_correct": int(n_correct),
+        "n_scored":  int(n_scored),
+    }
+
+
+def dump_reading_comprehension(model, out_dir: str, step: int):
+    """Write reading_comprehension_step_<N>.json with two modes:
+
+      easy: 4-way MCQ on local-context content-word completion. Same-passage
+            distractors, register-matched. Chance = 25%. Tracks small-model
+            progression; saturates on large models with strong local stats.
+
+      hard: 4-way MCQ on long-range entity reference. Correct word's prior
+            occurrence is >= 100 bytes back; immediate trailing context does
+            not contain it; distractors are other recurring entities from the
+            same passage. Chance = 25%. Specifically built to NOT saturate on
+            large models -- local n-gram knowledge gives no edge here, only
+            long-range entity tracking does.
+
+    The artifact reports per-band accuracy for both modes plus overall accuracy.
+    Skips bands without a corresponding comprehension_<level>.json file.
+    """
+    t0 = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+
+    modes_out = {}
+    for mode in COMPREHENSION_MODES:
+        bands = {}
+        total_correct = 0
+        total_items   = 0
+        for level in COMPREHENSION_LEVELS:
+            res = _score_mode_for_level(model, device, level, mode)
+            if res is None:
+                continue
+            bands[level] = res
+            total_correct += res["n_correct"]
+            total_items   += res["n_scored"]
+        if not bands:
+            continue
+        modes_out[mode] = {
+            "bands":            bands,
+            "overall_accuracy": round(total_correct / total_items, 4) if total_items > 0 else None,
+            "n_items_total":    int(total_items),
+        }
+
+    if was_training:
+        model.train()
+
+    # Top-level shape kept backwards-compatible: legacy easy-only consumers
+    # see "bands" / "overall_accuracy" pointing at easy-mode numbers.
+    easy = modes_out.get("easy")
+    out = {
+        "step":             int(step),
+        "precision":        _precision_tag(model),
+        "modes":            modes_out,
+        "bands":            (easy or {}).get("bands", {}),
+        "overall_accuracy": (easy or {}).get("overall_accuracy"),
+        "n_items_total":    (easy or {}).get("n_items_total", 0),
+        "chance":           0.25,
+        "n_candidates":     4,
+        "time_s":           round(time.time() - t0, 4),
+    }
+    path = os.path.join(out_dir, f"reading_comprehension_step_{step}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+    return path
+
+
+# ------------------------------------------------------------------------------------
 # Writing-health probe.
 #
 # What this measures: structural quality of the model's own generated text.

@@ -1,0 +1,315 @@
+{
+ "level": "college",
+ "source": "grade_college_source.txt",
+ "n_items": 30,
+ "seed": 17,
+ "config": {
+  "items_per_band": 30,
+  "prefix_max_bytes": 1024,
+  "min_prefix_bytes": 64,
+  "min_word_len": 4,
+  "length_tolerance": 2
+ },
+ "items": [
+  {
+   "prefix_bytes": "Building a coherent theory of historical causation has long been one of the more difficult problems in the discipline, though the challenge is not the ",
+   "correct": "absence",
+   "distractors": [
+    "decades",
+    "apparatus",
+    "despite"
+   ],
+   "slot_offset": 151
+  },
+  {
+   "prefix_bytes": "Building a coherent theory of historical causation has long been one of the more difficult problems in the discipline, though the challenge is not the absence of available frameworks. Plenty of theoretical vocabularies have been proposed over the last two centuries, but the challenge is rather that the basic units of historical analysis remain genuinely contested. Whether one favors structural explanation or methodological individualism, the same underlying question keeps ",
+   "correct": "returning",
+   "distractors": [
+    "phenomena",
+    "defensible",
+    "category"
+   ],
+   "slot_offset": 477
+  },
+  {
+   "prefix_bytes": "Building a coherent theory of historical causation has long been one of the more difficult problems in the discipline, though the challenge is not the absence of available frameworks. Plenty of theoretical vocabularies have been proposed over the last two centuries, but the challenge is rather that the basic units of historical analysis remain genuinely contested. Whether one favors structural explanation or methodological individualism, the same underlying question keeps returning: what are the units whose interactions count as historical change, and by what criteria do we separate those units from the dense flux in which they appear embedded?\n\nRecent work in the ",
+   "correct": "analytic",
+   "distractors": [
+    "school",
+    "theories",
+    "rarely"
+   ],
+   "slot_offset": 673
+  },
+  {
+   "prefix_bytes": "ty of theoretical vocabularies have been proposed over the last two centuries, but the challenge is rather that the basic units of historical analysis remain genuinely contested. Whether one favors structural explanation or methodological individualism, the same underlying question keeps returning: what are the units whose interactions count as historical change, and by what criteria do we separate those units from the dense flux in which they appear embedded?\n\nRecent work in the analytic tradition has retreated from grand systematic claims, with scholars now preferring more modest, domain-specific theorizing. This retreat is defensible in some respects, since it acknowledges the real limits imposed by historical distance and the chronic scarcity of evidence. But the retreat has also produced an unintended consequence: historiographical discourse has fragmented to the point where cross-disciplinary synthesis has become increasingly difficult to achieve.\n\nSome of this fragmentation can be traced to the social ",
+   "correct": "sciences",
+   "distractors": [
+    "defined",
+    "careful",
+    "action"
+   ],
+   "slot_offset": 1212
+  },
+  {
+   "prefix_bytes": "methodological individualism, the same underlying question keeps returning: what are the units whose interactions count as historical change, and by what criteria do we separate those units from the dense flux in which they appear embedded?\n\nRecent work in the analytic tradition has retreated from grand systematic claims, with scholars now preferring more modest, domain-specific theorizing. This retreat is defensible in some respects, since it acknowledges the real limits imposed by historical distance and the chronic scarcity of evidence. But the retreat has also produced an unintended consequence: historiographical discourse has fragmented to the point where cross-disciplinary synthesis has become increasingly difficult to achieve.\n\nSome of this fragmentation can be traced to the social sciences, especially during the middle decades of the twentieth century when quantitative methods rose to prominence and the academic disciplines consolidated their institutional boundaries. A tacit division of intellectual ",
+   "correct": "labor",
+   "distractors": [
+    "known",
+    "harder",
+    "press"
+   ],
+   "slot_offset": 1436
+  },
+  {
+   "prefix_bytes": "parate those units from the dense flux in which they appear embedded?\n\nRecent work in the analytic tradition has retreated from grand systematic claims, with scholars now preferring more modest, domain-specific theorizing. This retreat is defensible in some respects, since it acknowledges the real limits imposed by historical distance and the chronic scarcity of evidence. But the retreat has also produced an unintended consequence: historiographical discourse has fragmented to the point where cross-disciplinary synthesis has become increasingly difficult to achieve.\n\nSome of this fragmentation can be traced to the social sciences, especially during the middle decades of the twentieth century when quantitative methods rose to prominence and the academic disciplines consolidated their institutional boundaries. A tacit division of intellectual labor emerged from these developments. Sociologists explained contemporary collective behavior, while economists modeled resource allocation under conditions of scarcity. ",
+   "correct": "Political",
+   "distractors": [
+    "documenting",
+    "direction",
+    "classes"
+   ],
+   "slot_offset": 1607
+  },
+  {
+   "prefix_bytes": "esis has become increasingly difficult to achieve.\n\nSome of this fragmentation can be traced to the social sciences, especially during the middle decades of the twentieth century when quantitative methods rose to prominence and the academic disciplines consolidated their institutional boundaries. A tacit division of intellectual labor emerged from these developments. Sociologists explained contemporary collective behavior, while economists modeled resource allocation under conditions of scarcity. Political scientists examined the formal dynamics of institutions, and historians were left with what remained of the agenda, charged with documenting the past in whatever idiom seemed plausible at the moment. The boundaries between these disciplines were never as crisp as the institutional architecture suggested, but the practical effect of the division was nonetheless real and lasting, since it discouraged the synoptic theorizing that had defined the work of earlier figures like Marx and Tocqueville.\n\nConsider how ",
+   "correct": "successive",
+   "distractors": [
+    "transparent",
+    "contingency",
+    "embedded"
+   ],
+   "slot_offset": 2129
+  },
+  {
+   "prefix_bytes": "\n\nSome of this fragmentation can be traced to the social sciences, especially during the middle decades of the twentieth century when quantitative methods rose to prominence and the academic disciplines consolidated their institutional boundaries. A tacit division of intellectual labor emerged from these developments. Sociologists explained contemporary collective behavior, while economists modeled resource allocation under conditions of scarcity. Political scientists examined the formal dynamics of institutions, and historians were left with what remained of the agenda, charged with documenting the past in whatever idiom seemed plausible at the moment. The boundaries between these disciplines were never as crisp as the institutional architecture suggested, but the practical effect of the division was nonetheless real and lasting, since it discouraged the synoptic theorizing that had defined the work of earlier figures like Marx and Tocqueville.\n\nConsider how successive theoretical movements have handled the ",
+   "correct": "question",
+   "distractors": [
+    "mechanisms",
+    "reduction",
+    "remain"
+   ],
+   "slot_offset": 2179
+  },
+  {
+   "prefix_bytes": "scientists examined the formal dynamics of institutions, and historians were left with what remained of the agenda, charged with documenting the past in whatever idiom seemed plausible at the moment. The boundaries between these disciplines were never as crisp as the institutional architecture suggested, but the practical effect of the division was nonetheless real and lasting, since it discouraged the synoptic theorizing that had defined the work of earlier figures like Marx and Tocqueville.\n\nConsider how successive theoretical movements have handled the question of agency. Structuralist accounts of the mid-century tended to treat individual actors as carriers of impersonal social forces whose logic was held to be analytically prior to any particular biography. The consequence was that agents themselves became theoretically transparent, treated as conduits through which the underlying structures asserted themselves.\n\nThe reaction against this position eventually came, taking the form of renewed attention to ",
+   "correct": "lived",
+   "distractors": [
+    "given",
+    "logic",
+    "press"
+   ],
+   "slot_offset": 2641
+  },
+  {
+   "prefix_bytes": " whatever idiom seemed plausible at the moment. The boundaries between these disciplines were never as crisp as the institutional architecture suggested, but the practical effect of the division was nonetheless real and lasting, since it discouraged the synoptic theorizing that had defined the work of earlier figures like Marx and Tocqueville.\n\nConsider how successive theoretical movements have handled the question of agency. Structuralist accounts of the mid-century tended to treat individual actors as carriers of impersonal social forces whose logic was held to be analytically prior to any particular biography. The consequence was that agents themselves became theoretically transparent, treated as conduits through which the underlying structures asserted themselves.\n\nThe reaction against this position eventually came, taking the form of renewed attention to lived experience. Historians turned to discourse, narrative, and the textured detail of individual lives, and the resulting body of work has often been ",
+   "correct": "impressive",
+   "distractors": [
+    "alternative",
+    "apparatus",
+    "complacency"
+   ],
+   "slot_offset": 2793
+  },
+  {
+   "prefix_bytes": "as nonetheless real and lasting, since it discouraged the synoptic theorizing that had defined the work of earlier figures like Marx and Tocqueville.\n\nConsider how successive theoretical movements have handled the question of agency. Structuralist accounts of the mid-century tended to treat individual actors as carriers of impersonal social forces whose logic was held to be analytically prior to any particular biography. The consequence was that agents themselves became theoretically transparent, treated as conduits through which the underlying structures asserted themselves.\n\nThe reaction against this position eventually came, taking the form of renewed attention to lived experience. Historians turned to discourse, narrative, and the textured detail of individual lives, and the resulting body of work has often been impressive in its descriptive richness. But it has rarely engaged with the structural conditions that the previous generation took as its central subject, with the result that the two literatures ",
+   "correct": "continue",
+   "distractors": [
+    "careful",
+    "weighting",
+    "effect"
+   ],
+   "slot_offset": 2989
+  },
+  {
+   "prefix_bytes": "hemselves became theoretically transparent, treated as conduits through which the underlying structures asserted themselves.\n\nThe reaction against this position eventually came, taking the form of renewed attention to lived experience. Historians turned to discourse, narrative, and the textured detail of individual lives, and the resulting body of work has often been impressive in its descriptive richness. But it has rarely engaged with the structural conditions that the previous generation took as its central subject, with the result that the two literatures continue to develop in something like parallel ignorance of one another. Each produces interesting findings within its own framework, yet neither talks to the other in any sustained or productive way.\n\nWhat is needed is not the abandonment of structural analysis, nor is it the dismissal of agency-centered scholarship. The need is rather for sustained methodological reflection on the relationship between the two, conducted with sufficient rigor to permit ",
+   "correct": "specific",
+   "distractors": [
+    "condition",
+    "second",
+    "inquiry"
+   ],
+   "slot_offset": 3447
+  },
+  {
+   "prefix_bytes": "l lives, and the resulting body of work has often been impressive in its descriptive richness. But it has rarely engaged with the structural conditions that the previous generation took as its central subject, with the result that the two literatures continue to develop in something like parallel ignorance of one another. Each produces interesting findings within its own framework, yet neither talks to the other in any sustained or productive way.\n\nWhat is needed is not the abandonment of structural analysis, nor is it the dismissal of agency-centered scholarship. The need is rather for sustained methodological reflection on the relationship between the two, conducted with sufficient rigor to permit specific testable claims about which structural features condition which classes of action under which historical circumstances. This is easier to demand than to produce in practice, and existing attempts in this direction have generally fallen short of their own ambitions, including theories of practice from the ",
+   "correct": "late",
+   "distractors": [
+    "part",
+    "virtue",
+    "units"
+   ],
+   "slot_offset": 3762
+  },
+  {
+   "prefix_bytes": "ject, with the result that the two literatures continue to develop in something like parallel ignorance of one another. Each produces interesting findings within its own framework, yet neither talks to the other in any sustained or productive way.\n\nWhat is needed is not the abandonment of structural analysis, nor is it the dismissal of agency-centered scholarship. The need is rather for sustained methodological reflection on the relationship between the two, conducted with sufficient rigor to permit specific testable claims about which structural features condition which classes of action under which historical circumstances. This is easier to demand than to produce in practice, and existing attempts in this direction have generally fallen short of their own ambitions, including theories of practice from the late twentieth century and the more recent revivals of interest in causal mechanisms.\n\nThe alternative is unsatisfying both intellectually and practically, since continued production of distinguished but ",
+   "correct": "mutually",
+   "distractors": [
+    "dismissal",
+    "similarly",
+    "choices"
+   ],
+   "slot_offset": 3966
+  },
+  {
+   "prefix_bytes": "ed is rather for sustained methodological reflection on the relationship between the two, conducted with sufficient rigor to permit specific testable claims about which structural features condition which classes of action under which historical circumstances. This is easier to demand than to produce in practice, and existing attempts in this direction have generally fallen short of their own ambitions, including theories of practice from the late twentieth century and the more recent revivals of interest in causal mechanisms.\n\nThe alternative is unsatisfying both intellectually and practically, since continued production of distinguished but mutually unintelligible bodies of scholarship serves neither set of ends, and this is especially true at a moment when public demand for historical understanding has rarely been more acute.\n\nA useful starting point would be to take seriously a basic methodological insight: the relevant units of analysis are not given in advance by the data but are themselves theoretical ",
+   "correct": "constructs",
+   "distractors": [
+    "weighting",
+    "neighboring",
+    "contingency"
+   ],
+   "slot_offset": 4339
+  },
+  {
+   "prefix_bytes": " practice from the late twentieth century and the more recent revivals of interest in causal mechanisms.\n\nThe alternative is unsatisfying both intellectually and practically, since continued production of distinguished but mutually unintelligible bodies of scholarship serves neither set of ends, and this is especially true at a moment when public demand for historical understanding has rarely been more acute.\n\nA useful starting point would be to take seriously a basic methodological insight: the relevant units of analysis are not given in advance by the data but are themselves theoretical constructs whose adequacy must be assessed against the explanatory ambitions of the inquiry. Take the category of \"the working class\" as a familiar example. It may be perfectly useful for one set of questions and quite misleading for another, and the researcher's task is not to discover the true membership of the category through careful observation. The task is rather to specify in advance the analytic role the category is ",
+   "correct": "expected",
+   "distractors": [
+    "appeals",
+    "shaping",
+    "revise"
+   ],
+   "slot_offset": 4767
+  },
+  {
+   "prefix_bytes": "tisfying both intellectually and practically, since continued production of distinguished but mutually unintelligible bodies of scholarship serves neither set of ends, and this is especially true at a moment when public demand for historical understanding has rarely been more acute.\n\nA useful starting point would be to take seriously a basic methodological insight: the relevant units of analysis are not given in advance by the data but are themselves theoretical constructs whose adequacy must be assessed against the explanatory ambitions of the inquiry. Take the category of \"the working class\" as a familiar example. It may be perfectly useful for one set of questions and quite misleading for another, and the researcher's task is not to discover the true membership of the category through careful observation. The task is rather to specify in advance the analytic role the category is expected to play, and then evaluate its performance against that specification.\n\nCategories smuggled in from earlier theoretical ",
+   "correct": "traditions",
+   "distractors": [
+    "synthesis",
+    "increasingly",
+    "sketches"
+   ],
+   "slot_offset": 4896
+  },
+  {
+   "prefix_bytes": "inst the explanatory ambitions of the inquiry. Take the category of \"the working class\" as a familiar example. It may be perfectly useful for one set of questions and quite misleading for another, and the researcher's task is not to discover the true membership of the category through careful observation. The task is rather to specify in advance the analytic role the category is expected to play, and then evaluate its performance against that specification.\n\nCategories smuggled in from earlier theoretical traditions are especially dangerous in this respect, since they tend to enter the analysis without such reassessment. They produce the appearance of explanation while contributing little to genuine understanding, and their longevity within the discipline does not guarantee their continued utility, given that long use is not the same as careful use.\n\nThe implications of this position are not modest. The approach requires a willingness to revise long-established taxonomies when the evidence suggests they have ",
+   "correct": "outlived",
+   "distractors": [
+    "serves",
+    "unintended",
+    "taxonomies"
+   ],
+   "slot_offset": 5409
+  },
+  {
+   "prefix_bytes": "tic role the category is expected to play, and then evaluate its performance against that specification.\n\nCategories smuggled in from earlier theoretical traditions are especially dangerous in this respect, since they tend to enter the analysis without such reassessment. They produce the appearance of explanation while contributing little to genuine understanding, and their longevity within the discipline does not guarantee their continued utility, given that long use is not the same as careful use.\n\nThe implications of this position are not modest. The approach requires a willingness to revise long-established taxonomies when the evidence suggests they have outlived their usefulness. It also requires accepting that the resulting theoretical vocabulary will itself be provisional, since new questions and new evidence will press for further revision over time. Such a stance is uncomfortable for a discipline that draws part of its authority from the apparent stability of its central concepts.\n\nThe discomfort is ",
+   "correct": "unavoidable",
+   "distractors": [
+    "combination",
+    "unsatisfying",
+    "individualism"
+   ],
+   "slot_offset": 5766
+  },
+  {
+   "prefix_bytes": "pect, since they tend to enter the analysis without such reassessment. They produce the appearance of explanation while contributing little to genuine understanding, and their longevity within the discipline does not guarantee their continued utility, given that long use is not the same as careful use.\n\nThe implications of this position are not modest. The approach requires a willingness to revise long-established taxonomies when the evidence suggests they have outlived their usefulness. It also requires accepting that the resulting theoretical vocabulary will itself be provisional, since new questions and new evidence will press for further revision over time. Such a stance is uncomfortable for a discipline that draws part of its authority from the apparent stability of its central concepts.\n\nThe discomfort is unavoidable, since it is the cost of an intellectual practice that takes its own status seriously. History is properly understood as an inquiry, not a body of doctrine, and any other arrangement risks ",
+   "correct": "confusing",
+   "distractors": [
+    "treated",
+    "concern",
+    "continue"
+   ],
+   "slot_offset": 5967
+  },
+  {
+   "prefix_bytes": "ed their usefulness. It also requires accepting that the resulting theoretical vocabulary will itself be provisional, since new questions and new evidence will press for further revision over time. Such a stance is uncomfortable for a discipline that draws part of its authority from the apparent stability of its central concepts.\n\nThe discomfort is unavoidable, since it is the cost of an intellectual practice that takes its own status seriously. History is properly understood as an inquiry, not a body of doctrine, and any other arrangement risks confusing the conventions of the field with the structure of the world it claims to describe. That confusion, however well institutionalized through professional training, is the surest form of methodological complacency one can fall into.\n\nThe point is not that historians must become philosophers. Methodological reflection of this sort can be sustained without abandoning empirical work entirely. The two are mutually reinforcing rather than competing. A historian who ",
+   "correct": "knows",
+   "distractors": [
+    "serves",
+    "long",
+    "real"
+   ],
+   "slot_offset": 6439
+  },
+  {
+   "prefix_bytes": "epting that the resulting theoretical vocabulary will itself be provisional, since new questions and new evidence will press for further revision over time. Such a stance is uncomfortable for a discipline that draws part of its authority from the apparent stability of its central concepts.\n\nThe discomfort is unavoidable, since it is the cost of an intellectual practice that takes its own status seriously. History is properly understood as an inquiry, not a body of doctrine, and any other arrangement risks confusing the conventions of the field with the structure of the world it claims to describe. That confusion, however well institutionalized through professional training, is the surest form of methodological complacency one can fall into.\n\nThe point is not that historians must become philosophers. Methodological reflection of this sort can be sustained without abandoning empirical work entirely. The two are mutually reinforcing rather than competing. A historian who knows what her categories are doing is a ",
+   "correct": "better",
+   "distractors": [
+    "sweeping",
+    "treated",
+    "agency"
+   ],
+   "slot_offset": 6480
+  },
+  {
+   "prefix_bytes": "nt risks confusing the conventions of the field with the structure of the world it claims to describe. That confusion, however well institutionalized through professional training, is the surest form of methodological complacency one can fall into.\n\nThe point is not that historians must become philosophers. Methodological reflection of this sort can be sustained without abandoning empirical work entirely. The two are mutually reinforcing rather than competing. A historian who knows what her categories are doing is a better historian for that awareness. A philosopher who pays attention to actual historical practice produces better philosophy of history. Each discipline can be improved through engagement with the other, but the engagement must be taken seriously rather than treated as an ornamental gesture.\n\nSome recent scholarship has begun to move in this direction. The renewed interest in causal mechanisms is one such example. Studies of historical contingency are another notable case. Both reject the older ",
+   "correct": "choice",
+   "distractors": [
+    "question",
+    "treats",
+    "suggests"
+   ],
+   "slot_offset": 6982
+  },
+  {
+   "prefix_bytes": "ucture of the world it claims to describe. That confusion, however well institutionalized through professional training, is the surest form of methodological complacency one can fall into.\n\nThe point is not that historians must become philosophers. Methodological reflection of this sort can be sustained without abandoning empirical work entirely. The two are mutually reinforcing rather than competing. A historian who knows what her categories are doing is a better historian for that awareness. A philosopher who pays attention to actual historical practice produces better philosophy of history. Each discipline can be improved through engagement with the other, but the engagement must be taken seriously rather than treated as an ornamental gesture.\n\nSome recent scholarship has begun to move in this direction. The renewed interest in causal mechanisms is one such example. Studies of historical contingency are another notable case. Both reject the older choice between sweeping structural narratives and atomistic ",
+   "correct": "biographical",
+   "distractors": [
+    "appearance",
+    "successive",
+    "performance"
+   ],
+   "slot_offset": 7042
+  },
+  {
+   "prefix_bytes": "rian for that awareness. A philosopher who pays attention to actual historical practice produces better philosophy of history. Each discipline can be improved through engagement with the other, but the engagement must be taken seriously rather than treated as an ornamental gesture.\n\nSome recent scholarship has begun to move in this direction. The renewed interest in causal mechanisms is one such example. Studies of historical contingency are another notable case. Both reject the older choice between sweeping structural narratives and atomistic biographical sketches. Instead, they ask how specific configurations of conditions produce specific outcomes. They take seriously the role of accident, sequence, and timing in shaping historical change, and they acknowledge that explanation does not require reduction to a single underlying logic.\n\nThis kind of work is harder to produce than either pure narrative or pure theory. It demands attention to empirical detail and theoretical literacy alike. It also demands the ",
+   "correct": "patience",
+   "distractors": [
+    "serves",
+    "predictive",
+    "defined"
+   ],
+   "slot_offset": 7516
+  },
+  {
+   "prefix_bytes": "gagement with the other, but the engagement must be taken seriously rather than treated as an ornamental gesture.\n\nSome recent scholarship has begun to move in this direction. The renewed interest in causal mechanisms is one such example. Studies of historical contingency are another notable case. Both reject the older choice between sweeping structural narratives and atomistic biographical sketches. Instead, they ask how specific configurations of conditions produce specific outcomes. They take seriously the role of accident, sequence, and timing in shaping historical change, and they acknowledge that explanation does not require reduction to a single underlying logic.\n\nThis kind of work is harder to produce than either pure narrative or pure theory. It demands attention to empirical detail and theoretical literacy alike. It also demands the patience to articulate provisional claims that may be revised. The reward, when the work succeeds, is a kind of explanation that integrates structure and agency without ",
+   "correct": "collapsing",
+   "distractors": [
+    "biographical",
+    "explanation",
+    "specific"
+   ],
+   "slot_offset": 7685
+  },
+  {
+   "prefix_bytes": "oice between sweeping structural narratives and atomistic biographical sketches. Instead, they ask how specific configurations of conditions produce specific outcomes. They take seriously the role of accident, sequence, and timing in shaping historical change, and they acknowledge that explanation does not require reduction to a single underlying logic.\n\nThis kind of work is harder to produce than either pure narrative or pure theory. It demands attention to empirical detail and theoretical literacy alike. It also demands the patience to articulate provisional claims that may be revised. The reward, when the work succeeds, is a kind of explanation that integrates structure and agency without collapsing either dimension into the other. The hope is that more historians will find this approach worth the effort over time, despite its considerable methodological difficulty.\n\nA second concern follows from the first. If the categories of analysis are theoretically constructed, then the criteria by which we evaluate ",
+   "correct": "competing",
+   "distractors": [
+    "choices",
+    "scientists",
+    "reaction"
+   ],
+   "slot_offset": 8008
+  },
+  {
+   "prefix_bytes": " than either pure narrative or pure theory. It demands attention to empirical detail and theoretical literacy alike. It also demands the patience to articulate provisional claims that may be revised. The reward, when the work succeeds, is a kind of explanation that integrates structure and agency without collapsing either dimension into the other. The hope is that more historians will find this approach worth the effort over time, despite its considerable methodological difficulty.\n\nA second concern follows from the first. If the categories of analysis are theoretically constructed, then the criteria by which we evaluate competing histories must be similarly explicit. We can no longer rely on the implicit standard that a \"good\" historical account is one that conforms to the prevailing intuitions of the discipline. Such intuitions are themselves products of the very theoretical choices the analyst is supposed to be evaluating, and to use them as a benchmark is to confuse the conclusions of an inquiry with its ",
+   "correct": "premises",
+   "distractors": [
+    "natural",
+    "unintended",
+    "separate"
+   ],
+   "slot_offset": 8403
+  },
+  {
+   "prefix_bytes": "hen the work succeeds, is a kind of explanation that integrates structure and agency without collapsing either dimension into the other. The hope is that more historians will find this approach worth the effort over time, despite its considerable methodological difficulty.\n\nA second concern follows from the first. If the categories of analysis are theoretically constructed, then the criteria by which we evaluate competing histories must be similarly explicit. We can no longer rely on the implicit standard that a \"good\" historical account is one that conforms to the prevailing intuitions of the discipline. Such intuitions are themselves products of the very theoretical choices the analyst is supposed to be evaluating, and to use them as a benchmark is to confuse the conclusions of an inquiry with its premises.\n\nWhat sort of criterion, then, would be appropriate? Several candidates have been proposed in the literature. One school argues that explanatory adequacy should be measured by the breadth of phenomena a ",
+   "correct": "single",
+   "distractors": [
+    "treated",
+    "doctrine",
+    "behavior"
+   ],
+   "slot_offset": 8616
+  },
+  {
+   "prefix_bytes": "ethodological difficulty.\n\nA second concern follows from the first. If the categories of analysis are theoretically constructed, then the criteria by which we evaluate competing histories must be similarly explicit. We can no longer rely on the implicit standard that a \"good\" historical account is one that conforms to the prevailing intuitions of the discipline. Such intuitions are themselves products of the very theoretical choices the analyst is supposed to be evaluating, and to use them as a benchmark is to confuse the conclusions of an inquiry with its premises.\n\nWhat sort of criterion, then, would be appropriate? Several candidates have been proposed in the literature. One school argues that explanatory adequacy should be measured by the breadth of phenomena a single theoretical apparatus can address. A different school treats predictive performance as the relevant standard, particularly in cases where historical evidence permits something approximating a controlled comparison. A third school focuses on ",
+   "correct": "coherence",
+   "distractors": [
+    "documenting",
+    "neighboring",
+    "engagement"
+   ],
+   "slot_offset": 8864
+  }
+ ]
+}

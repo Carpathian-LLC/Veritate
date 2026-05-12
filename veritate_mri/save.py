@@ -52,6 +52,7 @@ RENAME_MAP_TEMPLATE = {
     "surprise_step_{step}.json":  "surprise.json",
     "quant_kl_step_{step}.json":  "quant_kl.json",
     "writing_health_step_{step}.json": "writing_health.json",
+    "reading_comprehension_step_{step}.json": "reading_comprehension.json",
     "step_{step}.json":           "generation.json",
 }
 
@@ -242,7 +243,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         dump_probe, dump_classroom, dump_grades, dump_concepts,
         dump_math, dump_grammar, dump_reasoning,
         dump_surprise, dump_quant_kl, dump_generation,
-        dump_writing_health, PROBE_PROMPT,
+        dump_writing_health, dump_reading_comprehension, PROBE_PROMPT,
     )
 
     _validate_name(name)
@@ -306,6 +307,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         ("probe",      lambda: dump_probe     (view, prompt, step_dir, step)),
         ("classroom",  lambda: dump_classroom (view,         step_dir, step)),
         ("grades",     lambda: dump_grades    (view,         step_dir, step)),
+        ("reading_comprehension", lambda: dump_reading_comprehension(view, step_dir, step)),
         ("math",       lambda: dump_math      (view,         step_dir, step)),
         ("grammar",    lambda: dump_grammar   (view,         step_dir, step)),
         ("reasoning",  lambda: dump_reasoning (view,         step_dir, step)),

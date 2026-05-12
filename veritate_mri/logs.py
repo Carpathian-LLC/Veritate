@@ -49,7 +49,7 @@ def emit(level, source, msg):
         targets = list(_SUBSCRIBERS)
     if level == "error" and _ERROR_HOOK is not None:
         try:
-            _ERROR_HOOK()
+            _ERROR_HOOK(entry["source"], entry["msg"])
         except Exception:
             pass
     for q in targets:

@@ -1,0 +1,315 @@
+{
+ "level": "prek",
+ "source": "grade_prek_source.txt",
+ "n_items": 30,
+ "seed": 17,
+ "config": {
+  "items_per_band": 30,
+  "prefix_max_bytes": 1024,
+  "min_prefix_bytes": 64,
+  "min_word_len": 4,
+  "length_tolerance": 2
+ },
+ "items": [
+  {
+   "prefix_bytes": "Pat had a dog. The dog was named Rex. Rex was big. Rex was brown. Rex liked to run.\n\nOne day, Pat took Rex to the park. The park had many trees. The park had a pond. The pond had ducks. Rex saw the ducks. Rex barked. The ducks did not care. The ducks just swam.\n\nPat sat on a bench. Pat had a ",
+   "correct": "ball",
+   "distractors": [
+    "time",
+    "tidy",
+    "strong"
+   ],
+   "slot_offset": 293
+  },
+  {
+   "prefix_bytes": "Pat had a dog. The dog was named Rex. Rex was big. Rex was brown. Rex liked to run.\n\nOne day, Pat took Rex to the park. The park had many trees. The park had a pond. The pond had ducks. Rex saw the ducks. Rex barked. The ducks did not care. The ducks just swam.\n\nPat sat on a bench. Pat had a ball. Pat threw the ball. Rex ran. Rex got the ball. Rex came back. Pat said, \"Good dog.\" Pat threw the ball again.\n\nA girl walked by. The girl had a kite. The kite was red. The ",
+   "correct": "kite",
+   "distractors": [
+    "lion",
+    "rabbit",
+    "glad"
+   ],
+   "slot_offset": 471
+  },
+  {
+   "prefix_bytes": "Pat had a dog. The dog was named Rex. Rex was big. Rex was brown. Rex liked to run.\n\nOne day, Pat took Rex to the park. The park had many trees. The park had a pond. The pond had ducks. Rex saw the ducks. Rex barked. The ducks did not care. The ducks just swam.\n\nPat sat on a bench. Pat had a ball. Pat threw the ball. Rex ran. Rex got the ball. Rex came back. Pat said, \"Good dog.\" Pat threw the ball again.\n\nA girl walked by. The girl had a kite. The kite was red. The kite was big. The wind was strong. The kite went up. The kite went high. The girl ran. The girl held the string. The kite did not get away.\n\nRex ",
+   "correct": "watched",
+   "distractors": [
+    "crackers",
+    "dreamed",
+    "found"
+   ],
+   "slot_offset": 616
+  },
+  {
+   "prefix_bytes": "Pat had a dog. The dog was named Rex. Rex was big. Rex was brown. Rex liked to run.\n\nOne day, Pat took Rex to the park. The park had many trees. The park had a pond. The pond had ducks. Rex saw the ducks. Rex barked. The ducks did not care. The ducks just swam.\n\nPat sat on a bench. Pat had a ball. Pat threw the ball. Rex ran. Rex got the ball. Rex came back. Pat said, \"Good dog.\" Pat threw the ball again.\n\nA girl walked by. The girl had a kite. The kite was red. The kite was big. The wind was strong. The kite went up. The kite went high. The girl ran. The girl held the string. The kite did not get away.\n\nRex watched the kite. Rex did not bark. Rex was tired. Rex sat down. Pat patted Rex on the head.\n\nA boy came over. The boy had a small dog. The small dog was white. The small dog had black ears. \"Can our dogs play?\" the boy asked. \"Yes,\" said Pat. The two dogs sniffed each other. The two dogs ran. They ",
+   "correct": "chased",
+   "distractors": [
+    "wagged",
+    "park",
+    "pieces"
+   ],
+   "slot_offset": 916
+  },
+  {
+   "prefix_bytes": "ex saw the ducks. Rex barked. The ducks did not care. The ducks just swam.\n\nPat sat on a bench. Pat had a ball. Pat threw the ball. Rex ran. Rex got the ball. Rex came back. Pat said, \"Good dog.\" Pat threw the ball again.\n\nA girl walked by. The girl had a kite. The kite was red. The kite was big. The wind was strong. The kite went up. The kite went high. The girl ran. The girl held the string. The kite did not get away.\n\nRex watched the kite. Rex did not bark. Rex was tired. Rex sat down. Pat patted Rex on the head.\n\nA boy came over. The boy had a small dog. The small dog was white. The small dog had black ears. \"Can our dogs play?\" the boy asked. \"Yes,\" said Pat. The two dogs sniffed each other. The two dogs ran. They chased each other. They were happy.\n\nPat and the boy talked. The boy was named Sam. Sam was six. Pat was seven. They were almost the same age. They were not in the same class. But they could be friends.\n\nThe dogs came back. They were tired too. They drank water from a bowl. The bowl was on the ",
+   "correct": "grass",
+   "distractors": [
+    "wash",
+    "brushed",
+    "threw"
+   ],
+   "slot_offset": 1211
+  },
+  {
+   "prefix_bytes": "d, \"Good dog.\" Pat threw the ball again.\n\nA girl walked by. The girl had a kite. The kite was red. The kite was big. The wind was strong. The kite went up. The kite went high. The girl ran. The girl held the string. The kite did not get away.\n\nRex watched the kite. Rex did not bark. Rex was tired. Rex sat down. Pat patted Rex on the head.\n\nA boy came over. The boy had a small dog. The small dog was white. The small dog had black ears. \"Can our dogs play?\" the boy asked. \"Yes,\" said Pat. The two dogs sniffed each other. The two dogs ran. They chased each other. They were happy.\n\nPat and the boy talked. The boy was named Sam. Sam was six. Pat was seven. They were almost the same age. They were not in the same class. But they could be friends.\n\nThe dogs came back. They were tired too. They drank water from a bowl. The bowl was on the grass. Pat had brought it.\n\nThe sun was high. The sun was warm. The sky was blue. The clouds were white. The grass was green. The trees were tall.\n\nA man rode a bike past them. The ",
+   "correct": "bike",
+   "distractors": [
+    "ready",
+    "ball",
+    "turtle"
+   ],
+   "slot_offset": 1392
+  },
+  {
+   "prefix_bytes": " \"Can our dogs play?\" the boy asked. \"Yes,\" said Pat. The two dogs sniffed each other. The two dogs ran. They chased each other. They were happy.\n\nPat and the boy talked. The boy was named Sam. Sam was six. Pat was seven. They were almost the same age. They were not in the same class. But they could be friends.\n\nThe dogs came back. They were tired too. They drank water from a bowl. The bowl was on the grass. Pat had brought it.\n\nThe sun was high. The sun was warm. The sky was blue. The clouds were white. The grass was green. The trees were tall.\n\nA man rode a bike past them. The bike had two wheels. The man went fast. Rex looked. Rex did not chase. Rex was a good dog. The white dog also did not chase. They were both good dogs.\n\nPat opened a bag. Pat had snacks. Pat had crackers. Sam had a juice box. They sat together. They ate. Rex looked at the crackers. Pat gave Rex one cracker. Rex ate it fast. The white dog wanted one too. Sam gave the white dog one. The white dog also ate it fast. Dogs eat fast.\n\nA bird ",
+   "correct": "flew",
+   "distractors": [
+    "table",
+    "sang",
+    "brown"
+   ],
+   "slot_offset": 1830
+  },
+  {
+   "prefix_bytes": " They chased each other. They were happy.\n\nPat and the boy talked. The boy was named Sam. Sam was six. Pat was seven. They were almost the same age. They were not in the same class. But they could be friends.\n\nThe dogs came back. They were tired too. They drank water from a bowl. The bowl was on the grass. Pat had brought it.\n\nThe sun was high. The sun was warm. The sky was blue. The clouds were white. The grass was green. The trees were tall.\n\nA man rode a bike past them. The bike had two wheels. The man went fast. Rex looked. Rex did not chase. Rex was a good dog. The white dog also did not chase. They were both good dogs.\n\nPat opened a bag. Pat had snacks. Pat had crackers. Sam had a juice box. They sat together. They ate. Rex looked at the crackers. Pat gave Rex one cracker. Rex ate it fast. The white dog wanted one too. Sam gave the white dog one. The white dog also ate it fast. Dogs eat fast.\n\nA bird flew down. The bird saw the crackers. The bird wanted some. Pat broke a cracker. Pat threw a piece. The ",
+   "correct": "bird",
+   "distractors": [
+    "tidy",
+    "opened",
+    "patted"
+   ],
+   "slot_offset": 1934
+  },
+  {
+   "prefix_bytes": " the same age. They were not in the same class. But they could be friends.\n\nThe dogs came back. They were tired too. They drank water from a bowl. The bowl was on the grass. Pat had brought it.\n\nThe sun was high. The sun was warm. The sky was blue. The clouds were white. The grass was green. The trees were tall.\n\nA man rode a bike past them. The bike had two wheels. The man went fast. Rex looked. Rex did not chase. Rex was a good dog. The white dog also did not chase. They were both good dogs.\n\nPat opened a bag. Pat had snacks. Pat had crackers. Sam had a juice box. They sat together. They ate. Rex looked at the crackers. Pat gave Rex one cracker. Rex ate it fast. The white dog wanted one too. Sam gave the white dog one. The white dog also ate it fast. Dogs eat fast.\n\nA bird flew down. The bird saw the crackers. The bird wanted some. Pat broke a cracker. Pat threw a piece. The bird hopped over. The bird took the piece. The bird flew up to a tree. The bird ate the piece in the tree.\n\n\"That bird is smart,\" Sam ",
+   "correct": "said",
+   "distractors": [
+    "moved",
+    "bike",
+    "juice"
+   ],
+   "slot_offset": 2068
+  },
+  {
+   "prefix_bytes": "un was warm. The sky was blue. The clouds were white. The grass was green. The trees were tall.\n\nA man rode a bike past them. The bike had two wheels. The man went fast. Rex looked. Rex did not chase. Rex was a good dog. The white dog also did not chase. They were both good dogs.\n\nPat opened a bag. Pat had snacks. Pat had crackers. Sam had a juice box. They sat together. They ate. Rex looked at the crackers. Pat gave Rex one cracker. Rex ate it fast. The white dog wanted one too. Sam gave the white dog one. The white dog also ate it fast. Dogs eat fast.\n\nA bird flew down. The bird saw the crackers. The bird wanted some. Pat broke a cracker. Pat threw a piece. The bird hopped over. The bird took the piece. The bird flew up to a tree. The bird ate the piece in the tree.\n\n\"That bird is smart,\" Sam said. \"Yes,\" said Pat.\n\nAfter a while, Sam said he had to go home. \"It was nice to meet you,\" Sam said. \"Yes,\" said Pat. \"Nice to meet you too.\" They waved. Sam and the white dog walked away.\n\nPat and Rex stayed for a ",
+   "correct": "little",
+   "distractors": [
+    "house",
+    "smiled",
+    "came"
+   ],
+   "slot_offset": 2286
+  },
+  {
+   "prefix_bytes": "ice box. They sat together. They ate. Rex looked at the crackers. Pat gave Rex one cracker. Rex ate it fast. The white dog wanted one too. Sam gave the white dog one. The white dog also ate it fast. Dogs eat fast.\n\nA bird flew down. The bird saw the crackers. The bird wanted some. Pat broke a cracker. Pat threw a piece. The bird hopped over. The bird took the piece. The bird flew up to a tree. The bird ate the piece in the tree.\n\n\"That bird is smart,\" Sam said. \"Yes,\" said Pat.\n\nAfter a while, Sam said he had to go home. \"It was nice to meet you,\" Sam said. \"Yes,\" said Pat. \"Nice to meet you too.\" They waved. Sam and the white dog walked away.\n\nPat and Rex stayed for a little longer. Then Pat said, \"Time to go, Rex.\" Rex got up. Rex wagged his tail. They walked home together.\n\nAt home, Mom was in the kitchen. Mom was making soup. The soup smelled good. The soup was hot. Mom smiled when she saw Pat. \"How was the park?\" Mom asked. \"Fun,\" said Pat. \"I made a friend. His name is Sam.\"\n\n\"That is good,\" Mom said. \"",
+   "correct": "Wash",
+   "distractors": [
+    "piece",
+    "girl",
+    "tree"
+   ],
+   "slot_offset": 2632
+  },
+  {
+   "prefix_bytes": ". The bird wanted some. Pat broke a cracker. Pat threw a piece. The bird hopped over. The bird took the piece. The bird flew up to a tree. The bird ate the piece in the tree.\n\n\"That bird is smart,\" Sam said. \"Yes,\" said Pat.\n\nAfter a while, Sam said he had to go home. \"It was nice to meet you,\" Sam said. \"Yes,\" said Pat. \"Nice to meet you too.\" They waved. Sam and the white dog walked away.\n\nPat and Rex stayed for a little longer. Then Pat said, \"Time to go, Rex.\" Rex got up. Rex wagged his tail. They walked home together.\n\nAt home, Mom was in the kitchen. Mom was making soup. The soup smelled good. The soup was hot. Mom smiled when she saw Pat. \"How was the park?\" Mom asked. \"Fun,\" said Pat. \"I made a friend. His name is Sam.\"\n\n\"That is good,\" Mom said. \"Wash your hands. Lunch is almost ready.\"\n\nPat washed his hands. The soap had bubbles. The water was warm. Pat dried his hands on a towel. The towel was soft.\n\nPat sat at the table. Mom put a bowl in front of him. The soup had carrots. The soup had peas. The ",
+   "correct": "soup",
+   "distractors": [
+    "warm",
+    "door",
+    "quiet"
+   ],
+   "slot_offset": 2890
+  },
+  {
+   "prefix_bytes": "meet you,\" Sam said. \"Yes,\" said Pat. \"Nice to meet you too.\" They waved. Sam and the white dog walked away.\n\nPat and Rex stayed for a little longer. Then Pat said, \"Time to go, Rex.\" Rex got up. Rex wagged his tail. They walked home together.\n\nAt home, Mom was in the kitchen. Mom was making soup. The soup smelled good. The soup was hot. Mom smiled when she saw Pat. \"How was the park?\" Mom asked. \"Fun,\" said Pat. \"I made a friend. His name is Sam.\"\n\n\"That is good,\" Mom said. \"Wash your hands. Lunch is almost ready.\"\n\nPat washed his hands. The soap had bubbles. The water was warm. Pat dried his hands on a towel. The towel was soft.\n\nPat sat at the table. Mom put a bowl in front of him. The soup had carrots. The soup had peas. The soup had small pieces of chicken. Pat ate slowly. The soup was very hot.\n\nRex ate his food too. Rex had dog food in a bowl. The bowl was on the floor. Rex was a tidy dog. He did not spill.\n\nAfter lunch, Pat colored a picture. The picture was of a dog. The picture was of Rex. Pat used ",
+   "correct": "brown",
+   "distractors": [
+    "slow",
+    "animals",
+    "white"
+   ],
+   "slot_offset": 3175
+  },
+  {
+   "prefix_bytes": "a little longer. Then Pat said, \"Time to go, Rex.\" Rex got up. Rex wagged his tail. They walked home together.\n\nAt home, Mom was in the kitchen. Mom was making soup. The soup smelled good. The soup was hot. Mom smiled when she saw Pat. \"How was the park?\" Mom asked. \"Fun,\" said Pat. \"I made a friend. His name is Sam.\"\n\n\"That is good,\" Mom said. \"Wash your hands. Lunch is almost ready.\"\n\nPat washed his hands. The soap had bubbles. The water was warm. Pat dried his hands on a towel. The towel was soft.\n\nPat sat at the table. Mom put a bowl in front of him. The soup had carrots. The soup had peas. The soup had small pieces of chicken. Pat ate slowly. The soup was very hot.\n\nRex ate his food too. Rex had dog food in a bowl. The bowl was on the floor. Rex was a tidy dog. He did not spill.\n\nAfter lunch, Pat colored a picture. The picture was of a dog. The picture was of Rex. Pat used brown for the body. Pat used black for the nose. Pat used pink for the tongue. The picture looked nice.\n\nMom hung the picture on the ",
+   "correct": "fridge",
+   "distractors": [
+    "chase",
+    "dream",
+    "tree"
+   ],
+   "slot_offset": 3308
+  },
+  {
+   "prefix_bytes": "r hands. Lunch is almost ready.\"\n\nPat washed his hands. The soap had bubbles. The water was warm. Pat dried his hands on a towel. The towel was soft.\n\nPat sat at the table. Mom put a bowl in front of him. The soup had carrots. The soup had peas. The soup had small pieces of chicken. Pat ate slowly. The soup was very hot.\n\nRex ate his food too. Rex had dog food in a bowl. The bowl was on the floor. Rex was a tidy dog. He did not spill.\n\nAfter lunch, Pat colored a picture. The picture was of a dog. The picture was of Rex. Pat used brown for the body. Pat used black for the nose. Pat used pink for the tongue. The picture looked nice.\n\nMom hung the picture on the fridge. There were already three other pictures there. The new one made four.\n\nPat sat on the couch. Pat opened a book. The book had a map. The map had hills. The map had a forest. The map had a small house. The book was about a rabbit. The rabbit lived in the small house. Pat read about the rabbit.\n\nThe rabbit had a friend. The friend was a turtle. The ",
+   "correct": "rabbit",
+   "distractors": [
+    "tail",
+    "nice",
+    "talked"
+   ],
+   "slot_offset": 3664
+  },
+  {
+   "prefix_bytes": "table. Mom put a bowl in front of him. The soup had carrots. The soup had peas. The soup had small pieces of chicken. Pat ate slowly. The soup was very hot.\n\nRex ate his food too. Rex had dog food in a bowl. The bowl was on the floor. Rex was a tidy dog. He did not spill.\n\nAfter lunch, Pat colored a picture. The picture was of a dog. The picture was of Rex. Pat used brown for the body. Pat used black for the nose. Pat used pink for the tongue. The picture looked nice.\n\nMom hung the picture on the fridge. There were already three other pictures there. The new one made four.\n\nPat sat on the couch. Pat opened a book. The book had a map. The map had hills. The map had a forest. The map had a small house. The book was about a rabbit. The rabbit lived in the small house. Pat read about the rabbit.\n\nThe rabbit had a friend. The friend was a turtle. The rabbit was fast. The turtle was slow. They had a race. The turtle won. The turtle won because the rabbit took a nap. Pat thought that was funny.\n\nAfter the book, Pat ",
+   "correct": "watched",
+   "distractors": [
+    "elephant",
+    "friends",
+    "colored"
+   ],
+   "slot_offset": 3830
+  },
+  {
+   "prefix_bytes": " picture. The picture was of a dog. The picture was of Rex. Pat used brown for the body. Pat used black for the nose. Pat used pink for the tongue. The picture looked nice.\n\nMom hung the picture on the fridge. There were already three other pictures there. The new one made four.\n\nPat sat on the couch. Pat opened a book. The book had a map. The map had hills. The map had a forest. The map had a small house. The book was about a rabbit. The rabbit lived in the small house. Pat read about the rabbit.\n\nThe rabbit had a friend. The friend was a turtle. The rabbit was fast. The turtle was slow. They had a race. The turtle won. The turtle won because the rabbit took a nap. Pat thought that was funny.\n\nAfter the book, Pat watched a show. The show was about animals. There was a lion. There was an elephant. There was a giraffe. The giraffe was the tallest.\n\nSoon it was time for bed. Pat brushed his teeth. Pat put on pajamas. The pajamas had stars on them. Mom read him a book. The book was about the moon.\n\nThe moon was ",
+   "correct": "bright",
+   "distractors": [
+    "little",
+    "liked",
+    "ball"
+   ],
+   "slot_offset": 4130
+  },
+  {
+   "prefix_bytes": "pink for the tongue. The picture looked nice.\n\nMom hung the picture on the fridge. There were already three other pictures there. The new one made four.\n\nPat sat on the couch. Pat opened a book. The book had a map. The map had hills. The map had a forest. The map had a small house. The book was about a rabbit. The rabbit lived in the small house. Pat read about the rabbit.\n\nThe rabbit had a friend. The friend was a turtle. The rabbit was fast. The turtle was slow. They had a race. The turtle won. The turtle won because the rabbit took a nap. Pat thought that was funny.\n\nAfter the book, Pat watched a show. The show was about animals. There was a lion. There was an elephant. There was a giraffe. The giraffe was the tallest.\n\nSoon it was time for bed. Pat brushed his teeth. Pat put on pajamas. The pajamas had stars on them. Mom read him a book. The book was about the moon.\n\nThe moon was bright. The moon was round. The moon went across the sky every night.\n\nPat liked the book. Pat asked Mom to read it again. Mom ",
+   "correct": "read",
+   "distractors": [
+    "name",
+    "park",
+    "hills"
+   ],
+   "slot_offset": 4257
+  },
+  {
+   "prefix_bytes": "\nThe rabbit had a friend. The friend was a turtle. The rabbit was fast. The turtle was slow. They had a race. The turtle won. The turtle won because the rabbit took a nap. Pat thought that was funny.\n\nAfter the book, Pat watched a show. The show was about animals. There was a lion. There was an elephant. There was a giraffe. The giraffe was the tallest.\n\nSoon it was time for bed. Pat brushed his teeth. Pat put on pajamas. The pajamas had stars on them. Mom read him a book. The book was about the moon.\n\nThe moon was bright. The moon was round. The moon went across the sky every night.\n\nPat liked the book. Pat asked Mom to read it again. Mom read it again. Then Mom turned off the light.\n\n\"Good night, Pat,\" Mom said. \"Good night, Mom,\" said Pat. \"Good night, Rex,\" said Pat. Rex was on the rug next to the bed. Rex was already asleep.\n\nPat closed his eyes. The room was dark. The house was quiet. Outside, the wind moved the trees. The trees made a soft sound.\n\nSoon Pat was asleep too. He dreamed about the park. He ",
+   "correct": "dreamed",
+   "distractors": [
+    "spill",
+    "treat",
+    "patted"
+   ],
+   "slot_offset": 4633
+  },
+  {
+   "prefix_bytes": "e. The rabbit was fast. The turtle was slow. They had a race. The turtle won. The turtle won because the rabbit took a nap. Pat thought that was funny.\n\nAfter the book, Pat watched a show. The show was about animals. There was a lion. There was an elephant. There was a giraffe. The giraffe was the tallest.\n\nSoon it was time for bed. Pat brushed his teeth. Pat put on pajamas. The pajamas had stars on them. Mom read him a book. The book was about the moon.\n\nThe moon was bright. The moon was round. The moon went across the sky every night.\n\nPat liked the book. Pat asked Mom to read it again. Mom read it again. Then Mom turned off the light.\n\n\"Good night, Pat,\" Mom said. \"Good night, Mom,\" said Pat. \"Good night, Rex,\" said Pat. Rex was on the rug next to the bed. Rex was already asleep.\n\nPat closed his eyes. The room was dark. The house was quiet. Outside, the wind moved the trees. The trees made a soft sound.\n\nSoon Pat was asleep too. He dreamed about the park. He dreamed about Rex. He dreamed about Sam and the ",
+   "correct": "white",
+   "distractors": [
+    "bumped",
+    "grass",
+    "nice"
+   ],
+   "slot_offset": 4681
+  },
+  {
+   "prefix_bytes": ". Pat put on pajamas. The pajamas had stars on them. Mom read him a book. The book was about the moon.\n\nThe moon was bright. The moon was round. The moon went across the sky every night.\n\nPat liked the book. Pat asked Mom to read it again. Mom read it again. Then Mom turned off the light.\n\n\"Good night, Pat,\" Mom said. \"Good night, Mom,\" said Pat. \"Good night, Rex,\" said Pat. Rex was on the rug next to the bed. Rex was already asleep.\n\nPat closed his eyes. The room was dark. The house was quiet. Outside, the wind moved the trees. The trees made a soft sound.\n\nSoon Pat was asleep too. He dreamed about the park. He dreamed about Rex. He dreamed about Sam and the white dog. The dream was happy.\n\nIn the morning, Pat woke up. The sun was in the window. Rex was already up. Rex wagged his tail. Pat got out of bed and put on his shoes. They went outside again. It was a new day.\n\nPat got the red ball. Pat threw the ball. Rex ran to it. Rex got the ball. Rex came back to Pat. Pat threw the ball again. Rex ran fast. Rex ",
+   "correct": "caught",
+   "distractors": [
+    "crackers",
+    "kite",
+    "bigger"
+   ],
+   "slot_offset": 5037
+  },
+  {
+   "prefix_bytes": " Mom read it again. Then Mom turned off the light.\n\n\"Good night, Pat,\" Mom said. \"Good night, Mom,\" said Pat. \"Good night, Rex,\" said Pat. Rex was on the rug next to the bed. Rex was already asleep.\n\nPat closed his eyes. The room was dark. The house was quiet. Outside, the wind moved the trees. The trees made a soft sound.\n\nSoon Pat was asleep too. He dreamed about the park. He dreamed about Rex. He dreamed about Sam and the white dog. The dream was happy.\n\nIn the morning, Pat woke up. The sun was in the window. Rex was already up. Rex wagged his tail. Pat got out of bed and put on his shoes. They went outside again. It was a new day.\n\nPat got the red ball. Pat threw the ball. Rex ran to it. Rex got the ball. Rex came back to Pat. Pat threw the ball again. Rex ran fast. Rex caught the ball. Pat said, \"Good dog, Rex!\"\n\nThe big tree was there. A bird was on the tree. The bird was small. The bird was blue. Pat sat down. Pat looked at the bird. The bird sang a song. The song was nice.\n\nMom called Pat. Mom said, \"",
+   "correct": "Come",
+   "distractors": [
+    "coat",
+    "turtle",
+    "trees"
+   ],
+   "slot_offset": 5276
+  },
+  {
+   "prefix_bytes": "he house was quiet. Outside, the wind moved the trees. The trees made a soft sound.\n\nSoon Pat was asleep too. He dreamed about the park. He dreamed about Rex. He dreamed about Sam and the white dog. The dream was happy.\n\nIn the morning, Pat woke up. The sun was in the window. Rex was already up. Rex wagged his tail. Pat got out of bed and put on his shoes. They went outside again. It was a new day.\n\nPat got the red ball. Pat threw the ball. Rex ran to it. Rex got the ball. Rex came back to Pat. Pat threw the ball again. Rex ran fast. Rex caught the ball. Pat said, \"Good dog, Rex!\"\n\nThe big tree was there. A bird was on the tree. The bird was small. The bird was blue. Pat sat down. Pat looked at the bird. The bird sang a song. The song was nice.\n\nMom called Pat. Mom said, \"Come in.\" Pat said, \"Bye, tree. Bye, bird.\" Pat walked to the door. Rex walked too. They went in.\n\nIn the house, Mom had soup. The soup was hot. Pat sat in the chair. Pat ate the soup. The soup was good. Pat ate it all.\n\nRex got a bone. Rex ",
+   "correct": "took",
+   "distractors": [
+    "quilt",
+    "moved",
+    "round"
+   ],
+   "slot_offset": 5517
+  },
+  {
+   "prefix_bytes": "rew the ball again. Rex ran fast. Rex caught the ball. Pat said, \"Good dog, Rex!\"\n\nThe big tree was there. A bird was on the tree. The bird was small. The bird was blue. Pat sat down. Pat looked at the bird. The bird sang a song. The song was nice.\n\nMom called Pat. Mom said, \"Come in.\" Pat said, \"Bye, tree. Bye, bird.\" Pat walked to the door. Rex walked too. They went in.\n\nIn the house, Mom had soup. The soup was hot. Pat sat in the chair. Pat ate the soup. The soup was good. Pat ate it all.\n\nRex got a bone. Rex took the bone. Rex sat on the rug. Rex ate the bone. Rex was happy.\n\nPat sat with Mom. Mom read a book. The book had cats. The book had dogs. Pat looked at the cats. Pat looked at the dogs. The book was fun.\n\nMom said, \"Time for a nap.\" Pat went to bed. Pat had a quilt. The quilt was warm. Rex got on the bed too. Rex put his head down. They went to sleep.\n\nWhen Pat woke up, the sun was low. Mom said, \"Time to play.\" Pat got up. Rex got up. They went out.\n\nSam was at the park. Sam said, \"Hi, Pat.\" Pat ",
+   "correct": "said",
+   "distractors": [
+    "cars",
+    "dogs",
+    "food"
+   ],
+   "slot_offset": 6023
+  },
+  {
+   "prefix_bytes": " Pat said, \"Bye, tree. Bye, bird.\" Pat walked to the door. Rex walked too. They went in.\n\nIn the house, Mom had soup. The soup was hot. Pat sat in the chair. Pat ate the soup. The soup was good. Pat ate it all.\n\nRex got a bone. Rex took the bone. Rex sat on the rug. Rex ate the bone. Rex was happy.\n\nPat sat with Mom. Mom read a book. The book had cats. The book had dogs. Pat looked at the cats. Pat looked at the dogs. The book was fun.\n\nMom said, \"Time for a nap.\" Pat went to bed. Pat had a quilt. The quilt was warm. Rex got on the bed too. Rex put his head down. They went to sleep.\n\nWhen Pat woke up, the sun was low. Mom said, \"Time to play.\" Pat got up. Rex got up. They went out.\n\nSam was at the park. Sam said, \"Hi, Pat.\" Pat said, \"Hi, Sam.\" They sat on the swing. The swing went up. The swing went down. Pat said, \"Wee!\" Sam said, \"Wee!\"\n\nRex ran with the white dog. The dogs ran fast. They had fun. The grass was green. The sky was blue. The day was bright.\n\nIt was time to go home. Pat said, \"Bye, Sam.\" Sam ",
+   "correct": "said",
+   "distractors": [
+    "turtle",
+    "found",
+    "sang"
+   ],
+   "slot_offset": 6309
+  },
+  {
+   "prefix_bytes": "ouse, Mom had soup. The soup was hot. Pat sat in the chair. Pat ate the soup. The soup was good. Pat ate it all.\n\nRex got a bone. Rex took the bone. Rex sat on the rug. Rex ate the bone. Rex was happy.\n\nPat sat with Mom. Mom read a book. The book had cats. The book had dogs. Pat looked at the cats. Pat looked at the dogs. The book was fun.\n\nMom said, \"Time for a nap.\" Pat went to bed. Pat had a quilt. The quilt was warm. Rex got on the bed too. Rex put his head down. They went to sleep.\n\nWhen Pat woke up, the sun was low. Mom said, \"Time to play.\" Pat got up. Rex got up. They went out.\n\nSam was at the park. Sam said, \"Hi, Pat.\" Pat said, \"Hi, Sam.\" They sat on the swing. The swing went up. The swing went down. Pat said, \"Wee!\" Sam said, \"Wee!\"\n\nRex ran with the white dog. The dogs ran fast. They had fun. The grass was green. The sky was blue. The day was bright.\n\nIt was time to go home. Pat said, \"Bye, Sam.\" Sam said, \"Bye, Pat.\" Pat walked home with Mom. Rex walked too. The walk was nice. Pat was glad.\n\nPat ",
+   "correct": "went",
+   "distractors": [
+    "pieces",
+    "bowl",
+    "clouds"
+   ],
+   "slot_offset": 6407
+  },
+  {
+   "prefix_bytes": "s. Pat looked at the cats. Pat looked at the dogs. The book was fun.\n\nMom said, \"Time for a nap.\" Pat went to bed. Pat had a quilt. The quilt was warm. Rex got on the bed too. Rex put his head down. They went to sleep.\n\nWhen Pat woke up, the sun was low. Mom said, \"Time to play.\" Pat got up. Rex got up. They went out.\n\nSam was at the park. Sam said, \"Hi, Pat.\" Pat said, \"Hi, Sam.\" They sat on the swing. The swing went up. The swing went down. Pat said, \"Wee!\" Sam said, \"Wee!\"\n\nRex ran with the white dog. The dogs ran fast. They had fun. The grass was green. The sky was blue. The day was bright.\n\nIt was time to go home. Pat said, \"Bye, Sam.\" Sam said, \"Bye, Pat.\" Pat walked home with Mom. Rex walked too. The walk was nice. Pat was glad.\n\nPat went home with Mom. Pat got his blocks. Pat made a tower. The tower was tall. Rex bumped it. The blocks fell down. Pat said, \"Oh no!\" Pat made it again. The new tower was bigger.\n\nMom gave Pat juice. The juice was cold. Pat drank it. Mom gave Pat a snack. The snack was an ",
+   "correct": "apple",
+   "distractors": [
+    "chase",
+    "play",
+    "caught"
+   ],
+   "slot_offset": 6680
+  },
+  {
+   "prefix_bytes": "k. Sam said, \"Hi, Pat.\" Pat said, \"Hi, Sam.\" They sat on the swing. The swing went up. The swing went down. Pat said, \"Wee!\" Sam said, \"Wee!\"\n\nRex ran with the white dog. The dogs ran fast. They had fun. The grass was green. The sky was blue. The day was bright.\n\nIt was time to go home. Pat said, \"Bye, Sam.\" Sam said, \"Bye, Pat.\" Pat walked home with Mom. Rex walked too. The walk was nice. Pat was glad.\n\nPat went home with Mom. Pat got his blocks. Pat made a tower. The tower was tall. Rex bumped it. The blocks fell down. Pat said, \"Oh no!\" Pat made it again. The new tower was bigger.\n\nMom gave Pat juice. The juice was cold. Pat drank it. Mom gave Pat a snack. The snack was an apple. The apple was red. Pat ate the apple. The apple was sweet.\n\nRex got a treat too. Rex ate the treat. Rex wanted more. Mom said no. Rex sat down. Rex looked sad. Pat gave him a hug.\n\nThe day went on. Pat played with cars. The cars were small. The cars were red and blue. Pat made the cars go fast. Pat made the cars go slow. The cars ",
+   "correct": "went",
+   "distractors": [
+    "tired",
+    "bike",
+    "ball"
+   ],
+   "slot_offset": 7019
+  },
+  {
+   "prefix_bytes": "m.\" They sat on the swing. The swing went up. The swing went down. Pat said, \"Wee!\" Sam said, \"Wee!\"\n\nRex ran with the white dog. The dogs ran fast. They had fun. The grass was green. The sky was blue. The day was bright.\n\nIt was time to go home. Pat said, \"Bye, Sam.\" Sam said, \"Bye, Pat.\" Pat walked home with Mom. Rex walked too. The walk was nice. Pat was glad.\n\nPat went home with Mom. Pat got his blocks. Pat made a tower. The tower was tall. Rex bumped it. The blocks fell down. Pat said, \"Oh no!\" Pat made it again. The new tower was bigger.\n\nMom gave Pat juice. The juice was cold. Pat drank it. Mom gave Pat a snack. The snack was an apple. The apple was red. Pat ate the apple. The apple was sweet.\n\nRex got a treat too. Rex ate the treat. Rex wanted more. Mom said no. Rex sat down. Rex looked sad. Pat gave him a hug.\n\nThe day went on. Pat played with cars. The cars were small. The cars were red and blue. Pat made the cars go fast. Pat made the cars go slow. The cars went up the ramp. The cars went down the ",
+   "correct": "ramp",
+   "distractors": [
+    "light",
+    "little",
+    "time"
+   ],
+   "slot_offset": 7060
+  },
+  {
+   "prefix_bytes": ". Rex walked too. The walk was nice. Pat was glad.\n\nPat went home with Mom. Pat got his blocks. Pat made a tower. The tower was tall. Rex bumped it. The blocks fell down. Pat said, \"Oh no!\" Pat made it again. The new tower was bigger.\n\nMom gave Pat juice. The juice was cold. Pat drank it. Mom gave Pat a snack. The snack was an apple. The apple was red. Pat ate the apple. The apple was sweet.\n\nRex got a treat too. Rex ate the treat. Rex wanted more. Mom said no. Rex sat down. Rex looked sad. Pat gave him a hug.\n\nThe day went on. Pat played with cars. The cars were small. The cars were red and blue. Pat made the cars go fast. Pat made the cars go slow. The cars went up the ramp. The cars went down the ramp. Rex watched the cars.\n\nThen Pat read a book. The book had a cat. The cat had a hat. The cat sat on a mat. Pat liked the cat. Pat liked the hat. Pat liked the mat. Pat read the book two times.\n\nSoon it was night. Pat had to brush his teeth. Pat had to put on his pj's. Pat had to get in bed. Mom read one more ",
+   "correct": "book",
+   "distractors": [
+    "longer",
+    "ball",
+    "talked"
+   ],
+   "slot_offset": 7375
+  }
+ ]
+}

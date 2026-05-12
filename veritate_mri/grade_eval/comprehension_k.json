@@ -1,0 +1,315 @@
+{
+ "level": "k",
+ "source": "grade_k_source.txt",
+ "n_items": 30,
+ "seed": 17,
+ "config": {
+  "items_per_band": 30,
+  "prefix_max_bytes": 1024,
+  "min_prefix_bytes": 64,
+  "min_word_len": 4,
+  "length_tolerance": 2
+ },
+ "items": [
+  {
+   "prefix_bytes": "Sam had a happy puppy named Pip. The puppy was very small and brown. Pip had soft, fuzzy fur all over. He had two big, shiny eyes. Sam loved his ",
+   "correct": "puppy",
+   "distractors": [
+    "call",
+    "asleep",
+    "plastic"
+   ],
+   "slot_offset": 145
+  },
+  {
+   "prefix_bytes": "Sam had a happy puppy named Pip. The puppy was very small and brown. Pip had soft, fuzzy fur all over. He had two big, shiny eyes. Sam loved his puppy a whole lot. Every morning they played together.\n\nOne sunny day, Sam had an idea. He said, \"Let's go to the playground.\" Pip wagged his tail quickly. Pip felt excited about going. He really liked the playground.\n\nSam grabbed a bright red rubber ball. He ",
+   "correct": "picked",
+   "distractors": [
+    "trees",
+    "home",
+    "small"
+   ],
+   "slot_offset": 405
+  },
+  {
+   "prefix_bytes": "Sam had a happy puppy named Pip. The puppy was very small and brown. Pip had soft, fuzzy fur all over. He had two big, shiny eyes. Sam loved his puppy a whole lot. Every morning they played together.\n\nOne sunny day, Sam had an idea. He said, \"Let's go to the playground.\" Pip wagged his tail quickly. Pip felt excited about going. He really liked the playground.\n\nSam grabbed a bright red rubber ball. He picked up his favorite blue leash. He buckled the leash on Pip's collar. They walked out the front door together. The afternoon sun was very bright. The whole sky was clear and blue.\n\nThey walked along the busy sidewalk. They saw a giant maple tree. They saw a fluffy yellow kitten. The kitten was sitting on a stone wall. Pip gave one little bark hello. The kitten just ignored them. Sam said, \"Come on, buddy.\"\n\nThe playground was nearby. They saw kids on the ",
+   "correct": "swings",
+   "distractors": [
+    "light",
+    "picture",
+    "away"
+   ],
+   "slot_offset": 867
+  },
+  {
+   "prefix_bytes": "small and brown. Pip had soft, fuzzy fur all over. He had two big, shiny eyes. Sam loved his puppy a whole lot. Every morning they played together.\n\nOne sunny day, Sam had an idea. He said, \"Let's go to the playground.\" Pip wagged his tail quickly. Pip felt excited about going. He really liked the playground.\n\nSam grabbed a bright red rubber ball. He picked up his favorite blue leash. He buckled the leash on Pip's collar. They walked out the front door together. The afternoon sun was very bright. The whole sky was clear and blue.\n\nThey walked along the busy sidewalk. They saw a giant maple tree. They saw a fluffy yellow kitten. The kitten was sitting on a stone wall. Pip gave one little bark hello. The kitten just ignored them. Sam said, \"Come on, buddy.\"\n\nThe playground was nearby. They saw kids on the swings. They saw kids on the slide. A boy hurried past with a kite. The kite was floating up high. Pip looked up at it. He really liked the kite.\n\nSam threw the bright red ball. Pip ran really fast across the ",
+   "correct": "grass",
+   "distractors": [
+    "three",
+    "find",
+    "today"
+   ],
+   "slot_offset": 1076
+  },
+  {
+   "prefix_bytes": "d his tail quickly. Pip felt excited about going. He really liked the playground.\n\nSam grabbed a bright red rubber ball. He picked up his favorite blue leash. He buckled the leash on Pip's collar. They walked out the front door together. The afternoon sun was very bright. The whole sky was clear and blue.\n\nThey walked along the busy sidewalk. They saw a giant maple tree. They saw a fluffy yellow kitten. The kitten was sitting on a stone wall. Pip gave one little bark hello. The kitten just ignored them. Sam said, \"Come on, buddy.\"\n\nThe playground was nearby. They saw kids on the swings. They saw kids on the slide. A boy hurried past with a kite. The kite was floating up high. Pip looked up at it. He really liked the kite.\n\nSam threw the bright red ball. Pip ran really fast across the grass. He caught the ball in his mouth. He brought it back, wagging happily. Sam threw it even further. Pip chased it again, panting. They played for a long, sunny morning.\n\nA girl walked over with another puppy. Her puppy was a ",
+   "correct": "little",
+   "distractors": [
+    "bring",
+    "himself",
+    "friends"
+   ],
+   "slot_offset": 1305
+  },
+  {
+   "prefix_bytes": "ery bright. The whole sky was clear and blue.\n\nThey walked along the busy sidewalk. They saw a giant maple tree. They saw a fluffy yellow kitten. The kitten was sitting on a stone wall. Pip gave one little bark hello. The kitten just ignored them. Sam said, \"Come on, buddy.\"\n\nThe playground was nearby. They saw kids on the swings. They saw kids on the slide. A boy hurried past with a kite. The kite was floating up high. Pip looked up at it. He really liked the kite.\n\nSam threw the bright red ball. Pip ran really fast across the grass. He caught the ball in his mouth. He brought it back, wagging happily. Sam threw it even further. Pip chased it again, panting. They played for a long, sunny morning.\n\nA girl walked over with another puppy. Her puppy was a little brown dog. The dog's name was Spot. Spot wagged at Pip happily. The two puppies started playing. They ran around in big circles. They jumped together. They had so much fun.\n\nThe girl said, \"Your puppy is friendly.\" Sam said, \"Thanks. Yours is too.\" They ",
+   "correct": "both",
+   "distractors": [
+    "smiled",
+    "half",
+    "lapped"
+   ],
+   "slot_offset": 1566
+  },
+  {
+   "prefix_bytes": " said, \"Come on, buddy.\"\n\nThe playground was nearby. They saw kids on the swings. They saw kids on the slide. A boy hurried past with a kite. The kite was floating up high. Pip looked up at it. He really liked the kite.\n\nSam threw the bright red ball. Pip ran really fast across the grass. He caught the ball in his mouth. He brought it back, wagging happily. Sam threw it even further. Pip chased it again, panting. They played for a long, sunny morning.\n\nA girl walked over with another puppy. Her puppy was a little brown dog. The dog's name was Spot. Spot wagged at Pip happily. The two puppies started playing. They ran around in big circles. They jumped together. They had so much fun.\n\nThe girl said, \"Your puppy is friendly.\" Sam said, \"Thanks. Yours is too.\" They both smiled at each other. The puppies barked back and forth. It was a happy, playful bark.\n\nSam sat down on the soft grass. The grass felt warm and dry. The grass was bright green. He could feel the sunny breeze. Pip came over and curled up. Pip was ",
+   "correct": "sleepy",
+   "distractors": [
+    "trees",
+    "dripped",
+    "kids"
+   ],
+   "slot_offset": 1817
+  },
+  {
+   "prefix_bytes": "in, panting. They played for a long, sunny morning.\n\nA girl walked over with another puppy. Her puppy was a little brown dog. The dog's name was Spot. Spot wagged at Pip happily. The two puppies started playing. They ran around in big circles. They jumped together. They had so much fun.\n\nThe girl said, \"Your puppy is friendly.\" Sam said, \"Thanks. Yours is too.\" They both smiled at each other. The puppies barked back and forth. It was a happy, playful bark.\n\nSam sat down on the soft grass. The grass felt warm and dry. The grass was bright green. He could feel the sunny breeze. Pip came over and curled up. Pip was sleepy now. He had played a whole lot.\n\nSam saw a big black bird. The bird flew across the playground. It had wide, dark wings. It made a really loud call. Pip did not bark this time. He just watched quietly. The bird flew far away.\n\nSam pulled out a little snack. It was a small plastic box. He had a few crunchy crackers. He gave one to his puppy. Pip ate it really fast. Sam ate one too. The crackers ",
+   "correct": "tasted",
+   "distractors": [
+    "white",
+    "teeth",
+    "part"
+   ],
+   "slot_offset": 2221
+  },
+  {
+   "prefix_bytes": "ppy is friendly.\" Sam said, \"Thanks. Yours is too.\" They both smiled at each other. The puppies barked back and forth. It was a happy, playful bark.\n\nSam sat down on the soft grass. The grass felt warm and dry. The grass was bright green. He could feel the sunny breeze. Pip came over and curled up. Pip was sleepy now. He had played a whole lot.\n\nSam saw a big black bird. The bird flew across the playground. It had wide, dark wings. It made a really loud call. Pip did not bark this time. He just watched quietly. The bird flew far away.\n\nSam pulled out a little snack. It was a small plastic box. He had a few crunchy crackers. He gave one to his puppy. Pip ate it really fast. Sam ate one too. The crackers tasted yummy.\n\nA father walked by with two children. The children waved hello to Sam. Sam waved happily back at them. Pip wagged his tail at them. The children stopped to pet him. Pip licked one girl's open hand. She gave a happy little giggle.\n\nThe kids ran off to the swings. Sam watched them happily play. He ",
+   "correct": "felt",
+   "distractors": [
+    "note",
+    "leaf",
+    "yellow"
+   ],
+   "slot_offset": 2533
+  },
+  {
+   "prefix_bytes": "arm and dry. The grass was bright green. He could feel the sunny breeze. Pip came over and curled up. Pip was sleepy now. He had played a whole lot.\n\nSam saw a big black bird. The bird flew across the playground. It had wide, dark wings. It made a really loud call. Pip did not bark this time. He just watched quietly. The bird flew far away.\n\nSam pulled out a little snack. It was a small plastic box. He had a few crunchy crackers. He gave one to his puppy. Pip ate it really fast. Sam ate one too. The crackers tasted yummy.\n\nA father walked by with two children. The children waved hello to Sam. Sam waved happily back at them. Pip wagged his tail at them. The children stopped to pet him. Pip licked one girl's open hand. She gave a happy little giggle.\n\nThe kids ran off to the swings. Sam watched them happily play. He felt really good inside. The playground was a fun place.\n\nSam slowly stood up. \"Time to head home, buddy.\" Pip got up quickly too. He stretched his long back. They walked toward the front gate. The ",
+   "correct": "girl",
+   "distractors": [
+    "gently",
+    "dream",
+    "knew"
+   ],
+   "slot_offset": 2731
+  },
+  {
+   "prefix_bytes": "d a whole lot.\n\nSam saw a big black bird. The bird flew across the playground. It had wide, dark wings. It made a really loud call. Pip did not bark this time. He just watched quietly. The bird flew far away.\n\nSam pulled out a little snack. It was a small plastic box. He had a few crunchy crackers. He gave one to his puppy. Pip ate it really fast. Sam ate one too. The crackers tasted yummy.\n\nA father walked by with two children. The children waved hello to Sam. Sam waved happily back at them. Pip wagged his tail at them. The children stopped to pet him. Pip licked one girl's open hand. She gave a happy little giggle.\n\nThe kids ran off to the swings. Sam watched them happily play. He felt really good inside. The playground was a fun place.\n\nSam slowly stood up. \"Time to head home, buddy.\" Pip got up quickly too. He stretched his long back. They walked toward the front gate. The girl with Spot waved goodbye. Sam waved back at her.\n\nOn the way home, they tried a different path. They saw a small garden pond. Two ",
+   "correct": "white",
+   "distractors": [
+    "circles",
+    "sleepy",
+    "loud"
+   ],
+   "slot_offset": 2865
+  },
+  {
+   "prefix_bytes": "rackers tasted yummy.\n\nA father walked by with two children. The children waved hello to Sam. Sam waved happily back at them. Pip wagged his tail at them. The children stopped to pet him. Pip licked one girl's open hand. She gave a happy little giggle.\n\nThe kids ran off to the swings. Sam watched them happily play. He felt really good inside. The playground was a fun place.\n\nSam slowly stood up. \"Time to head home, buddy.\" Pip got up quickly too. He stretched his long back. They walked toward the front gate. The girl with Spot waved goodbye. Sam waved back at her.\n\nOn the way home, they tried a different path. They saw a small garden pond. Two white ducks swam on it. The ducks were really pretty. Pip wanted to chase them. Sam said, \"No, buddy. Let the ducks be.\"\n\nThey kept on walking together. The afternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet ",
+   "correct": "street",
+   "distractors": [
+    "room",
+    "threw",
+    "book"
+   ],
+   "slot_offset": 3237
+  },
+  {
+   "prefix_bytes": "m. Pip licked one girl's open hand. She gave a happy little giggle.\n\nThe kids ran off to the swings. Sam watched them happily play. He felt really good inside. The playground was a fun place.\n\nSam slowly stood up. \"Time to head home, buddy.\" Pip got up quickly too. He stretched his long back. They walked toward the front gate. The girl with Spot waved goodbye. Sam waved back at her.\n\nOn the way home, they tried a different path. They saw a small garden pond. Two white ducks swam on it. The ducks were really pretty. Pip wanted to chase them. Sam said, \"No, buddy. Let the ducks be.\"\n\nThey kept on walking together. The afternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright blue ",
+   "correct": "door",
+   "distractors": [
+    "higher",
+    "blew",
+    "friend"
+   ],
+   "slot_offset": 3422
+  },
+  {
+   "prefix_bytes": "k at her.\n\nOn the way home, they tried a different path. They saw a small garden pond. Two white ducks swam on it. The ducks were really pretty. Pip wanted to chase them. Sam said, \"No, buddy. Let the ducks be.\"\n\nThey kept on walking together. The afternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright blue door. Mom was waiting at the door. She waved happily. \"Hi, Sam! Hi, Pip!\" she called out. Sam ran up the wooden steps. Pip ran up too. He gave Mom a happy lick.\n\n\"Did you have fun today?\" Mom asked. \"Yes, Mom,\" Sam said happily. \"Pip played a whole lot. He made a brand new friend. Her name was Spot, the puppy.\"\n\nMom gave Sam a warm hug. She gave Pip a gentle pat. They went ",
+   "correct": "inside",
+   "distractors": [
+    "little",
+    "black",
+    "things"
+   ],
+   "slot_offset": 3798
+  },
+  {
+   "prefix_bytes": " ducks be.\"\n\nThey kept on walking together. The afternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright blue door. Mom was waiting at the door. She waved happily. \"Hi, Sam! Hi, Pip!\" she called out. Sam ran up the wooden steps. Pip ran up too. He gave Mom a happy lick.\n\n\"Did you have fun today?\" Mom asked. \"Yes, Mom,\" Sam said happily. \"Pip played a whole lot. He made a brand new friend. Her name was Spot, the puppy.\"\n\nMom gave Sam a warm hug. She gave Pip a gentle pat. They went inside the house. The kitchen smelled really good. Mom had made tomato soup.\n\nSam took off Pip's collar leash. Pip lapped up some water. He drank really fast. Sam sat down at the table. Mom set out a ",
+   "correct": "yellow",
+   "distractors": [
+    "good",
+    "ears",
+    "held"
+   ],
+   "slot_offset": 3998
+  },
+  {
+   "prefix_bytes": "\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright blue door. Mom was waiting at the door. She waved happily. \"Hi, Sam! Hi, Pip!\" she called out. Sam ran up the wooden steps. Pip ran up too. He gave Mom a happy lick.\n\n\"Did you have fun today?\" Mom asked. \"Yes, Mom,\" Sam said happily. \"Pip played a whole lot. He made a brand new friend. Her name was Spot, the puppy.\"\n\nMom gave Sam a warm hug. She gave Pip a gentle pat. They went inside the house. The kitchen smelled really good. Mom had made tomato soup.\n\nSam took off Pip's collar leash. Pip lapped up some water. He drank really fast. Sam sat down at the table. Mom set out a yellow bowl. The soup was warm and salty. It had little bits of corn and beans.\n\nSam ate the yummy soup slowly. It tasted really good. Pip sat by his feet. Pip got really sleepy. He put his head down. He closed his tired eyes. He took a ",
+   "correct": "long",
+   "distractors": [
+    "knew",
+    "window",
+    "shone"
+   ],
+   "slot_offset": 4235
+  },
+  {
+   "prefix_bytes": "t. Sam ran up the wooden steps. Pip ran up too. He gave Mom a happy lick.\n\n\"Did you have fun today?\" Mom asked. \"Yes, Mom,\" Sam said happily. \"Pip played a whole lot. He made a brand new friend. Her name was Spot, the puppy.\"\n\nMom gave Sam a warm hug. She gave Pip a gentle pat. They went inside the house. The kitchen smelled really good. Mom had made tomato soup.\n\nSam took off Pip's collar leash. Pip lapped up some water. He drank really fast. Sam sat down at the table. Mom set out a yellow bowl. The soup was warm and salty. It had little bits of corn and beans.\n\nSam ate the yummy soup slowly. It tasted really good. Pip sat by his feet. Pip got really sleepy. He put his head down. He closed his tired eyes. He took a long puppy nap.\n\nAfter lunch, Sam read a picture book. The book had cats and dogs. It had bright, colorful pages. Sam read three pages out loud. Then he showed it to Pip. Pip just gave a big yawn.\n\nSam felt really sleepy too. He went over to the rug. He lay down next to Pip. He petted Pip's soft, ",
+   "correct": "fuzzy",
+   "distractors": [
+    "drew",
+    "knew",
+    "gave"
+   ],
+   "slot_offset": 4533
+  },
+  {
+   "prefix_bytes": "soup was warm and salty. It had little bits of corn and beans.\n\nSam ate the yummy soup slowly. It tasted really good. Pip sat by his feet. Pip got really sleepy. He put his head down. He closed his tired eyes. He took a long puppy nap.\n\nAfter lunch, Sam read a picture book. The book had cats and dogs. It had bright, colorful pages. Sam read three pages out loud. Then he showed it to Pip. Pip just gave a big yawn.\n\nSam felt really sleepy too. He went over to the rug. He lay down next to Pip. He petted Pip's soft, fuzzy fur. Soon he closed his eyes.\n\nIn his dream, Sam ran in a big sunny field. Pip ran along beside him. The sky was full of bright kites. They flew on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and slowly sat up.\n\n\"Hi, buddy,\" he said softly. Pip wagged his fluffy tail. He gave Sam a wet lick. Sam smiled happily. He felt cozy and warm.\n\nMom came in the living room. She had a brand new little ball. It was orange and ",
+   "correct": "bouncy",
+   "distractors": [
+    "kiss",
+    "chased",
+    "pajamas"
+   ],
+   "slot_offset": 5039
+  },
+  {
+   "prefix_bytes": "\n\nSam ate the yummy soup slowly. It tasted really good. Pip sat by his feet. Pip got really sleepy. He put his head down. He closed his tired eyes. He took a long puppy nap.\n\nAfter lunch, Sam read a picture book. The book had cats and dogs. It had bright, colorful pages. Sam read three pages out loud. Then he showed it to Pip. Pip just gave a big yawn.\n\nSam felt really sleepy too. He went over to the rug. He lay down next to Pip. He petted Pip's soft, fuzzy fur. Soon he closed his eyes.\n\nIn his dream, Sam ran in a big sunny field. Pip ran along beside him. The sky was full of bright kites. They flew on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and slowly sat up.\n\n\"Hi, buddy,\" he said softly. Pip wagged his fluffy tail. He gave Sam a wet lick. Sam smiled happily. He felt cozy and warm.\n\nMom came in the living room. She had a brand new little ball. It was orange and bouncy. It was just for Pip the puppy. \"Look what I picked up ",
+   "correct": "today",
+   "distractors": [
+    "spot",
+    "already",
+    "fluffy"
+   ],
+   "slot_offset": 5101
+  },
+  {
+   "prefix_bytes": "oo. He went over to the rug. He lay down next to Pip. He petted Pip's soft, fuzzy fur. Soon he closed his eyes.\n\nIn his dream, Sam ran in a big sunny field. Pip ran along beside him. The sky was full of bright kites. They flew on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and slowly sat up.\n\n\"Hi, buddy,\" he said softly. Pip wagged his fluffy tail. He gave Sam a wet lick. Sam smiled happily. He felt cozy and warm.\n\nMom came in the living room. She had a brand new little ball. It was orange and bouncy. It was just for Pip the puppy. \"Look what I picked up today,\" she said. Pip got up really fast. He saw the new ball. He spun in a happy little circle.\n\nMom rolled the ball across the floor. Pip ran after it quickly. He brought it back. They all started laughing. Sam threw the ball again. Pip chased it really fast. He was so quick.\n\nSoon the night came. Bright stars came out. Sam ate a yummy dinner. He had warm bread. He had a big ",
+   "correct": "plate",
+   "distractors": [
+    "inside",
+    "wall",
+    "drew"
+   ],
+   "slot_offset": 5481
+  },
+  {
+   "prefix_bytes": "ip wagged his fluffy tail. He gave Sam a wet lick. Sam smiled happily. He felt cozy and warm.\n\nMom came in the living room. She had a brand new little ball. It was orange and bouncy. It was just for Pip the puppy. \"Look what I picked up today,\" she said. Pip got up really fast. He saw the new ball. He spun in a happy little circle.\n\nMom rolled the ball across the floor. Pip ran after it quickly. He brought it back. They all started laughing. Sam threw the ball again. Pip chased it really fast. He was so quick.\n\nSoon the night came. Bright stars came out. Sam ate a yummy dinner. He had warm bread. He had a big plate of beans. He drank some warm milk too.\n\nHe brushed his little teeth. He put on his soft pajamas. They had bright stars on them. He climbed into his cozy bed. Pip jumped up too. Pip lay down at his feet.\n\nMom came in to read. She read a short story. It was the one with the moon and the cow. Sam knew it really well. He said the words along with her.\n\nMom gave Sam a goodnight kiss. She turned out the ",
+   "correct": "bedroom",
+   "distractors": [
+    "licked",
+    "mouth",
+    "dripped"
+   ],
+   "slot_offset": 5888
+  },
+  {
+   "prefix_bytes": " He spun in a happy little circle.\n\nMom rolled the ball across the floor. Pip ran after it quickly. He brought it back. They all started laughing. Sam threw the ball again. Pip chased it really fast. He was so quick.\n\nSoon the night came. Bright stars came out. Sam ate a yummy dinner. He had warm bread. He had a big plate of beans. He drank some warm milk too.\n\nHe brushed his little teeth. He put on his soft pajamas. They had bright stars on them. He climbed into his cozy bed. Pip jumped up too. Pip lay down at his feet.\n\nMom came in to read. She read a short story. It was the one with the moon and the cow. Sam knew it really well. He said the words along with her.\n\nMom gave Sam a goodnight kiss. She turned out the bedroom light. She left the door open a little. The hallway light was on.\n\nSam looked up at the window. He could see one bright star. It twinkled in the sky. Pip gave a sleepy little sigh. He was already half asleep.\n\n\"Good night, buddy,\" Sam said. \"I love you a lot.\" He closed his sleepy eyes. He ",
+   "correct": "thought",
+   "distractors": [
+    "bouncy",
+    "garden",
+    "leaves"
+   ],
+   "slot_offset": 6187
+  },
+  {
+   "prefix_bytes": "ickly. He brought it back. They all started laughing. Sam threw the ball again. Pip chased it really fast. He was so quick.\n\nSoon the night came. Bright stars came out. Sam ate a yummy dinner. He had warm bread. He had a big plate of beans. He drank some warm milk too.\n\nHe brushed his little teeth. He put on his soft pajamas. They had bright stars on them. He climbed into his cozy bed. Pip jumped up too. Pip lay down at his feet.\n\nMom came in to read. She read a short story. It was the one with the moon and the cow. Sam knew it really well. He said the words along with her.\n\nMom gave Sam a goodnight kiss. She turned out the bedroom light. She left the door open a little. The hallway light was on.\n\nSam looked up at the window. He could see one bright star. It twinkled in the sky. Pip gave a sleepy little sigh. He was already half asleep.\n\n\"Good night, buddy,\" Sam said. \"I love you a lot.\" He closed his sleepy eyes. He thought about the playground. He thought of his new friend Spot. He thought about the bright ",
+   "correct": "kite",
+   "distractors": [
+    "friend",
+    "window",
+    "school"
+   ],
+   "slot_offset": 6280
+  },
+  {
+   "prefix_bytes": "d up too. Pip lay down at his feet.\n\nMom came in to read. She read a short story. It was the one with the moon and the cow. Sam knew it really well. He said the words along with her.\n\nMom gave Sam a goodnight kiss. She turned out the bedroom light. She left the door open a little. The hallway light was on.\n\nSam looked up at the window. He could see one bright star. It twinkled in the sky. Pip gave a sleepy little sigh. He was already half asleep.\n\n\"Good night, buddy,\" Sam said. \"I love you a lot.\" He closed his sleepy eyes. He thought about the playground. He thought of his new friend Spot. He thought about the bright kite.\n\nSoon he was fast asleep. Pip was sleeping too. The whole house was quiet. The bright moon shone down. It was the end of a really good day.\n\nThe next day, Sam and Pip went to the park again. They saw their friends. Lucy and Max were there. Max was a brown puppy too. The dogs played hard. They ran in big circles. They jumped over a small log. They had so much fun.\n\nSam played on the slide. ",
+   "correct": "Lucy",
+   "distractors": [
+    "petted",
+    "stars",
+    "street"
+   ],
+   "slot_offset": 6678
+  },
+  {
+   "prefix_bytes": "y light was on.\n\nSam looked up at the window. He could see one bright star. It twinkled in the sky. Pip gave a sleepy little sigh. He was already half asleep.\n\n\"Good night, buddy,\" Sam said. \"I love you a lot.\" He closed his sleepy eyes. He thought about the playground. He thought of his new friend Spot. He thought about the bright kite.\n\nSoon he was fast asleep. Pip was sleeping too. The whole house was quiet. The bright moon shone down. It was the end of a really good day.\n\nThe next day, Sam and Pip went to the park again. They saw their friends. Lucy and Max were there. Max was a brown puppy too. The dogs played hard. They ran in big circles. They jumped over a small log. They had so much fun.\n\nSam played on the slide. Lucy played there too. They went down the slide together. Sam laughed and laughed. Lucy laughed too. The slide was fast. They walked back up the steps. They went down again.\n\nPip got tired and sat in the grass. Max sat next to him. The two puppies licked each other's ears. Sam smiled at the ",
+   "correct": "funny",
+   "distractors": [
+    "small",
+    "mouth",
+    "kitten"
+   ],
+   "slot_offset": 6970
+  },
+  {
+   "prefix_bytes": " friend Spot. He thought about the bright kite.\n\nSoon he was fast asleep. Pip was sleeping too. The whole house was quiet. The bright moon shone down. It was the end of a really good day.\n\nThe next day, Sam and Pip went to the park again. They saw their friends. Lucy and Max were there. Max was a brown puppy too. The dogs played hard. They ran in big circles. They jumped over a small log. They had so much fun.\n\nSam played on the slide. Lucy played there too. They went down the slide together. Sam laughed and laughed. Lucy laughed too. The slide was fast. They walked back up the steps. They went down again.\n\nPip got tired and sat in the grass. Max sat next to him. The two puppies licked each other's ears. Sam smiled at the funny sight. Lucy smiled too.\n\nA man came by selling ice cream. Sam asked his mom for a treat. Mom said yes. Sam picked strawberry. Lucy picked chocolate. They sat on a bench together. The ice cream was cold and sweet. It dripped on Sam's hand a little. He laughed.\n\nAfter the treat, Sam and ",
+   "correct": "Lucy",
+   "distractors": [
+    "chase",
+    "hand",
+    "turned"
+   ],
+   "slot_offset": 7262
+  },
+  {
+   "prefix_bytes": ". Max was a brown puppy too. The dogs played hard. They ran in big circles. They jumped over a small log. They had so much fun.\n\nSam played on the slide. Lucy played there too. They went down the slide together. Sam laughed and laughed. Lucy laughed too. The slide was fast. They walked back up the steps. They went down again.\n\nPip got tired and sat in the grass. Max sat next to him. The two puppies licked each other's ears. Sam smiled at the funny sight. Lucy smiled too.\n\nA man came by selling ice cream. Sam asked his mom for a treat. Mom said yes. Sam picked strawberry. Lucy picked chocolate. They sat on a bench together. The ice cream was cold and sweet. It dripped on Sam's hand a little. He laughed.\n\nAfter the treat, Sam and Lucy ran around the big maple tree. They counted to ten and tried to find each other. The tree was wide. The tree was old. The leaves made a soft sound in the wind.\n\nWhen the sun started to go down, everyone said goodbye. \"See you tomorrow!\" Lucy called. \"See you tomorrow!\" Sam called ",
+   "correct": "back",
+   "distractors": [
+    "good",
+    "come",
+    "girl's"
+   ],
+   "slot_offset": 7548
+  },
+  {
+   "prefix_bytes": "ip got tired and sat in the grass. Max sat next to him. The two puppies licked each other's ears. Sam smiled at the funny sight. Lucy smiled too.\n\nA man came by selling ice cream. Sam asked his mom for a treat. Mom said yes. Sam picked strawberry. Lucy picked chocolate. They sat on a bench together. The ice cream was cold and sweet. It dripped on Sam's hand a little. He laughed.\n\nAfter the treat, Sam and Lucy ran around the big maple tree. They counted to ten and tried to find each other. The tree was wide. The tree was old. The leaves made a soft sound in the wind.\n\nWhen the sun started to go down, everyone said goodbye. \"See you tomorrow!\" Lucy called. \"See you tomorrow!\" Sam called back. He held Pip's leash and walked home with his mom. Pip walked next to him, very tired but very happy.\n\nSam thought about the day for a long time after dinner. He wanted to remember every part. He wanted to remember the slide and the bench. He wanted to remember the cold ice cream. He wanted to remember Lucy laughing.\n\nThat ",
+   "correct": "night",
+   "distractors": [
+    "dream",
+    "grass",
+    "garden"
+   ],
+   "slot_offset": 7878
+  },
+  {
+   "prefix_bytes": "t dripped on Sam's hand a little. He laughed.\n\nAfter the treat, Sam and Lucy ran around the big maple tree. They counted to ten and tried to find each other. The tree was wide. The tree was old. The leaves made a soft sound in the wind.\n\nWhen the sun started to go down, everyone said goodbye. \"See you tomorrow!\" Lucy called. \"See you tomorrow!\" Sam called back. He held Pip's leash and walked home with his mom. Pip walked next to him, very tired but very happy.\n\nSam thought about the day for a long time after dinner. He wanted to remember every part. He wanted to remember the slide and the bench. He wanted to remember the cold ice cream. He wanted to remember Lucy laughing.\n\nThat night, Sam took out his crayons. He drew a picture for Lucy. He drew the slide. He drew the maple tree. He drew Pip and Max playing. He drew Lucy and himself with smiles on their faces.\n\nSam wrote a small note on the picture. The note said, \"You are my best friend.\" He folded the picture in half. He put it in his school bag. He would ",
+   "correct": "give",
+   "distractors": [
+    "woke",
+    "open",
+    "showed"
+   ],
+   "slot_offset": 8214
+  },
+  {
+   "prefix_bytes": "he sun started to go down, everyone said goodbye. \"See you tomorrow!\" Lucy called. \"See you tomorrow!\" Sam called back. He held Pip's leash and walked home with his mom. Pip walked next to him, very tired but very happy.\n\nSam thought about the day for a long time after dinner. He wanted to remember every part. He wanted to remember the slide and the bench. He wanted to remember the cold ice cream. He wanted to remember Lucy laughing.\n\nThat night, Sam took out his crayons. He drew a picture for Lucy. He drew the slide. He drew the maple tree. He drew Pip and Max playing. He drew Lucy and himself with smiles on their faces.\n\nSam wrote a small note on the picture. The note said, \"You are my best friend.\" He folded the picture in half. He put it in his school bag. He would give it to Lucy at the park tomorrow.\n\nPip watched Sam. Pip wagged his tail. Sam patted his soft head. Sam said, \"Good night, my buddy.\" He turned off the light. He climbed into his cozy bed. The moon was out again. The stars were bright.\n\nSam ",
+   "correct": "thought",
+   "distractors": [
+    "goodnight",
+    "inside",
+    "sitting"
+   ],
+   "slot_offset": 8458
+  }
+ ]
+}

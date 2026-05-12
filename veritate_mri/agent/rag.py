@@ -204,6 +204,73 @@ def identity_compressor(passage: str) -> str:
     return passage
 
 
+def make_word_ppl_compressor(brain, keep_frac: float = 0.5, max_ctx_bytes: int = 1024):
+    """Word-level perplexity compressor (I53 / S60). Uses a Brain-shaped
+    backend as the byte-level scorer: per-byte NLL of the passage is
+    aggregated to word boundaries by mean; words with the lowest mean
+    NLL (most predictable from preceding bytes, least informative) are
+    dropped. Single-space joiner between kept words.
+    `keep_frac` ∈ (0, 1] is the fraction of words to retain.
+    `max_ctx_bytes` caps scoring cost; longer passages are truncated.
+    Smoke (85M, S60): word-level @ keep=0.5 ≈ 2× compression for
+    +0.19 nll on tinystories continuations; @ keep=0.25 ≈ 4.3× for +0.27.
+    Output is human-readable, unlike per-byte deletion."""
+    import re
+    import torch
+    import torch.nn.functional as F
+    _WORD_RE = re.compile(rb"\S+|\s+")
+    keep_frac = max(1e-3, min(1.0, float(keep_frac)))
+    max_ctx_bytes = max(64, int(max_ctx_bytes))
+
+    device = next(brain.model.parameters()).device
+
+    @torch.no_grad()
+    def _score_bytes(b: bytes):
+        tokens = torch.tensor(list(b), dtype=torch.long,
+                              device=device).unsqueeze(0)
+        # Respect the model's seq cap so we never blow past pos_emb length.
+        cap = getattr(brain.model, "seq", tokens.size(1))
+        if tokens.size(1) > cap:
+            tokens = tokens[:, -cap:]
+        logits = brain.model(tokens)[0]
+        logp = F.log_softmax(logits[0], dim=-1)
+        nll = torch.zeros(tokens.size(1), device=tokens.device)
+        targets = tokens[0]
+        nll[1:] = -logp[:-1].gather(1, targets[1:].unsqueeze(1)).squeeze(1)
+        if tokens.size(1) > 1:
+            nll[0] = nll[1:].mean()
+        return nll.tolist()
+
+    def _compress(passage: str) -> str:
+        if keep_frac >= 1.0 or not passage:
+            return passage
+        b = passage.encode("utf-8")
+        if len(b) > max_ctx_bytes:
+            b = b[:max_ctx_bytes]
+        try:
+            nlls = _score_bytes(b)
+        except Exception:
+            return passage  # silent fallback: never break the chain
+        spans = [(m.start(), m.end()) for m in _WORD_RE.finditer(b)
+                 if not m.group(0).isspace()]
+        if not spans:
+            return passage
+        scores = []
+        for (s, e) in spans:
+            seg = nlls[s:e]
+            scores.append(sum(seg) / max(1, len(seg)))
+        keep_n = max(1, int(round(len(spans) * keep_frac)))
+        order = sorted(range(len(spans)), key=lambda i: scores[i], reverse=True)
+        keep = set(order[:keep_n])
+        out = []
+        for i, (s, e) in enumerate(spans):
+            if i in keep:
+                out.append(b[s:e].decode("utf-8", errors="replace"))
+        return " ".join(out) or passage
+
+    return _compress
+
+
 def crude_compressor(passage: str, ratio: float = 0.5) -> str:
     """Crude compression heuristic: keep only sentences with above-average
     information density (lots of nouns / numbers / proper-nouns). NOT a

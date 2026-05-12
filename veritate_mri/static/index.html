@@ -66,9 +66,20 @@
 <div class="tab-body active" data-tab="generation">
 
   <div class="panel" style="margin-bottom: 10px;">
-    <h2>prompt <em>type something. the model autocompletes byte-by-byte.</em></h2>
+    <h2>prompt <em id="promptModeHint">ask the model a question. answers go in the conversation below.</em></h2>
     <div class="body">
-      <textarea id="prompt" rows="2">Once upon a time, there was a little girl who</textarea>
+      <div id="modeRow" style="display:flex;gap:14px;align-items:center;margin-bottom:6px;font-size:11px;color:var(--dim)">
+        <span style="color:var(--text);font-weight:600">mode</span>
+        <label title="Chat: ask questions, the model can use tools.">
+          <input type="radio" name="genMode" value="chat" checked> chat
+        </label>
+        <label title="Autocomplete: type the start of a sentence, the model finishes it.">
+          <input type="radio" name="genMode" value="complete"> autocomplete
+        </label>
+        <span class="stat" id="modeBadge" style="color:var(--dim);margin-left:auto"></span>
+      </div>
+      <textarea id="prompt" rows="2" placeholder="Ask a question, e.g. &quot;what is the Eiffel Tower's height?&quot;"></textarea>
+      <div id="genThinking" class="gen-thinking" style="display:none"></div>
       <div class="controls">
         <label>backend
           <select id="backend" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px">
@@ -103,49 +114,114 @@
         <span id="maxHint" class="stat" style="font-size:10px;color:var(--dim)"></span>
         <span id="liveStats" class="stats"></span>
       </div>
+      <details id="advancedWrap" style="margin-top:8px;border:1px solid var(--line);border-radius:4px;padding:6px 8px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600">advanced <span style="color:var(--dim);font-weight:400;font-size:11px">— decode, RAG, tools, addons</span></summary>
       <div id="decodeRow" style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
-        <span style="color:var(--text);font-weight:600" title="PyTorch-backend decode-path options. fast mode trades brain-scan telemetry for ~10x speed; constrained masks output to a grammar/vocab.">decode</span>
-        <label title="fast mode: kv = cached attention (1-byte-per-step, byte-exact, 19x at T=512), mtp = multi-byte-prediction head accept-all (1.5-3x, Veritate800M only), mtp-verify = byte-exact MTP-verify self-speculative (Veritate800M only, byte-exact to single-byte decode). off = default rich-telemetry path.">
+        <span style="color:var(--text);font-weight:600" title="Decode speed mode + output shape constraint.">decode</span>
+        <label title="Decode speed mode. Skips telemetry for raw speed.">
           fast
           <select id="genFastMode" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
-            <option value="off">off (full telemetry)</option>
-            <option value="kv">kv cache (byte-exact)</option>
-            <option value="mtp">mtp head accept-all (800M)</option>
-            <option value="mtp-verify">mtp-verify (byte-exact, 800M)</option>
-            <option value="adaptive">adaptive depth (early-exit at tau=0.8, 16% save byte-exact on 85M)</option>
+            <option value="off">off</option>
+            <option value="kv">kv cache</option>
+            <option value="mtp">multi-byte head</option>
+            <option value="mtp-verify">verified multi-byte</option>
+            <option value="adaptive">adaptive depth</option>
           </select>
         </label>
-        <label title="output-shape constraint applied as a -inf logit mask. json forces grammar-valid JSON; vocab/stop presets are convenience macros.">
-          constrained
+        <label title="Constrain the output shape.">
+          shape
           <select id="genConstrained" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
             <option value="off">off</option>
             <option value="json">json</option>
-            <option value="vocab:ascii">vocab: ascii</option>
-            <option value="vocab:alnum">vocab: alphanumeric</option>
-            <option value="vocab:lower">vocab: lowercase</option>
-            <option value="vocab:digits">vocab: digits</option>
-            <option value="stop:newline">stop: newline</option>
-            <option value="stop:double_newline">stop: blank line</option>
+            <option value="vocab:ascii">ascii only</option>
+            <option value="vocab:alnum">alphanumeric only</option>
+            <option value="vocab:lower">lowercase only</option>
+            <option value="vocab:digits">digits only</option>
+            <option value="stop:newline">stop at newline</option>
+            <option value="stop:double_newline">stop at blank line</option>
           </select>
         </label>
-        <span class="stat" style="font-size:10px;color:var(--dim)">PyTorch backend only</span>
+      </div>
+      <div id="ragRow" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
+        <span style="color:var(--text);font-weight:600" title="Retrieve relevant snippets from a local folder and inject as prompt context.">RAG</span>
+        <label title="File or folder of text. Leave blank to disable.">
+          corpus
+          <input id="ragCorpus" type="text" placeholder="/path/to/folder" style="width:260px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+        </label>
+        <label title="How many snippets to retrieve.">
+          top-K
+          <input id="ragK" type="number" value="3" step="1" min="1" max="16" style="width:60px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+        </label>
+        <label title="Trim retrieved context. word_ppl drops the most predictable words.">
+          compress
+          <select id="ragCompress" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+            <option value="off">off</option>
+            <option value="crude">heuristic</option>
+            <option value="word_ppl:0.75">keep 75% words</option>
+            <option value="word_ppl:0.5">keep 50% words</option>
+            <option value="word_ppl:0.25">keep 25% words</option>
+          </select>
+        </label>
+        <span id="ragStat" class="stat" style="font-size:10px;color:var(--dim)"></span>
+      </div>
+      <div id="agentRow" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
+        <span style="color:var(--text);font-weight:600" title="Let the model use tools to answer. Every step shows up in the reasoning trace below.">tools</span>
+        <label class="agentToolBox" title="Do math. The model writes an expression and gets the answer.">
+          <input type="checkbox" class="agentTool" data-tool="calculator" checked> do math
+        </label>
+        <label class="agentToolBox" title="Search a local folder of text files for relevant snippets.">
+          <input type="checkbox" class="agentTool" data-tool="retrieve" checked> search local docs
+        </label>
+        <label class="agentToolBox" title="Fetch a URL (safe — blocks internal addresses).">
+          <input type="checkbox" class="agentTool" data-tool="fetch"> open a web page
+        </label>
+        <label class="agentToolBox" title="Read a file under the folder set in 'files folder' below.">
+          <input type="checkbox" class="agentTool" data-tool="fs_read"> read local files
+        </label>
+        <label title="Folder the model is allowed to read files from.">
+          files folder
+          <input id="agentFsRoot" type="text" placeholder="/path/to/dir" style="width:180px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+        </label>
+        <label title="Max reasoning steps.">
+          max steps
+          <input id="agentMaxTurns" type="number" value="6" step="1" min="1" max="16" style="width:50px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+        </label>
+        <label title="Sample K candidates per step, pick the best.">
+          best-of
+          <input id="agentBestOf" type="number" value="1" step="1" min="1" max="8" style="width:50px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+        </label>
+        <span id="agentStat" class="stat" style="font-size:10px;color:var(--dim)"></span>
       </div>
       <div id="addonsRow" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
-        <span style="color:var(--text);font-weight:600" title="inference-time addons applied to the PyTorch backend before sampling. each addon biases next-byte logits without touching the model.">addons</span>
+        <span style="color:var(--text);font-weight:600" title="Bias next-byte logits before sampling. PyTorch backend only.">addons</span>
         <span id="addonsList" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"></span>
-        <span id="addonsHint" class="stat" style="font-size:10px;color:var(--dim)">PyTorch backend only</span>
       </div>
+      </details>
+      <details id="ragPanel" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:4px;padding:6px 8px;font-size:11px" open>
+        <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--text);font-weight:600">RAG context</span>
+          <span id="ragPanelMeta" class="stat" style="color:var(--dim)"></span>
+        </summary>
+        <div id="ragHits" style="margin-top:4px;display:flex;flex-direction:column;gap:4px"></div>
+        <details id="ragPrefixWrap" style="margin-top:6px">
+          <summary style="cursor:pointer;color:var(--dim)">final prompt prefix</summary>
+          <pre id="ragPrefix" style="white-space:pre-wrap;margin:4px 0 0 0;color:var(--text);background:#0a0c12;padding:6px;border-radius:3px;max-height:200px;overflow:auto"></pre>
+        </details>
+      </details>
+      <details id="agentPanel" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:4px;padding:6px 8px;font-size:11px" open>
+        <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--text);font-weight:600">reasoning trace</span>
+          <span id="agentPanelMeta" class="stat" style="color:var(--dim)"></span>
+        </summary>
+        <div id="agentTimeline" style="margin-top:4px;display:flex;flex-direction:column;gap:4px"></div>
+      </details>
       <details class="more">
         <summary>what these knobs do</summary>
         <div class="more-content">
-          <h4>temperature</h4>
-          <p>Reshapes the probability distribution before sampling. The model produces a logit per byte; we divide all logits by <code>temp</code>, then softmax. Numbers below 1 sharpen the distribution (the model's favorite byte gets picked more often). Numbers above 1 flatten it (rarer bytes get a real chance). At 0.1 it's nearly deterministic (mode-only behavior). At 1.5+ output gets noisy and incoherent. For coherent prose on this 80M model: 0.6 to 0.9.</p>
-          <h4>top_k</h4>
-          <p>Caps the candidate pool. Only the K bytes with the highest logits get any chance of being sampled; the rest get zeroed out. <code>top_k = 1</code> is greedy decoding (always pick the argmax, output is deterministic given the prompt). <code>top_k = 256</code> means no filtering at all. The default 40 prevents the model from sampling from the long tail of garbage while still leaving room for diversity. Lower values are safer; higher values are more creative but more likely to derail.</p>
-          <h4>max bytes</h4>
-          <p>How many bytes to generate before stopping. Each byte is one forward pass. On CPU, expect roughly 5 to 15 bytes per second for the 80M model, so 240 bytes is a 20 to 50 second run. The model has a 256-byte context window; bytes beyond that slide the prompt out of view, so very long runs lose track of where they started.</p>
-          <h4>how the knobs interact</h4>
-          <p>Temperature and top_k both fight randomness from different angles. Low temp + high top_k = predictable but flexible. High temp + top_k=1 = still deterministic (top_k=1 wins). For variations on the same theme, hold top_k=40 and sweep temperature. For "what does the model literally believe is most likely," set top_k=1 and temp=0.1.</p>
+          <p><b>temperature</b> — sharpens (&lt;1) or flattens (&gt;1) the next-byte distribution. 0.6–0.9 for coherent prose; 0.1 nearly deterministic; 1.5+ noisy.</p>
+          <p><b>top_k</b> — only the K highest-logit bytes are sampleable. <code>k=1</code> = greedy. <code>k=256</code> = no filter. Default 40 cuts the long tail without losing variety.</p>
+          <p><b>max bytes</b> — bytes to generate before stopping. One forward pass per byte.</p>
+          <p>top_k wins ties: <code>top_k=1</code> is greedy regardless of temperature. Sweep temperature with top_k held to compare variants.</p>
         </div>
       </details>
     </div>
@@ -263,16 +339,7 @@
     <div class="panel">
       <h2>logit lens <em>what each layer would predict if the network stopped there</em></h2>
       <div class="body"><div id="lens"></div></div>
-      <p class="desc"><b>How this works.</b> The model's final prediction comes from the last layer's residual stream projected through the
-         unembedding matrix. The logit lens applies that <i>same projection</i> to the residual stream after every earlier layer too &mdash;
-         giving you a per-layer "what would the model predict if it stopped here?" Top byte and probability are shown per layer; the gold-
-         highlighted row is the first layer whose top-1 prediction matches the byte that actually got sampled.</p>
-      <p class="desc"><b>What to expect by region.</b> <b style="color:var(--cool)">L0–L3 (sensory)</b> usually predicts whatever byte is
-         currently in the input position &mdash; the residual is barely past the embedding, so it just echoes. <b style="color:var(--warm)">L4–L8
-         (association)</b> predictions start sharpening as syntactic and semantic context accumulates &mdash; you'll see the top-1 probability
-         climb. <b style="color:var(--hot)">L9–L11 (output)</b> commit to the actual next byte; this is where the "first match" check usually
-         fires. If the gold row is way up at L4 or L5, the model's decision was effectively made early. If it never matches, the temperature/top_k
-         sampling pulled a non-argmax byte.</p>
+      <p class="desc">Each row = what the model would predict if it stopped at that layer (its residual run through the unembedding). Top byte + probability per layer. Gold row = first layer whose top-1 matches the byte that was actually sampled. Expect: <b style="color:var(--cool)">L0&ndash;L3</b> echoes the input, <b style="color:var(--warm)">L4&ndash;L8</b> sharpens, <b style="color:var(--hot)">L9&ndash;L11</b> commits. Gold high in the stack = decision made early.</p>
       <div data-detail="lens"></div>
     </div>
     <div class="panel">
@@ -295,25 +362,13 @@
     <div class="panel">
       <h2>residual stream depth <em>how much information has accumulated by each layer</em></h2>
       <div class="body"><ul class="layers" id="res"></ul></div>
-      <p class="desc"><b>What the residual stream is.</b> Imagine a shared notebook 768 numbers wide. Layer 0 starts by writing the byte embedding
-         + position embedding into it. Each layer that follows reads the notebook, decides what to add, then writes its delta back. Every layer reads
-         <i>everything</i> previous layers wrote. The numbers in this list are the L2 norm (magnitude) of the notebook's contents after each layer.
-         <b>Growing through depth is normal</b> &mdash; later layers see more accumulated context. <b>Sharp jumps</b> from one layer to the next mean
-         that layer added a lot of new content. <b>Plateaus</b> mean a layer just refined what was already there. If the values blow up to huge numbers
-         late in the stack, that's saturation pressure; INT8 will clip. If they shrink, the model is canceling out earlier signal.</p>
+      <p class="desc">L2 norm of the shared 768-wide residual after each layer. Growth = layer added context (normal). Flat = refined what was there. Big spikes = layer wrote a lot. Collapse = layer cancelled earlier signal. Large values late in the stack = INT8 saturation risk.</p>
       <div data-detail="residual"></div>
     </div>
     <div class="panel">
       <h2>per-layer contribution <em>which layer is actually working for this byte</em></h2>
       <div class="body"><ul class="layers" id="contrib"></ul></div>
-      <p class="desc"><b>What this measures.</b> For each layer, the L2 norm of (residual after the layer &minus; residual before the layer).
-         In plain terms: how much did this layer change the notebook? <b>Big bar = this layer did real work for this specific token</b>; small bar =
-         this layer mostly passed the residual through unchanged. Most tokens have one or two dominant layers. Boring middle-of-word bytes usually
-         have early-layer dominance (L0&ndash;L3 just doing surface pattern matching). Bytes at sentence boundaries / branching points usually have
-         late-layer dominance (L9&ndash;L11 committing to a choice). Together with <i>per-layer decisiveness</i>: contribution tells you <b>how much
-         a layer wrote</b>; decisiveness tells you <b>how aimed that writing was</b>. A layer can write a lot but spread it across many bytes
-         (high contrib + low decisiveness = layer dumping context); or write a little aimed at one byte (low contrib + high decisiveness = a precise
-         late commit).</p>
+      <p class="desc">L2 norm of (residual after layer &minus; residual before). How much each layer changed the residual for this byte. Big bar = layer did real work. Most bytes have one or two dominant layers: early (L0&ndash;L3) for surface patterns, late (L9&ndash;L11) for committing decisions. Pair with <i>decisiveness</i>: contribution = volume, decisiveness = aim.</p>
       <div data-detail="contribution"></div>
     </div>
   </div>
@@ -644,28 +699,47 @@
   </div>
 
   <div class="panel">
-    <h2>reading level <em>per-band fluency over training, 7 reading-level tiers</em></h2>
+    <h2>register fluency proxy <em>per-band byte NLL across 7 prose registers &mdash; fluency proxy, not comprehension</em></h2>
     <div class="body">
       <div id="learnReadLegend" style="margin-bottom:6px"></div>
       <canvas id="cReadGradeL" height="200" style="margin-top:4px"></canvas>
-      <div class="meta" style="margin-top:4px;margin-bottom:14px;font-size:10.5px">trajectory: per-band fluency % (UP = better). Each band starts at 0 (random) at step 0 and rises toward FLUENT (ppl 3.0 = 100%). Threshold lines marked.</div>
+      <div class="meta" style="margin-top:4px;margin-bottom:14px;font-size:10.5px">trajectory: per-band byte-NLL score (UP = lower ppl on the band). Every band anchors at 0 (random, ppl 256) at step 0; the ppl 3.0 dashed line is a reference, not a pass mark.</div>
       <div id="learnReadLevel">no grades data</div>
       <div class="meta" style="margin-top:8px;font-size:10.5px;color:var(--warm)">
-        Perplexity proxy &mdash; this estimates fluency from per-band cross-entropy, not real comprehension.
-        For accuracy on MMLU&nbsp;/&nbsp;HellaSwag&nbsp;/&nbsp;IFEval, see the <b>Deep Eval</b> panel below.
+        Register-NLL proxy &mdash; this measures how well the model has learned the prose statistics of each register, not whether it understands the text. FKGL targets syntactic difficulty (sentence length, syllables), not cognitive load: formulaic academic phrasing often scores lower ppl than short high-entropy Pre-K sentences.
+        For real comprehension see the <b>Deep Eval</b> panel below (MMLU&nbsp;/&nbsp;HellaSwag&nbsp;/&nbsp;IFEval).
       </div>
     </div>
-    <details class="more"><summary>how the grade is computed</summary><div class="more-content">
+    <details class="more"><summary>how this metric is computed</summary><div class="more-content">
       <h4>where the test corpora come from</h4>
       <p>For each of the 7 bands (Pre-K, K, Elem, Middle, HS, College, PhD) we hold out ~4&nbsp;KB of grade-labeled byte text in <code>veritate_mri/grade_eval/grade_&lt;level&gt;_eval.bin</code>. Sources are fresh hand-authored passages tuned to each band's prose statistics (sentence length, clause density, register), giving clean bytes from offset 0 with no Gutenberg boilerplate to inflate ppl. Probe text never overlaps with training corpora. Sources live at <code>veritate_mri/grade_eval/sources/</code>; producer: <code>veritate_mri/tools/build_grade_evals.py</code>.</p>
       <h4>what perplexity (ppl) actually measures</h4>
-      <p><b>Perplexity = exp(mean cross-entropy)</b>. It is the effective number of bytes the model is choosing between at each step. ppl 256 = uniform random across all bytes. ppl 1.0 = perfect prediction. ppl &lt; 3.0 means the model needs under 1.6 bits to commit to each next byte (the empirical floor where TinyStories-clone prose stops looking like noise). Lower is better.</p>
-      <h4>why "highest passing band" is the honest read</h4>
-      <p>A model with low ppl on Elem and high ppl on Pre-K isn't necessarily "below Elem." Each band's prose has a different statistical signature (sentence length, clause density, register), and the model's training mix decides which signature scores best. The most informative answer is the highest band the model can read fluently. That's the ceiling, and it's what the hero label shows.</p>
-      <h4>what to do with this</h4>
-      <p><b class="lead">FLUENT band that's the curriculum target.</b> Stage gate passes. Advance to the next stage.</p>
-      <p><b class="lead">EMERGING band with a small gap</b> (e.g. ppl 3.3 vs 3.0 threshold). The next 1-2k steps on that domain usually closes it; keep training.</p>
-      <p><b class="lead">NOT YET band on the curriculum target.</b> Corpus mix is wrong for the stage. Lower the LR or rewind to easier text rather than pushing on.</p>
+      <p><b>Perplexity = exp(mean cross-entropy)</b>. It is the effective number of bytes the model is choosing between at each step. ppl 256 = uniform random across all bytes. ppl 1.0 = perfect prediction. ppl &lt; 3.0 means the model needs under 1.6 bits to commit to each next byte. Lower is better.</p>
+      <h4>why this is a proxy and not a reading test</h4>
+      <p>Byte cross-entropy measures how predictable the next byte is, not whether the model has built a representation of meaning. The "PhD" band's prose is full of formulaic genre phrasing ("we present", "p &lt; 0.05") and is often <i>easier</i> to predict than short Pre-K sentences with high local entropy ("Bug. Big bug! Run!"). A model can score well on a band purely by recognizing its register without comprehending the text. Treat this tile as <i>register coverage</i>, not reading ability. The hard "can it read" question is the Deep Eval panel below and the comprehension probe (in progress).</p>
+      <h4>how to read the bands</h4>
+      <p><b class="lead">Band below the ppl-3.0 reference</b> &mdash; the model has learned this register's prose statistics well.</p>
+      <p><b class="lead">Band 1-2 ppl above the reference</b> &mdash; close to learned. A few thousand more steps on similar text usually closes it.</p>
+      <p><b class="lead">Band far above the reference</b> &mdash; that register is under-represented in the training mix, not necessarily "too hard."</p>
+    </div></details>
+  </div>
+
+  <div class="panel">
+    <h2>reading comprehension <em>4-way contextual-completion MCQ, register-matched distractors, chance = 25%</em></h2>
+    <div class="body">
+      <div id="learnReadingComp">no comprehension probe data yet</div>
+    </div>
+    <details class="more"><summary>what this actually measures</summary><div class="more-content">
+      <h4>the task</h4>
+      <p>For each grade-band passage, ~30 items each present the model with a passage prefix followed by a slot the model must fill. Four candidates: the correct content word and three distractors drawn from the <i>same passage</i>. The model picks via lowest mean per-byte NLL on each candidate conditioned on the prefix.</p>
+      <h4>why this is honest where the fluency tile is not</h4>
+      <p>Distractors share the passage's register, genre, vocabulary, and syntax. Length-normalization is matched (distractors are within &plusmn;2 bytes of the correct word). The slot sits mid-passage, so sentence-initial bigram cues don't help. The only way to win is to use long-range context to disambiguate meaning. A model that has only learned register statistics cannot rise above chance here.</p>
+      <h4>how to read the bands</h4>
+      <p><b class="lead">Below 32% (near chance)</b> &mdash; the model has no reliable signal on this band's prose. Either the register is rare in training or comprehension hasn't formed yet.</p>
+      <p><b class="lead">32-55%</b> &mdash; emerging context use. The model is picking up local semantic cues but not consistent.</p>
+      <p><b class="lead">Above 55%</b> &mdash; a real comprehension signal. The model is reliably using passage context to predict content words.</p>
+      <h4>limitations</h4>
+      <p>This is contextual prediction, not full comprehension &mdash; the model is never asked an explicit question about the passage. For true MCQ comprehension on standard benchmarks, run the Deep Eval panel below (MMLU/HellaSwag/IFEval). The two are complementary: this probe runs every checkpoint and gives per-band signal cheaply; Deep Eval is the slow ground-truth check.</p>
     </div></details>
   </div>
 
@@ -699,9 +773,9 @@
       Real benchmark accuracy, not a perplexity proxy. Click <b>run deep eval</b> and the dashboard loads the selected checkpoint through the same PyTorch Brain backend it uses for inference, scores every question/item with byte-level per-byte log-likelihood (the byte-level analog of <code>acc_norm</code> in <code>lm-eval-harness</code>), and writes the JSON report next to your model in <code>models/&lt;run&gt;/eval_deep/</code>. Cached results auto-load when this panel opens.
       <span style="color:var(--warm)">Heads up &mdash; if a model is currently training on MPS, deep eval will briefly share that device. The button is the only trigger; nothing schedules this.</span>
     </p>
-    <details class="more"><summary>how this differs from the reading-level tile</summary><div class="more-content">
+    <details class="more"><summary>how this differs from the register-fluency tile</summary><div class="more-content">
       <h4>two complementary views of "is the model getting smarter"</h4>
-      <p><b class="lead">Reading level (above)</b> is fast and runs at every checkpoint via the save hook. It scores per-byte cross-entropy on hand-authored grade-labeled prose (Pre-K through PhD). High score = the model's distribution matches that prose's statistics. <span style="color:var(--warm)">It is fluency, not comprehension.</span> A model can score "fluent at college-level prose" while still being totally wrong on a college-level multiple choice question.</p>
+      <p><b class="lead">Register fluency (above)</b> is fast and runs at every checkpoint via the save hook. It scores per-byte cross-entropy on hand-authored grade-labeled prose (Pre-K through PhD). Low ppl = the model's distribution matches that prose's statistics. <span style="color:var(--warm)">It is register coverage, not comprehension.</span> A model can score low ppl on "college-level prose" while still being totally wrong on a college-level multiple choice question.</p>
       <p><b class="lead">Deep eval (this panel)</b> is the comprehension test. The model has to actually rank the right multiple-choice answer above the wrong ones, or follow a verifiable instruction. Slow (5-20 min per suite), runs only when you click the button, returns real numbers everyone reports.</p>
       <h4>random baselines</h4>
       <p>MMLU and HellaSwag are 4-way MCQ &rarr; chance = <b>25%</b>. The panel color-codes accuracy: green &gt; 50% (above chance by a comfortable margin), amber 25-50% (signal exists but weak), red &lt; 25% (below chance &mdash; either the harness or the model is broken).</p>
@@ -1042,13 +1116,21 @@
   </div>
 
   <div class="panel">
-    <h2>reading level <em>per-band fluency over training, 7 reading-level tiers</em></h2>
+    <h2>register fluency proxy <em>per-band byte NLL across 7 prose registers &mdash; fluency proxy, not comprehension</em></h2>
     <div class="body">
       <div id="trainReadLegend" style="margin-bottom:6px"></div>
       <canvas id="cReadGradeT" height="200" style="margin-top:4px"></canvas>
-      <div class="meta" style="margin-top:4px;margin-bottom:14px;font-size:10.5px">trajectory: per-band fluency % (UP = better). Each band starts at 0 (random) at step 0 and rises toward FLUENT (ppl 3.0 = 100%). Threshold lines marked.</div>
+      <div class="meta" style="margin-top:4px;margin-bottom:14px;font-size:10.5px">trajectory: per-band byte-NLL score (UP = lower ppl on the band). Every band anchors at 0 (random, ppl 256) at step 0; the ppl 3.0 dashed line is a reference, not a pass mark.</div>
       <div id="trainReadLevel">no grades data</div>
     </div>
+  </div>
+
+  <div class="panel">
+    <h2>reading comprehension <em>4-way contextual-completion MCQ, register-matched distractors, chance = 25%</em></h2>
+    <div class="body">
+      <div id="trainReadingComp">no comprehension probe data yet</div>
+    </div>
+    <p class="desc">Per-band 4-way MCQ: given a passage prefix the model ranks the correct content word against 3 same-passage distractors. Register/length-matched distractors mean fluency alone cannot win &mdash; only context use. Chance = 25%. See the Learning tab for the full explanation.</p>
   </div>
 
   <div class="panel">
@@ -1282,8 +1364,8 @@
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px;margin-top:8px">
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
-            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Heartbeat <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">required &middot; every 6h</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Hashed machine id, OS/arch, uptime, restart and error counts, model count, model-name hash. No prompts, checkpoints, or source.</div>
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Heartbeat <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">minimum &middot; every 6h</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Hashed machine id, timestamp, uptime, restart count, error count, and a flag for whether training is currently active. No prompts, checkpoints, source, or model identities.</div>
             <div class="meta" id="heartbeatStatusLine" style="font-size:10.5px;color:var(--dim);line-height:1.55">
               machine id: <span id="heartbeatMachineId">.</span><br>
               device id: <span id="heartbeatDeviceId">.</span><br>
@@ -1306,11 +1388,20 @@
           </div>
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Error reports <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">on by default</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Adds error log lines (source tag + truncated message) to each heartbeat so we can fix what's breaking. Capped at 20 errors per ping, 240 chars per message. No tracebacks, no file paths.</div>
+            <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
+              <input type="checkbox" id="heartbeatSendErrorsEnable">
+              <span class="opt-title" style="margin:0;font-size:11.5px">Send error detail</span>
+            </label>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Advanced <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">opt-in</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Once per machine: CPU, RAM, GPU specs. Per training run: model name, size, arch, precision, batch size, total steps. Hardware never repeated. No weights, datasets, or metrics.</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Once per machine: CPU, RAM, GPU specs. Per active training run: model name, parameter count, shape (hidden, layers, heads, seq), plugin id, started_at. Hardware never repeated. No weights, datasets, or metrics.</div>
             <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
               <input type="checkbox" id="analyticsAdvancedEnable">
-              <span class="opt-title" style="margin:0;font-size:11.5px">Send hardware &amp; training events</span>
+              <span class="opt-title" style="margin:0;font-size:11.5px">Send hardware &amp; training details</span>
             </label>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="reviewConsentBtn" class="action" type="button">review what gets sent</button>

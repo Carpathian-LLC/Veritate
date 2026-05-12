@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import platform
+import random
 import socket
 import ssl
 import threading
@@ -41,6 +42,9 @@ from readers import paths, models as models_reader
 
 HEARTBEAT_URL          = "https://api.carpathian.ai/webhook/veritate-heartbeat"
 HEARTBEAT_INTERVAL_SECS = 6 * 60 * 60
+# +/- jitter applied to every scheduled send. Spreads thundering herds when
+# many clients restart at once (release rollout, regional power blip, etc).
+HEARTBEAT_JITTER_FRAC   = 0.10
 HEARTBEAT_FIRST_DELAY   = 5 * 60
 HEARTBEAT_TIMEOUT_SECS  = 8.0
 HEARTBEAT_USER_AGENT    = "veritate-heartbeat/2"
@@ -53,6 +57,9 @@ HOST_TOKEN_LEN = 12
 
 PROTOCOL_VERSION = 2
 TRAINING_EVENTS_PER_PING_MAX = 32
+ERRORS_PER_PING_MAX = 20
+ERROR_SOURCE_MAX  = 32
+ERROR_MESSAGE_MAX = 240
 
 _LOCK        = threading.Lock()
 _PROCESS_START = time.monotonic()
@@ -158,10 +165,26 @@ def record_restart():
     return n
 
 
-def record_error_tick():
+def record_error_tick(source="", msg=""):
+    """Logger hook. Always increments the count; appends a {ts, source, msg}
+    record to a bounded ring so the next heartbeat can ship error detail when
+    heartbeat_send_errors is enabled. Truncates fields so a runaway logger
+    can't blow up state."""
     s = _state()
     n = int(s.get("errors_pending") or 0) + 1
-    _update_state({"errors_pending": n})
+    patch = {"errors_pending": n}
+    buf = s.get("errors_pending_detail") or []
+    if not isinstance(buf, list):
+        buf = []
+    buf.append({
+        "ts":     int(time.time()),
+        "source": str(source or "")[:ERROR_SOURCE_MAX],
+        "msg":    str(msg or "")[:ERROR_MESSAGE_MAX],
+    })
+    if len(buf) > ERRORS_PER_PING_MAX * 4:
+        buf = buf[-ERRORS_PER_PING_MAX * 4:]
+    patch["errors_pending_detail"] = buf
+    _update_state(patch)
 
 
 def record_training_event(model_name, arch, started_at=None):
@@ -185,12 +208,30 @@ def record_training_event(model_name, arch, started_at=None):
     _update_state({"pending_training_events": pend})
 
 
-def _consume_errors():
+def _consume_errors(with_detail):
+    """Drains the pending error counter and the detail ring. Returns
+    (count, detail_list_or_None). detail_list is None when the user has
+    opted out of error-detail telemetry; the count itself is always part of
+    the minimal payload."""
     s = _state()
     n = int(s.get("errors_pending") or 0)
+    detail = None
+    patch = {}
     if n:
-        _update_state({"errors_pending": 0})
-    return n
+        patch["errors_pending"] = 0
+    if with_detail:
+        buf = s.get("errors_pending_detail") or []
+        detail = buf[-ERRORS_PER_PING_MAX:] if isinstance(buf, list) and buf else []
+        if buf:
+            patch["errors_pending_detail"] = []
+    else:
+        # Opted out: drop the buffer so nothing carries over if the user
+        # toggles the checkbox on later. Their consent applies forward.
+        if s.get("errors_pending_detail"):
+            patch["errors_pending_detail"] = []
+    if patch:
+        _update_state(patch)
+    return n, detail
 
 
 def _accumulate_runtime(uptime_secs):
@@ -227,33 +268,54 @@ def _hw_block():
 
 
 def _build_payload():
+    """Tiered payload:
+      minimal (always sent if heartbeat enabled): machine_id, ts, uptime,
+        restarts, error count, presence of training (no detail).
+      errors tier (heartbeat_send_errors): full {ts, source, msg} list.
+      analytics tier (analytics_advanced_enabled): host/os/arch, total
+        runtime, n_models, models_hash, hw block (once), training detail
+        with model name + shape + n_params, trainings event buffer."""
     uptime = max(0.0, time.monotonic() - _PROCESS_START)
-    s = _state()
-    mh, n_models = _models_hash()
+    s    = _state()
+    cfg  = settings_mod.get()
+    send_errors    = bool(cfg.get("heartbeat_send_errors"))
+    send_analytics = bool(cfg.get("analytics_advanced_enabled"))
+    err_count, err_detail = _consume_errors(with_detail=send_errors)
     payload = {
         "v":           PROTOCOL_VERSION,
         "machine_id":  _machine_id(),
         "device_id":   _effective_device_id(),
         "ts":          int(time.time()),
-        "host":        _host_token(),
-        "os":          platform.system() or "",
-        "arch":        platform.machine() or "",
         "uptime_secs": int(uptime),
-        "total_runtime_secs": int(float(s.get("total_runtime_secs") or 0.0) + uptime),
         "restarts":    int(s.get("restarts") or 0),
-        "errors":      _consume_errors(),
-        "n_models":    n_models,
-        "models_hash": mh,
+        "errors":      err_count,
     }
+    if send_errors and err_detail:
+        payload["errors_detail"] = err_detail
     fn = _TRAINING_FN
+    train_payload = None
     if fn is not None:
         try:
             t = fn()
             if isinstance(t, dict) and t:
-                payload["training"] = t
+                train_payload = t
         except Exception:
-            pass
-    if bool(settings_mod.get().get("analytics_advanced_enabled")):
+            train_payload = None
+    if train_payload is not None:
+        if send_analytics:
+            payload["training"] = train_payload
+        else:
+            # Minimal tier still reports whether a run is active so the
+            # server can flip online/active, just without identifying it.
+            payload["training_active"] = True
+    if send_analytics:
+        mh, n_models = _models_hash()
+        payload["host"]               = _host_token()
+        payload["os"]                 = platform.system() or ""
+        payload["arch"]               = platform.machine() or ""
+        payload["total_runtime_secs"] = int(float(s.get("total_runtime_secs") or 0.0) + uptime)
+        payload["n_models"]           = n_models
+        payload["models_hash"]        = mh
         if not bool(s.get("hw_dump_sent")):
             hw = _hw_block()
             if hw is not None:
@@ -328,9 +390,28 @@ def _enabled():
     return bool(s.get("heartbeat_enabled"))
 
 
+def _jittered_interval():
+    spread = HEARTBEAT_INTERVAL_SECS * HEARTBEAT_JITTER_FRAC
+    return HEARTBEAT_INTERVAL_SECS + random.uniform(-spread, spread)
+
+
+def _training_signature():
+    fn = _TRAINING_FN
+    if fn is None:
+        return None
+    try:
+        t = fn()
+    except Exception:
+        return None
+    if not isinstance(t, dict) or not t:
+        return None
+    return (t.get("plugin_id"), t.get("started_at"))
+
+
 def _loop():
     last_persist = time.monotonic()
     next_send    = time.monotonic() + HEARTBEAT_FIRST_DELAY
+    last_train   = _training_signature()
     while True:
         time.sleep(60)
         now = time.monotonic()
@@ -339,11 +420,22 @@ def _loop():
             last_persist = now
             _update_state({"last_start_ts": time.time()})
         if not _enabled():
-            next_send = now + HEARTBEAT_INTERVAL_SECS
+            next_send = now + _jittered_interval()
+            last_train = _training_signature()
+            continue
+        # Edge-triggered ping on training start/stop. Lets the server flip a
+        # client between "online" and "active" within a minute instead of
+        # waiting up to 6h for the next steady ping. Coalesced with the
+        # steady cadence: one transition = one extra ping, not a flood.
+        cur_train = _training_signature()
+        if cur_train != last_train:
+            last_train = cur_train
+            _send_once()
+            next_send = now + _jittered_interval()
             continue
         if now >= next_send:
             _send_once()
-            next_send = now + HEARTBEAT_INTERVAL_SECS
+            next_send = now + _jittered_interval()
 
 
 def start():

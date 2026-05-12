@@ -164,6 +164,145 @@ class AgentLoop:
         self.seed_base = int(seed_base)
         self.system_prompt = _build_system_prompt(toolbox)
 
+    def run_streaming(self, user_input: str):
+        """Generator variant of run() that yields per-event dicts as the
+        loop progresses. Event shapes:
+            {kind: "turn_start", turn: <i>}
+            {kind: "thought",    turn: <i>, text: <str>}
+            {kind: "action",     turn: <i>, tool: <str>, args: <dict>}
+            {kind: "observation",turn: <i>, text: <str>, elapsed_s: <f>}
+            {kind: "schema_err", turn: <i>, error: <str>, raw_head: <str>}
+            {kind: "answer",     turn: <i>, text: <str>}
+            {kind: "stop",       reason: <str>, total_elapsed_s: <f>}
+        Consumers (SSE, log tail) read the same shape. Internally delegates
+        the run-once-and-collect path; the loop body is duplicated minimally
+        to preserve `run()` for non-streaming callers."""
+        from decode import JSONConstraint
+        import torch
+
+        class _AgentJSONConstraint(JSONConstraint):
+            def prime(self, prefix: bytes) -> None:
+                return
+
+        result = AgentResult()
+        t_start = time.time()
+        for turn_i in range(self.max_turns):
+            yield {"kind": "turn_start", "turn": turn_i}
+            turn = AgentTurn()
+            t0 = time.time()
+            prompt = _build_turn_prompt(self.system_prompt, user_input, result.turns)
+
+            candidates = []
+            for k in range(self.best_of_n):
+                torch.manual_seed(self.seed_base + turn_i * self.best_of_n + k)
+                constraint = _AgentJSONConstraint()
+                gen = self.backend.stream(prompt,
+                                          temperature=self.temperature,
+                                          top_k_sample=self.top_k,
+                                          max_new=self.max_new,
+                                          constraint=constraint)
+                raw, stop = _collect_bytes(gen)
+                candidates.append((raw, stop))
+
+            chosen_raw, chosen_stop = candidates[0]
+            chosen_obj = None
+            for raw, stop in candidates:
+                try:
+                    obj = json.loads(raw.decode("utf-8", errors="replace"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if isinstance(obj, dict) and ("action" in obj or "answer" in obj):
+                    chosen_raw, chosen_stop, chosen_obj = raw, stop, obj
+                    break
+            if chosen_obj is None:
+                longest = max(candidates, key=lambda c: len(c[0]))
+                chosen_raw, chosen_stop = longest
+
+            raw, stop = chosen_raw, chosen_stop
+            turn.raw_bytes = raw
+            turn.stop_reason = stop
+            turn.elapsed_s = time.time() - t0
+
+            try:
+                obj = json.loads(raw.decode("utf-8", errors="replace"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                turn.parse_error = f"{type(e).__name__}: {e}"
+                turn.schema_error = "model emitted incomplete JSON; retry"
+                head = raw[:120].decode("utf-8", errors="replace")
+                yield {"kind": "schema_err", "turn": turn_i,
+                       "error": turn.schema_error, "raw_head": head}
+                result.turns.append(turn)
+                continue
+
+            if not isinstance(obj, dict):
+                turn.schema_error = f"top-level JSON must be an object, got {type(obj).__name__}"
+                yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
+                result.turns.append(turn)
+                continue
+            turn.parsed = obj
+            turn.thought = obj.get("thought") if isinstance(obj.get("thought"), str) else None
+            if turn.thought:
+                yield {"kind": "thought", "turn": turn_i, "text": turn.thought}
+
+            if "answer" in obj:
+                ans = obj.get("answer")
+                if not isinstance(ans, str):
+                    turn.schema_error = "'answer' must be a string"
+                    yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
+                    result.turns.append(turn)
+                    continue
+                turn.answer = ans
+                yield {"kind": "answer", "turn": turn_i, "text": ans}
+                result.turns.append(turn)
+                result.final_answer = ans
+                result.stop_reason = "answer"
+                break
+
+            if "action" in obj:
+                action = obj.get("action")
+                args = obj.get("args") or {}
+                if not isinstance(action, str):
+                    turn.schema_error = "'action' must be a string"
+                    yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
+                    result.turns.append(turn)
+                    continue
+                if not isinstance(args, dict):
+                    turn.schema_error = "'args' must be an object"
+                    yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
+                    result.turns.append(turn)
+                    continue
+                tool = self.toolbox.get(action)
+                if tool is None:
+                    turn.schema_error = f"unknown tool {action!r}; available: {self.toolbox.names()}"
+                    yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
+                    result.turns.append(turn)
+                    continue
+                turn.action = action
+                turn.args = args
+                yield {"kind": "action", "turn": turn_i, "tool": action, "args": args}
+                tool_t0 = time.time()
+                turn.observation = tool.call(args)
+                tool_dt = time.time() - tool_t0
+                # Trim observation to keep SSE payload bounded
+                obs_view = turn.observation
+                if len(obs_view) > _DEFAULT_OBS_TRIM:
+                    obs_view = obs_view[:_DEFAULT_OBS_TRIM] + " ... [trimmed]"
+                yield {"kind": "observation", "turn": turn_i, "text": obs_view,
+                       "elapsed_s": tool_dt}
+                result.turns.append(turn)
+                continue
+
+            turn.schema_error = "JSON object must contain either 'answer' or 'action'"
+            yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
+            result.turns.append(turn)
+
+        if result.final_answer is None:
+            result.stop_reason = result.stop_reason or "max_turns"
+        result.total_elapsed_s = time.time() - t_start
+        yield {"kind": "stop", "reason": result.stop_reason,
+               "total_elapsed_s": result.total_elapsed_s,
+               "turns": len(result.turns)}
+
     def run(self, user_input: str) -> AgentResult:
         # Avoid cycle: local import. We need a JSONConstraint subclass that
         # skips Brain.stream's "prime with full prompt" step, because the

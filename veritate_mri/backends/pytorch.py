@@ -1153,23 +1153,39 @@ class Brain:
         m = self.model
         seq = m.seq
 
-        # Detect model variant: canonical Veritate uses `pos_emb` and the
-        # tied lm_head; RoPE variants use rope_cos/rope_sin; 800M routes
-        # byte-0 through mtp.lm_head. For adaptive we use the same projection
-        # head the FINAL forward would use, so the logit-lens at any layer
-        # is comparable to the final output.
-        is_rope = hasattr(m, "rope_cos") and hasattr(m, "rope_sin")
-        is_800m = is_rope and hasattr(m, "mtp")
+        # Model-agnostic output projection (preflight rule 11a). The model
+        # knows what it is; this code does not. byte0_projector() returns a
+        # callable that maps residual -> byte-0 logits regardless of variant.
+        from decode import byte0_projector
+        project = byte0_projector(m)
 
-        # Pre-cache the final-norm + lm_head projection. For 800M this is
-        # (n_out) then (mtp.norms[0], mtp.transforms[0], mtp.lm_head); for
-        # canonical Veritate / VeritateRoPE it's (n_out, lm_head).
-        def project(residual):
-            x = m.n_out(residual)
-            if is_800m:
-                head0 = m.mtp.norms[0](m.mtp.transforms[0](x))
-                return m.mtp.lm_head(head0)
-            return m.lm_head(x)
+        # Cache whether the model exposes its own embed() / has a RoPE
+        # cache. We don't dispatch by variant here — we ask the model what
+        # surface it provides.
+        has_embed       = hasattr(m, "embed") and callable(m.embed)
+        has_rope_cache  = hasattr(m, "rope_cos") and hasattr(m, "rope_sin")
+        has_extend_rope = hasattr(m, "extend_rope") and callable(m.extend_rope)
+
+        def _embed_input(ids_tensor):
+            """Use model.embed() if it exists. Otherwise build a canonical
+            tok_emb + pos_emb input. (RoPE models register rope_cos/sin as
+            buffers; the model's own embed() handles them.)"""
+            if has_embed:
+                return m.embed(ids_tensor)
+            T = ids_tensor.size(1)
+            positions = torch.arange(T, device=ids_tensor.device).unsqueeze(0)
+            return m.tok_emb(ids_tensor) + m.pos_emb(positions)
+
+        def _run_block(block, x):
+            """Some block signatures take extra args (RoPE cos/sin). Try the
+            plain call first; fall back to the RoPE signature if needed.
+            Both signatures live in the model class, not the consumer."""
+            try:
+                return block(x)
+            except TypeError:
+                if has_rope_cache:
+                    return block(x, m.rope_cos, m.rope_sin)
+                raise
 
         ids_full = list(prompt_bytes)
         produced = 0
@@ -1182,24 +1198,16 @@ class Brain:
 
             # Embed + per-block walk with early exit
             with torch.no_grad():
-                if is_rope:
-                    # Extend rope cache if needed
+                # Extend RoPE cache if the model has one and we exceed it
+                if has_rope_cache and has_extend_rope:
                     if ids.size(1) > m.rope_cos.size(0):
                         m.extend_rope(ids.size(1))
-                    x = m.embed(ids)
-                else:
-                    # Canonical Veritate: tok_emb + pos_emb
-                    T = ids.size(1)
-                    positions = torch.arange(T, device=ids.device).unsqueeze(0)
-                    x = m.tok_emb(ids) + m.pos_emb(positions)
+                x = _embed_input(ids)
 
                 exit_layer = m.layers
                 final_logits = None
                 for L, blk in enumerate(m.blocks):
-                    if is_rope:
-                        x = blk(x, m.rope_cos, m.rope_sin)
-                    else:
-                        x = blk(x)
+                    x = _run_block(blk, x)
                     # Check confidence at this layer. Project the last
                     # position only — that's the next-byte prediction.
                     last_residual = x[:, -1:, :]

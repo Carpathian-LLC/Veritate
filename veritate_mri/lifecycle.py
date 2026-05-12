@@ -30,7 +30,14 @@ import plugin_runner
 # ------------------------------------------------------------------------------------
 # Constants
 
-DELAY_SECS = 0.4
+# Brief pause before tearing down the current process. Two purposes: the HTTP
+# response to /lifecycle/restart needs time to flush to the client, and any
+# concurrent request handlers need a beat to exit. 200ms is plenty for both
+# and keeps the perceived restart well under a second.
+DELAY_SECS    = 0.2
+# Pause between cleanup and detached relaunch. Old port releases instantly
+# under SO_REUSEADDR (Werkzeug's default), so a small fence is enough.
+RELAUNCH_GAP  = 0.1
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -82,7 +89,7 @@ def _do_restart(app_config, launch_cmd):
         os._exit(2)
     if "--skip-build" not in launch_cmd:
         launch_cmd = launch_cmd + ["--skip-build"]
-    time.sleep(0.5)
+    time.sleep(RELAUNCH_GAP)
     logmod.warn("lifecycle", f"detached relaunch (training preserved): {' '.join(launch_cmd)}")
     try:
         subprocess.Popen(launch_cmd, **_detached_popen_kwargs())
@@ -113,7 +120,7 @@ def _do_soft_reload(app_config, launch_cmd):
         os._exit(2)
     if "--skip-build" not in launch_cmd:
         launch_cmd = launch_cmd + ["--skip-build"]
-    time.sleep(0.5)
+    time.sleep(RELAUNCH_GAP)
     logmod.warn("lifecycle", f"soft reload (training preserved): {' '.join(launch_cmd)}")
     try:
         subprocess.Popen(launch_cmd, **_detached_popen_kwargs())

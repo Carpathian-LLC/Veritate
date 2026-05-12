@@ -309,6 +309,26 @@ def export_checkpoint(name, step):
     # MEGA wraps the base under "base.*" keys; vanilla / M3 / M1 use bare keys.
     base_prefix = "base." if (is_moe and "base.tok_emb.weight" in sd) else ""
 
+    # v9/v11 .bin format encodes positions as a learned embedding (pos_emb) and
+    # expects no multi-byte prediction head. Veritate800M-class models use RoPE
+    # (no pos_emb) and an MTP head; they need a future v12 format the engine
+    # does not yet implement. Fail fast with a clear message instead of the
+    # generic "checkpoint missing key" error.
+    has_pos_emb = (base_prefix + "pos_emb.weight") in sd
+    has_rope    = any(k.startswith(base_prefix + "rope") for k in sd) or \
+                  any("rope" in k.lower() for k in sd)
+    has_mtp     = any(k.startswith(base_prefix + "mtp.") for k in sd)
+    if not has_pos_emb or has_rope or has_mtp:
+        kind = "RoPE + MTP" if (has_rope and has_mtp) else \
+               ("RoPE" if has_rope else ("MTP" if has_mtp else "non-canonical"))
+        raise ValueError(
+            f"export not supported for {kind} models (model '{name}', step {step}). "
+            f"The v9/v11 .bin engine format expects a canonical Veritate trunk "
+            f"(learned pos_emb, single LM head). Veritate800M and other "
+            f"RoPE/MTP variants need a v12 engine format that hasn't shipped yet. "
+            f"For now, run this model through the PyTorch backend instead."
+        )
+
     tok_w = fetch(sd, base_prefix + "tok_emb.weight")
     pos_w = fetch(sd, base_prefix + "pos_emb.weight")
     act_boost = compute_act_boost(tok_w, pos_w)
@@ -383,6 +403,20 @@ def export_checkpoint_ternary(name, step, out_path=None):
 
     shape = shape_from_config(name)
     sd = load_state_dict(ckpt_path)
+
+    # Same canonical-Veritate guard as export_checkpoint above.
+    has_pos_emb = "pos_emb.weight" in sd
+    has_rope    = any("rope" in k.lower() for k in sd)
+    has_mtp     = any(k.startswith("mtp.") for k in sd)
+    if not has_pos_emb or has_rope or has_mtp:
+        kind = "RoPE + MTP" if (has_rope and has_mtp) else \
+               ("RoPE" if has_rope else ("MTP" if has_mtp else "non-canonical"))
+        raise ValueError(
+            f"ternary export not supported for {kind} models (model '{name}', "
+            f"step {step}). The v11 ternary .bin format expects a canonical "
+            f"Veritate trunk. Run through the PyTorch backend until a v12 "
+            f"engine format ships."
+        )
 
     tok_w = fetch(sd, "tok_emb.weight")
     pos_w = fetch(sd, "pos_emb.weight")

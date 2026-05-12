@@ -33,6 +33,7 @@ DEFAULTS = {
     "hud_position": "top",
     "hud_detailed": False,
     "heartbeat_enabled": True,
+    "heartbeat_send_errors": True,
     "consent_modal_seen": False,
     "analytics_advanced_enabled": False,
     "update_channel": "stable",
