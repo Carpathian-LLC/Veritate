@@ -7567,6 +7567,108 @@ function _refreshUpdateStatus() {
   fetch("/app/update_status").then(r => r.json()).then(_renderUpdateStatus).catch(() => {});
 }
 
+// Two-gate pull flow for the main platform updater. Matches the protections
+// the new plugin/model sync has:
+//   1. If a trainer is running, prompt before overwriting source files (the
+//      same Windows file-lock foot-gun that took out fortis).
+//   2. Hit /app/local_edits. If the user has modified, deleted, or added any
+//      tracked source files since the last pull, list them and require an
+//      explicit "force overwrite" confirm.
+// Both gates correspond to backend flags (ignore_training, force); the
+// dashboard only passes them when the user has acknowledged the dialog.
+function _appUpdatePullWithGuards() {
+  const lab = $("updateActionStatus");
+  const upb = $("updatePullBtn");
+  const willReload = !!($("updateAutoReload") && $("updateAutoReload").checked);
+
+  // Gate 1: active training.
+  let ignoreTraining = false;
+  const active = (typeof _activeTrainingName === "function") ? _activeTrainingName() : "";
+  if (active) {
+    const ok = confirm(
+      `Training is active: ${active}.\n\n` +
+      `Updating the Veritate platform overwrites source files the running ` +
+      `trainer may import. On Windows this typically kills the run with a ` +
+      `file-lock error; on macOS/Linux the trainer's next lazy import will ` +
+      `load the new code, which may be incompatible.\n\n` +
+      `Stop training first (recommended), or click OK to update anyway.`
+    );
+    if (!ok) return;
+    ignoreTraining = true;
+  }
+
+  if (lab) { lab.textContent = "checking for local edits…"; lab.style.color = "var(--warm)"; }
+  if (upb) upb.disabled = true;
+
+  fetch("/app/local_edits").then(r => r.json()).then(edits => {
+    // Gate 2: local edits to tracked source files.
+    let force = false;
+    if (edits && edits.ok && edits.has_baseline) {
+      const c = edits.counts || {};
+      // Only modified/missing block the pull — added files aren't touched.
+      const blockingTotal = (c.modified || 0) + (c.missing || 0);
+      if (blockingTotal > 0) {
+        const lines = [];
+        const cap = 15;  // don't overflow the alert dialog
+        for (const m of (edits.modified || []).slice(0, cap)) lines.push(`  modified: ${m.path}`);
+        for (const m of (edits.missing  || []).slice(0, cap)) lines.push(`  deleted:  ${m.path}`);
+        const more = blockingTotal > lines.length ? `\n  …and ${blockingTotal - lines.length} more` : "";
+        const addedNote = (c.added > 0)
+          ? `\n\n(${c.added} user-added file${c.added === 1 ? " is" : "s are"} present but not affected — the updater only overwrites files from the upstream tarball.)`
+          : "";
+        const ok = confirm(
+          `${blockingTotal} local edit${blockingTotal === 1 ? "" : "s"} detected since the last update ` +
+          `(${c.modified || 0} modified · ${c.missing || 0} deleted):\n\n` +
+          lines.join("\n") + more + addedNote + `\n\n` +
+          `Updating will overwrite modified files with the upstream version ` +
+          `and restore any files you deleted.\n\n` +
+          `Click OK to overwrite local edits and update anyway, or Cancel to ` +
+          `back out and stash your changes.`
+        );
+        if (!ok) {
+          if (lab) { lab.textContent = "update cancelled"; lab.style.color = "var(--dim)"; }
+          if (upb) upb.disabled = false;
+          return;
+        }
+        force = true;
+      }
+    }
+
+    if (lab) { lab.textContent = willReload ? "pulling + reloading…" : "pulling…"; lab.style.color = "var(--warm)"; }
+    return fetch("/app/update_pull", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reload:          willReload,
+        force:           force,
+        ignore_training: ignoreTraining,
+      }),
+    }).then(r => r.json()).then(res => {
+      if (res && res.status) _renderUpdateStatus(res.status);
+      if (lab) {
+        if (res && res.ok) {
+          lab.textContent = willReload ? "pulled, reloading…" : "pulled";
+          lab.style.color = "var(--data-pos)";
+          if (willReload) _lifecycleWaitForServer(lab);
+        } else if (res && res.requires_force) {
+          // Server detected edits we didn't catch (e.g. race with another tab);
+          // surface the count and let the user retry with force.
+          lab.textContent = `local edits detected — retry to force overwrite`;
+          lab.style.color = "var(--accent)";
+        } else if (res && res.training_active) {
+          lab.textContent = `training active — stop it first`;
+          lab.style.color = "var(--hot)";
+        } else {
+          lab.textContent = `failed: ${(res && res.error) || "unknown"}`;
+          lab.style.color = "var(--hot)";
+        }
+      }
+    });
+  })
+    .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
+    .finally(() => { if (upb) upb.disabled = false; _refreshUpdateStatus(); });
+}
+
 // Stale-bin banner. /models/bin_health reports any .bin in models/<name>/
 // that the current engine refuses to load (e.g. retired format versions left
 // over from a merge). Hovering the banner shows which models are affected;
@@ -7914,15 +8016,28 @@ function _pluginsCheckTrigger() {
       if (lab) {
         if (res.ok) {
           const n = res.new_files ?? 0;
+          const m = res.modified  ?? 0;
           const total = res.remote_files ?? 0;
-          lab.textContent = n === 0
-            ? `up to date (${total} file${total === 1 ? "" : "s"} on remote)`
-            : `${n} new file${n === 1 ? "" : "s"} available (${total} on remote)`;
-          lab.style.color = n === 0 ? "var(--data-pos)" : "var(--warm)";
+          const parts = [];
+          if (n === 0 && m === 0) parts.push(`up to date (${total} file${total === 1 ? "" : "s"} on remote)`);
+          else {
+            if (n) parts.push(`${n} update${n === 1 ? "" : "s"} available`);
+            if (m) parts.push(`${m} locally modified`);
+            parts.push(`(${total} on remote)`);
+          }
+          lab.textContent = parts.join(" · ");
+          lab.style.color = (n === 0 && m === 0) ? "var(--data-pos)"
+                          : (m > 0 ? "var(--accent)" : "var(--warm)");
         } else {
           lab.textContent = `check failed: ${res.error || "unknown error"}`;
           lab.style.color = "var(--hot)";
         }
+      }
+      // Auto-populate the details panel if it's open so the user sees the
+      // breakdown without an extra click.
+      const panel = $("pluginsFilesPanel");
+      if (panel && panel.style.display !== "none" && res.files) {
+        _syncRenderPanel("plugins", res);
       }
     })
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
@@ -7945,30 +8060,37 @@ function _pluginsUpdateTrigger() {
   if (active) {
     const ok = confirm(
       `Training is active: ${active}.\n\n` +
-      `Downloading plugins will overwrite plugin.py files on disk. On Windows ` +
-      `this typically kills the run immediately; even on macOS/Linux a restart ` +
-      `or auto-resume will pick up the new code, which may be incompatible with ` +
-      `the running model.\n\n` +
-      `Stop training first (recommended), or click OK to download anyway.`
+      `The sync will only touch files it tracks; locally-modified files are left ` +
+      `alone. But updating a plugin.py that a running trainer imports lazily can ` +
+      `still crash the run (Windows is especially strict about file locks).\n\n` +
+      `Stop training first (recommended), or click OK to sync anyway.`
     );
     if (!ok) return;
   }
   const btn = $("pluginsUpdateBtn");
   const lab = $("pluginsSyncStatus");
   if (btn) btn.disabled = true;
-  if (lab) { lab.textContent = "updating…"; lab.style.color = "var(--warm)"; }
+  if (lab) { lab.textContent = "syncing…"; lab.style.color = "var(--warm)"; }
+  // Bulk "safe" sync: pass no actions dict — server applies default policy
+  // (install missing + update clean-but-outdated; skip modified/conflict).
   fetch("/plugins/git/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
     .then(r => r.json())
     .then(res => {
-      if (res.ok) {
+      if (res.ok || res.results) {
+        const r = res.results || {};
+        const parts = [];
+        if (r.installed?.length) parts.push(`${r.installed.length} installed`);
+        if (r.updated?.length)   parts.push(`${r.updated.length} updated`);
+        if (r.skipped?.length)   parts.push(`${r.skipped.length} skipped`);
+        if (r.errors?.length)    parts.push(`${r.errors.length} errors`);
         if (lab) {
-          const dl = res.downloaded ?? 0;
-          const sk = res.skipped ?? 0;
-          lab.textContent = `downloaded ${dl} new file${dl === 1 ? "" : "s"}; kept ${sk} existing`;
-          lab.style.color = "var(--data-pos)";
+          lab.textContent = parts.length ? parts.join(", ") : "done";
+          lab.style.color = (r.errors && r.errors.length) ? "var(--hot)" : "var(--data-pos)";
         }
-        if (res.status) _pluginsApplyStatus(res.status);
-        else _pluginsRefreshStatus();
+        _pluginsRefreshStatus();
+        // If the details panel is open, refresh it so the user sees the new state.
+        const panel = $("pluginsFilesPanel");
+        if (panel && panel.style.display !== "none") _syncFilesFetch("plugins");
       } else {
         if (lab) { lab.textContent = `failed: ${res.error || "unknown error"}`; lab.style.color = "var(--hot)"; }
         _pluginsRefreshStatus();
@@ -7996,14 +8118,29 @@ function _modelsCheckTrigger() {
     .then(res => {
       if (res.status) _modelsApplyStatus(res.status);
       else _modelsRefreshStatus();
+      const panel = $("modelsFilesPanel");
+      if (panel && panel.style.display !== "none" && res.files) {
+        _syncRenderPanel("models", res);
+      }
       if (lab) {
         if (res.ok) {
           const n = res.new_files ?? 0;
+          const m = res.modified  ?? 0;
           const total = res.remote_files ?? 0;
-          lab.textContent = n === 0
-            ? `up to date (${total} file${total === 1 ? "" : "s"} on remote)`
-            : `${n} new file${n === 1 ? "" : "s"} available (${total} on remote)`;
-          lab.style.color = n === 0 ? "var(--data-pos)" : "var(--warm)";
+          const localTrained = res.provenance
+            ? Object.values(res.provenance).filter(v => v === "local-trained").length
+            : 0;
+          const parts = [];
+          if (n === 0 && m === 0) parts.push(`up to date (${total} on remote)`);
+          else {
+            if (n) parts.push(`${n} update${n === 1 ? "" : "s"} available`);
+            if (m) parts.push(`${m} locally modified`);
+            parts.push(`(${total} on remote)`);
+          }
+          if (localTrained > 0) parts.push(`+ ${localTrained} local-trained`);
+          lab.textContent = parts.join(" · ");
+          lab.style.color = (n === 0 && m === 0) ? "var(--data-pos)"
+                          : (m > 0 ? "var(--accent)" : "var(--warm)");
         } else {
           lab.textContent = `check failed: ${res.error || "unknown error"}`;
           lab.style.color = "var(--hot)";
@@ -8019,37 +8156,345 @@ function _modelsUpdateTrigger() {
   if (active) {
     const ok = confirm(
       `Training is active: ${active}.\n\n` +
-      `Downloading models will overwrite checkpoint and config files on disk. ` +
-      `If the running trainer writes to one of those files mid-download you'll ` +
-      `get a corrupted checkpoint, and even a clean download may stomp the ` +
-      `live run's own next checkpoint.\n\n` +
-      `Stop training first (recommended), or click OK to download anyway.`
+      `Locally-trained models are excluded from sync entirely (provenance: ` +
+      `local-trained), so your run's own files won't be touched. But if any ` +
+      `remote-pulled model overlaps with the running one, the download could ` +
+      `still corrupt an active checkpoint.\n\n` +
+      `Stop training first (recommended), or click OK to sync anyway.`
     );
     if (!ok) return;
   }
   const btn = $("modelsUpdateBtn");
   const lab = $("modelsSyncStatus");
   if (btn) btn.disabled = true;
-  if (lab) { lab.textContent = "updating…"; lab.style.color = "var(--warm)"; }
+  if (lab) { lab.textContent = "syncing…"; lab.style.color = "var(--warm)"; }
+  _syncStartProgressPoll();   // live byte counter for large model downloads
   fetch("/models/git/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
     .then(r => r.json())
     .then(res => {
-      if (res.ok) {
+      if (res.ok || res.results) {
+        const r = res.results || {};
+        const parts = [];
+        if (r.installed?.length) parts.push(`${r.installed.length} installed`);
+        if (r.updated?.length)   parts.push(`${r.updated.length} updated`);
+        if (r.skipped?.length)   parts.push(`${r.skipped.length} skipped`);
+        if (r.errors?.length)    parts.push(`${r.errors.length} errors`);
         if (lab) {
-          const dl = res.downloaded ?? 0;
-          const sk = res.skipped ?? 0;
-          lab.textContent = `downloaded ${dl} new file${dl === 1 ? "" : "s"}; kept ${sk} existing`;
-          lab.style.color = "var(--data-pos)";
+          lab.textContent = parts.length ? parts.join(", ") : "done";
+          lab.style.color = (r.errors && r.errors.length) ? "var(--hot)" : "var(--data-pos)";
         }
-        if (res.status) _modelsApplyStatus(res.status);
-        else _modelsRefreshStatus();
+        _modelsRefreshStatus();
+        const panel = $("modelsFilesPanel");
+        if (panel && panel.style.display !== "none") _syncFilesFetch("models");
       } else {
         if (lab) { lab.textContent = `failed: ${res.error || "unknown error"}`; lab.style.color = "var(--hot)"; }
         _modelsRefreshStatus();
       }
     })
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
-    .finally(() => { if (btn) btn.disabled = false; });
+    .finally(() => {
+      if (btn) btn.disabled = false;
+      _syncStopProgressPoll();
+    });
+}
+
+// ===========================================================================
+// PER-FILE SYNC PANEL (plugins + models)
+// ---------------------------------------------------------------------------
+// Three-state classification (see veritate_mri/sync_common.py):
+//   current          - local matches remote (nothing to do)
+//   missing          - in remote, not on disk
+//   update_available - local matches last-sync, remote moved (safe overwrite)
+//   modified         - local differs from last-sync (user edited)
+//   conflict         - both local and remote moved since last sync
+//   orphan           - tracked locally but no longer in remote
+//
+// Each state has its own default action button. Modified and conflict files
+// expose [Force] (overwrite) and [Adopt] (record local as the new baseline);
+// neither is offered as a bulk action.
+// ===========================================================================
+const SYNC_STATE_META = {
+  current:          { color: "var(--data-pos)", badge: "✓ current",      title: "local matches remote" },
+  missing:          { color: "var(--warm)",     badge: "↓ missing",      title: "in remote but not on disk" },
+  update_available: { color: "var(--warm)",     badge: "↑ update",       title: "local matches last sync; remote has changed" },
+  modified:         { color: "var(--accent)",   badge: "✏ modified",     title: "you edited this file; remote unchanged" },
+  conflict:         { color: "var(--hot)",      badge: "⚠ conflict",     title: "you edited AND remote moved — review before forcing" },
+  orphan:           { color: "var(--dim)",      badge: "○ orphan",       title: "tracked locally but no longer in remote" },
+};
+
+const _syncState = {
+  plugins: { last: null, inflight: false },
+  models:  { last: null, inflight: false, progressTimer: null },
+};
+
+function _syncFmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+}
+
+function _syncEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function _syncShortSha(s) {
+  return (s || "").slice(0, 8);
+}
+
+// Build the per-row HTML — the action buttons depend on the file's state.
+// `scope` is "plugins" or "models". The buttons fire _syncFilesAction.
+function _syncFileRowHtml(scope, row) {
+  const meta = SYNC_STATE_META[row.state] || { color: "var(--dim)", badge: row.state, title: row.state };
+  const isLarge = scope === "models" && row.large;
+  const sizeBadge = isLarge ? ` <span style="color:var(--warm);font-size:10px">LARGE</span>` : "";
+  const sizeText = row.size ? ` · ${_syncFmtBytes(row.size)}` : "";
+  let actions = "";
+  if (row.state === "missing") {
+    actions = `<button class="action" data-sync-action="install"
+                       data-sync-path="${_syncEsc(row.path)}">install</button>`;
+  } else if (row.state === "update_available") {
+    actions = `<button class="action" data-sync-action="update"
+                       data-sync-path="${_syncEsc(row.path)}">update</button>`
+            + ` <button class="action" data-sync-action="skip"
+                       data-sync-path="${_syncEsc(row.path)}"
+                       title="leave for now">skip</button>`;
+  } else if (row.state === "modified" || row.state === "conflict") {
+    actions = `<button class="action" data-sync-action="force"
+                       data-sync-path="${_syncEsc(row.path)}"
+                       data-sync-warn="1"
+                       title="overwrite your local edits with remote">force overwrite</button>`
+            + ` <button class="action" data-sync-action="adopt"
+                       data-sync-path="${_syncEsc(row.path)}"
+                       title="record current local content as the new baseline">adopt local</button>`;
+  } else if (row.state === "orphan") {
+    actions = `<button class="action" data-sync-action="adopt"
+                       data-sync-path="${_syncEsc(row.path)}"
+                       title="record locally; sync ignores from now on">adopt</button>`;
+  }
+  const remoteSha = row.remote_sha ? `<span title="remote sha" style="color:var(--dim);font-size:10px">r ${_syncShortSha(row.remote_sha)}</span>` : "";
+  const localSha  = row.local_sha  ? `<span title="local sha"  style="color:var(--dim);font-size:10px">l ${_syncShortSha(row.local_sha)}</span>` : "";
+  return `<div class="sync-row" data-sync-path="${_syncEsc(row.path)}"
+              style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:10.5px">
+    <div style="min-width:0;display:flex;flex-direction:column;gap:1px">
+      <code style="color:var(--text);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_syncEsc(row.path)}${sizeBadge}</code>
+      <span style="color:var(--dim);font-size:10px">${remoteSha} ${localSha}${sizeText}</span>
+    </div>
+    <span style="color:${meta.color};white-space:nowrap" title="${_syncEsc(meta.title)}">${meta.badge}</span>
+    <span class="inline" style="gap:4px;flex-wrap:wrap;justify-content:flex-end">${actions}</span>
+  </div>`;
+}
+
+function _syncProvenanceBadge(prov) {
+  if (prov === "remote-pulled") {
+    return `<span style="color:var(--accent);font-size:10px" title="published in the remote repo; participates in sync">remote-pulled</span>`;
+  }
+  return `<span style="color:var(--data-pos);font-size:10px" title="trained locally; never touched by sync">local-trained</span>`;
+}
+
+// Group rows by top-level dir for the Models panel (where each dir is a model
+// with its own provenance). Plugins are rendered as a flat list.
+function _syncGroupByDir(rows) {
+  const groups = {};
+  for (const r of rows) {
+    const top = r.path.includes("/") ? r.path.split("/", 1)[0] : "(root)";
+    (groups[top] ||= []).push(r);
+  }
+  return groups;
+}
+
+function _syncRenderPanel(scope, data) {
+  const panel = $(scope + "FilesPanel");
+  if (!panel) return;
+  if (!data || !data.ok) {
+    panel.innerHTML = `<div class="meta" style="color:var(--hot);font-size:10.5px">${_syncEsc((data && data.error) || "check failed")}</div>`;
+    return;
+  }
+  const rows = data.files || [];
+  const counts = data.counts || {};
+  const totalActionable = (counts.missing || 0) + (counts.update_available || 0);
+  const totalRisky      = (counts.modified || 0) + (counts.conflict || 0);
+
+  let header = `<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px;font-size:10.5px;color:var(--dim)">
+    <span>${rows.length} file${rows.length === 1 ? "" : "s"} tracked · `
+    + `${counts.current || 0} current · ${counts.update_available || 0} updates · `
+    + `${counts.missing || 0} missing · ${counts.modified || 0} modified · ${counts.conflict || 0} conflict</span>
+    <span>branch: <code style="color:var(--text)">${_syncEsc(data.branch || "main")}</code></span>
+  </div>`;
+
+  if (totalActionable === 0 && totalRisky === 0) {
+    header += `<div style="color:var(--data-pos);font-size:10.5px;margin-bottom:6px">All files are in sync — nothing to do.</div>`;
+  } else if (totalRisky > 0) {
+    header += `<div style="color:var(--accent);font-size:10.5px;margin-bottom:6px">⚠ ${totalRisky} file${totalRisky === 1 ? "" : "s"} require an explicit decision (force overwrite or adopt local).</div>`;
+  }
+
+  let body = "";
+  if (scope === "models" && data.provenance) {
+    const groups = _syncGroupByDir(rows);
+    const groupNames = Object.keys(groups).sort();
+    for (const name of groupNames) {
+      const prov = data.provenance[name] || "local-trained";
+      body += `<details ${prov === "remote-pulled" ? "open" : ""} style="margin-top:6px;border:1px solid var(--line);border-radius:3px;padding:6px 8px">
+        <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <span style="font-weight:600;color:var(--text);font-size:11px">${_syncEsc(name)}</span>
+          ${_syncProvenanceBadge(prov)}
+        </summary>
+        <div style="margin-top:4px">${groups[name].map(r => _syncFileRowHtml(scope, r)).join("")}</div>
+      </details>`;
+    }
+    // local-trained dirs not in the file table — list them so the user can see them
+    const localOnly = Object.keys(data.provenance).filter(d => data.provenance[d] === "local-trained" && !groups[d]).sort();
+    if (localOnly.length) {
+      body += `<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--line);font-size:10.5px;color:var(--dim)">
+        local-trained (invisible to sync): ${localOnly.map(d => `<code style="color:var(--text)">${_syncEsc(d)}</code>`).join(", ")}
+      </div>`;
+    }
+  } else {
+    body = rows.map(r => _syncFileRowHtml(scope, r)).join("");
+  }
+
+  panel.innerHTML = header + body;
+  panel.querySelectorAll("button[data-sync-action]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const action = btn.getAttribute("data-sync-action");
+      const path   = btn.getAttribute("data-sync-path");
+      const warn   = btn.getAttribute("data-sync-warn") === "1";
+      if (warn && !confirm(`This will overwrite your local edits to:\n\n  ${path}\n\nContinue?`)) return;
+      _syncFilesAction(scope, path, action);
+    });
+  });
+}
+
+function _syncFilesFetch(scope) {
+  const panel = $(scope + "FilesPanel");
+  if (!panel) return Promise.resolve(null);
+  panel.innerHTML = `<div class="meta" style="color:var(--dim);font-size:10.5px">loading…</div>`;
+  return fetch(`/${scope}/git/files`)
+    .then(r => r.json())
+    .then(data => {
+      _syncState[scope].last = data;
+      _syncRenderPanel(scope, data);
+      return data;
+    })
+    .catch(e => {
+      panel.innerHTML = `<div class="meta" style="color:var(--hot);font-size:10.5px">${_syncEsc(_backendErrMsg(e))}</div>`;
+      return null;
+    });
+}
+
+function _syncFilesAction(scope, path, action) {
+  if (_syncState[scope].inflight) return;
+  _syncState[scope].inflight = true;
+  const lab = $(scope + "SyncStatus");
+  if (lab) { lab.textContent = `${action} ${path}…`; lab.style.color = "var(--warm)"; }
+  const body = JSON.stringify({ actions: { [path]: action } });
+  // Models with large downloads: kick off the progress poller so the user
+  // sees byte counters as the file streams.
+  if (scope === "models") _syncStartProgressPoll();
+  fetch(`/${scope}/git/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body })
+    .then(r => r.json())
+    .then(res => {
+      if (lab) {
+        if (res.ok) {
+          const r = res.results || {};
+          const parts = [];
+          if (r.installed?.length) parts.push(`${r.installed.length} installed`);
+          if (r.updated?.length)   parts.push(`${r.updated.length} updated`);
+          if (r.forced?.length)    parts.push(`${r.forced.length} forced`);
+          if (r.adopted?.length)   parts.push(`${r.adopted.length} adopted`);
+          if (r.skipped?.length)   parts.push(`${r.skipped.length} skipped`);
+          if (r.errors?.length)    parts.push(`${r.errors.length} errors`);
+          lab.textContent = parts.length ? parts.join(", ") : "done";
+          lab.style.color = (r.errors && r.errors.length) ? "var(--hot)" : "var(--data-pos)";
+        } else {
+          lab.textContent = `failed: ${res.error || "unknown"}`;
+          lab.style.color = "var(--hot)";
+        }
+      }
+      if (scope === "plugins") _pluginsRefreshStatus();
+      else                     _modelsRefreshStatus();
+      // refresh the detail panel so the row's state advances
+      return _syncFilesFetch(scope);
+    })
+    .catch(e => {
+      if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; }
+    })
+    .finally(() => {
+      _syncState[scope].inflight = false;
+      if (scope === "models") _syncStopProgressPoll();
+    });
+}
+
+// ---- Live progress overlay for large model downloads ------------------------
+function _syncStartProgressPoll() {
+  if (_syncState.models.progressTimer) return;
+  const tick = () => {
+    fetch("/models/git/progress").then(r => r.json()).then(p => {
+      const items = (p && p.items) || {};
+      _syncRenderProgress(items);
+    }).catch(() => {});
+  };
+  tick();
+  _syncState.models.progressTimer = setInterval(tick, 700);
+}
+
+function _syncStopProgressPoll() {
+  if (_syncState.models.progressTimer) {
+    clearInterval(_syncState.models.progressTimer);
+    _syncState.models.progressTimer = null;
+  }
+  // one last tick so the final 100% bars render before we stop
+  setTimeout(() => fetch("/models/git/progress").then(r => r.json()).then(p => {
+    _syncRenderProgress((p && p.items) || {});
+  }).catch(() => {}), 500);
+}
+
+function _syncRenderProgress(items) {
+  const panel = $("modelsFilesPanel");
+  if (!panel) return;
+  const keys = Object.keys(items);
+  if (!keys.length) return;
+  // Inject (or refresh) a fixed-position banner inside the panel that lists
+  // every in-flight file with a percentage bar.
+  let banner = panel.querySelector("[data-sync-progress]");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.setAttribute("data-sync-progress", "1");
+    banner.style.cssText = "margin:6px 0 8px;padding:6px 8px;border:1px solid var(--accent);border-radius:3px;background:rgba(38,123,255,0.05);font-size:10.5px";
+    panel.insertBefore(banner, panel.firstChild);
+  }
+  banner.innerHTML = `<div style="font-weight:600;color:var(--text);margin-bottom:4px">downloading</div>` +
+    keys.map(k => {
+      const it = items[k];
+      const total = it.bytes_total || 0;
+      const done  = it.bytes_done  || 0;
+      const pct = total > 0 ? Math.min(100, Math.round(done * 100 / total)) : 0;
+      const lab = `${_syncFmtBytes(done)}${total ? " / " + _syncFmtBytes(total) : ""}`;
+      const stateColor = it.state === "error" ? "var(--hot)" : it.state === "done" ? "var(--data-pos)" : "var(--accent)";
+      return `<div style="display:flex;flex-direction:column;gap:2px;margin-top:4px">
+        <div style="display:flex;justify-content:space-between;gap:8px;font-size:10px">
+          <code style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${_syncEsc(k)}</code>
+          <span style="color:var(--dim)">${lab} (${pct}%) <span style="color:${stateColor}">${_syncEsc(it.state || "")}</span></span>
+        </div>
+        <div style="height:3px;background:var(--line);border-radius:2px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${stateColor};transition:width .2s"></div>
+        </div>
+      </div>`;
+    }).join("");
+}
+
+function _syncTogglePanel(scope) {
+  const panel = $(scope + "FilesPanel");
+  if (!panel) return;
+  if (panel.style.display === "none" || !panel.style.display) {
+    panel.style.display = "block";
+    _syncFilesFetch(scope);
+  } else {
+    panel.style.display = "none";
+  }
 }
 
 // ---- Corpus library (apt-style downloader for plugins/corpus/) ----
@@ -8911,32 +9356,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   const upb = $("updatePullBtn");
   if (upb) upb.addEventListener("click", () => {
-    const lab = $("updateActionStatus");
-    const willReload = !!(updateState.current && updateState.current.last && false) ||
-                       !!($("updateAutoReload") && $("updateAutoReload").checked);
-    if (lab) { lab.textContent = willReload ? "pulling + reloading..." : "pulling..."; lab.style.color = "var(--warm)"; }
-    upb.disabled = true;
-    fetch("/app/update_pull", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reload: willReload }),
-    })
-      .then(r => r.json())
-      .then(res => {
-        if (res && res.status) _renderUpdateStatus(res.status);
-        if (lab) {
-          if (res && res.ok) {
-            lab.textContent = willReload ? "pulled, reloading..." : "pulled";
-            lab.style.color = "var(--data-pos)";
-            if (willReload) _lifecycleWaitForServer(lab);
-          } else {
-            lab.textContent = `failed: ${res && res.error || "unknown"}`;
-            lab.style.color = "var(--hot)";
-          }
-        }
-      })
-      .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
-      .finally(() => { upb.disabled = false; _refreshUpdateStatus(); });
+    _appUpdatePullWithGuards();
   });
   const ub = $("updateBanner");
   if (ub) ub.addEventListener("click", () => {
@@ -8957,6 +9377,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (pcb) pcb.addEventListener("click", _pluginsCheckTrigger);
   const pub = $("pluginsUpdateBtn");
   if (pub) pub.addEventListener("click", _pluginsUpdateTrigger);
+  const pdb = $("pluginsDetailsBtn");
+  if (pdb) pdb.addEventListener("click", () => _syncTogglePanel("plugins"));
   _pluginsRefreshStatus();
   setInterval(_pluginsRefreshStatus, 15000);
 
@@ -8964,6 +9386,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (mcb) mcb.addEventListener("click", _modelsCheckTrigger);
   const mub = $("modelsUpdateBtn");
   if (mub) mub.addEventListener("click", _modelsUpdateTrigger);
+  const mdb = $("modelsDetailsBtn");
+  if (mdb) mdb.addEventListener("click", () => _syncTogglePanel("models"));
   _modelsRefreshStatus();
   setInterval(_modelsRefreshStatus, 15000);
 

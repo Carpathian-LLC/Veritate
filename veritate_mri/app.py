@@ -418,13 +418,23 @@ def app_update_check_route():
 @app.route("/app/update_pull", methods=["POST"])
 def app_update_pull_route():
     body = request.get_json(silent=True) or {}
-    res = app_sync_mod.pull()
+    force            = bool(body.get("force"))
+    ignore_training  = bool(body.get("ignore_training"))
+    res = app_sync_mod.pull_update(force=force, ignore_training=ignore_training)
     if res.get("ok") and body.get("reload"):
         try:
             lifecycle.restart(app.config)
         except Exception as e:
             res["reload_error"] = f"{type(e).__name__}: {e}"
     return res
+
+
+@app.route("/app/local_edits")
+def app_local_edits_route():
+    """Returns the list of files that diverge from the last-pulled baseline.
+    The dashboard calls this before triggering /app/update_pull so it can
+    warn the user about modified/missing/added source files."""
+    return app_sync_mod.local_edits()
 
 
 @app.route("/app/update_channel", methods=["POST"])
@@ -872,12 +882,22 @@ def plugins_git_status():
 
 @app.route("/plugins/git/sync", methods=["POST"])
 def plugins_git_sync():
-    return plugins_sync.sync()
+    body = request.get_json(silent=True) or {}
+    actions = body.get("actions") if isinstance(body.get("actions"), dict) else None
+    branch  = body.get("branch") if isinstance(body.get("branch"), str) else None
+    return plugins_sync.sync(actions=actions, branch=branch)
 
 
 @app.route("/plugins/git/check", methods=["POST"])
 def plugins_git_check():
     return plugins_sync.check()
+
+
+@app.route("/plugins/git/files")
+def plugins_git_files():
+    """Per-file table with three-state classification. The dashboard renders
+    one row per remote (or tracked) file and exposes per-row action buttons."""
+    return plugins_sync.files()
 
 
 @app.route("/plugins/open_folder", methods=["POST"])
@@ -925,12 +945,30 @@ def models_git_status():
 
 @app.route("/models/git/sync", methods=["POST"])
 def models_git_sync():
-    return models_sync.sync()
+    body = request.get_json(silent=True) or {}
+    actions = body.get("actions") if isinstance(body.get("actions"), dict) else None
+    branch  = body.get("branch") if isinstance(body.get("branch"), str) else None
+    return models_sync.sync(actions=actions, branch=branch)
 
 
 @app.route("/models/git/check", methods=["POST"])
 def models_git_check():
     return models_sync.check()
+
+
+@app.route("/models/git/files")
+def models_git_files():
+    """Per-file table + per-dir provenance. Local-trained model dirs (those
+    not present in the remote tree) are excluded — they're never affected by
+    sync. The dashboard surfaces provenance as a badge per group."""
+    return models_sync.files()
+
+
+@app.route("/models/git/progress")
+def models_git_progress():
+    """Live byte-counter for the active models_sync.sync() run. Polled by the
+    dashboard while large downloads are in flight."""
+    return models_sync.progress()
 
 
 @app.route("/models/open_folder", methods=["POST"])
