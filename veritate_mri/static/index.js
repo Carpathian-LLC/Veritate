@@ -6325,6 +6325,7 @@ const _TR_SIZE_PRESETS = {
   // multimind_m3 / m1 sizes (dense)
   "30m":  { layers: 10, hidden: 512,  ffn: 2048, heads: 8,  params: 31e6  },
   "80m":  { layers: 12, hidden: 768,  ffn: 3072, heads: 12, params: 85e6  },
+  "85m":  { layers: 12, hidden: 768,  ffn: 3072, heads: 12, params: 85e6  },
   "120m": { layers: 12, hidden: 896,  ffn: 3584, heads: 14, params: 115e6 },
   "200m": { layers: 16, hidden: 1024, ffn: 4096, heads: 16, params: 202e6 },
   "400m": { layers: 24, hidden: 1280, ffn: 5120, heads: 20, params: 472e6 },
@@ -6349,7 +6350,7 @@ const TRAINER_SCHEMA = {
   scratch: [
     // ---- required (every trainer) ----
     { name: "corpus",       type: "corpus", required: true,  label: "training data file",      help: "the file the model reads." },
-    { name: "size",         type: "str",    required: true,  label: "model size",               help: "bigger = smarter, slower, more VRAM.", choices: ["30m","80m","120m","200m","400m","800m","850m","1b","1b5"] },
+    { name: "size",         type: "str",    required: true,  label: "model size",               help: "bigger = smarter, slower, more VRAM.", choices: ["30m","80m","85m","120m","200m","400m","800m","850m","1b","1b5"] },
     { name: "precision",    type: "str",    required: true,  label: "number precision",         help: "bf16 = half memory; fp32 = double.", choices: ["bf16","fp32"] },
     { name: "version",      type: "str",    required: true,  label: "version tag",              help: "label for this run (v1, v2a, ...)." },
     { name: "description",  type: "text",   required: true,  label: "what this model is for",   help: "saved into the model config." },
@@ -6361,7 +6362,7 @@ const TRAINER_SCHEMA = {
     { name: "base_lr",      type: "float",                   label: "peak learning rate",       help: "typical 1e-4 to 5e-4. higher = faster, riskier." },
     { name: "min_lr",       type: "float",                   label: "minimum learning rate",    help: "where the LR settles. typical 1e-5." },
     { name: "warmup_steps", type: "int",                     label: "warmup steps",             help: "slower ramp from 0 to peak LR." },
-    { name: "lr_schedule",  type: "str",                     label: "lr schedule",              help: "cosine smooth decay, linear straight, constant flat.", choices: ["cosine","linear","constant"] },
+    { name: "lr_schedule",  type: "str",                     label: "lr schedule",              help: "cosine smooth decay, linear straight, constant flat, wsd warmup-stable-decay.", choices: ["cosine","linear","constant","wsd"] },
     { name: "weight_decay", type: "float",                   label: "weight decay",             help: "stronger = more regularization." },
     { name: "beta1",        type: "float",                   label: "adamw beta1",              help: "1st-moment decay. 0.9 default." },
     { name: "beta2",        type: "float",                   label: "adamw beta2",              help: "2nd-moment decay. 0.95 for LMs." },
@@ -6372,6 +6373,21 @@ const TRAINER_SCHEMA = {
     { name: "eval_every",   type: "int",                     label: "eval every",               help: "steps between validation runs." },
     { name: "eval_iters",   type: "int",                     label: "eval batches",             help: "more = more accurate val loss." },
     { name: "seed",         type: "int",                     label: "random seed",              help: "different seed = different random run." },
+    // ---- plugin-specific architecture knobs (rendered when the plugin's
+    //      manifest opts them in via defaults) ----
+    { name: "variant",         type: "str",                   label: "variant tag",             help: "single-token suffix appended to the model dir name (e.g. 'sparse', 'qat'). leave blank for no variant." },
+    { name: "n_predict",       type: "int",                   label: "MTP heads (n_predict)",   help: "multi-token-prediction head count; 1 = vanilla, 2 = byte-t+2 head, 4 = 800M-style." },
+    { name: "mtp_aux_weight",  type: "float",                 label: "MTP aux weight",          help: "loss weight on the auxiliary MTP heads (heads 1..N-1). 0 = MTP heads untrained." },
+    { name: "l1_lambda",       type: "float",                 label: "L1 sparsity penalty",     help: "coefficient on mean(|post-activation|) loss for sparse-ReLU FFNs. 0 = off." },
+    { name: "wsd_decay_frac",  type: "float",                 label: "WSD decay fraction",      help: "fraction of total steps spent in decay phase. typical 0.1." },
+    { name: "wsd_decay_kind",  type: "str",                   label: "WSD decay shape",         help: "shape of the LR decay tail.", choices: ["sqrt","linear","cosine"] },
+    { name: "hidden",          type: "int",                   label: "hidden width",            help: "transformer hidden dim. plugin-set; rarely edited." },
+    { name: "layers",          type: "int",                   label: "transformer layers",      help: "depth. plugin-set; rarely edited." },
+    { name: "ffn",             type: "int",                   label: "FFN width",               help: "FFN inner dim (usually 4 * hidden). plugin-set." },
+    { name: "heads",           type: "int",                   label: "attention heads",         help: "must divide hidden. plugin-set." },
+    { name: "vocab",           type: "int",                   label: "vocab size",              help: "256 for byte-level. plugin-set." },
+    { name: "rope_base",       type: "float",                 label: "RoPE base",               help: "rotary positional base (theta). 10000 = default, higher = longer-context extrapolation." },
+    { name: "router_aux_loss_coef", type: "float",            label: "router balance weight",   help: "MoE load-balancing loss coefficient (~0.01). MEGA only." },
     // ---- experimental / test-model clusters (all ADVANCED) ----
     { name: "rank",            type: "int",        advanced: true, label: "adapter rank",            help: "Multimind M3 only. higher = more adapter memory." },
     { name: "n_slots",         type: "int",        advanced: true, label: "schema slots",            help: "Multimind M1 only. # of named slots (256 canonical)." },
@@ -6399,7 +6415,7 @@ const TRAINER_SCHEMA = {
     { name: "base_lr",      type: "float",                      label: "peak learning rate",    help: "lower this for fine-tuning. typical 1e-4." },
     { name: "min_lr",       type: "float",                      label: "minimum learning rate", help: "where the LR settles. typical 1e-5." },
     { name: "warmup_steps", type: "int",                        label: "warmup steps",          help: "usually irrelevant on resume." },
-    { name: "lr_schedule",  type: "str",                        label: "lr schedule",           help: "cosine smooth, linear straight, constant flat.", choices: ["cosine","linear","constant"] },
+    { name: "lr_schedule",  type: "str",                        label: "lr schedule",           help: "cosine smooth, linear straight, constant flat, wsd warmup-stable-decay.", choices: ["cosine","linear","constant","wsd"] },
     { name: "weight_decay", type: "float",                      label: "weight decay",          help: "stronger = more regularization." },
     { name: "beta1",        type: "float",                      label: "adamw beta1",           help: "1st-moment decay. 0.9 default." },
     { name: "beta2",        type: "float",                      label: "adamw beta2",           help: "2nd-moment decay. 0.95 for LMs." },
@@ -6421,7 +6437,9 @@ const TRAINER_SCHEMA = {
 // Build the per-render arg list for a plugin. Render order = required fields
 // first (in schema order), then manifest declaration order. The schema is the
 // catalog of known knobs (labels, helps, types); the manifest opts each plugin
-// in via `defaults` and decides the order users see them.
+// in via `defaults` and decides the order users see them. Fields the manifest
+// declares that aren't in the schema get a generic synthesized entry so any
+// new plugin renders correctly without a dashboard code change.
 function _trArgsForPlugin(p) {
   if (!p || !p.manifest) return [];
   const sch  = TRAINER_SCHEMA[trainState.flow] || [];
@@ -6430,19 +6448,51 @@ function _trArgsForPlugin(p) {
   for (const a of sch) byName[a.name] = a;
   const used = new Set();
   const out = [];
+
+  // Synthesize a schema entry from a manifest default whose type is inferred
+  // from the value. Used when the plugin declares a knob the dashboard has
+  // never heard of.
+  const _synth = (name, val) => {
+    let inferredType = "str";
+    if (typeof val === "boolean") inferredType = "bool";
+    else if (typeof val === "number") inferredType = Number.isInteger(val) ? "int" : "float";
+    return {
+      name: name,
+      type: inferredType,
+      label: name.replace(/_/g, " "),
+      help: "",
+    };
+  };
+
+  // Auto-expand a fixed-choice dropdown when the manifest default isn't in
+  // the schema's static list. Keeps known plugins clean while letting new
+  // ones declare any value without touching the dashboard.
+  const _withDefault = (base, defaultVal) => {
+    const o = Object.assign({}, base, { default: defaultVal });
+    if (Array.isArray(o.choices) && defaultVal !== undefined) {
+      const s = String(defaultVal);
+      if (!o.choices.map(String).includes(s)) {
+        o.choices = o.choices.concat([s]);
+      }
+    }
+    return o;
+  };
+
+  // 1. Required fields first, in schema order, picking up manifest defaults
+  //    where present.
   for (const a of sch) {
     if (!a.required) continue;
     used.add(a.name);
-    const o = Object.assign({}, a);
-    if (defs[a.name] !== undefined) o.default = defs[a.name];
-    out.push(o);
+    out.push(_withDefault(a, defs[a.name]));
   }
+
+  // 2. Non-required fields in MANIFEST declaration order. If the schema knows
+  //    the field, use its label/help/type; otherwise synthesize one.
   for (const name of Object.keys(defs)) {
     if (used.has(name)) continue;
-    const a = byName[name];
-    if (!a) continue;
     used.add(name);
-    out.push(Object.assign({}, a, { default: defs[name] }));
+    const a = byName[name] || _synth(name, defs[name]);
+    out.push(_withDefault(a, defs[name]));
   }
   return out;
 }
