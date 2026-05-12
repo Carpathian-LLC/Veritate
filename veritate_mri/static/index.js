@@ -3630,7 +3630,11 @@ function makeClassroomState() {
 const classroomState  = makeClassroomState();   // live training tab
 const classroomStateL = makeClassroomState();   // learning tab
 
-function _u32le(b, o) { return b[o] | (b[o+1]<<8) | (b[o+2]<<16) | (b[o+3]*0x1000000); }
+// `>>> 0` coerces the bitwise-OR result to unsigned. Without it, any byte with
+// the high bit set (b[o+3] >= 0x80) makes the implicit int32 cast in `|` return
+// a negative number — most painfully, 0xFFFFFFFF (the ZIP64 sentinel) came back
+// as -1, so the ZIP64 detection check `=== 0xFFFFFFFF` never matched.
+function _u32le(b, o) { return (b[o] | (b[o+1]<<8) | (b[o+2]<<16) | (b[o+3]*0x1000000)) >>> 0; }
 function _u16le(b, o) { return b[o] | (b[o+1]<<8); }
 
 // minimal zip+npy reader. accepts the bytes of a .npz produced by np.savez_compressed.
@@ -3642,19 +3646,98 @@ async function parse_npz(buf) {
   while (i + 4 <= u8.length) {
     const sig = _u32le(u8, i);
     if (sig !== 0x04034b50) break;             // local file header magic
+    const flags      = _u16le(u8, i + 6);
     const method     = _u16le(u8, i + 8);
-    const compSize   = _u32le(u8, i + 18);
-    const uncompSize = _u32le(u8, i + 22);
+    let   compSize   = _u32le(u8, i + 18);
+    let   uncompSize = _u32le(u8, i + 22);
     const nameLen    = _u16le(u8, i + 26);
     const extraLen   = _u16le(u8, i + 28);
     const name = new TextDecoder().decode(u8.subarray(i + 30, i + 30 + nameLen));
+    // ZIP64: numpy.savez writes 0xFFFFFFFF in the 32-bit size fields and puts
+    // the real 8-byte values in the Zip64 Extended Information extra field
+    // (header ID 0x0001). Without this, dataEnd overflows past the buffer and
+    // the parser stops after the first member.
+    if (compSize === 0xFFFFFFFF || uncompSize === 0xFFFFFFFF) {
+      const extraStart = i + 30 + nameLen;
+      const extraEnd   = extraStart + extraLen;
+      let p = extraStart;
+      while (p + 4 <= extraEnd) {
+        const hdrId  = _u16le(u8, p);
+        const hdrLen = _u16le(u8, p + 2);
+        if (hdrId === 0x0001) {
+          let q = p + 4;
+          if (uncompSize === 0xFFFFFFFF) {
+            const lo = _u32le(u8, q), hi = _u32le(u8, q + 4);
+            uncompSize = hi * 0x100000000 + lo;
+            q += 8;
+          }
+          if (compSize === 0xFFFFFFFF) {
+            const lo = _u32le(u8, q), hi = _u32le(u8, q + 4);
+            compSize = hi * 0x100000000 + lo;
+            q += 8;
+          }
+          break;
+        }
+        p += 4 + hdrLen;
+      }
+    }
+    // Streaming mode (general purpose bit 3 set): sizes live in a Data
+    // Descriptor that follows the compressed payload, not in the local header.
+    // We don't see this in numpy's writer today but handle it defensively so
+    // any well-formed npz/zip still parses.
+    if (flags & 0x08 && (compSize === 0 || compSize === 0xFFFFFFFF)) {
+      // Locate the next entry header (or central directory) to bound the payload.
+      let scan = i + 30 + nameLen + extraLen;
+      while (scan + 4 <= u8.length) {
+        const s2 = _u32le(u8, scan);
+        if (s2 === 0x08074b50 || s2 === 0x04034b50 || s2 === 0x02014b50) break;
+        scan++;
+      }
+      compSize = scan - (i + 30 + nameLen + extraLen);
+    }
     const dataStart = i + 30 + nameLen + extraLen;
     const dataEnd = dataStart + compSize;
     let payload = u8.subarray(dataStart, dataEnd);
     if (method === 8) {
+      // Manually pump the decompressor so we can keep the already-decoded
+      // bytes when WebKit/Safari throws the spurious "Extra bytes past the
+      // end" error at end-of-stream. numpy's deflate streams trip that error
+      // even though the bit count is correct — Python's zlib decompresses
+      // them cleanly with no leftover bytes.
       const ds = new DecompressionStream("deflate-raw");
-      const blob = new Blob([payload]);
-      payload = new Uint8Array(await new Response(blob.stream().pipeThrough(ds)).arrayBuffer());
+      const writer = ds.writable.getWriter();
+      const reader = ds.readable.getReader();
+      const chunks = [];
+      let total = 0;
+      const drainLoop = (async () => {
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            total += value.length;
+          }
+        } catch (e) {
+          // Tolerate end-of-stream errors when we've already collected enough
+          // bytes to satisfy uncompSize (the data is whole; only the trailing
+          // bit-padding tripped the decompressor's end check).
+          if (!(uncompSize && total >= uncompSize)) throw e;
+        }
+      })();
+      try {
+        await writer.write(payload);
+      } catch (_) { /* same tolerance — the read side will report real errors */ }
+      try { await writer.close(); } catch (_) {}
+      await drainLoop;
+      const merged = new Uint8Array(uncompSize || total);
+      let off = 0;
+      for (const c of chunks) {
+        const take = Math.min(c.length, merged.length - off);
+        merged.set(c.subarray(0, take), off);
+        off += take;
+        if (off >= merged.length) break;
+      }
+      payload = merged;
     } else if (method !== 0) {
       throw new Error("npz: unsupported compression " + method);
     }
@@ -3663,6 +3746,11 @@ async function parse_npz(buf) {
     }
     out[name] = parse_npy(payload);
     i = dataEnd;
+    // If the streaming flag was set, skip the trailing Data Descriptor record
+    // (signature 0x08074b50 + crc32 + compSize + uncompSize, all 4 or 8 bytes).
+    if (flags & 0x08 && i + 4 <= u8.length && _u32le(u8, i) === 0x08074b50) {
+      i += 4 + 4 + 4 + 4;
+    }
   }
   return out;
 }
@@ -3823,8 +3911,6 @@ function fmt_bytes(n) {
   return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
 }
 
-const L3_BUDGET_BYTES = 96 * 1024 * 1024;  // 9800X3D L3
-
 function render_size_meter(refs, run, cfg) {
   const root = $(refs.sizeMeterId);
   if (!cfg) {
@@ -3836,12 +3922,13 @@ function render_size_meter(refs, run, cfg) {
     root.innerHTML = `<span class="meta">config.json missing <code>shape</code> for run <b>${run}</b></span>`;
     return;
   }
+  // Weight footprint at common precisions. fp32 = 4 B/param, bf16/fp16 = 2,
+  // int8 = 1, int4 = 0.5. Pure weights only; optimizer state and activations
+  // are training-time costs and live in the training-form estimator instead.
+  const fp32 = pc.total * 4;
+  const bf16 = pc.total * 2;
   const int8 = pc.total;
   const int4 = Math.ceil(pc.total / 2);
-  const fits = int8 <= L3_BUDGET_BYTES;
-  const fitColor = fits ? "#5dff9b" : "#ff7d5d";
-  const fitLabel = fits ? "FITS L3" : "SPILLS TO DRAM";
-  const pct = (int8 / L3_BUDGET_BYTES * 100).toFixed(1);
   root.innerHTML = `
     <table>
       <tr><td class="l" style="text-align:left">run</td><td style="text-align:right">${run}</td></tr>
@@ -3850,9 +3937,10 @@ function render_size_meter(refs, run, cfg) {
       <tr><td class="l" style="text-align:left">  embed (tied)</td><td style="text-align:right">${pc.parts.embed.toLocaleString()}</td></tr>
       <tr><td class="l" style="text-align:left">  attention</td><td style="text-align:right">${pc.parts.attn.toLocaleString()}</td></tr>
       <tr><td class="l" style="text-align:left">  ffn</td><td style="text-align:right">${pc.parts.ffn.toLocaleString()}</td></tr>
-      <tr><td class="l" style="text-align:left">INT8 weight bytes</td><td style="text-align:right">${fmt_bytes(int8)}  (${pct}% of 96 MB L3)</td></tr>
-      <tr><td class="l" style="text-align:left">INT4 weight bytes</td><td style="text-align:right">${fmt_bytes(int4)}</td></tr>
-      <tr><td class="l" style="text-align:left">L3 fit (9800X3D)</td><td style="text-align:right"><span style="background:${fits ? "#103025" : "#330a0a"};color:${fitColor};padding:2px 8px;border-radius:3px;font-weight:700">${fitLabel}</span></td></tr>
+      <tr><td class="l" style="text-align:left">weights @ fp32</td><td style="text-align:right">${fmt_bytes(fp32)}</td></tr>
+      <tr><td class="l" style="text-align:left">weights @ bf16 / fp16</td><td style="text-align:right">${fmt_bytes(bf16)}</td></tr>
+      <tr><td class="l" style="text-align:left">weights @ int8</td><td style="text-align:right">${fmt_bytes(int8)}</td></tr>
+      <tr><td class="l" style="text-align:left">weights @ int4</td><td style="text-align:right">${fmt_bytes(int4)}</td></tr>
     </table>`;
 }
 
@@ -4002,7 +4090,31 @@ function render_pruning_report(refs, r) {
   $("pruneRefreshBtn").addEventListener("click", () => load_pruning_report(refs, r.model));
 }
 
+// Plain-English legend for the confidence-evolution chart. Each series gets a
+// colored swatch, its display name, and a one-sentence "what does UP mean?"
+// summary. Same colors as the canvas (kept in lockstep below).
+const CONFEVO_LEGEND_ITEMS = [
+  { color: "#5dc8ff", label: "margin",            tip: "gap between top byte and runner-up — UP = top byte pulls farther ahead" },
+  { color: "#ffae5d", label: "entropy",           tip: "1 − H(p)/log₂V — UP = probability mass concentrates on fewer bytes" },
+  { color: "#5dff9b", label: "lens-consistency",  tip: "fraction of layers that already agree with the final prediction — UP = decision lands earlier in the stack" },
+  { color: "#ff5d9b", label: "residual-stab",     tip: "smoothness of how the residual grows layer to layer — UP = stack commits steadily instead of in jumps" },
+];
+
+function _renderConfEvoLegend(canvasId) {
+  const el = document.getElementById(canvasId + "Legend");
+  if (!el) return;
+  el.innerHTML = CONFEVO_LEGEND_ITEMS.map(it =>
+    `<span title="${it.tip}" style="display:inline-flex;align-items:center;gap:5px">
+      <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${it.color}"></span>
+      <span style="color:var(--text)">${it.label}</span>
+      <span style="color:var(--dim)">— ${it.tip}</span>
+    </span>`
+  ).join("");
+}
+
 function render_confidence_evo(refs, run, steps, confByStep) {
+  // Legend renders even when there's no data so users see what the panel is for.
+  if (refs.confCanvas && refs.confCanvas.id) _renderConfEvoLegend(refs.confCanvas.id);
   const have = steps.filter(s => s.lens && confByStep[s.step]);
   // Update the hover/status line so the user can tell "no data" from "data
   // missing for some reason" — used to silently render an empty chart.
@@ -4050,43 +4162,122 @@ function render_lens_drift(refs, run, steps, lensByStep) {
     return;
   }
   const layers = lensByStep[have[0].step].lens_rows.length;
+
+  // Printable / control byte glyph. Kept short — one visible character — so
+  // the heatmap cells stay tight and the column reads like a single column of
+  // letters instead of a wall of metadata.
   function byte_glyph(b) {
-    if (b === 32) return "<span style='color:var(--dim)'>␣</span>";
-    if (b === 10) return "<span style='color:var(--dim)'>↵</span>";
-    if (b === 9)  return "<span style='color:var(--dim)'>→</span>";
-    if (b < 32 || b === 127 || b > 126) return "<span style='color:var(--dim)'>·" + b + "</span>";
+    if (b === 32) return "␣";
+    if (b === 10) return "↵";
+    if (b === 9)  return "→";
+    if (b < 32 || b === 127 || b > 126) return "·";
     const c = String.fromCharCode(b);
-    const safe = c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" : c;
-    return safe;
+    if (c === "<") return "&lt;";
+    if (c === ">") return "&gt;";
+    if (c === "&") return "&amp;";
+    return c;
   }
-  let html = `<table style="font-size:10.5px"><tr><th style="text-align:left">layer</th>`;
-  for (const s of have) html += `<th>step ${s.step.toLocaleString()}</th>`;
-  html += `</tr>`;
-  for (let L = 0; L < layers; L++) {
-    html += `<tr><td style="text-align:left;color:var(--dim)">L${L}</td>`;
-    for (const s of have) {
-      const row = lensByStep[s.step].lens_rows[L];
-      const V = row.length;
-      // top-3 raw logit picks (raw int32 ordering — same as argmax).
-      const idx = Array.from({length: V}, (_, k) => k);
-      idx.sort((a, b) => row[b] - row[a]);
-      const top = idx.slice(0, 3);
-      // softmax on the row to get probs (mirror parse_npz path).
-      let absMax = 1;
-      for (let v = 0; v < V; v++) { const a = Math.abs(row[v]); if (a > absMax) absMax = a; }
-      let sum = 0;
-      const probs = new Float64Array(V);
-      for (let v = 0; v < V; v++) {
-        const e = Math.exp(row[v] / absMax * 8.0 - 8.0);
-        probs[v] = e; sum += e;
-      }
-      for (let v = 0; v < V; v++) probs[v] /= sum;
-      const cells = top.map(b => `<span style='display:inline-block;min-width:34px;text-align:center'><b>${byte_glyph(b)}</b><span style='color:var(--dim)'>·${(probs[b] * 100).toFixed(0)}%</span></span>`).join(" ");
-      html += `<td style="text-align:left">${cells}</td>`;
+
+  // Per-cell softmax → top-1 byte + probability + second-place gap. Reused as
+  // the data backbone of the heatmap; we don't render top-3 anymore because
+  // the cell color already encodes confidence and the secondary picks add
+  // visual noise that hides the actual signal across checkpoints.
+  function cellInfo(row) {
+    const V = row.length;
+    let absMax = 1;
+    for (let v = 0; v < V; v++) { const a = Math.abs(row[v]); if (a > absMax) absMax = a; }
+    let sum = 0;
+    const probs = new Float64Array(V);
+    for (let v = 0; v < V; v++) {
+      const e = Math.exp(row[v] / absMax * 8.0 - 8.0);
+      probs[v] = e; sum += e;
     }
-    html += `</tr>`;
+    let p1 = -Infinity, p2 = -Infinity, top1 = 0;
+    for (let v = 0; v < V; v++) {
+      const p = probs[v] / sum;
+      probs[v] = p;
+      if (p > p1) { p2 = p1; p1 = p; top1 = v; }
+      else if (p > p2) { p2 = p; }
+    }
+    return { top1, p1, gap: p1 - p2, probs };
   }
-  html += `</table>`;
+
+  // Final-layer top-1 per checkpoint = the byte the model actually committed
+  // to at that step. We highlight the first layer up the stack whose top-1
+  // matches — the "commit row". Gold means the decision was made early.
+  const commitedByStep = {};
+  for (const s of have) {
+    const final = lensByStep[s.step].lens_rows[layers - 1];
+    commitedByStep[s.step] = cellInfo(final).top1;
+  }
+  const commitRowByStep = {};
+  for (const s of have) {
+    const tgt = commitedByStep[s.step];
+    let firstHit = -1;
+    for (let L = 0; L < layers; L++) {
+      const info = cellInfo(lensByStep[s.step].lens_rows[L]);
+      if (info.top1 === tgt) { firstHit = L; break; }
+    }
+    commitRowByStep[s.step] = firstHit;
+  }
+
+  // Layer-region tint: sensory (cool) → association (warm) → output (hot).
+  // Matches the legend used elsewhere in the dashboard so users can carry the
+  // same region intuition over.
+  function regionRGB(L) {
+    const t = layers || 1;
+    if (L < t / 3)       return [93, 200, 255];    // cool — sensory
+    if (L < 2 * t / 3)   return [255, 174, 93];    // warm — association
+    return [255, 93, 93];                          // hot  — output
+  }
+  function cellBg(p, rgb) {
+    // background opacity rises with confidence. low confidence = nearly black.
+    const a = Math.max(0.05, Math.min(0.9, p * 0.95));
+    return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a.toFixed(3)})`;
+  }
+  function cellFg(p) {
+    // foreground brightens with confidence so the byte glyph pops on dim cells too.
+    if (p >= 0.5) return "#0a0c11";       // dark text on bright cell
+    if (p >= 0.2) return "#f0f4ff";
+    return "rgba(255,255,255,0.55)";
+  }
+
+  // Inline-style grid. CSS columns are: a sticky layer label + one column per
+  // checkpoint. Each cell ~36px wide so the byte glyph reads big.
+  const cols = `60px repeat(${have.length}, minmax(40px, 1fr))`;
+  let html = `<div style="display:grid;grid-template-columns:${cols};gap:2px;font-size:11px;line-height:1.1">`;
+  // Header row.
+  html += `<div style="font-size:10px;color:var(--dim);padding:2px 4px">layer</div>`;
+  for (const s of have) {
+    html += `<div style="font-size:10px;color:var(--dim);text-align:center;padding:2px 0">${s.step.toLocaleString()}</div>`;
+  }
+  // Body rows: one per layer.
+  for (let L = 0; L < layers; L++) {
+    const rgb = regionRGB(L);
+    html += `<div style="font-size:10px;color:rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.85);padding:0 4px;display:flex;align-items:center;justify-content:flex-end;font-weight:600">L${L}</div>`;
+    for (const s of have) {
+      const info = cellInfo(lensByStep[s.step].lens_rows[L]);
+      const bg   = cellBg(info.p1, rgb);
+      const fg   = cellFg(info.p1);
+      const isCommit = (commitRowByStep[s.step] === L);
+      const border = isCommit ? "1.5px solid #ffd54a" : "1px solid rgba(255,255,255,0.04)";
+      const tip = `step ${s.step} L${L}: top1='${String.fromCharCode(info.top1 < 32 || info.top1 > 126 ? 46 : info.top1)}' (0x${info.top1.toString(16).padStart(2,'0')}) @ ${(info.p1*100).toFixed(0)}% · gap ${(info.gap*100).toFixed(0)}pp${isCommit ? " · COMMIT" : ""}`;
+      html += `<div title="${tip}" style="background:${bg};color:${fg};border:${border};border-radius:3px;text-align:center;font-family:ui-monospace,monospace;padding:3px 0;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:28px">
+        <span style="font-size:14px;font-weight:700;line-height:1">${byte_glyph(info.top1)}</span>
+        <span style="font-size:9px;opacity:.75;line-height:1.1">${(info.p1*100).toFixed(0)}%</span>
+      </div>`;
+    }
+  }
+  html += `</div>`;
+
+  // Legend strip below the grid.
+  html += `<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font-size:10.5px;color:var(--dim)">
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgb(93,200,255);vertical-align:middle"></span> L0–L${Math.floor(layers/3)-1} sensory</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgb(255,174,93);vertical-align:middle"></span> L${Math.floor(layers/3)}–L${Math.floor(2*layers/3)-1} association</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgb(255,93,93);vertical-align:middle"></span> L${Math.floor(2*layers/3)}–L${layers-1} output</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;border:1.5px solid #ffd54a;vertical-align:middle"></span> commit row (top-1 first matches final layer)</span>
+    <span style="color:var(--dim)">cell brightness = top-1 probability</span>
+  </div>`;
   root.innerHTML = html;
 }
 

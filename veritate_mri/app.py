@@ -706,7 +706,10 @@ def pruning_report():
         else:
             m = Veritate(vocab=vocab, hidden=hidden, layers=layers, ffn=ffn_arg,
                          heads=heads, seq=seq)
-            m.load_state_dict(sd, strict=True)
+            # strict=False so plugin checkpoints that add heads beyond canonical
+            # Veritate (e.g. veritate_85m's MTP head, which sits AFTER the FFN
+            # blocks the pruning probe measures) don't blow up the report.
+            m.load_state_dict(sd, strict=False)
         m.eval()
 
         corpus_stem = (cfg.get("corpus") or "").strip()
@@ -818,7 +821,10 @@ def pruning_generate_plugin():
         else:
             m = Veritate(vocab=vocab, hidden=hidden, layers=layers, ffn=ffn_arg,
                          heads=heads, seq=seq)
-            m.load_state_dict(sd, strict=True)
+            # strict=False so plugin checkpoints that add heads beyond canonical
+            # Veritate (e.g. veritate_85m's MTP head, which sits AFTER the FFN
+            # blocks the pruning probe measures) don't blow up the report.
+            m.load_state_dict(sd, strict=False)
         m.eval()
 
         corpus_stem = (cfg.get("corpus") or "").strip()

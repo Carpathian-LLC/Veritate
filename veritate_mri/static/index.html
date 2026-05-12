@@ -673,9 +673,9 @@
   <!-- ---------- classroom dashboard tier-1 panels (mirrored from live training tab) ---------- -->
 
   <div class="panel">
-    <h2>model size meter <em>params, INT8/INT4 bytes, L3 fit</em></h2>
+    <h2>model size meter <em>params and weight bytes at each precision</em></h2>
     <div class="body"><div id="learnSizeMeter">no timeline selected</div></div>
-    <p class="desc">Params, INT8/INT4 byte budget, and L3-cache fit. <b style="color:#5dff9b">Green</b> = INT8 weights fit in the 9800X3D's 96 MB L3; <b style="color:#ff7d5d">red</b> = spills to DRAM.</p>
+    <p class="desc">Parameter count broken down by component, plus the weight footprint at fp32 / bf16 / int8 / int4. Pure weight bytes only — optimizer state and activations are training-time costs and show up in the training-form memory estimator.</p>
   </div>
 
   <div class="panel" data-expandable="true">
@@ -684,12 +684,13 @@
   </div>
 
   <div class="panel">
-    <h2>confidence evolution <em>margin / entropy / lens-consistency / residual-stab over training</em></h2>
+    <h2>confidence evolution <em>is the model getting more sure of itself over training?</em></h2>
     <div class="body">
+      <div id="cConfEvoLLegend" style="display:flex;flex-wrap:wrap;gap:14px;font-size:10.5px;color:var(--dim);margin-bottom:6px"></div>
       <canvas id="cConfEvoL" height="180"></canvas>
       <div class="meta hover-info" id="cConfEvoLHover">hover to inspect</div>
     </div>
-    <p class="desc">Margin / entropy / lens-consistency / residual-stab from each <code>lens_step_*.npz</code>. <b style="color:#5dff9b">Lens-consistency</b> climbing = the model commits to its prediction earlier in the stack.</p>
+    <p class="desc">Four numbers per checkpoint, each measuring "how sure was the model?" from a different angle. UP for any of them means the model committed to its top prediction more confidently than it did at the previous checkpoint. Plotted from each <code>lens_step_*.npz</code>.</p>
   </div>
 
   <div class="panel" data-expandable="true">
@@ -1095,24 +1096,25 @@
   <!-- ---------- classroom dashboard tier-1 panels ---------- -->
 
   <div class="panel">
-    <h2>model size meter <em>params, INT8/INT4 bytes, L3 fit</em></h2>
+    <h2>model size meter <em>params and weight bytes at each precision</em></h2>
     <div class="body"><div id="trainSizeMeter">no run selected</div></div>
-    <p class="desc">Params, INT8/INT4 byte budget, and L3-cache fit. <b style="color:#5dff9b">Green</b> = INT8 weights fit in the 9800X3D's 96 MB L3; <b style="color:#ff7d5d">red</b> = spills to DRAM.</p>
+    <p class="desc">Parameter count broken down by component, plus the weight footprint at fp32 / bf16 / int8 / int4. Pure weight bytes only — optimizer state and activations are training-time costs and show up in the training-form memory estimator.</p>
   </div>
 
   <div class="panel">
-    <h2>confidence evolution <em>margin / entropy / lens-consistency / residual-stab over training</em></h2>
+    <h2>confidence evolution <em>is the model getting more sure of itself over training?</em></h2>
     <div class="body">
+      <div id="cConfEvoTLegend" style="display:flex;flex-wrap:wrap;gap:14px;font-size:10.5px;color:var(--dim);margin-bottom:6px"></div>
       <canvas id="cConfEvoT" height="180"></canvas>
       <div class="meta hover-info" id="cConfEvoTHover">hover to inspect</div>
     </div>
-    <p class="desc">Margin / entropy / lens-consistency / residual-stab from each <code>lens_step_*.npz</code>. <b style="color:#5dff9b">Lens-consistency</b> climbing = the model commits to its prediction earlier in the stack.</p>
+    <p class="desc">Four numbers per checkpoint, each measuring "how sure was the model?" from a different angle. UP for any of them means the model committed to its top prediction more confidently than it did at the previous checkpoint. Plotted from each <code>lens_step_*.npz</code>.</p>
   </div>
 
-  <div class="panel">
-    <h2>lens-logit drift <em>top-3 predicted bytes per layer per checkpoint</em></h2>
-    <div class="body"><div id="trainLensDrift" style="max-height: 420px; overflow: auto">no lens data</div></div>
-    <p class="desc">Rows are layers, columns are checkpoints. Cells show the top-3 bytes that layer would emit if its residual were read off through the embedding (logit-lens).</p>
+  <div class="panel collapsible collapsed">
+    <h2>lens-logit drift <em>per-byte snapshot — usually not what you want on the Training tab</em></h2>
+    <div class="body"><div id="trainLensDrift" style="max-height: 320px; overflow: auto">no lens data</div></div>
+    <p class="desc">Each cell asks <i>if the model stopped at this layer, what byte would it predict?</i> for ONE specific byte sampled from the corpus at probe time. Rows = layers (bottom → top), columns = checkpoints. Brighter cell = higher top-1 probability. The gold-bordered row marks the first layer that already matched the final-layer prediction (where the decision was "committed"). Best read on the Classroom tab against a specific probe prompt; on the Training tab it's a single byte's evolution, which is mostly noise.</p>
   </div>
 
   <div class="panel">

@@ -344,7 +344,15 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     state = {"model": model.state_dict(), "step": int(step)}
     if optimizer is not None: state["optimizer"] = optimizer.state_dict()
     if args is not None:      state["args"]      = args
-    torch.save(state, ckpt_path)
+    # Atomic write: serialize to a sibling .tmp first, then os.replace into
+    # place. If the process dies mid-write (SIGKILL, OOM, Windows kill, power
+    # loss), the partial file is named step_N.pt.tmp and is invisible to the
+    # `step_*.pt` parser in every plugin's latest_checkpoint_step. Without
+    # this, a partial step_N.pt would be picked as the resume target and crash
+    # torch.load on next start — or worse, silently misload.
+    tmp_path = ckpt_path + ".tmp"
+    torch.save(state, tmp_path)
+    os.replace(tmp_path, ckpt_path)
     logmod.info("save", f"wrote checkpoint: {ckpt_path}")
 
     # The dump suite walks a canonical Veritate. Non-canonical models (MoE,
