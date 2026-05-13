@@ -19,7 +19,8 @@ import time
 
 import numpy as np
 
-import logs as logmod
+from runtime import logs as logmod
+from training import confidence as confidence_mod
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -91,6 +92,11 @@ def _is_veritate_800m(sd):
     return "pos_emb.weight" not in sd and any(k.startswith("mtp.transforms.") for k in sd)
 
 
+def _is_veritate_85m_mtp(sd):
+    """The 85m plugin trunk: learned pos_emb AND an MTP byte-0 head."""
+    return "pos_emb.weight" in sd and any(k.startswith("mtp.transforms.") for k in sd)
+
+
 def _is_rope_only(sd):
     """RoPE without MTP (e.g., experiments/v2/rope_85m checkpoints): no pos_emb,
     no mtp head."""
@@ -103,7 +109,7 @@ class Brain:
         import torch.nn.functional as F
         repo_root = os.path.normpath(os.path.join(HERE, "..", ".."))
         sys.path.insert(0, repo_root)
-        from veritate.model import Veritate
+        from veritate_core.model import Veritate
         globals()["torch"] = torch
         globals()["F"] = F
         globals()["Veritate"] = Veritate
@@ -121,6 +127,10 @@ class Brain:
         sd = s["model"]
         del s
         self.checkpoint = os.path.basename(checkpoint)
+        # Calibration weights for the confidence score live alongside the
+        # checkpoint at models/<name>/confidence_weights.json. Falls back to the
+        # engine main.c constants when absent (see confidence.WEIGHTS_FALLBACK).
+        self._conf_weights = confidence_mod.load_weights(os.path.dirname(os.path.dirname(checkpoint)))
         if "tok_emb.weight" not in sd:
             plugin_name = str(cfg.get("plugin") or "").strip()
             tag = f" (plugin: {plugin_name})" if plugin_name else ""
@@ -154,11 +164,23 @@ class Brain:
             # rope_cos / rope_sin are non-persistent buffers built at
             # construction; nothing in `sd` to load for them.
             self.model.load_state_dict(sd, strict=False)
+        elif _is_veritate_85m_mtp(sd):
+            plugin_dir = os.path.join(repo_root, "plugins", "veritate_85m")
+            if plugin_dir not in sys.path:
+                sys.path.insert(0, plugin_dir)
+            from plugin import Veritate85M  # type: ignore
+            n_predict = int(cfg.get("n_predict") or 2)
+            self.model = Veritate85M(
+                vocab=shape["vocab"], hidden=shape["hidden"], layers=shape["layers"],
+                ffn=shape["ffn"], heads=shape["heads"], seq=shape["seq"],
+                n_predict=n_predict,
+            )
+            self.model.load_state_dict(sd, strict=True)
         elif _is_rope_only(sd):
             # RoPE-only checkpoint (e.g., the experiments/v2/rope_85m finetunes
             # of the canonical 85M). State-dict layout matches canonical Veritate
             # MINUS pos_emb.weight; no MTP head.
-            from veritate.model_rope import VeritateRoPE
+            from veritate_core.model_rope import VeritateRoPE
             rope_base = float(cfg.get("rope_base") or 10000.0)
             self.model = VeritateRoPE(
                 vocab=shape["vocab"], hidden=shape["hidden"], layers=shape["layers"],
@@ -773,6 +795,23 @@ class Brain:
 
             memory = self._memory_lookup(ffn_top)
 
+            # confidence + four components (rule 23: emit the same fields the
+            # training-time dumper writes; the shared calculator lives at
+            # veritate_mri/confidence.py so both paths agree by construction).
+            # lens[L] is a list of top-3 {b, p} dicts; the top-1 byte is lens[L][0]["b"].
+            lens_argmax = [int(lens[L][0]["b"]) for L in range(m.layers)]
+            res_stack = torch.stack([self.cap_block_out[L][0, -1] for L in range(m.layers)]).float()
+            embed_row = emb_w[nxt].float()
+            conf = confidence_mod.frame_fields(
+                last_logits=last_logits, probs=probs, nxt=nxt,
+                lens_argmax=lens_argmax, res_stack=res_stack, embed_row=embed_row,
+                vocab=int(m.vocab), weights=self._conf_weights,
+            )
+
+            # Per-frame shape matches the C-engine frame schema in app.py so the
+            # dashboard renderer consumes one shape from both backends.
+            ablation = ({"layer": self._ablate_layer, "neuron": self._ablate_neuron}
+                        if self._ablate_layer >= 0 and self._ablate_neuron >= 0 else None)
             yield {
                 "kind": "token",
                 "byte": nxt, "argmax_byte": argmax_byte, "T": T,
@@ -786,8 +825,12 @@ class Brain:
                 "dla_picked": dla_picked,
                 "dla_argmax": dla_argmax,
                 "dla_cand": dla_cand,
-                "ablation_layer":  self._ablate_layer,
-                "ablation_neuron": self._ablate_neuron,
+                "ablation": ablation,
+                "margin":           conf["margin"],
+                "entropy":          conf["entropy"],
+                "lens_consistency": conf["lens_consistency"],
+                "residual_stab":    conf["residual_stab"],
+                "confidence":       conf["confidence"],
                 "attn": attn, "info_flow": info_flow,
                 "res": res_norms, "contrib": contributions,
                 "lens": lens, "cand": candidates,

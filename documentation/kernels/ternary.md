@@ -10,7 +10,7 @@ This is a versioned contract. Adding, removing, or changing the signature of any
 
 A 1B-class MEGA model with ternary weights is ~200 MB on disk vs ~1 GB INT8 vs ~4 GB FP32. The active per-byte footprint at top-1 routing is ~40 MB, which fits the 9800X3D's 96 MB L3 with attention + KV. Smaller than INT8 by 5x at the same accuracy band, this is the gating change that lets MEGA-class models run cache-resident on consumer hardware.
 
-The trainer (`veritate/qat.py::fake_quant_weight_ternary`) does the QAT side; the engine implements the inference side. Accuracy is preserved because activation and output paths stay INT8: only the weight tier shrinks.
+The trainer (`veritate_core/qat.py::fake_quant_weight_ternary`) does the QAT side; the engine implements the inference side. Accuracy is preserved because activation and output paths stay INT8: only the weight tier shrinks.
 
 # ------------------------------------------------------------------------------------
 # Packing format

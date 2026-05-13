@@ -22,8 +22,8 @@ if MRI_DIR not in sys.path:
     sys.path.insert(0, MRI_DIR)
 
 import torch
-import save as save_mod
 from readers import paths
+from training import save as save_mod
 
 # ------------------------------------------------------------------------------------
 # Constants

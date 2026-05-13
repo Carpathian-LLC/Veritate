@@ -694,13 +694,24 @@ void dla_top(const model_t* m, const int8_t* ffn_neurons_pos, int32_t byte, dla_
 }
 
 // ------------------------------------------------------------------------------------
-// logit lens — project an int16 residual row through the int8 embed matrix.
-// out gets V_VOCAB int32 dot products. shape: embed[V_VOCAB][V_HIDDEN] @ residual[V_HIDDEN].
+// logit lens — project an int16 residual row through the model's output head.
+// v11 and earlier: tied head, iterate embed[V][H] row-major.
+// v12: untied lm_head, iterate the prep'd lm_head's b_rowmaj which is on-disk
+//      [k=H][n=V] layout, indexed as b_rowmaj[h*V + v].
 // ------------------------------------------------------------------------------------
 
-static void lens_project(const veritate_shape_t* sh, const int8_t* embed,
-                         const int16_t* residual, int32_t* out) {
-    const int32_t V = sh->vocab, H = sh->hidden;
+static void model_lens_project(const model_t* m, const int16_t* residual, int32_t* out) {
+    const int32_t V = m->shape.vocab, H = m->shape.hidden;
+    if (m->mtp_present && m->lm_head.b_rowmaj) {
+        const int8_t* W = m->lm_head.b_rowmaj;
+        for (int32_t v = 0; v < V; v++) {
+            int32_t s = 0;
+            for (int32_t h = 0; h < H; h++) s += (int32_t)residual[h] * (int32_t)W[h * V + v];
+            out[v] = s;
+        }
+        return;
+    }
+    const int8_t* embed = m->embed;
     for (int32_t v = 0; v < V; v++) {
         const int8_t* row = embed + (size_t)v * H;
         int32_t s = 0;
@@ -861,7 +872,7 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
             for (int32_t p = 0; p < real_len; p++) {
                 const int16_t* res = a->act + (size_t)p * H;
                 int32_t* dst = trace->lens_logits + ((size_t)L * S + p) * V;
-                lens_project(sh, m->embed, res, dst);
+                model_lens_project(m, res, dst);
             }
         }
     }
@@ -976,7 +987,7 @@ void forward_decode(const model_t* m, kv_cache_t* cache, int32_t token, int8_t* 
                     memset(ffn_dst, 0, (size_t)F);
                     if (trace->lens_logits) {
                         int32_t* lens_dst = trace->lens_logits + ((size_t)L * S + pos) * V;
-                        lens_project(sh, m->embed, d->act, lens_dst);
+                        model_lens_project(m, d->act, lens_dst);
                     }
                 }
                 // kv cache rows must still advance for this position; copy the carried
@@ -1127,7 +1138,7 @@ void forward_decode(const model_t* m, kv_cache_t* cache, int32_t token, int8_t* 
 
         if (trace && trace->lens_logits) {
             int32_t* dst = trace->lens_logits + ((size_t)L * S + pos) * V;
-            lens_project(sh, m->embed, d->act, dst);
+            model_lens_project(m, d->act, dst);
         }
     }
 
@@ -1302,8 +1313,27 @@ void detokenize_bytes(const int32_t* tokens, int32_t n, char* out) {
 }
 
 // ------------------------------------------------------------------------------------
-// lm head — tied to input embedding. temperature + top-k + multinomial.
+// lm head — tied to input embedding (v11 and earlier) or untied + MTP byte-0
+// projection (v12). temperature + top-k + multinomial.
 // ------------------------------------------------------------------------------------
+
+// v12 byte-0 MTP projector: h_byte0 = norms[0] ( transforms[0] ( h_in ) ). No-op
+// memcpy when mtp_present == 0. Scratch buffers live on model_t (allocated in
+// load) so the decode hot path stays alloc-free.
+void model_project_byte0(const model_t* m, const int8_t* h_in, int8_t* h_out) {
+    const int32_t H = m->shape.hidden;
+    if (!m->mtp_present) {
+        memcpy(h_out, h_in, (size_t)H);
+        return;
+    }
+    int32_t* tmp32 = m->mtp_scratch_i32;
+    int16_t* tmp16 = m->mtp_scratch_i16;
+    matmul_int8_vnni_prep(h_in, &m->mtp_transform0, tmp32, 1);
+    for (int32_t i = 0; i < H; i++) {
+        tmp16[i] = sat_int16(requant_pb(tmp32[i], &m->mtp_transform0, i));
+    }
+    layernorm_i16_to_i8(tmp16, h_out, m->mtp_norm0_w, 1, H);
+}
 
 // build lm_head — transpose embed to [hidden, vocab] layout prep_b expects, then pack.
 void lm_head_build(model_t* m) {
@@ -1321,10 +1351,16 @@ void lm_head_build(model_t* m) {
 int32_t sample_token_ext(const model_t* m, const int8_t* hidden, float temp, int32_t top_k,
                          uint32_t* rng, int32_t* out_logits, int32_t* out_argmax) {
     const int32_t V = m->shape.vocab;
+    const int32_t H = m->shape.hidden;
     int32_t* logits = (int32_t*)malloc((size_t)V * sizeof(int32_t));
     float*   fp     = (float*)  malloc((size_t)V * sizeof(float));
 
-    matmul_int8_vnni_prep(hidden, &m->lm_head, logits, 1);
+    // v12: apply byte-0 MTP head before the lm_head matmul. On v11 and earlier
+    // (mtp_present == 0) this is a memcpy, so the int8 path is unchanged.
+    int8_t* h_byte0 = (int8_t*)malloc((size_t)H);
+    model_project_byte0(m, hidden, h_byte0);
+    matmul_int8_vnni_prep(h_byte0, &m->lm_head, logits, 1);
+    free(h_byte0);
 
     int32_t argmax = 0;
     int32_t argmax_logit = logits[0];
@@ -1678,18 +1714,21 @@ int model_load(model_t* m, const char* path) {
         hdr.version != VERITATE_MODEL_VERSION_MOD &&
         hdr.version != VERITATE_MODEL_VERSION_NORM &&
         hdr.version != VERITATE_MODEL_VERSION_BOOST &&
-        hdr.version != VERITATE_MODEL_VERSION_QAT) { fclose(f); return -1; }
+        hdr.version != VERITATE_MODEL_VERSION_QAT &&
+        hdr.version != VERITATE_MODEL_VERSION_MTP) { fclose(f); return -1; }
 
     const int32_t V = m->shape.vocab, H = m->shape.hidden, S = m->shape.seq;
     const int32_t F = m->shape.ffn, Ln = m->shape.layers;
 
     if (hdr.version == VERITATE_MODEL_VERSION_BOOST ||
-        hdr.version == VERITATE_MODEL_VERSION_QAT) {
+        hdr.version == VERITATE_MODEL_VERSION_QAT ||
+        hdr.version == VERITATE_MODEL_VERSION_MTP) {
         if (fread(&m->act_boost, sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
         if (m->act_boost < 1) m->act_boost = 1;
     }
 
-    if (hdr.version == VERITATE_MODEL_VERSION_QAT) {
+    if (hdr.version == VERITATE_MODEL_VERSION_QAT ||
+        hdr.version == VERITATE_MODEL_VERSION_MTP) {
         // v11 header extension: quant_mode, n_experts, router_topk.
         if (fread(&m->quant_mode,  sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
         if (fread(&m->n_experts,   sizeof(int32_t), 1, f) != 1) { fclose(f); return -1; }
@@ -1727,14 +1766,23 @@ int model_load(model_t* m, const char* path) {
     // and message the user. fix: retrain with qat_enabled=true. context:
     // docs/c_engine_120m_fix_tracking.md.
     if (m->act_boost > 1) {
-        fprintf(stderr,
-            "model_load: refusing to load. act_boost=%d means this model was "
-            "trained without QAT; matmul accumulator quantization noise will "
-            "dominate the signal and the engine will produce gibberish. "
-            "retrain with qat_enabled=true (multimind_mega trainer in the "
-            "dashboard) or use the PyTorch backend for non-QAT checkpoints. "
-            "context: docs/c_engine_120m_fix_tracking.md.\n", m->act_boost);
-        fclose(f); model_free(m); return -1;
+        const char* bypass = getenv("VERITATE_ALLOW_HIGH_ACT_BOOST");
+        if (bypass && bypass[0] && bypass[0] != '0') {
+            fprintf(stderr,
+                "model_load: act_boost=%d but VERITATE_ALLOW_HIGH_ACT_BOOST is set. "
+                "loading anyway. expect noisy or gibberish output until the model "
+                "is QAT-converged enough for act_boost=1.\n", m->act_boost);
+        } else {
+            fprintf(stderr,
+                "model_load: refusing to load. act_boost=%d means this model was "
+                "trained without QAT; matmul accumulator quantization noise will "
+                "dominate the signal and the engine will produce gibberish. "
+                "retrain with qat_enabled=true (multimind_mega trainer in the "
+                "dashboard) or use the PyTorch backend for non-QAT checkpoints. "
+                "set VERITATE_ALLOW_HIGH_ACT_BOOST=1 to force-load for dev testing. "
+                "context: docs/c_engine_120m_fix_tracking.md.\n", m->act_boost);
+            fclose(f); model_free(m); return -1;
+        }
     }
 
     if (fread(m->embed,     (size_t)V * H, 1, f) != 1) { fclose(f); return -1; }
@@ -1745,9 +1793,12 @@ int model_load(model_t* m, const char* path) {
     const int has_gate = (hdr.version == VERITATE_MODEL_VERSION_MOD);
     const int has_norm = (hdr.version == VERITATE_MODEL_VERSION_NORM ||
                          hdr.version == VERITATE_MODEL_VERSION_BOOST ||
-                         hdr.version == VERITATE_MODEL_VERSION_QAT);
+                         hdr.version == VERITATE_MODEL_VERSION_QAT ||
+                         hdr.version == VERITATE_MODEL_VERSION_MTP);
     const int has_moe  = (hdr.version == VERITATE_MODEL_VERSION_QAT && m->n_experts > 1);
-    const int ternary  = (hdr.version == VERITATE_MODEL_VERSION_QAT && m->quant_mode == VERITATE_QUANT_TERNARY);
+    const int ternary  = ((hdr.version == VERITATE_MODEL_VERSION_QAT ||
+                          hdr.version == VERITATE_MODEL_VERSION_MTP) &&
+                         m->quant_mode == VERITATE_QUANT_TERNARY);
     for (int32_t L = 0; L < Ln; L++) {
         block_t* blk = &m->blocks[L];
         blk->n_experts   = m->n_experts;
@@ -1806,9 +1857,23 @@ int model_load(model_t* m, const char* path) {
         if (fread(m->n_out_w, (size_t)H, 1, f) != 1) { fclose(f); return -1; }
     }
 
+    // v12: MTP byte-0 head + untied lm_head.
+    if (hdr.version == VERITATE_MODEL_VERSION_MTP) {
+        m->mtp_present = 1;
+        m->mtp_norm0_w     = (int8_t*) xalloc64((size_t)H);
+        m->mtp_scratch_i32 = (int32_t*)xalloc64((size_t)H * sizeof(int32_t));
+        m->mtp_scratch_i16 = (int16_t*)xalloc64((size_t)H * sizeof(int16_t));
+        if (!m->mtp_norm0_w || !m->mtp_scratch_i32 || !m->mtp_scratch_i16) { fclose(f); return -1; }
+        if (fread(m->mtp_norm0_w, (size_t)H, 1, f) != 1) { fclose(f); return -1; }
+        if (load_b(f, H, H, &m->mtp_transform0, 0) != 0) { fclose(f); return -1; }
+        // keep_raw=1 retains the on-disk [H][V] bytes in lm_head.b_rowmaj so
+        // model_lens_project can read them without re-materializing a transpose.
+        if (load_b(f, V, H, &m->lm_head,        1) != 0) { fclose(f); return -1; }
+    }
+
     fclose(f);
     byte_direction_build(m);
-    lm_head_build(m);
+    if (!m->mtp_present) lm_head_build(m);
     m->cw_loaded = 0;
     return 0;
 }
@@ -1866,6 +1931,13 @@ void model_free(model_t* m) {
     if (!m) return;
     byte_direction_free(m);
     free_prepped_b(&m->lm_head);
+    if (m->mtp_present) {
+        free_prepped_b(&m->mtp_transform0);
+        if (m->mtp_norm0_w)     { veritate_aligned_free(m->mtp_norm0_w);     m->mtp_norm0_w     = NULL; }
+        if (m->mtp_scratch_i32) { veritate_aligned_free(m->mtp_scratch_i32); m->mtp_scratch_i32 = NULL; }
+        if (m->mtp_scratch_i16) { veritate_aligned_free(m->mtp_scratch_i16); m->mtp_scratch_i16 = NULL; }
+        m->mtp_present = 0;
+    }
     if (m->blocks) {
         for (int32_t L = 0; L < m->shape.layers; L++) {
             block_t* blk = &m->blocks[L];

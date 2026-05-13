@@ -7,20 +7,25 @@ summary: What the dashboard, MRI server, and external tools can pull from a trai
 
 > Friendly summary. The canonical, field-level contract is `documentation/hooks/contract.md`.
 
-## the eight per-checkpoint artifacts
+## the thirteen per-checkpoint artifacts
 
-Every artifact is produced by a single call to `save.save(model, name, step, ...)`. Paths are relative to `models/<name>/hooks/step_<N>/`.
+Every artifact is produced by a single call to `save.save(model, name, step, ...)`. Paths are relative to `models/<name>/hooks/step_<N>/`. The dashboard's hook-reader walks the canonical filenames in `readers/paths.py::HOOK_ARTIFACTS`; `save.RENAME_MAP_TEMPLATE` performs the `*_step_<N>.*` → canonical rename after each dump produces its prefixed file.
 
 | file | producer | what it carries |
 |---|---|---|
-| `probe_step_<N>.json` | `dump_probe` | top-K active neurons per layer for a fixed prompt |
-| `lens_step_<N>.npz` | `dump_probe` | logit-lens projections per layer + residual L2 norms |
-| `classroom_step_<N>.json` | `dump_classroom` | parameter count, INT8/INT4 byte sizes, weight-delta L2, alive neurons per layer |
-| `grades_step_<N>.json` | `dump_grades` | reading-grade ladder per level + estimated grade |
-| `concepts_step_<N>.json` | `dump_concepts` | concept → top-neurons mapping per layer |
-| `surprise_step_<N>.json` | `dump_surprise` | per-token bits/byte for the canonical prompt |
-| `quant_kl_step_<N>.json` | `dump_quant_kl` | KL between fp and quantized output distributions |
-| `step_<N>.json` (generation) | `dump_generation` | full TFRM v7 frames, one per generated token |
+| `probe.json` | `dump_probe` | top-K active neurons per layer for a fixed prompt |
+| `lens.npz` | `dump_probe` | logit-lens projections per layer + residual L2 norms |
+| `classroom.json` | `dump_classroom` | parameter count, INT8/INT4 byte sizes, weight-delta L2, alive neurons per layer |
+| `grades.json` | `dump_grades` | reading-grade ladder per level + estimated grade |
+| `math.json` | `dump_math` | arithmetic rubric scores |
+| `grammar.json` | `dump_grammar` | grammar-eval rubric scores |
+| `reasoning.json` | `dump_reasoning` | reasoning-eval rubric scores |
+| `concepts.json` | `dump_concepts` | concept → top-neurons mapping per layer |
+| `surprise.json` | `dump_surprise` | per-token bits/byte for the canonical prompt |
+| `quant_kl.json` | `dump_quant_kl` | KL between fp and quantized output distributions |
+| `writing_health.json` | `dump_writing_health` | writing-style telemetry (repetition, vocab spread) |
+| `reading_comprehension.json` | `dump_reading_comprehension` | multi-prompt comprehension rubric scores |
+| `generation.json` | `dump_generation` | full TFRM v7 frames, one per generated token |
 
 ## the TFRM v7 frame
 
@@ -55,8 +60,8 @@ One frame per generated token. Same shape from training-time `dump_generation` a
 |---|---|---|
 | live inference | TFRM frame stream | `GET /generate?prompt=...&backend=<c-or-pytorch>` |
 | in-process training | TFRM frame per checkpoint | `models/<name>/hooks/step_<N>/generation.json` |
-| past-checkpoint learning | all eight artifacts per saved step | `models/<name>/hooks/step_<N>/{probe,lens,classroom,grades,concepts,surprise,quant_kl,generation}.{json,npz}` |
-| distillation | the eight artifacts on teacher and student at the same step | `models/<teacher>/...` and `models/<student>/...` |
+| past-checkpoint learning | all thirteen artifacts per saved step | `models/<name>/hooks/step_<N>/{probe,lens,classroom,grades,math,grammar,reasoning,concepts,surprise,quant_kl,writing_health,reading_comprehension,generation}.{json,npz}` |
+| distillation | the thirteen artifacts on teacher and student at the same step | `models/<teacher>/...` and `models/<student>/...` |
 | live training stream | per-step TFRM-lite over SSE | `GET /train_stream` (opt-in via the streaming helper) |
 | ablation | inference forward with one FFN neuron zeroed at the kernel boundary | `GET /generate?...&ablate_layer=L&ablate_neuron=N` |
 | ablation replay | same but loads a saved checkpoint instead of the latest bin | `GET /generate?...&checkpoint=step_<N>&ablate_layer=L&ablate_neuron=N` |

@@ -12,7 +12,7 @@ veritate_engine/**/bin/
 ..venv/
 venv/
 __pycache__/
-models/
+/models/
 build_out.txt
 chat_err.log
 c_trace_*.bin
@@ -20,11 +20,9 @@ c_trace_*.bin
 *.orig
 .plugin_pid.json
 .plugin_run.log
-plugins/
+/plugins/
 data/*
 /*de.md
-plugins
-models
 .DS_Store
 docs/
 /experiments
@@ -33,3 +31,4 @@ experiments/
 veritate_trace.bin
 *.vrmr
 *.tern
+.pytest_cache

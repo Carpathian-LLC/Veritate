@@ -22,7 +22,7 @@ import torch.nn.functional as F
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "..")))
-from veritate.model import Veritate
+from veritate_core.model import Veritate
 
 VERITATE_TRACE_MAGIC   = b"VRMR"
 VERITATE_TRACE_VERSION = 8

@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.normpath(os.path.join(HERE, "..")) not in sys.path:
     sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..")))
 try:
-    import logs as logmod
+    from runtime import logs as logmod
 except Exception:
     class _NoLog:
         def info(self, *a, **kw): pass

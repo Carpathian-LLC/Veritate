@@ -21,7 +21,7 @@
     </div>
     <div id="aiBody"></div>
     <div class="ai-foot">
-      <span>AI-generated, always verify before making changes &nbsp;·&nbsp; <a href="https://carpathian.ai/ai" target="_blank" style="color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)">Use Carpathian AI</a></span>
+      <span>AI-generated, always verify before making changes &nbsp;·&nbsp; <a href="https://carpathian.ai/ai" target="_blank" style="color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)">Try Carpathian AI</a></span>
       <span class="ai-foot-actions">
         <button id="aiSaveTxtBtn" type="button" disabled title="save the answer as a .txt file">save .txt</button>
         <button id="aiDoneBtn" type="button">close</button>
@@ -898,7 +898,6 @@
       <div class="controls" style="margin-bottom: 18px;gap:6px;flex-wrap:wrap">
         <button class="trainFlowBtn" data-flow="scratch"  type="button">from scratch</button>
         <button class="trainFlowBtn" data-flow="continue" type="button">continue saved</button>
-        <button class="trainFlowBtn" data-flow="distill"  type="button">distill</button>
         <button class="trainFlowBtn" data-flow="export"   type="button">export .bin</button>
       </div>
 
@@ -1299,24 +1298,30 @@
           </div>
 
           <div style="display:flex;flex-direction:column;gap:4px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;grid-column:1 / -1" id="corpusLibraryRow">
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
-              <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Corpus library</div>
-              <div class="inline" style="gap:6px;flex-wrap:wrap">
+            <div id="corpusLibraryHeader" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;cursor:pointer;user-select:none" title="click to expand / collapse">
+              <div style="display:flex;align-items:center;gap:6px;font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">
+                <span id="corpusLibraryChevron" style="display:inline-block;width:14px;font-size:14px;line-height:1;color:var(--accent);transition:transform 0.15s">&#9656;</span>
+                Corpus library
+                <span id="corpusLibraryCountBadge" class="meta" style="font-size:10.5px;color:var(--dim);font-weight:400;letter-spacing:0"></span>
+              </div>
+              <div class="inline" style="gap:6px;flex-wrap:wrap" id="corpusLibraryActions">
                 <button id="corpusRefreshBtn"   class="action" type="button">refresh</button>
                 <button id="corpusOpenFolderBtn" class="action" type="button">folder</button>
                 <button id="corpusAddSourceBtn" class="action" type="button">+ custom</button>
                 <button id="corpusToggleConfigBtn" class="action" type="button" title="catalog URL settings">URL</button>
               </div>
             </div>
-            <div id="corpusCatalogStatus" class="meta" style="font-size:10.5px"></div>
-            <div id="corpusConfigRow" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
-              <input type="text" id="corpusCatalogUrl" placeholder="https://.../catalog.json"
-                     style="flex:1;min-width:240px;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:3px 6px;font-size:10.5px;color:var(--text);font-family:monospace">
-              <button id="corpusCatalogUrlSaveBtn" class="action" type="button">save</button>
-              <span id="corpusCatalogUrlStatus" class="meta" style="font-size:10.5px"></span>
+            <div id="corpusLibraryBody" style="display:none;flex-direction:column;gap:4px">
+              <div id="corpusCatalogStatus" class="meta" style="font-size:10.5px"></div>
+              <div id="corpusConfigRow" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+                <input type="text" id="corpusCatalogUrl" placeholder="https://.../catalog.json"
+                       style="flex:1;min-width:240px;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:3px 6px;font-size:10.5px;color:var(--text);font-family:monospace">
+                <button id="corpusCatalogUrlSaveBtn" class="action" type="button">save</button>
+                <span id="corpusCatalogUrlStatus" class="meta" style="font-size:10.5px"></span>
+              </div>
+              <div id="corpusList" style="display:flex;flex-direction:column;gap:2px;margin-top:4px"></div>
+              <span id="corpusActionStatus" class="meta" style="font-size:10.5px"></span>
             </div>
-            <div id="corpusList" style="display:flex;flex-direction:column;gap:2px;margin-top:4px"></div>
-            <span id="corpusActionStatus" class="meta" style="font-size:10.5px"></span>
           </div>
 
         </div>
@@ -1367,11 +1372,21 @@
       <div class="settings-row">
         <div class="label">Analytics</div>
         <div class="desc">Anonymous data that tells us Veritate is alive in the wild and what hardware to support next. Aggregated counts (no machine ids, no IPs) appear at <a href="https://carpathian.ai/veritate" target="_blank" style="color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)">carpathian.ai/veritate</a>.</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px;margin-top:8px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:8px">
 
-          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Detect system <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">local only</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Snapshot CPU, RAM, GPU, OS &rarr; <code>data/system_specs.json</code>. Powers the training memory estimator. Re-run after hardware changes.</div>
+            <div class="meta" style="font-size:10.5px;color:var(--warm)">With Advanced on, also enables <b>Auto-pick</b> on the Training tab.</div>
+            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button id="sysDetectBtn" class="action" type="button">Detect now</button>
+            </div>
+            <div id="sysSpecsView" class="meta" style="font-size:10.5px;color:var(--dim);line-height:1.55">not detected yet</div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Heartbeat <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">minimum &middot; every 6h</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Hashed machine id, timestamp, uptime, restart count, error count, and a flag for whether training is currently active. No prompts, checkpoints, source, or model identities.</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Hashed id, uptime, restart/error counts, training-active flag. No prompts or checkpoints.</div>
             <div class="meta" id="heartbeatStatusLine" style="font-size:10.5px;color:var(--dim);line-height:1.55">
               machine id: <span id="heartbeatMachineId">.</span><br>
               device id: <span id="heartbeatDeviceId">.</span><br>
@@ -1379,10 +1394,10 @@
               total runtime: <span id="heartbeatRuntime">0s</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">
-              <label for="deviceNameInput" class="meta" style="font-size:10.5px;color:var(--dim)">device name <span style="color:var(--dim)">(optional, max 15 chars; defaults to 8-char hash)</span></label>
+              <label for="deviceNameInput" class="meta" style="font-size:10.5px;color:var(--dim)">device name <span style="color:var(--dim)">(optional, max 15 chars)</span></label>
               <div class="inline" style="gap:6px;flex-wrap:wrap">
                 <input type="text" id="deviceNameInput" maxlength="15" placeholder="e.g. lab-rig-01"
-                       style="flex:1;min-width:160px;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:inherit">
+                       style="flex:1 1 100px;min-width:0;width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:inherit">
                 <button id="deviceNameSaveBtn" class="action" type="button">save</button>
               </div>
               <span id="deviceNameStatus" class="meta" style="font-size:10.5px"></span>
@@ -1393,18 +1408,18 @@
             </div>
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Error reports <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">on by default</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Adds error log lines (source tag + truncated message) to each heartbeat so we can fix what's breaking. Capped at 20 errors per ping, 240 chars per message. No tracebacks, no file paths.</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Source tag + truncated message per heartbeat. Max 20/ping, 240 chars. No tracebacks or paths.</div>
             <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
               <input type="checkbox" id="heartbeatSendErrorsEnable">
               <span class="opt-title" style="margin:0;font-size:11.5px">Send error detail</span>
             </label>
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px">
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Advanced <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">opt-in</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Once per machine: CPU, RAM, GPU specs. Per active training run: model name, parameter count, shape (hidden, layers, heads, seq), plugin id, started_at. Hardware never repeated. No weights, datasets, or metrics.</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Once per machine: CPU/RAM/GPU. Per active run: name, params, shape, plugin. No weights or metrics.</div>
             <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
               <input type="checkbox" id="analyticsAdvancedEnable">
               <span class="opt-title" style="margin:0;font-size:11.5px">Send hardware &amp; training details</span>
@@ -1418,58 +1433,55 @@
       </div>
 
       <div class="settings-row">
-        <div class="label">Detect my system</div>
-        <div class="desc">
-          Capture a snapshot of this machine's CPU, RAM, GPU, and OS into <code>data/system_specs.json</code>. The training-tab memory estimator uses this to show how close your settings are to your VRAM / unified memory budget. Re-run after a hardware change.
-          <div style="margin-top:6px;color:var(--warm)">When <b>Advanced telemetry</b> (above) is also enabled, an <b>Auto-pick training settings</b> button appears on the Training tab and uses these specs to fill batch size, gradient accumulation, learning rate, warmup, and activation checkpointing for you.</div>
-        </div>
-        <div class="inline" style="flex-direction:column;align-items:flex-start;gap:8px">
-          <button id="sysDetectBtn" class="action" type="button">Detect now</button>
-          <div id="sysSpecsView" class="meta" style="font-size:11px;color:var(--dim);line-height:1.55">not detected yet</div>
-        </div>
-      </div>
+        <div class="label">Analytics overlay</div>
+        <div class="desc">On-screen tooling that reads from telemetry: a live HUD strip and an AI explainer for dashboard panels.</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:8px">
 
-      <div class="settings-row">
-        <div class="label">AI assist</div>
-        <div class="desc">
-          Adds an "ask AI" button next to selected dashboard panels. Each click sends the panel's current data to a remote model and shows the explanation in a modal. The default endpoint is hosted by Carpathian and ships with a public access key. Override either if you want to point at your own endpoint or key. When disabled, no buttons render and no calls are made.
-          <div style="margin-top:6px;font-size:11px"><a href="https://carpathian.ai/ai" target="_blank" style="color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)">Use Carpathian AI</a></div>
-        </div>
-        <div class="inline" style="flex-direction:column;align-items:flex-start;gap:8px">
-          <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:10px;padding:8px 14px">
-            <input type="checkbox" id="aiEnable">
-            <span class="opt-title" style="margin:0">Enable AI assist</span>
-          </label>
-          <div class="inline" style="gap:8px;flex-wrap:wrap">
-            <label style="font-size:11px;color:var(--dim)">endpoint override
-              <input type="text" id="aiEndpointUser" placeholder="(default)" style="width:380px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;margin-left:6px">
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">HUD overlay <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">live telemetry strip</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Pins CPU / memory / per-GPU bars to the top of the page. Spot when something should be unloaded. Numeric metrics live on the Logs tab.</div>
+            <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
+              <input type="checkbox" id="hudEnable">
+              <span class="opt-title" style="margin:0;font-size:11.5px">Enable HUD overlay</span>
             </label>
-          </div>
-          <div class="inline" style="gap:8px;flex-wrap:wrap">
-            <label style="font-size:11px;color:var(--dim)">api key override
-              <input type="password" id="aiApiKeyUser" placeholder="(default)" style="width:380px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;margin-left:6px">
+            <label class="opt" style="max-width:none;flex-direction:row;align-items:flex-start;gap:8px;padding:6px 10px">
+              <input type="checkbox" id="hudDetailed" style="margin-top:2px">
+              <span style="display:flex;flex-direction:column;gap:2px">
+                <span class="opt-title" style="margin:0;font-size:11.5px">Detailed stats <span style="color:var(--dim);font-weight:400">(for nerds)</span></span>
+                <span class="opt-sub" style="font-size:10.5px">Inline numbers next to each bar &mdash; CPU %, RSS, GPU VRAM used/total.</span>
+              </span>
             </label>
-            <button id="aiSaveBtn" class="action" type="button">save overrides</button>
-            <span id="aiSaveStatus" class="meta" style="font-size:10.5px"></span>
+            <div class="meta" id="hudPreviewLine" style="font-size:10.5px;color:var(--dim);line-height:1.55;margin-top:2px">
+              now: <span id="hudPreviewCpu">.</span> &middot; ram <span id="hudPreviewRam">.</span> &middot; gpu <span id="hudPreviewGpu">.</span>
+            </div>
           </div>
-        </div>
-      </div>
 
-      <div class="settings-row">
-        <div class="label">HUD overlay</div>
-        <div class="desc">Pins a thin live telemetry strip to the top of the page (CPU / memory / per-GPU bars). Useful for spotting when something should be unloaded. Numeric metrics live on the Logs tab; the HUD is just bars.</div>
-        <div class="inline" style="flex-direction:column;align-items:flex-start;gap:8px">
-          <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:10px;padding:8px 14px">
-            <input type="checkbox" id="hudEnable">
-            <span class="opt-title" style="margin:0">Enable HUD overlay</span>
-          </label>
-          <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:10px;padding:8px 14px">
-            <input type="checkbox" id="hudDetailed">
-            <span style="display:flex;flex-direction:column;gap:2px">
-              <span class="opt-title" style="margin:0">Detailed stats <span style="color:var(--dim);font-weight:400">(for nerds)</span></span>
-              <span class="opt-sub">Inline numbers next to each bar — CPU normalized % and core count, RSS as % of system + total RAM, GPU name and VRAM used/total. The HUD just shows headline values otherwise.</span>
-            </span>
-          </label>
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">AI assist <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">panel explainer</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Adds an &ldquo;ask AI&rdquo; button next to selected dashboard panels. Each click sends the panel's data to a remote model. When disabled, no buttons render and no calls are made.</div>
+            <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
+              <input type="checkbox" id="aiEnable">
+              <span class="opt-title" style="margin:0;font-size:11.5px">Enable AI assist</span>
+            </label>
+            <div class="meta" id="aiEffectiveLine" style="font-size:10.5px;color:var(--dim);line-height:1.55">
+              endpoint: <span id="aiEffectiveEndpoint" style="font-family:monospace">.</span><br>
+              key: <span id="aiEffectiveKey">.</span> &middot; source: <span id="aiEffectiveSource">default</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;margin-top:2px">
+              <label style="font-size:10.5px;color:var(--dim)">endpoint override
+                <input type="text" id="aiEndpointUser" placeholder="(default)" style="width:100%;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;margin-top:2px;font-size:11px;box-sizing:border-box">
+              </label>
+              <label style="font-size:10.5px;color:var(--dim)">api key override
+                <input type="password" id="aiApiKeyUser" placeholder="(default)" style="width:100%;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;margin-top:2px;font-size:11px;box-sizing:border-box">
+              </label>
+            </div>
+            <div class="inline" style="gap:6px;margin-top:2px;flex-wrap:wrap">
+              <button id="aiSaveBtn" class="action" type="button">save overrides</button>
+              <a href="https://carpathian.ai/ai" target="_blank" style="color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent);font-size:11px">Try Carpathian AI</a>
+              <span id="aiSaveStatus" class="meta" style="font-size:10.5px"></span>
+            </div>
+          </div>
+
         </div>
       </div>
 

@@ -379,6 +379,50 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes cprogslide { 0% { background-position: 0 0; } 100% { background-position: 32px 0; } }
 
+  /* ============================ loading states ============================ */
+  /* Panel-level overlay spinner for action-triggered loads. Toggle .is-loading
+     on any positioning container; the overlay dims content and centers a
+     spinner on top. Safe to nest. */
+  .is-loading { position: relative; }
+  .is-loading > * { pointer-events: none; }
+  .is-loading::after { content: ""; position: absolute; inset: 0;
+                       background: rgba(10, 12, 18, 0.55); z-index: 50;
+                       backdrop-filter: blur(1px); pointer-events: none; border-radius: inherit; }
+  .is-loading::before { content: ""; position: absolute; top: 50%; left: 50%;
+                        width: 22px; height: 22px; margin: -11px 0 0 -11px;
+                        border: 2px solid var(--dim); border-top-color: var(--warm);
+                        border-radius: 50%; z-index: 51; animation: spin 0.7s linear infinite;
+                        pointer-events: none; }
+  .is-loading.is-loading-sm::before { width: 14px; height: 14px; margin: -7px 0 0 -7px; border-width: 2px; }
+
+  /* Inline pulse dot for status text — for polling refreshes that shouldn't
+     trigger a full overlay (no flicker on 1-second polls). */
+  .busy-dot::after { content: ""; display: inline-block; width: 7px; height: 7px;
+                     margin-left: 6px; border-radius: 50%;
+                     background: var(--warm); animation: pulse 1.2s ease-in-out infinite;
+                     vertical-align: middle; }
+  @keyframes pulse { 0%, 100% { opacity: 0.30; } 50% { opacity: 1; } }
+
+  /* Skeleton shimmer for shape-known placeholders. Use .skel-line for table
+     rows, .skel-block for canvas/card slots, .skel-text for inline meta text. */
+  .skel { position: relative; overflow: hidden;
+          background: rgba(255, 255, 255, 0.04); border-radius: 3px; }
+  .skel::after { content: ""; position: absolute; inset: 0;
+                 background: linear-gradient(90deg, transparent 0%,
+                              rgba(255, 255, 255, 0.06) 50%, transparent 100%);
+                 background-size: 200px 100%; background-repeat: no-repeat;
+                 animation: shimmer 1.4s linear infinite; }
+  .skel-line  { height: 11px; margin: 6px 0; }
+  .skel-block { height: 78px; margin: 8px 0; }
+  .skel-text  { display: inline-block; height: 10px; min-width: 60px; width: 60%;
+                vertical-align: middle; }
+  .skel-row   { display: flex; gap: 8px; align-items: center; padding: 6px 0; }
+  .skel-row > .skel-line { flex: 1; height: 11px; margin: 0; }
+  .skel-grid  { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+                gap: 8px; padding: 6px 0; }
+  .skel-grid > .skel-block { height: 60px; margin: 0; }
+  @keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: calc(100% + 200px) 0; } }
+
   /* corpus library tag pills — match the .case badge design language */
   .corpus-tag { display: inline-block; padding: 1px 7px; border-radius: 2px; font-size: 9.5px;
                 font-weight: 700; letter-spacing: .04em; text-transform: uppercase; line-height: 1.55;

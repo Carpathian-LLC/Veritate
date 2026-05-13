@@ -30,20 +30,20 @@ sys.path.insert(0, HERE)
 from backends.pytorch import Brain, load_memory
 from backends.c_engine import CTracedSubprocess
 from readers import paths, models, hooks, train_csv, config as cfg_reader, checkpoints, engine, bin as binr, plugins as plugins_reader, corpus as corpus_reader, wiki as wiki_reader
-import atlas as atlas_mod
-import train_stream as train_stream_mod
-import logs as logmod
-import build_runner
-import lifecycle
-import plugin_runner
-import plugins_sync
-import models_sync
-import corpus_sync
-import sys_metrics
-import settings as settings_mod
-import heartbeat as heartbeat_mod
-import ai_assist as ai_assist_mod
-import app_sync as app_sync_mod
+from runtime import logs as logmod
+from runtime import lifecycle
+from runtime import sys_metrics
+from runtime import settings as settings_mod
+from runtime import heartbeat as heartbeat_mod
+from runtime import ai_assist as ai_assist_mod
+from training import atlas as atlas_mod
+from training import train_stream as train_stream_mod
+from training import build_runner
+from training import plugin_runner
+from sync import plugins_sync
+from sync import models_sync
+from sync import corpus_sync
+from sync import app_sync as app_sync_mod
 import addons as addons_mod
 import threading
 
@@ -652,8 +652,8 @@ def pruning_report():
         return ({"ok": False, "error": f"no checkpoints under models/{name}/"}, 400)
     try:
         import torch
-        import pruning as pruning_mod
-        from veritate.model import Veritate
+        from training import pruning as pruning_mod
+        from veritate_core.model import Veritate
         ckpt_path = checkpoints.path_for(name, step)
         s = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         cfg = dict(s.get("args", {}))
@@ -773,8 +773,8 @@ def pruning_generate_plugin():
         return ({"ok": False, "error": "missing or invalid model/step"}, 400)
     try:
         import torch
-        import pruning as pruning_mod
-        from veritate.model import Veritate
+        from training import pruning as pruning_mod
+        from veritate_core.model import Veritate
         ckpt_path = checkpoints.path_for(name, step)
         s = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         cfg = dict(s.get("args", {}))
@@ -864,7 +864,7 @@ def export_bin(name):
     if step is None:
         return ({"ok": False, "error": f"no checkpoints under models/{name}/"}, 400)
     try:
-        import export as export_mod
+        from training import export as export_mod
         result = export_mod.export_checkpoint(name, int(step))
     except (FileNotFoundError, ValueError, KeyError) as e:
         logmod.error("export", f"{name} step {step}: {type(e).__name__}: {e}")

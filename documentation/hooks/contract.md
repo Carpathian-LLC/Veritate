@@ -4,7 +4,7 @@ API reference for the data the dashboard, MRI server, and external tools can pul
 
 ## artifacts (training-time, per checkpoint)
 
-All paths relative to `models/<name>/hooks/step_<N>/`. Every artifact below is produced by a single call to `veritate_mri/save.py::save(model, name, step, ...)`, exposed to plugins as `veritate.plugin.save.save`.
+All paths relative to `models/<name>/hooks/step_<N>/`. Every artifact below is produced by a single call to `veritate_mri/training/save.py::save(model, name, step, ...)`, exposed to plugins as `veritate_core.plugin.save.save`.
 
 `save.save()` calls `model.hook_spec()` and walks the returned object as if it were a canonical `Veritate`. Vanilla models return `self`; non-canonical models (MoE, sidecar adapters, future workspace / HDC modules) return a thin adapter that exposes canonical-shaped trace points. See [hook_spec contract](#hook_spec-contract) below.
 

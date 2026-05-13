@@ -43,7 +43,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, REPO)
 
-from veritate.model import Veritate, VOCAB_BYTE_LEVEL  # noqa: E402
+from veritate_core.model import Veritate, VOCAB_BYTE_LEVEL  # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants

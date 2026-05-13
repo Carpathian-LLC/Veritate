@@ -9,7 +9,7 @@
 #   (only encode the new token; attention runs against cached K/V).
 #
 # - Works with both model variants:
-#     * veritate.model.Veritate            — canonical, learned abs pos_emb
+#     * veritate_core.model.Veritate       — canonical, learned abs pos_emb
 #     * plugins.veritate_800m.Veritate800M — RoPE, MTP head
 #   Detected by the presence of `pos_emb` vs `rope_cos`.
 #
@@ -300,7 +300,7 @@ class KVCachedDecoder:
         the blocks.
         """
         # Resolve `apply_rope` from whatever module the model class lives in.
-        # Both `plugins/veritate_800m/plugin.py` and `veritate/model_rope.py`
+        # Both `plugins/veritate_800m/plugin.py` and `veritate_core/model_rope.py`
         # define `apply_rope(x, cos, sin)` at module scope. This avoids the
         # old `from plugin import apply_rope` indirection.
         import sys as _sys

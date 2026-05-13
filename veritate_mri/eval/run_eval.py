@@ -115,7 +115,7 @@ def load_checkpoint(ckpt_path: str, device: str = "cpu"):
         )
         model.load_state_dict(sd, strict=False)
     else:
-        from veritate.model import Veritate
+        from veritate_core.model import Veritate
         model = Veritate(**shape)
         model.load_state_dict(sd, strict=True)
 
@@ -139,7 +139,7 @@ def run_suites_on_model(model,
                         progress_cb=None) -> dict:
     """Run a subset of the eval suites on an already-loaded model.
 
-    `model` is anything with the same forward contract as `veritate.model.Veritate`
+    `model` is anything with the same forward contract as `veritate_core.model.Veritate`
     (or the 800M plugin). The dashboard passes `Brain.model` directly.
 
     `suites` is a list drawn from {"mmlu", "hellaswag", "ifeval"}.

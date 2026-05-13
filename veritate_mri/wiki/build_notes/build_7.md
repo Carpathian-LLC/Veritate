@@ -31,7 +31,7 @@ summary: Updater swapped from git fetch + reset to HTTPS tarball + in-place copy
 
 ### model classes
 
-- New `veritate/model_rope.py::VeritateRoPE`. RoPE-only sibling of canonical `Veritate` and the 800M plugin's `Veritate800M` (no MTP head, tied lm_head). The Brain backend now dispatches three ways: canonical (learned `pos_emb`), RoPE-only (`VeritateRoPE`), RoPE+MTP (`Veritate800M`).
+- New `veritate_core/model_rope.py::VeritateRoPE`. RoPE-only sibling of canonical `Veritate` and the 800M plugin's `Veritate800M` (no MTP head, tied lm_head). The Brain backend now dispatches three ways: canonical (learned `pos_emb`), RoPE-only (`VeritateRoPE`), RoPE+MTP (`Veritate800M`).
 - Brain checkpoint loader now reads shape from either `args` or `config` in the saved dict, so the v2 experimental checkpoints (rope_85m etc.) load through the same path as canonical and 800M checkpoints.
 
 ### `/generate` API
@@ -55,6 +55,16 @@ The default `/generate` path (no `fast`, no `constrained`) is unchanged; the ric
 
 All component versions rebased to `v1.X.Y`. The build counter (`build`) and the minor (`X`) are what move; `v1` is the platform-stable base across the board.
 
+### platform organization (mid-build)
+
+A second pass during build 7 cleaned up root and naming:
+
+- **Package rename:** `veritate/` → `veritate_core/`. The old name collided with the repo root. All imports, plugins, tests, and docs updated.
+- **Single entry point:** `run.py` replaced by [`veritate.py`](../../../veritate.py) at the repo root. It creates `./venv`, installs `requirements.txt` on first launch (idempotent via a hash sentinel), then re-execs itself under the venv interpreter to serve the MRI dashboard. Re-launches are silent and near-instant.
+- **Double-click launchers:** `start.bat` (Windows) and `start.command` (macOS) at root. Linux uses `python veritate.py` from a terminal. Old `installer/` folder and `run.py` shim removed.
+- **MRI internals split:** `veritate_mri/` reorganized into `runtime/`, `training/`, and `sync/` subpackages. Top-level shims removed (was: 20+ loose `.py` files at `veritate_mri/`).
+- **`.gitignore` anchoring:** unanchored `plugins`/`models` lines were matching at any depth and silently hiding `documentation/plugins/`. Patterns are now `/plugins/` and `/models/`.
+
 ## what the user has to do
 
 ### required: reload python after updating
@@ -63,7 +73,7 @@ Click **reload python** once after the update lands so the new `app_sync` module
 
 ### required: set the repo URL env var (if not already set)
 
-The new HTTP updater needs to know where to fetch from. Set this once in your shell or `run.py` launcher:
+The new HTTP updater needs to know where to fetch from. Set this once in your shell or `veritate.py` launcher:
 
 ```sh
 export VERITATE_REPO_URL=https://github.com/<owner>/<repo>

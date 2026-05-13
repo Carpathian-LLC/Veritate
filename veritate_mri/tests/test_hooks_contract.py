@@ -24,7 +24,7 @@ REPO_ROOT = os.path.dirname(MRI_DIR)
 if MRI_DIR not in sys.path:
     sys.path.insert(0, MRI_DIR)
 
-import save as save_mod
+from training import save as save_mod
 from readers import paths
 
 # ------------------------------------------------------------------------------------
@@ -42,6 +42,7 @@ CANONICAL_ARTIFACTS = {
     "surprise.json",
     "quant_kl.json",
     "writing_health.json",
+    "reading_comprehension.json",
     "generation.json",
 }
 

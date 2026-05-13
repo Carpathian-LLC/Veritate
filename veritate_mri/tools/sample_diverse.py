@@ -28,7 +28,7 @@ sys.path.insert(0, REPO)
 sys.path.insert(0, os.path.join(REPO, "plugins", "veritate_mega"))
 sys.path.insert(0, os.path.join(REPO, "plugins", "multimind_m3"))
 
-from veritate.plugin import qat as qat_helpers
+from veritate_core.plugin import qat as qat_helpers
 from veritate_mri.addons import build_chain, list_addons
 
 # ------------------------------------------------------------------------------------

@@ -245,16 +245,26 @@ def run_eval(backend, toolbox: Optional[Toolbox] = None,
 
 
 if __name__ == "__main__":
-    # Smoke run on the 85M trained checkpoint
+    import argparse
+    ap = argparse.ArgumentParser(description="Agent eval harness smoke runner.")
+    ap.add_argument("--ckpt",      required=True, help="Path to a Veritate .pt checkpoint.")
+    ap.add_argument("--out",       default="",    help="Where to write the JSON report. Defaults to <ckpt-stem>_agent_eval.json next to the checkpoint.")
+    ap.add_argument("--threads",   type=int, default=2)
+    ap.add_argument("--max_turns", type=int, default=2)
+    ap.add_argument("--max_new",   type=int, default=96)
+    ap.add_argument("--best_of_n", type=int, default=2)
+    args = ap.parse_args()
+
     HERE = os.path.dirname(os.path.abspath(__file__))
     REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
     sys.path.insert(0, REPO)
     sys.path.insert(0, os.path.join(REPO, "veritate_mri"))
     from backends.pytorch import Brain
-    ckpt = os.path.join(REPO, "experiments", "overnight", "ckpt_step_2000.pt")
-    brain = Brain(ckpt, threads=2)
-    print(f"loaded {brain.n_params/1e6:.1f}M params")
-    out = run_eval(brain, max_turns=2, max_new_per_turn=96, best_of_n=2, verbose=True)
-    with open("/tmp/agent_eval_85m.json", "w") as f:
+    brain = Brain(args.ckpt, threads=args.threads)
+    print(f"loaded {brain.n_params/1e6:.1f}M params from {args.ckpt}")
+    out = run_eval(brain, max_turns=args.max_turns, max_new_per_turn=args.max_new,
+                   best_of_n=args.best_of_n, verbose=True)
+    out_path = args.out or os.path.splitext(args.ckpt)[0] + "_agent_eval.json"
+    with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
-    print(f"wrote /tmp/agent_eval_85m.json")
+    print(f"wrote {out_path}")

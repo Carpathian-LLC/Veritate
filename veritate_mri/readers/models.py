@@ -24,11 +24,12 @@ from . import paths
 #   (new)    <user_slug>_<size> — the user picks any slug; the form auto-appends
 #            <size> (e.g. "chatty_otter_85m"). Spec details (corpus, precision,
 #            version, variant) move into the description.
+# Size token: <digits><m|b>[optional digits], so 85m, 1b, 1b3 (1.3B), 1b5 all pass.
 NAME_RE_LEGACY = re.compile(
-    r"^[a-z0-9]+(?:_[a-z0-9]+)*_[0-9]+[mb]_[a-z0-9]+_v[0-9]+[a-z]?(?:_[a-z][a-z0-9]*)?$"
+    r"^[a-z0-9]+(?:_[a-z0-9]+)*_[0-9]+[mb][0-9]*_[a-z0-9]+_v[0-9]+[a-z]?(?:_[a-z][a-z0-9]*)?$"
 )
 NAME_RE_USER = re.compile(
-    r"^[a-z0-9]+(?:_[a-z0-9]+)*_[0-9]+[mb]$"
+    r"^[a-z0-9]+(?:_[a-z0-9]+)*_[0-9]+[mb][0-9]*$"
 )
 
 # ------------------------------------------------------------------------------------

@@ -14,7 +14,7 @@ A script + a manifest under `plugins/<name>/`. The platform exposes a small set 
 ## the four namespaces
 
 ```python
-from veritate.plugin import save, paths, model, qat
+from veritate_core.plugin import save, paths, model, qat
 ```
 
 Anything else in the parent repo is internal and may move without notice.
@@ -194,7 +194,7 @@ The canonical contract has full M1 and MEGA examples plus the line-by-line updat
 
 ## what plugins must not do
 
-- Import from `veritate_mri.*` directly. Use `veritate.plugin.save` and `veritate.plugin.paths`.
+- Import from `veritate_mri.*` directly. Use `veritate_core.plugin.save` and `veritate_core.plugin.paths`.
 - Write outside `models/<name>/`. The dashboard reads from a fixed layout; writes elsewhere are invisible.
 - Edit `config.json` after `save()` has bootstrapped it, except via fields the contract defines.
 - Invent your own dump artifacts. The dashboard renders the eight in `HOOK_ARTIFACTS`. Add real ones via the hooks contract update process.

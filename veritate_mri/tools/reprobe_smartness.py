@@ -75,7 +75,7 @@ def main() -> int:
 
     axes = args.only or list(AXIS_TO_FN.keys())
 
-    import checkpoint_probe as cp
+    from training import checkpoint_probe as cp
 
     cps = discover_checkpoints(args.name)
     if not cps:

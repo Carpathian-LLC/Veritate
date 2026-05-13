@@ -3,6 +3,33 @@
 
 const $ = id => document.getElementById(id);
 
+// Canonical canvas palette. Mirrors the CSS custom properties in index.css so
+// canvas drawing stays in sync with the rest of the dashboard. Drawing code
+// reaches for PALETTE.<token> instead of inlining hex; one place to edit a color.
+// Semantic roles:
+//   cool      primary data (training loss, learning rate, neutral series)
+//   warm      mid-state / amber (qat-train, grad-norm)
+//   hot       bad / regressing (errors, OOM warnings)
+//   purple    the "different signal" (val loss, secondary trace)
+//   dataPos   muted positive (throughput, "vote-for" contributions)
+//   highlight gold "look here" (current frame, selection marker)
+//   accent    user-facing accent (links, picker borders)
+//   good      RESERVED interaction only (hover, click affordance)
+//   dim       backgrounds, axis labels
+const PALETTE = {
+  cool:      "#5dc8ff",
+  warm:      "#ffae5d",
+  hot:       "#ff5d5d",
+  purple:    "#b075ff",
+  dataPos:   "#5d9c75",
+  highlight: "#f0d65a",
+  accent:    "#6aa6ff",
+  good:      "#5dff9b",
+  dim:       "#6f7480",
+  text:      "#d6d8db",
+  line:      "#1e2330",
+};
+
 // ---- canvases ----
 const cFfn  = $("cFfn"),  ctxFfn  = cFfn.getContext("2d");
 const cTop  = $("cTop"),  ctxTop  = cTop.getContext("2d");
@@ -31,10 +58,10 @@ let coactState = { pairs: new Map(), nFrames: 0 };
 function _backendErrMsg(e) {
   const s = String(e && e.message || e || "");
   if (e instanceof TypeError && /load failed|failed to fetch|networkerror/i.test(s)) {
-    return "backend offline. relaunch with python run.py";
+    return "backend offline. relaunch via start.bat / start.command (or python veritate.py)";
   }
   if (e instanceof SyntaxError) {
-    return "backend offline or returned non-JSON. relaunch with python run.py";
+    return "backend offline or returned non-JSON. relaunch via start.bat / start.command (or python veritate.py)";
   }
   return s || String(e);
 }
@@ -42,6 +69,76 @@ function _backendErrMsg(e) {
 function _isTabActive(tabName) {
   const el = document.querySelector('.tab-body[data-tab="' + tabName + '"]');
   return !!(el && el.classList.contains("active"));
+}
+
+// ---- loading-state helpers ----
+// Shared primitives so every async render has a uniform loading affordance.
+// Three modes: (1) setLoading / withLoading for action-triggered overlays,
+// (2) setBusyDot for polling refreshes that shouldn't flicker, (3)
+// showSkeleton / clearSkeleton for shape-known cold loads. CSS classes live
+// in index.css under "loading states".
+
+// Toggle a panel-level spinner overlay. `el` can be an element or an id string.
+// Options: { size: 'sm' } for a smaller spinner (use for inline status slots).
+function setLoading(el, on, opts) {
+  const node = (typeof el === "string") ? $(el) : el;
+  if (!node) return;
+  node.classList.toggle("is-loading", !!on);
+  if (opts && opts.size === "sm") node.classList.toggle("is-loading-sm", !!on);
+  else if (!on) node.classList.remove("is-loading-sm");
+}
+
+// Run an async function with a spinner overlay on `el`. Always hides on
+// completion (success or error) and re-throws so callers see the error.
+async function withLoading(el, fn, opts) {
+  setLoading(el, true, opts);
+  try { return await fn(); }
+  finally { setLoading(el, false); }
+}
+
+// Inline pulse dot for polling-style refreshes — signals activity without
+// flickering a full overlay every tick.
+function setBusyDot(el, on) {
+  const node = (typeof el === "string") ? $(el) : el;
+  if (!node) return;
+  node.classList.toggle("busy-dot", !!on);
+}
+
+// Fill `el` with skeleton placeholders. kind:
+//   "lines"  — n horizontal bars (default)
+//   "rows"   — n label+bar pairs
+//   "blocks" — n stacked rectangles
+//   "grid"   — auto-fill grid of small blocks
+// Stamps data-skel so clearSkeleton knows to wipe its own placeholder html.
+function showSkeleton(el, kind, count) {
+  const node = (typeof el === "string") ? $(el) : el;
+  if (!node) return;
+  const n = Math.max(1, count || 4);
+  let html = "";
+  if (kind === "rows") {
+    for (let i = 0; i < n; i++) html += '<div class="skel-row"><span class="skel skel-text"></span><span class="skel skel-line"></span></div>';
+  } else if (kind === "blocks") {
+    for (let i = 0; i < n; i++) html += '<div class="skel skel-block"></div>';
+  } else if (kind === "grid") {
+    html = '<div class="skel-grid">';
+    for (let i = 0; i < n; i++) html += '<div class="skel skel-block"></div>';
+    html += '</div>';
+  } else {
+    for (let i = 0; i < n; i++) html += '<div class="skel skel-line"></div>';
+  }
+  node.dataset.skel = "1";
+  node.innerHTML = html;
+}
+
+// Clear a previously-shown skeleton. Caller writes real content right after.
+// No-op if no skeleton was shown (caller's content has already replaced it).
+function clearSkeleton(el) {
+  const node = (typeof el === "string") ? $(el) : el;
+  if (!node) return;
+  if (node.dataset.skel === "1") {
+    delete node.dataset.skel;
+    node.innerHTML = "";
+  }
 }
 
 function fitCanvas(c) {
@@ -179,8 +276,8 @@ function drawFfn(c, ctx, ffnFull) {
     for (let b = 0; b < B; b++) {
       const isHover = hover && hover.layer === l && hover.bucket === b;
       if (isHover) {
-        ctx.shadowColor = "#39ff14"; ctx.shadowBlur = 8;
-        ctx.fillStyle = "#39ff14";
+        ctx.shadowColor = PALETTE.highlight; ctx.shadowBlur = 8;
+        ctx.fillStyle = PALETTE.highlight;
       } else {
         ctx.fillStyle = regionRamp(ffnFull[l][b] / 255, l);
       }
@@ -382,8 +479,8 @@ function drawTopNeurons(c, ctx, ffnTop) {
       const t = n.v / maxV;
       const isHover = hover && hover.layer === l && hover.k === k;
       if (isHover) {
-        ctx.shadowColor = "#39ff14"; ctx.shadowBlur = 10;
-        ctx.fillStyle = "#39ff14";
+        ctx.shadowColor = PALETTE.highlight; ctx.shadowBlur = 10;
+        ctx.fillStyle = PALETTE.highlight;
       } else {
         ctx.fillStyle = regionRamp(t, l);
       }
@@ -458,13 +555,13 @@ function drawLetterMs(c, ctx, allFrames, currentIdx, allBytes, promptLen) {
     const bh = Math.max(1, plotH * v);
     const x = padL + i * barW;
     const y = padT + plotH - bh;
-    ctx.fillStyle = i === currentIdx ? "#39ff14" : "#3a4660";
+    ctx.fillStyle = i === currentIdx ? PALETTE.highlight : "#3a4660";
     ctx.fillRect(x, y, Math.max(1, barW - 0.5), bh);
   }
   if (currentIdx >= 0 && currentIdx < N) {
     const x = padL + currentIdx * barW + barW / 2;
-    ctx.shadowColor = "#39ff14"; ctx.shadowBlur = 8;
-    ctx.strokeStyle = "#39ff14"; ctx.lineWidth = 2;
+    ctx.shadowColor = PALETTE.highlight; ctx.shadowBlur = 8;
+    ctx.strokeStyle = PALETTE.highlight; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
     ctx.shadowBlur = 0;
   }
@@ -522,8 +619,8 @@ function drawTelemetry(c, ctx, allFrames, currentIdx) {
   }
   if (currentIdx >= 0) {
     const x = padL + (N === 1 ? plotW / 2 : (plotW * currentIdx) / (N - 1));
-    ctx.shadowColor = "#39ff14"; ctx.shadowBlur = 8;
-    ctx.strokeStyle = "#39ff14"; ctx.lineWidth = 2;
+    ctx.shadowColor = PALETTE.highlight; ctx.shadowBlur = 8;
+    ctx.strokeStyle = PALETTE.highlight; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
     ctx.shadowBlur = 0;
   }
@@ -601,7 +698,17 @@ function drawList(elId, vals, cls) {
   $(elId).innerHTML = html;
 }
 
-function regionRowClass(layer) {
+// Region bucket for a layer index. Depth-relative: first third = sensory,
+// middle third = association, last third = output. Falls back to the legacy
+// 12-layer split (the only model size when these names were coined) when
+// totalLayers is omitted so old call sites keep working.
+function regionRowClass(layer, totalLayers) {
+  const t = totalLayers | 0;
+  if (t > 0) {
+    if (layer < t / 3)       return "region-sense";
+    if (layer < (2 * t) / 3) return "region-assoc";
+    return "region-output";
+  }
   if (layer <= 3) return "region-sense";
   if (layer <= 8) return "region-assoc";
   return "region-output";
@@ -1132,14 +1239,14 @@ function setMeta(m) {
   const precColor = prec.startsWith("QAT") ? "var(--warm)" : "var(--data-pos)";
   const cDir = m.c_model_dir || (m.c_model || null);
   const cModelChip = cDir
-    ? `<span class="stat">model <b style="color:#39ff14" title="${m.c_model_path || ''}">${cDir}</b></span>`
+    ? `<span class="stat">model <b style="color:${PALETTE.highlight}" title="${m.c_model_path || ''}">${cDir}</b></span>`
     : `<span class="stat">model <b style="color:var(--dim)">unloaded</b></span>`;
   const cEngineChip = m.c_engine_version
     ? `<span class="stat">veritate <b title="${m.c_exe_path || ''}">${m.c_engine_version}</b></span>`
     : "";
   const cPrec = m.c_model_precision || null;
   const cPrecColor = cPrec ? (cPrec.startsWith("INT4") ? "#ff8aa0"
-                              : cPrec.startsWith("INT8") ? "#39ff14"
+                              : cPrec.startsWith("INT8") ? PALETTE.highlight
                               : "var(--warm)") : "var(--dim)";
   const cPrecChip = cPrec
     ? `<span class="stat">c-precision <b style="color:${cPrecColor}" title="bin v${m.c_model_bin_version || '?'} ${m.c_model_training || ''} ${m.c_model_activation || ''}">${cPrec}</b></span>`
@@ -1160,6 +1267,7 @@ function setMeta(m) {
 async function loadAddons() {
   const list = $("addonsList");
   if (!list) return;
+  showSkeleton(list, "rows", 3);
   try {
     const r = await fetch("/addons");
     const data = await r.json();
@@ -2299,13 +2407,17 @@ function renderOutputEvolution() {
         const isQat = (found.ckpt.precision || "").toUpperCase().startsWith("QAT");
         const stageCls = isQat ? "qat" : "fp32";
         const stageTag = (found.ckpt.precision && found.ckpt.precision !== "unknown") ? found.ckpt.precision : "FP32";
+        const noFrames = (found.ckpt.n_frames | 0) === 0;
+        const cellBody = noFrames
+          ? `<div class="ckpt-cell-text"><span class="meta">no generation captured</span></div>`
+          : `<div class="ckpt-cell-text"><span class="pr">${escapeHtml(meta.prompt)}</span>${escapeHtml(found.ckpt.output_text)}</div>`;
         html += `
           <div class="ckpt-cell ${stageCls}" data-idx="${found.idx}">
             <div class="ckpt-cell-head">
               <span class="step-num">step ${found.ckpt.step.toLocaleString()}</span>
               <span class="stage-tag ${stageCls}">${escapeHtml(stageTag)}</span>
             </div>
-            <div class="ckpt-cell-text"><span class="pr">${escapeHtml(meta.prompt)}</span>${escapeHtml(found.ckpt.output_text)}</div>
+            ${cellBody}
           </div>`;
       }
     }
@@ -2407,6 +2519,7 @@ async function ensureLearningLoaded() {
       learningTimelinePathPrefix = `/timeline/${encodeURIComponent(picked)}/`;
     }
   }
+  showSkeleton("learningStatus", "lines", 2);
   try {
     const r = await fetch(learningTimelinePathPrefix + "timeline.json?" + Date.now(), { cache: "no-store" });
     const meta = await r.json();
@@ -2459,7 +2572,11 @@ async function ensureLearningLoaded() {
       cQuantKlL.__bound = true;
     }
     learningState.loaded = true;
-    selectCheckpoint(0);
+    // Open on the first checkpoint that actually has captured frames. Early
+    // checkpoints sometimes land with n_frames=0 (generation dump skipped or
+    // crashed); opening on one of those leaves every per-frame panel blank.
+    const firstWithFrames = meta.checkpoints.findIndex(cc => (cc.n_frames | 0) > 0);
+    selectCheckpoint(firstWithFrames >= 0 ? firstWithFrames : 0);
     // first activation: kick off the classroom mirror for the auto-picked timeline.
     // (the activateTab guard ran before learningTimelineName was set; load it now.)
     if (learningTimelineName && classroomStateL.run !== learningTimelineName) {
@@ -2530,6 +2647,9 @@ function renderLearning() {
   if (!frame) {
     $("frameLabelL").textContent = `0 / 0`;
     updateScrubTape("scrubTapeL", [], -1, learningState.promptBytes);
+    const respEl = $("responseL");
+    if (respEl) respEl.innerHTML =
+      `<span class="meta">no captured frames at step ${c.step.toLocaleString()}. The generation dump skipped or crashed at this checkpoint; the rubric and weight panels still work. Scrub to a later checkpoint to see per-byte panels.</span>`;
     return;
   }
   const generatedBs = data.frames.map(f => f.byte);
@@ -2746,7 +2866,7 @@ function summarizeTriggers(stories) {
 async function showNeuronModal(layer, neuronId, currentActivation) {
   const r = regionLabel(layer);
   $("modalTitle").innerHTML = `Layer ${layer}, Neuron #${neuronId}<span class="region case b-${r.cls.replace('b-','')}" style="display:inline-block;background:${r.cls==='b-sense'?'#0e2230':r.cls==='b-assoc'?'#2a2010':'#2a1010'};color:${r.cls==='b-sense'?'#5dc8ff':r.cls==='b-assoc'?'#ffae5d':'#ff5d5d'}">${r.name}</span>`;
-  $("modalBody").innerHTML = `<p class="meta">loading...</p>`;
+  showSkeleton("modalBody", "blocks", 4);
   $("neuronModal").classList.remove("hidden");
   document.body.classList.add("no-scroll");
   try {
@@ -3455,16 +3575,20 @@ function renderTrain(allRows) {
   const tps      = rows.filter(r => isTrainSplit(r.split)).map(r => ({ x: r.step, y: r.tok_per_s }));
   const gn       = rows.filter(r => isTrainSplit(r.split)).map(r => ({ x: r.step, y: r.grad_norm }));
 
+  // Canonical chart palette (mirrors index.css custom properties so the canvas
+  // draws agree with the rest of the dashboard). Train = cool/blue, val =
+  // purple (the "different signal" color), QAT splits keep base + warm so the
+  // semantic "train vs val" pairing reads the same way regardless of run.
   plotTrainSeries(cLossT, ctxLossT, [
-    { points: train,    color: "#5dc8ff", lw: 1 },
-    { points: val,      color: "#a899d4", lw: 2, dots: true },
-    { points: qatTrain, color: "#ff9a3c", lw: 1 },
-    { points: qatVal,   color: "#ff5d9b", lw: 2, dots: true },
-    { points: valQat,   color: "#ff5d9b", lw: 1, dots: true },
+    { points: train,    color: PALETTE.cool,    lw: 1 },
+    { points: val,      color: PALETTE.purple,  lw: 2, dots: true },
+    { points: qatTrain, color: PALETTE.warm,    lw: 1 },
+    { points: qatVal,   color: PALETTE.purple,  lw: 2, dots: true },
+    { points: valQat,   color: PALETTE.purple,  lw: 1, dots: true },
   ], { logY: true });
-  plotTrainSeries(cLrT,   ctxLrT,   [{ points: lr,  color: "#5dc8ff", lw: 1.5 }]);
-  plotTrainSeries(cTpsT,  ctxTpsT,  [{ points: tps, color: "#5dff9b", lw: 1.5 }]);
-  plotTrainSeries(cGnT,   ctxGnT,   [{ points: gn,  color: "#ff9a5d", lw: 1   }], { logY: true });
+  plotTrainSeries(cLrT,   ctxLrT,   [{ points: lr,  color: PALETTE.cool,     lw: 1.5 }]);
+  plotTrainSeries(cTpsT,  ctxTpsT,  [{ points: tps, color: PALETTE.dataPos,  lw: 1.5 }]);
+  plotTrainSeries(cGnT,   ctxGnT,   [{ points: gn,  color: PALETTE.warm,     lw: 1   }], { logY: true });
 
   const valSeries = (qatVal.length > 0 ? qatVal : (val.length > 0 ? val : valQat));
   renderTrainPlateau(valSeries);
@@ -3529,9 +3653,9 @@ function renderTrain(allRows) {
   let html = "<table><tr><th>step</th><th style='text-align:left'>split</th><th>loss</th><th>lr</th><th>gn</th><th>tok/s</th><th>wall s</th></tr>";
   const splitColor = s => {
     if (s === "train") return "#5dc8ff";
-    if (s === "val")   return "#a899d4";
-    if (typeof s === "string" && s.endsWith("_train")) return "#ff9a3c";
-    if (typeof s === "string" && (s.endsWith("_val") || s.startsWith("val_"))) return "#ff5d9b";
+    if (s === "val")   return PALETTE.purple;
+    if (typeof s === "string" && s.endsWith("_train")) return PALETTE.warm;
+    if (typeof s === "string" && (s.endsWith("_val") || s.startsWith("val_"))) return PALETTE.purple;
     return "#ddd";
   };
   for (const r of recent) {
@@ -3890,18 +4014,23 @@ async function classroomFetchProbe(run, fname) {
   return await r.json();
 }
 
-// shape -> total params. matches PyTorch Veritate (embeddings + per-layer Q/K/V/O + ffn up/down + lm_head tied).
-// returns { total, parts: {embed, attn, ffn, head} }.
-function compute_param_count(shape) {
-  if (!shape) return null;
-  const V = shape.vocab|0, H = shape.hidden|0, F = shape.ffn|0, L = shape.layers|0;
+// shape -> total params. matches the canonical Veritate (token-emb + learned
+// pos-emb + per-layer Q/K/V/O + FFN up+down + 2 RMSNorms + final RMSNorm + tied
+// lm_head). Accepts either a `shape` sub-object OR the config-top-level form
+// the trainer writes today (vocab/hidden/layers/ffn/heads/seq at the root).
+// returns { total, parts: {embed, pos, attn, ffn, ln} }.
+function compute_param_count(cfgOrShape) {
+  if (!cfgOrShape) return null;
+  const s = (cfgOrShape.shape && typeof cfgOrShape.shape === "object") ? cfgOrShape.shape : cfgOrShape;
+  const V = s.vocab|0, H = s.hidden|0, F = s.ffn|0, L = s.layers|0, T = s.seq|0;
   if (!V || !H || !F || !L) return null;
-  const embed = V * H;                       // tied lm head shares this
-  const attn  = L * (4 * H * H);             // Q,K,V,O
-  const ffn   = L * (2 * H * F);             // up + down
-  const ln    = L * (2 * 2 * H) + 2 * H;     // 2 layernorms per block + final ln (gain+bias)
-  const total = embed + attn + ffn + ln;
-  return { total, parts: { embed, attn, ffn, ln } };
+  const embed = V * H;                  // tied lm head shares this
+  const pos   = T ? T * H : 0;          // learned pos emb (canonical Veritate). RoPE models supply seq but no pos_emb param; the overcount stays small at long seq.
+  const attn  = L * (4 * H * H);        // Q,K,V,O
+  const ffn   = L * (2 * H * F);        // up + down
+  const ln    = L * (2 * H) + H;        // 2 RMSNorms/block (gain only) + final RMSNorm
+  const total = embed + pos + attn + ffn + ln;
+  return { total, shape: { vocab: V, hidden: H, layers: L, ffn: F, heads: s.heads|0, seq: T }, parts: { embed, pos, attn, ffn, ln } };
 }
 
 function fmt_bytes(n) {
@@ -3917,9 +4046,9 @@ function render_size_meter(refs, run, cfg) {
     root.innerHTML = `<span class="meta">no config.json for run <b>${run}</b></span>`;
     return;
   }
-  const pc = compute_param_count(cfg.shape);
+  const pc = compute_param_count(cfg);
   if (!pc) {
-    root.innerHTML = `<span class="meta">config.json missing <code>shape</code> for run <b>${run}</b></span>`;
+    root.innerHTML = `<span class="meta">config.json missing shape fields (vocab/hidden/layers/ffn) for run <b>${run}</b></span>`;
     return;
   }
   // Weight footprint at common precisions. fp32 = 4 B/param, bf16/fp16 = 2,
@@ -3929,14 +4058,17 @@ function render_size_meter(refs, run, cfg) {
   const bf16 = pc.total * 2;
   const int8 = pc.total;
   const int4 = Math.ceil(pc.total / 2);
+  const sh = pc.shape;
   root.innerHTML = `
     <table>
       <tr><td class="l" style="text-align:left">run</td><td style="text-align:right">${run}</td></tr>
-      <tr><td class="l" style="text-align:left">shape</td><td style="text-align:right">V=${cfg.shape.vocab}  H=${cfg.shape.hidden}  L=${cfg.shape.layers}  F=${cfg.shape.ffn}</td></tr>
+      <tr><td class="l" style="text-align:left">shape</td><td style="text-align:right">V=${sh.vocab}  H=${sh.hidden}  L=${sh.layers}  F=${sh.ffn}${sh.heads ? "  heads=" + sh.heads : ""}${sh.seq ? "  seq=" + sh.seq : ""}</td></tr>
       <tr><td class="l" style="text-align:left">total params</td><td style="text-align:right"><b>${pc.total.toLocaleString()}</b></td></tr>
       <tr><td class="l" style="text-align:left">  embed (tied)</td><td style="text-align:right">${pc.parts.embed.toLocaleString()}</td></tr>
+      ${pc.parts.pos ? `<tr><td class="l" style="text-align:left">  pos emb</td><td style="text-align:right">${pc.parts.pos.toLocaleString()}</td></tr>` : ""}
       <tr><td class="l" style="text-align:left">  attention</td><td style="text-align:right">${pc.parts.attn.toLocaleString()}</td></tr>
       <tr><td class="l" style="text-align:left">  ffn</td><td style="text-align:right">${pc.parts.ffn.toLocaleString()}</td></tr>
+      <tr><td class="l" style="text-align:left">  rmsnorm</td><td style="text-align:right">${pc.parts.ln.toLocaleString()}</td></tr>
       <tr><td class="l" style="text-align:left">weights @ fp32</td><td style="text-align:right">${fmt_bytes(fp32)}</td></tr>
       <tr><td class="l" style="text-align:left">weights @ bf16 / fp16</td><td style="text-align:right">${fmt_bytes(bf16)}</td></tr>
       <tr><td class="l" style="text-align:left">weights @ int8</td><td style="text-align:right">${fmt_bytes(int8)}</td></tr>
@@ -4097,7 +4229,7 @@ const CONFEVO_LEGEND_ITEMS = [
   { color: "#5dc8ff", label: "margin",            tip: "gap between top byte and runner-up — UP = top byte pulls farther ahead" },
   { color: "#ffae5d", label: "entropy",           tip: "1 − H(p)/log₂V — UP = probability mass concentrates on fewer bytes" },
   { color: "#5dff9b", label: "lens-consistency",  tip: "fraction of layers that already agree with the final prediction — UP = decision lands earlier in the stack" },
-  { color: "#ff5d9b", label: "residual-stab",     tip: "smoothness of how the residual grows layer to layer — UP = stack commits steadily instead of in jumps" },
+  { color: PALETTE.purple, label: "residual-stab",     tip: "smoothness of how the residual grows layer to layer — UP = stack commits steadily instead of in jumps" },
 ];
 
 function _renderConfEvoLegend(canvasId) {
@@ -4150,7 +4282,7 @@ function render_confidence_evo(refs, run, steps, confByStep) {
     { points: marginN,     color: "#5dc8ff", lw: 1.5, dots: true },
     { points: entropy,     color: "#ffae5d", lw: 1.5, dots: true },
     { points: consistency, color: "#5dff9b", lw: 2,   dots: true },
-    { points: stab,        color: "#ff5d9b", lw: 1.5, dots: true },
+    { points: stab,        color: PALETTE.purple, lw: 1.5, dots: true },
   ]);
 }
 
@@ -4790,8 +4922,17 @@ function openConceptModal(name, conceptsSteps, conceptsByStep, latest) {
     }
     const maxAbsV = Math.max(...topN.map(n => Math.abs(n.v))) || 1;
     const maxLayer = Math.max(...topN.map(n => n.layer));
-    const layerColor = L => (L <= 3) ? "#5dc8ff" : (L <= 8) ? "var(--warm)" : "var(--hot)";
-    const layerRegion = L => (L <= 3) ? "sense" : (L <= 8) ? "association" : "output";
+    const totalLayers = maxLayer + 1;
+    // Depth-relative regions: first third = sensory, middle = association,
+    // last = output. Works for any layer count, not just the legacy 12.
+    const layerColor = L => {
+      const cls = regionRowClass(L, totalLayers);
+      return cls === "region-sense" ? "#5dc8ff" : cls === "region-assoc" ? "var(--warm)" : "var(--hot)";
+    };
+    const layerRegion = L => {
+      const cls = regionRowClass(L, totalLayers);
+      return cls === "region-sense" ? "sense" : cls === "region-assoc" ? "association" : "output";
+    };
     let bars = "";
     for (let L = 0; L <= maxLayer; L++) {
       const n = perLayer[L];
@@ -4802,9 +4943,14 @@ function openConceptModal(name, conceptsSteps, conceptsByStep, latest) {
       const h = Math.max(2, Math.round((Math.abs(n.v) / maxAbsV) * 32));
       bars += `<div title="L${L} ${layerRegion(L)} &middot; neuron n=${n.id} act=${n.v}" style="width:20px;height:46px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center"><div style="width:14px;height:${h}px;background:${layerColor(L)};border-radius:1px"></div><div class="meta" style="font-size:9px;margin-top:2px">L${L}</div></div>`;
     }
+    // Region thirds: first third sense, middle association, last output. Print the
+    // actual layer ranges instead of baking the legacy 12-layer split into the copy.
+    const senseHi = Math.max(0, Math.ceil(totalLayers / 3) - 1);
+    const assocHi = Math.max(senseHi + 1, Math.ceil((2 * totalLayers) / 3) - 1);
+    const lastL   = totalLayers - 1;
     body += `
       <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--line)">
-        <div class="meta" style="font-size:11px;margin-bottom:6px"><b style="color:var(--text)">where this concept lives</b> &mdash; strongest FFN neuron per layer at the commit position, latest checkpoint. Bars show activation magnitude. Color is the brain region: <span style="color:#5dc8ff">L0&ndash;3 sense</span>, <span style="color:var(--warm)">L4&ndash;8 association</span>, <span style="color:var(--hot)">L9&ndash;11 output</span>.</div>
+        <div class="meta" style="font-size:11px;margin-bottom:6px"><b style="color:var(--text)">where this concept lives</b> &mdash; strongest FFN neuron per layer at the commit position, latest checkpoint. Bars show activation magnitude. Color is the brain region: <span style="color:#5dc8ff">L0&ndash;${senseHi} sense</span>, <span style="color:var(--warm)">L${senseHi+1}&ndash;${assocHi} association</span>, <span style="color:var(--hot)">L${assocHi+1}&ndash;${lastL} output</span>.</div>
         <div style="display:flex;gap:3px;align-items:flex-end">${bars}</div>
       </div>`;
   } else {
@@ -5330,10 +5476,19 @@ async function loadClassroomFor(state, refs, run) {
   state.conceptsByStep = {};
   state.compSteps = [];
   state.compByStep = {};
-  $(refs.sizeMeterId).innerHTML = `<span class="meta">loading…</span>`;
-  $(refs.lensDriftId).innerHTML = `<span class="meta">loading…</span>`;
-  if (refs.readLevelId) $(refs.readLevelId).innerHTML = `<span class="meta">loading…</span>`;
-  if (refs.conceptsId)  $(refs.conceptsId).innerHTML  = `<span class="meta">loading…</span>`;
+  // Skeleton placeholders on every panel this loader will populate. The
+  // render_* fns below replace innerHTML on success, which wipes the skeleton.
+  // Panels without data (e.g. no checkpoints yet) get their normal empty-state
+  // message via the steps.length === 0 branch.
+  showSkeleton(refs.sizeMeterId, "rows",  2);
+  showSkeleton(refs.lensDriftId, "blocks", 1);
+  if (refs.readLevelId)     showSkeleton(refs.readLevelId,     "rows",   3);
+  if (refs.conceptsId)      showSkeleton(refs.conceptsId,      "grid",   6);
+  if (refs.mathLevelId)     showSkeleton(refs.mathLevelId,     "rows",   3);
+  if (refs.grammarLevelId)  showSkeleton(refs.grammarLevelId,  "rows",   3);
+  if (refs.reasoningLevelId) showSkeleton(refs.reasoningLevelId,"rows",  3);
+  if (refs.writingHealthId) showSkeleton(refs.writingHealthId, "rows",   3);
+  if (refs.readingCompId)   showSkeleton(refs.readingCompId,   "rows",   3);
   // config.json — best-effort
   try {
     const r = await fetch(`/run/${encodeURIComponent(run)}/config?` + Date.now(), { cache: "no-store" });
@@ -5372,7 +5527,9 @@ async function loadClassroomFor(state, refs, run) {
       catch (e) { console.warn("probe fetch", s.step, e); }
     }));
     // lens npz files, one per step
-    const V = (state.config && state.config.shape && state.config.shape.vocab) || 256;
+    // Tolerate flat config (vocab at top level) and the nested cfg.shape form;
+    // fall back to byte-vocab (256) only when neither is present.
+    const V = (state.config && ((state.config.shape && state.config.shape.vocab) || state.config.vocab)) || 256;
     await Promise.all(steps.map(async s => {
       if (!s.lens) return;
       try {
@@ -5503,8 +5660,9 @@ function _deepEvalScaleClass(nParams) {
 
 function _deepEvalExpectedBand(suite) {
   const cfg = (typeof classroomStateL !== "undefined" && classroomStateL) ? classroomStateL.config : null;
-  if (!cfg || !cfg.shape) return null;
-  const pc = compute_param_count(cfg.shape);
+  // compute_param_count tolerates both flat configs (vocab/hidden/... at top
+  // level, the trainer's actual write shape) and the nested cfg.shape form.
+  const pc = compute_param_count(cfg);
   if (!pc) return null;
   const band = _deepEvalScaleClass(pc.total);
   if (!band) return null;
@@ -5637,7 +5795,7 @@ async function refreshDeepEvalForRun(run) {
   const statusEl  = document.getElementById("deepEvalStatus");
   const resultsEl = document.getElementById("deepEvalResults");
   if (statusEl)  statusEl.textContent = "";
-  if (resultsEl) resultsEl.innerHTML  = `<span class="meta">loading cached results…</span>`;
+  if (resultsEl) showSkeleton(resultsEl, "blocks", 3);
   _deepEvalPopulateStepPicker(run);
   if (!run) {
     if (resultsEl) resultsEl.innerHTML = `<span class="meta">pick a timeline first</span>`;
@@ -6533,24 +6691,24 @@ function _trUpdateComposedName() {
 // processes). The estimate caps as a *warning*, not a guarantee — real
 // usage varies with sequence packing, KV cache, M3 adapter slot table,
 // MoE routing, QAT fake-quant overhead, and PyTorch fragmentation.
-const _TR_SIZE_PRESETS = {
-  // multimind_m3 / m1 sizes (dense)
-  "30m":  { layers: 10, hidden: 512,  ffn: 2048, heads: 8,  params: 31e6  },
-  "80m":  { layers: 12, hidden: 768,  ffn: 3072, heads: 12, params: 85e6  },
-  "85m":  { layers: 12, hidden: 768,  ffn: 3072, heads: 12, params: 85e6  },
-  "120m": { layers: 12, hidden: 896,  ffn: 3584, heads: 14, params: 115e6 },
-  "200m": { layers: 16, hidden: 1024, ffn: 4096, heads: 16, params: 202e6 },
-  "400m": { layers: 24, hidden: 1280, ffn: 5120, heads: 20, params: 472e6 },
-  "800m": { layers: 28, hidden: 1536, ffn: 6144, heads: 24, params: 793e6 },
-  // multimind_mega sizes (MoE total params; per-byte active << total)
-  "850m": { layers: 12, hidden: 1024, ffn: 4096, heads: 16, params: 860e6  },
-  "1b":   { layers: 12, hidden: 1280, ffn: 3840, heads: 16, params: 1023e6 },
-  "1b5":  { layers: 14, hidden: 1408, ffn: 4224, heads: 16, params: 1500e6 },
-  // scratch_transformer-style sizes (subset)
-  "5m":   { layers: 6,  hidden: 256,  ffn: 1024, heads: 4,  params: 5e6   },
-  "7m":   { layers: 8,  hidden: 256,  ffn: 1024, heads: 4,  params: 7e6   },
-  "20m":  { layers: 8,  hidden: 512,  ffn: 2048, heads: 8,  params: 20e6  },
-};
+// Active plugin's shape table. Each plugin's manifest.json declares its own
+// `sizes` block; the dashboard reads from there so the size dropdown and the
+// VRAM estimator always reflect what the *current* trainer actually supports.
+// No literals here: shape data is owned by manifests, not the dashboard.
+function _trActiveSizes() {
+  const p = (typeof trainState !== "undefined" && trainState) ? trainState.selected : null;
+  const s = (p && p.manifest && p.manifest.sizes) || null;
+  return (s && typeof s === "object") ? s : {};
+}
+
+function _trSizeOrder() {
+  return Object.keys(_trActiveSizes());
+}
+
+function _trSizeShape(size) {
+  const t = _trActiveSizes();
+  return (size && t[size]) ? t[size] : null;
+}
 
 // ---------------------------------------------------------------
 // Trainer form schema. The dashboard owns labels, helps, types,
@@ -6563,14 +6721,14 @@ const TRAINER_SCHEMA = {
     // ---- required (every trainer) ----
     { name: "name",         type: "str",    required: true,  label: "model name",               help: "your name for this model; the model size is auto-appended to make the on-disk folder (e.g. 'chatty_otter' becomes 'chatty_otter_85m')." },
     { name: "corpus",       type: "corpus", required: true,  label: "training data file",      help: "the file the model reads." },
-    { name: "size",         type: "str",    required: true,  label: "model size",               help: "bigger = smarter, slower, more VRAM.", choices: ["30m","80m","85m","120m","200m","400m","800m","850m","1b","1b5"] },
+    { name: "size",         type: "str",    required: true,  label: "model size",               help: "bigger = smarter, slower, more VRAM. MoE sizes (the ones with active_params in the trainer's manifest) store all experts on disk but only fire a slice per byte.", choices: _trSizeOrder },
     { name: "precision",    type: "str",    required: true,  label: "number precision",         help: "bf16 = half memory; fp32 = double.", choices: ["bf16","fp32"] },
     { name: "version",      type: "str",                     label: "version tag (optional)",   help: "free-form revision label (v1, v2a, ...); shows up in the description, not the folder name." },
     { name: "description",  type: "text",                    label: "what this model is for",   help: "saved into the model config. If left blank, auto-filled from corpus/size/precision/version/variant." },
     // ---- standard training loop ----
-    { name: "total_steps",  type: "int",                     label: "total training steps",     help: "more = longer training." },
-    { name: "batch_size",   type: "int",                     label: "batch size",               help: "higher = faster, more VRAM." },
-    { name: "seq",          type: "int",                     label: "sequence length",          help: "wider per-step view, more VRAM." },
+    { name: "total_steps",  type: "int",   required: true,   label: "total training steps",     help: "the training loop stops when it reaches this many steps. More = longer training, lower final loss, more wall-clock and disk." },
+    { name: "batch_size",   type: "int",   required: true,   label: "batch size",               help: "rows processed per step. Higher = faster wall-clock and smoother gradients but more VRAM." },
+    { name: "seq",          type: "int",   required: true,   label: "sequence length",          help: "bytes of context the model sees per row. Bigger = more per-step learning + more VRAM (linear in attention here, quadratic without flash-attn)." },
     { name: "n_chunks",     type: "int",                     label: "TBPTT chunks per step",    help: "more bytes per step; doesn't change VRAM (that's bptt_window)." },
     { name: "base_lr",      type: "float",                   label: "peak learning rate",       help: "typical 1e-4 to 5e-4. higher = faster, riskier." },
     { name: "min_lr",       type: "float",                   label: "minimum learning rate",    help: "where the LR settles. typical 1e-5." },
@@ -6613,21 +6771,24 @@ const TRAINER_SCHEMA = {
     { name: "router_topk",     type: "int",        advanced: true, label: "router top-k",            help: "MEGA only. experts that fire per token." },
     { name: "router_aux_loss", type: "float",      advanced: true, label: "router balance weight",   help: "MEGA only. load-balance loss coefficient (~0.01)." },
     // ---- checkboxes (all together at the end) ----
-    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "~30% slower for ~50% less activation VRAM." },
-    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "fake-quant in forward pass; exports to v9 INT8 binary." },
-    { name: "freeze_base",   type: "bool", featured: true, advanced: true,  label: "freeze base",                help: "M1 only. only the adapter trains; base stays frozen." },
-    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "MEGA only. INT8 optimizer state; required for 1B+ MoE on 12 GB." },
+    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "Trades compute for memory: rerun the forward pass during backward instead of storing every layer's activations. About 30% slower, about 50% less activation VRAM." },
+    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "Quantization-aware training. Wraps weights + activations + RMSNorm in fake-quant ops (INT8 per-tensor maxabs) during the forward pass; the resulting checkpoint exports to a v9 (canonical trunk) or v12 (MTP head) INT8 engine binary with no post-hoc calibration loss. RoPE trunks (Veritate800M and friends) are still PyTorch-only until a future format ships." },
+    { name: "freeze_base",   type: "bool", featured: true, advanced: true,  label: "freeze base",                help: "Adapter-only training: lock the base trunk so only the adapter (M1/M3) learns. Faster, smaller deltas, lower forgetting." },
+    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "Optimizer state in INT8 instead of FP32. Cuts ~6 bytes/param from VRAM (10 vs 16). Required to fit 1B+ MoE on 12 GB. Tiny convergence cost." },
   ],
   continue: [
     // ---- required ----
     { name: "resume",       type: "model_name", required: true, label: "model to continue", help: "previously-trained model; its config sets shape, corpus, adapter." },
+    // QAT is featured at the top so the canonical "repair my non-QAT model into
+    // an INT8 export" workflow is one click and one resume away.
+    { name: "qat_enabled",   type: "bool", featured: true,      label: "convert this model to INT8 (QAT)", help: "Fine-tune the resumed model under fake-quant ops. Result exports to a v9 INT8 binary (canonical trunk) or v12 (MTP head). Use lr ~1e-5 to avoid breaking the base. New checkpoints overwrite the resumed model's directory; keep a copy of the pre-QAT checkpoint if you want to roll back." },
     // ---- optional corpus override ----
     // The resume-target's config.json holds the original corpus, and
     // apply_resume_overrides() restores it when this field is left blank
     // (see veritate_800m/plugin.py: a flag passed on the CLI suppresses the
     // config-replay). Picking a different stem here swaps the training data
     // for the continued run without changing model shape.
-    { name: "corpus",       type: "corpus",                     label: "training data (optional override)", help: "leave blank to keep the original corpus this model was trained on. Pick a different file to switch corpora on this continued run (e.g. domain fine-tune)." },
+    { name: "corpus",       type: "corpus",                     label: "training data (leave blank to reuse original)", help: "Blank = reuse the corpus this model was trained on. Pick a different file to refine on a new corpus (domain fine-tune) without changing model shape." },
     // ---- standard training loop ----
     { name: "total_steps",  type: "int",                        label: "total training steps",  help: "extend or shorten the run." },
     { name: "batch_size",   type: "int",                        label: "batch size",            help: "higher = faster, more VRAM." },
@@ -6648,10 +6809,9 @@ const TRAINER_SCHEMA = {
     // ---- experimental / test-model knobs (ADVANCED) ----
     { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "BPTT depth. 1 = frozen, 4 = balanced, n_chunks = full." },
     { name: "quant_mode",   type: "str", advanced: true,        label: "weight quant mode",     help: "active only when QAT enabled. int8 (default), int4, or ternary (BitNet 1.58).", choices: ["int8","int4","ternary"] },
-    // ---- checkboxes (all together at the end) ----
-    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "~30% slower for ~50% less activation VRAM." },
-    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "QAT fine-tune into a new <source>_qat model. use lr ~1e-5." },
-    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "MEGA only. match the original run's setting." },
+    // ---- checkboxes (all together at the end; qat_enabled is up top with resume) ----
+    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "Trades compute for memory: rerun the forward during backward. ~30% slower, ~50% less activation VRAM." },
+    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "INT8 optimizer state. Match the original run's setting or VRAM math breaks." },
   ],
 };
 
@@ -6676,6 +6836,13 @@ function _trArgsForPlugin(p) {
 
   const _withDefault = (base, defaultVal) => {
     const o = Object.assign({}, base, { default: defaultVal });
+    // A schema entry may declare `choices` as either an array literal or a
+    // function returning an array (used for plugin-scoped lookups like the
+    // size dropdown, which reads the active plugin's manifest.sizes). Resolve
+    // the function here so downstream renderers always see an array.
+    if (typeof o.choices === "function") {
+      o.choices = o.choices() || [];
+    }
     if (Array.isArray(o.choices) && defaultVal !== undefined) {
       const s = String(defaultVal);
       if (!o.choices.map(String).includes(s)) {
@@ -6753,24 +6920,51 @@ function _trEstimateMemory() {
         const sh = cfg.shape || {};
         size      = size      || ta.size;
         precision = precision || ta.precision;
-        seq       = seq       || sh.seq || ta.seq;
+        // Trainer writes shape at config top level today; older runs may carry
+        // a nested `shape` object. Accept both, then fall back to training_args.
+        seq       = seq       || sh.seq || cfg.seq || ta.seq;
       }
     }
   }
 
-  const sz = _TR_SIZE_PRESETS[size];
+  const sz = _trSizeShape(size);
   if (!sz || !batch || !seq) return null;
 
   const bpv = precision === "bf16" ? 2 : 4;
+  // AdamW: fp32 weights + grads + m + v = 16 bytes/param. bitsandbytes 8-bit
+  // AdamW drops m+v to 1 byte each, giving 4+4+1+1 = 10.
   const bytesPerParam = adam8On ? 10 : 16;
   const bpttWindow = Math.max(1, isNaN(bpttRaw) ? 1 : bpttRaw);
 
-  const staticBytes = sz.params * bytesPerParam;
+  // MoE: experts sit on disk in full but only the active slice fires per byte.
+  // Static memory uses the full param count (the optimizer state covers every
+  // expert), activation memory uses the active slice (only those experts run).
+  const totalParams  = sz.params;
+  const activeParams = sz.active_params || sz.params;
+  const isMoE        = !!sz.active_params;
+
+  const weightsBytes = totalParams * 4;            // fp32 master weights
+  const gradsBytes   = totalParams * 4;            // fp32 grads
+  const optimBytes   = totalParams * (bytesPerParam - 8); // remainder = m + v
+  const staticBytes  = totalParams * bytesPerParam;
+
   let actBytes = batch * seq * sz.hidden * sz.layers * 13 * bpv * bpttWindow;
+  if (isMoE) actBytes *= activeParams / totalParams;
   if (ckptOn) actBytes *= 0.5;
+
+  // KV cache during eval (only matters at long seq). Per-byte cost is
+  // 2 (K+V) * heads * head_dim * bpv per layer, summed over T.
+  const headDim   = Math.floor(sz.hidden / sz.heads);
+  const kvBytes   = 2 * sz.layers * sz.heads * headDim * seq * batch * bpv;
+
   const totalRaw = staticBytes + actBytes;
   const total = Math.round(totalRaw * 1.15);
-  return { staticBytes, actBytes, total, ckptOn, adam8On, size, precision, seq, batch, bpttWindow };
+  return {
+    staticBytes, actBytes, total, kvBytes, ckptOn, adam8On,
+    size, precision, seq, batch, bpttWindow,
+    isMoE, totalParams, activeParams,
+    weightsBytes, gradsBytes, optimBytes,
+  };
 }
 
 function _trUpdateVramEstimate() {
@@ -6807,11 +7001,19 @@ function _trUpdateVramEstimate() {
     budgetLine = `<div style="margin-top:3px;color:var(--warm)">no system specs detected &mdash; click <b>detect my system</b> in settings to compare against your hardware.</div>`;
   }
 
+  const fmtParams = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : (n / 1e6).toFixed(0) + "M";
+  const moeNote = est.isMoE
+    ? ` <span style="color:var(--dim)">(MoE: ${fmtParams(est.totalParams)} total, ${fmtParams(est.activeParams)} active per byte)</span>`
+    : "";
+  const breakdown =
+    `weights ${fmt(est.weightsBytes)} + grads ${fmt(est.gradsBytes)} ` +
+    `+ optim ${fmt(est.optimBytes)}${est.adam8On ? " <i>(8-bit)</i>" : ""} ` +
+    `+ activations ${fmt(est.actBytes)}${est.ckptOn ? " <i>(act-ckpt -50%)</i>" : ""}`;
   out.innerHTML =
     `<div><b style="color:${badgeColor}">estimated training memory</b>` +
-    ` <b style="color:var(--text);font-size:13px">${fmt(est.total)}</b>` +
-    ` <span style="color:var(--dim)">= weights+optim ${fmt(est.staticBytes)} + activations ${fmt(est.actBytes)}` +
-    `${est.ckptOn ? " (act-ckpt -50%)" : ""}${est.adam8On ? ", 8-bit AdamW" : ""}, +15% PyTorch overhead</span></div>` +
+    ` <b style="color:var(--text);font-size:13px">${fmt(est.total)}</b>${moeNote}</div>` +
+    `<div style="color:var(--dim);margin-top:2px">${breakdown}, +15% PyTorch overhead</div>` +
+    `<div style="color:var(--dim);margin-top:1px">eval KV cache at seq=${est.seq}: ${fmt(est.kvBytes)}</div>` +
     budgetLine;
 }
 
@@ -6883,7 +7085,7 @@ function _trAutoOptimize() {
   // INT_MAX even with a precision/grad-graph safety margin.
   const MPS_INT_MAX = 2147483647;
   const MPS_SAFETY  = 0.85;
-  const sizePreset  = _TR_SIZE_PRESETS[_trArgVal("size")];
+  const sizePreset  = _trSizeShape(_trArgVal("size"));
   const seqVal      = parseInt(_trArgVal("seq"), 10);
   let mpsBatchCap = Infinity;
   if (budget.kind === "unified" && sizePreset && sizePreset.heads && seqVal > 0) {
@@ -7016,11 +7218,81 @@ function _trUpdateCorpusMeta() {
   });
 }
 
+function _trPosHintPop(hint) {
+  const mark = hint.querySelector(".hint-mark");
+  const pop  = hint.querySelector(".hint-pop");
+  if (!mark || !pop) return;
+  // Make the popover measurable: render it off-screen, then place it.
+  pop.style.left = "-9999px";
+  pop.style.top  = "0";
+  hint.classList.add("is-open");
+  const margin    = 8;
+  const markRect  = mark.getBoundingClientRect();
+  const popRect   = pop.getBoundingClientRect();
+  const vw        = window.innerWidth;
+  const vh        = window.innerHeight;
+  let left = markRect.left;
+  if (left + popRect.width > vw - margin) left = vw - popRect.width - margin;
+  if (left < margin) left = margin;
+  let top  = markRect.bottom + 4;
+  if (top + popRect.height > vh - margin) top = Math.max(margin, markRect.top - popRect.height - 4);
+  pop.style.left = left + "px";
+  pop.style.top  = top  + "px";
+}
+
+function _trClearHintPop(hint) {
+  hint.classList.remove("is-open");
+  const pop = hint.querySelector(".hint-pop");
+  if (pop) { pop.style.left = "-9999px"; pop.style.top = "0"; }
+}
+
+// Two-way sync: model's config.json -> form. When the resume model selector
+// changes (or is set on first render), pull that model's training_args from
+// /run/<name>/config and apply each schema-known field. The reverse direction
+// (form -> config.json) already happens: native_trainer._save_args_for_config
+// rewrites the model's config.json on every checkpoint.
+function _trApplyResumeConfig(modelName) {
+  if (!modelName) return;
+  fetch(`/run/${encodeURIComponent(modelName)}/config?` + Date.now(), { cache: "no-store" })
+    .then(r => r.ok ? r.json() : null)
+    .then(cfg => {
+      if (!cfg) return;
+      const ta = cfg.training_args || {};
+      const sch = TRAINER_SCHEMA[trainState.flow] || [];
+      const schemaNames = new Set(sch.map(a => a.name));
+      for (const k of Object.keys(ta)) {
+        if (k === "resume") continue;                 // never overwrite the picker itself
+        if (!schemaNames.has(k)) continue;            // only fields the form actually renders
+        const el = _trArgEl(k);
+        if (!el) continue;
+        if (el.dataset.argKind === "model_step") continue;
+        const v = ta[k];
+        if (v === null || v === undefined) continue;  // null/missing -> leave current value
+        if (el.type === "checkbox") el.checked = !!v;
+        else el.value = String(v);
+      }
+      _trUpdateStepCascades();
+      _trUpdateCorpusMeta();
+      _trUpdateVramEstimate();
+      _trUpdateComposedName();
+    })
+    .catch(() => {});
+}
+
 function _trWireArgListeners() {
   document.querySelectorAll('#trainArgs [data-arg]').forEach(el => {
     const fn = () => { _trUpdateComposedName(); _trUpdateStepCascades(); _trUpdateCorpusMeta(); _trUpdateVramEstimate(); _trCorpusSizeWarning(); };
     el.addEventListener("change", fn);
     el.addEventListener("input",  fn);
+    if (el.dataset.arg === "resume") {
+      el.addEventListener("change", () => _trApplyResumeConfig(el.value));
+    }
+  });
+  document.querySelectorAll('#trainArgs .hint').forEach(hint => {
+    hint.addEventListener("mouseenter", () => _trPosHintPop(hint));
+    hint.addEventListener("mouseleave", () => _trClearHintPop(hint));
+    hint.addEventListener("focus",      () => _trPosHintPop(hint));
+    hint.addEventListener("blur",       () => _trClearHintPop(hint));
   });
 }
 
@@ -7043,6 +7315,12 @@ function _trApplyDefaults() {
     }
   }
   _trAutoPickBundledCorpus();
+  // If the form rendered with a resume model already selected, pull that
+  // model's saved settings on top of the plugin defaults.
+  const resumeEl = _trArgEl("resume");
+  if (resumeEl && resumeEl.value) {
+    _trApplyResumeConfig(resumeEl.value);
+  }
 }
 
 function _trAutoPickBundledCorpus() {
@@ -7082,39 +7360,70 @@ function _trRenderForm() {
   if (introEl) {
     introEl.innerHTML = `<b>${_trEsc(p.manifest.name || p.id)}</b> &middot; fields marked <span style="color:var(--hot)">*</span> are required &middot; settings render in the order this trainer's manifest declares them.`;
   }
-  // Responsive grid: small fields auto-pack into columns; wide types (text/path)
-  // and bool span the full row. Inline `style` keeps it self-contained — no
-  // class additions to the platform stylesheet.
+  // Responsive grid: small fields auto-pack into columns; wide types (text/path/tools)
+  // and bool span the full row. Help text is condensed to a hoverable blue ? badge so
+  // the form stays compact; the popover surfaces the same explanation.
   let html = `<style>
-    .trArgsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px 16px; font-size: 11.5px; }
-    .trArgsGrid .cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .trArgsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px 16px; font-size: 11.5px; }
+    .trArgsGrid .cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; position: relative; }
     .trArgsGrid .cell.wide { grid-column: 1 / -1; }
-    .trArgsGrid .cell label { color: var(--text); font-size: 11px; font-weight: 500; }
-    .trArgsGrid .cell .help { color: var(--dim); font-size: 10.5px; line-height: 1.4; }
+    .trArgsGrid .cell .row { display: flex; align-items: center; gap: 6px; }
+    .trArgsGrid .cell label { color: var(--text); font-size: 11px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; }
     .trArgsGrid .cell input[type="text"],
     .trArgsGrid .cell input[type="number"],
     .trArgsGrid .cell select,
     .trArgsGrid .cell textarea { width: 100%; min-width: 0; box-sizing: border-box; }
-    .trArgsGrid .cell.bool { flex-direction: row; align-items: center; gap: 8px; }
+    .trArgsGrid .cell.bool { flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap; }
     .trArgsGrid .cell.bool label { font-size: 11.5px; }
-    .trArgsGrid .cell.bool .help { font-size: 10.5px; }
     .trArgsGrid .cell.featured { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 6px; }
     .trArgsGrid .cell.featured label { color: var(--text); font-weight: 600; }
-    .trArgsGrid .cell.featured .help { color: var(--dim); }
-    @media (max-width: 640px) { .trArgsGrid { grid-template-columns: 1fr; gap: 12px; } }
+    .trArgsGrid .cell .adv-badge { color: var(--warm); font-weight: 600; font-size: 9.5px; letter-spacing: 0.5px; }
+    .trArgsGrid .cell .hint {
+      display: inline-block;
+      cursor: help; user-select: none; vertical-align: middle;
+    }
+    .trArgsGrid .cell .hint-mark {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 13px; height: 13px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff; font-weight: 700; font-size: 9.5px; line-height: 1;
+    }
+    /* Fixed positioning lets a popover near the right edge of the form escape
+       the parent grid's clipping bounds. Coordinates are set by _trPosHintPop
+       on mouseenter and clamped to the viewport so the popover never spills
+       off-screen no matter which field it anchors to. */
+    .trArgsGrid .cell .hint-pop {
+      visibility: hidden; opacity: 0;
+      position: fixed; left: 0; top: 0; z-index: 9999;
+      background: var(--panel-2, #1a1d24); color: var(--text);
+      border: 1px solid var(--accent); border-radius: 4px;
+      padding: 6px 8px; font-size: 10.5px; line-height: 1.45;
+      max-width: 280px; width: max-content;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+      transition: opacity 0.08s ease-in;
+      pointer-events: none;
+      white-space: normal; text-align: left; font-weight: 400;
+    }
+    .trArgsGrid .cell .hint.is-open .hint-pop { visibility: visible; opacity: 1; }
+    @media (max-width: 1100px) { .trArgsGrid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); } }
+    @media (max-width: 720px)  { .trArgsGrid { grid-template-columns: 1fr; gap: 12px; } }
   </style>
   <div class="trArgsGrid">`;
   for (const a of _trArgsForPlugin(p)) {
-    const req   = a.required ? '<span style="color:var(--hot)"> *</span>' : "";
-    const label = a.label ? _trEsc(a.label) : _trEsc(a.name);
-    const advBadge = a.advanced ? `<span style="color:var(--warm);font-weight:600">ADVANCED</span> · ` : "";
-    const help  = a.help ? `<div class="help">${advBadge}${_trEsc(a.help)}</div>` : "";
-    const wide  = (a.type === "text" || a.type === "path") ? " wide" : "";
+    const req      = a.required ? '<span style="color:var(--hot)"> *</span>' : "";
+    const labelTxt = a.label ? _trEsc(a.label) : _trEsc(a.name);
+    const advBadge = a.advanced ? `<span class="adv-badge">ADV</span>` : "";
+    const helpText = a.help ? _trEsc(a.help) : "";
+    const hint     = helpText
+      ? `<span class="hint" tabindex="0" aria-label="${helpText}"><span class="hint-mark">?</span><span class="hint-pop">${helpText}</span></span>`
+      : "";
+    const wide     = (a.type === "text" || a.type === "path") ? " wide" : "";
     const featured = a.featured ? " featured" : "";
     if (a.type === "bool") {
-      html += `<div class="cell bool wide${featured}">${_trBuildInput(a)}<label>${label}${req}</label>${help && ` <span class="help" style="margin-left:6px">${_trEsc(a.help || "")}</span>` || ""}</div>`;
+      html += `<div class="cell bool wide${featured}">${_trBuildInput(a)}<label>${labelTxt}${req}</label>${advBadge}${hint}</div>`;
     } else {
-      html += `<div class="cell${wide}${featured}"><label>${label}${req}</label>${_trBuildInput(a)}${help}</div>`;
+      html += `<div class="cell${wide}${featured}"><label>${labelTxt}${req} ${advBadge}${hint}</label>${_trBuildInput(a)}</div>`;
     }
   }
   html += `</div>`;
@@ -7581,17 +7890,46 @@ function _renderSysmetrics(snap) {
   host.innerHTML = html;
 }
 
+function _settingsTabActive() {
+  const t = document.querySelector('.tab-body[data-tab="settings"]');
+  return !!(t && t.classList.contains("active"));
+}
+function _renderHudPreview(snap) {
+  const cpuEl = $("hudPreviewCpu");
+  if (!cpuEl) return;
+  if (!snap || !snap.available) {
+    cpuEl.textContent = "n/a";
+    $("hudPreviewRam").textContent = "n/a";
+    $("hudPreviewGpu").textContent = "n/a";
+    return;
+  }
+  cpuEl.textContent = (snap.cpu_pct || 0).toFixed(0) + "%";
+  const memPct = snap.sys_mem_total ? (snap.sys_mem_used / snap.sys_mem_total * 100) : 0;
+  $("hudPreviewRam").textContent = memPct.toFixed(0) + "% (" + _fmtBytes(snap.sys_mem_used) + " / " + _fmtBytes(snap.sys_mem_total) + ")";
+  const gpus = snap.gpus || [];
+  if (!gpus.length) { $("hudPreviewGpu").textContent = "none detected"; return; }
+  const parts = gpus.map(g => {
+    const load = g.load_pct == null ? "—" : Math.round(g.load_pct) + "%";
+    const vram = (g.vram_used != null && g.vram_total != null)
+      ? _fmtBytes(g.vram_used) + "/" + _fmtBytes(g.vram_total)
+      : (g.vram_total != null ? _fmtBytes(g.vram_total) : "");
+    return load + (vram ? " · " + vram : "");
+  });
+  $("hudPreviewGpu").textContent = parts.join(", ");
+}
 let _sysPollTimer = null;
 function _sysPollTick() {
   fetch("/sys_metrics").then(r => r.json()).then(snap => {
     if (settingsState.current && settingsState.current.hud_enabled) _renderHud(snap);
     if (document.querySelector('.tab-body[data-tab="logs"]').classList.contains("active")) _renderSysmetrics(snap);
+    if (_settingsTabActive()) _renderHudPreview(snap);
   }).catch(() => {});
 }
 function _sysPollEnsure() {
   const wantHud  = !!(settingsState.current && settingsState.current.hud_enabled);
   const wantLogs = document.querySelector('.tab-body[data-tab="logs"]').classList.contains("active");
-  const want = wantHud || wantLogs;
+  const wantSettings = _settingsTabActive();
+  const want = wantHud || wantLogs || wantSettings;
   if (want && !_sysPollTimer) {
     _sysPollTick();
     _sysPollTimer = setInterval(_sysPollTick, 1000);
@@ -7631,7 +7969,30 @@ function _applySettingsToUI(s) {
   if (aiEp) aiEp.value = s.ai_endpoint_user || "";
   const aiKy = $("aiApiKeyUser");
   if (aiKy) aiKy.value = s.ai_api_key_user || "";
+  _aiUpdateEffectiveLine(s);
   if (typeof _AI !== "undefined" && _AI && _AI.applyEnabled) _AI.applyEnabled(!!s.ai_enabled);
+}
+
+function _aiUpdateEffectiveLine(s) {
+  const epEl = $("aiEffectiveEndpoint");
+  if (!epEl) return;
+  const userEp = (s.ai_endpoint_user || "").trim();
+  const userKy = (s.ai_api_key_user  || "").trim();
+  const effEp = userEp || s.ai_endpoint || "";
+  const effKy = userKy || s.ai_api_key  || "";
+  epEl.textContent = effEp || "(none)";
+  const keyEl = $("aiEffectiveKey");
+  if (keyEl) {
+    if (!effKy) keyEl.textContent = "(none)";
+    else if (effKy.length <= 8) keyEl.textContent = "•••";
+    else keyEl.textContent = effKy.slice(0, 4) + "…" + effKy.slice(-4);
+  }
+  const srcEl = $("aiEffectiveSource");
+  if (srcEl) {
+    const epSrc = userEp ? "override" : "default";
+    const kySrc = userKy ? "override" : "default";
+    srcEl.textContent = (epSrc === kySrc) ? epSrc : `endpoint ${epSrc}, key ${kySrc}`;
+  }
 }
 
 function _fmtRuntime(secs) {
@@ -8110,11 +8471,11 @@ function _lifecycleKillExecute() {
         return;
       }
       setTimeout(() => {
-        if (label) { label.textContent = "server killed. relaunch with python run.py."; label.style.color = "var(--hot)"; }
+        if (label) { label.textContent = "server killed. relaunch via start.bat / start.command (or python veritate.py)."; label.style.color = "var(--hot)"; }
       }, 800);
     })
     .catch(() => {
-      if (label) { label.textContent = "server killed. relaunch with python run.py."; label.style.color = "var(--hot)"; }
+      if (label) { label.textContent = "server killed. relaunch via start.bat / start.command (or python veritate.py)."; label.style.color = "var(--hot)"; }
     });
 }
 
@@ -8785,6 +9146,12 @@ function _corpusRenderCatalog(data) {
   const list = $("corpusList");
   const urlInput = $("corpusCatalogUrl");
   const statusEl = $("corpusCatalogStatus");
+  const countBadge = $("corpusLibraryCountBadge");
+  if (countBadge && data && Array.isArray(data.corpora)) {
+    const total = data.corpora.length;
+    const installed = data.corpora.filter(c => c.installed || c.local).length;
+    countBadge.textContent = installed ? `(${installed} / ${total} installed)` : `(${total} available)`;
+  }
   if (!list) return;
 
   if (urlInput && document.activeElement !== urlInput) {
@@ -8957,6 +9324,11 @@ function _corpusRenderCatalog(data) {
 function _corpusRefreshCatalog() {
   if (corpusLibState.inflight) return;
   corpusLibState.inflight = true;
+  // Cold load: stamp a skeleton so the catalog area doesn't read as empty
+  // while the upstream fetch is in flight. Background refresh (poll while an
+  // install is running) keeps the existing list visible — corpusLibState.catalog
+  // is non-null in that case.
+  if (!corpusLibState.catalog) showSkeleton("corpusList", "blocks", 5);
   fetch("/corpus/library/catalog")
     .then(r => r.json())
     .then(data => { _corpusRenderCatalog(data); })
@@ -9205,7 +9577,7 @@ function _trCorpusSizeWarning() {
   }
   const entry = data.corpora.find(c => c.stem === stem);
   if (!entry) { warnEl.style.display = "none"; return; }
-  const preset = (typeof _TR_SIZE_PRESETS !== "undefined") ? _TR_SIZE_PRESETS[size] : null;
+  const preset = _trSizeShape(size);
   const params = preset ? preset.params : null;
   if (params == null) { warnEl.style.display = "none"; return; }
   const minP = entry.recommended_min_params;
@@ -9303,6 +9675,41 @@ async function showConsentModal({ allowDecline }) {
   _saveSettings({ analytics_advanced_enabled: advanced, consent_modal_seen: true });
 }
 
+async function showConsentReviewModal() {
+  const body = `
+    <div style="display:grid;gap:10px">
+      <div style="padding:10px 14px;background:#0f1218;border-radius:3px">
+        <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:4px">
+          Heartbeat <span style="font-size:10.5px;color:var(--dim);font-weight:400;margin-left:6px">required &middot; every 6h</span>
+        </div>
+        <div style="font-size:11.5px;color:var(--text);line-height:1.55">
+          Hashed machine id, OS, uptime, restart and error counts, model count. Lets us see Veritate is alive in the wild.
+        </div>
+        <div style="font-size:11px;color:var(--dim);line-height:1.5;margin-top:4px">
+          No prompts, checkpoints, or source.
+        </div>
+      </div>
+      <div style="padding:10px 14px;background:#0f1218;border-radius:3px">
+        <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:4px">
+          Hardware &amp; training <span style="font-size:10.5px;color:var(--dim);font-weight:400;margin-left:6px">optional</span>
+        </div>
+        <div style="font-size:11.5px;color:var(--text);line-height:1.55">
+          Once per machine: CPU, RAM, GPU specs &mdash; tells us what to support next. Per training run: model name, size, arch, precision, batch size, total steps &mdash; tells us what the community trains.
+        </div>
+        <div style="font-size:11px;color:var(--warm);line-height:1.5;margin-top:4px">
+          The platform sends your hardware specs once and it's never repeated. No weights, datasets, or training metrics are sent. This helps us support more platforms.
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--dim);text-align:center;margin-top:2px">change any time in Settings &rsaquo; Analytics</div>
+    </div>
+  `;
+  await showModal({
+    title: "What gets sent",
+    body,
+    buttons: [{ label: "Close", value: "close", primary: true }],
+  });
+}
+
 async function showBuildNoticesIfAny() {
   let notices = [];
   try {
@@ -9377,7 +9784,7 @@ document.addEventListener("DOMContentLoaded", () => {
     _saveSettings({ heartbeat_send_errors: errs.checked });
   });
   const reviewBtn = $("reviewConsentBtn");
-  if (reviewBtn) reviewBtn.addEventListener("click", () => { showConsentModal({ allowDecline: true }); });
+  if (reviewBtn) reviewBtn.addEventListener("click", () => { showConsentReviewModal(); });
   const detectBtn = $("sysDetectBtn");
   if (detectBtn) detectBtn.addEventListener("click", () => {
     detectBtn.disabled = true;
@@ -9549,11 +9956,26 @@ document.addEventListener("DOMContentLoaded", () => {
   if (aiSave) aiSave.addEventListener("click", () => {
     const lab = $("aiSaveStatus");
     if (lab) { lab.textContent = "saving..."; lab.style.color = "var(--warm)"; }
-    _saveSettings({
-      ai_endpoint_user: ($("aiEndpointUser").value || "").trim(),
-      ai_api_key_user:  ($("aiApiKeyUser").value  || "").trim(),
-    });
+    const ep = ($("aiEndpointUser").value || "").trim();
+    const ky = ($("aiApiKeyUser").value  || "").trim();
+    _saveSettings({ ai_endpoint_user: ep, ai_api_key_user: ky });
+    if (settingsState.current) {
+      settingsState.current.ai_endpoint_user = ep;
+      settingsState.current.ai_api_key_user  = ky;
+      _aiUpdateEffectiveLine(settingsState.current);
+    }
     if (lab) { lab.textContent = "saved"; lab.style.color = "var(--data-pos)"; }
+  });
+  ["aiEndpointUser", "aiApiKeyUser"].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("input", () => {
+      if (!settingsState.current) return;
+      const s = { ...settingsState.current,
+                  ai_endpoint_user: ($("aiEndpointUser").value || "").trim(),
+                  ai_api_key_user:  ($("aiApiKeyUser").value  || "").trim() };
+      _aiUpdateEffectiveLine(s);
+    });
   });
   const askRT = $("askAiRecentTrain");
   if (askRT) askRT.addEventListener("click", () => {
@@ -9621,8 +10043,17 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(_refreshUpdateStatus, 60000);
   const bb = $("settingsBuildBtn");
   if (bb) bb.addEventListener("click", () => {
+    // The actual build runs in the background — the POST returns immediately
+    // and _pollBuildStatus picks up the new status on the next tick. Briefly
+    // mark the button busy so the click registers visually before the poll.
+    bb.disabled = true;
+    setLoading(bb, true, { size: "sm" });
     fetch("/engine/build", { method: "POST" }).catch(() => {});
-    setTimeout(_pollBuildStatus, 200);
+    setTimeout(() => {
+      setLoading(bb, false);
+      bb.disabled = false;
+      _pollBuildStatus();
+    }, 400);
   });
   _pollBuildStatus();
   setInterval(_pollBuildStatus, 3000);
@@ -9646,6 +10077,20 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(_modelsRefreshStatus, 15000);
 
   // ---- Corpus library wiring ----
+  const corpusHeader = $("corpusLibraryHeader");
+  const corpusBody   = $("corpusLibraryBody");
+  const corpusChev   = $("corpusLibraryChevron");
+  const corpusActions = $("corpusLibraryActions");
+  if (corpusHeader && corpusBody) {
+    corpusHeader.addEventListener("click", (e) => {
+      // Don't toggle when clicking action buttons / inputs inside the header
+      if (corpusActions && corpusActions.contains(e.target)) return;
+      if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT") return;
+      const open = corpusBody.style.display !== "none";
+      corpusBody.style.display = open ? "none" : "flex";
+      if (corpusChev) corpusChev.style.transform = open ? "rotate(0deg)" : "rotate(90deg)";
+    });
+  }
   const crb = $("corpusRefreshBtn");
   if (crb) crb.addEventListener("click", _corpusRefreshCatalog);
   const cof = $("corpusOpenFolderBtn");
@@ -9656,6 +10101,12 @@ document.addEventListener("DOMContentLoaded", () => {
   if (cas) cas.addEventListener("click", _corpusOpenAddSourceModal);
   const ctc = $("corpusToggleConfigBtn");
   if (ctc) ctc.addEventListener("click", () => {
+    const body = $("corpusLibraryBody");
+    const chev = $("corpusLibraryChevron");
+    if (body && body.style.display === "none") {
+      body.style.display = "flex";
+      if (chev) chev.style.transform = "rotate(90deg)";
+    }
     const row = $("corpusConfigRow");
     if (row) row.style.display = (row.style.display === "none" || !row.style.display) ? "flex" : "none";
   });
@@ -9811,6 +10262,8 @@ async function ensureWikiLoaded() {
     return;
   }
   wikiState.loading = true;
+  showSkeleton("wikiSubtabs", "lines", 3);
+  showSkeleton("wikiList",    "rows",  4);
   try {
     const r = await fetch("/wiki");
     const d = await r.json();
@@ -9856,7 +10309,7 @@ function prettifyCat(s) {
 
 async function loadWikiCategory(category) {
   const list = $("wikiList");
-  list.innerHTML = `<div class="wiki-empty">loading…</div>`;
+  showSkeleton(list, "rows", 5);
   $("wikiEntry").innerHTML = `<div class="wiki-empty">Pick an entry on the left.</div>`;
   try {
     let entries = wikiState.entries[category];
@@ -9899,7 +10352,7 @@ async function loadWikiEntry(category, slug) {
     el.classList.toggle("active", el.dataset.slug === slug);
   });
   const view = $("wikiEntry");
-  view.innerHTML = `<div class="wiki-empty">loading…</div>`;
+  showSkeleton(view, "blocks", 3);
   try {
     const r = await fetch(`/wiki/${encodeURIComponent(category)}/${encodeURIComponent(slug)}`);
     if (!r.ok) {
@@ -9956,7 +10409,7 @@ async function loadVersions() {
     },
     plugins: {
       title: "Plugin Engine",
-      body:  "Version of the plugin contract surfaced by veritate.plugin: manifest schema, lifecycle hooks, and the platform calls a plugin is allowed to make. Bumps when a hook is added, renamed, or removed. Plugins compiled against an older contract version may refuse to load."
+      body:  "Version of the plugin contract surfaced by veritate_core.plugin: manifest schema, lifecycle hooks, and the platform calls a plugin is allowed to make. Bumps when a hook is added, renamed, or removed. Plugins compiled against an older contract version may refuse to load."
     },
   };
   const ORDER = ["channel", "build", "engine", "mri", "format", "plugins"];

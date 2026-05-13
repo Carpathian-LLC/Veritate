@@ -18,7 +18,7 @@ summary: Engine gains a ternary scalar oracle and AVX-512 + VNNI ternary matmul 
 
 ### engine kernels
 
-- **Ternary scalar oracle.** `kernels/scalar/matmul_ternary_scalar.c` ships the BitNet b1.58 reference: trits in {-1, 0, +1}, packed 5-per-byte in base-3, per-tensor mean-abs scale. Matches `veritate/qat.py::fake_quant_weight_ternary` exactly.
+- **Ternary scalar oracle.** `kernels/scalar/matmul_ternary_scalar.c` ships the BitNet b1.58 reference: trits in {-1, 0, +1}, packed 5-per-byte in base-3, per-tensor mean-abs scale. Matches `veritate_core/qat.py::fake_quant_weight_ternary` exactly.
 - **Ternary AVX-512 + VNNI path.** `kernels/x86_64/matmul_ternary_vnni.c` unpacks each row's trits into a per-call int8 buffer and dispatches through `vpdpbusd` with the standard +128 unsigned-shift trick. Bit-identical to the scalar oracle by construction. Further unpack-in-SIMD optimization is a follow-up; correctness ships first per claude_preflight rule 23.
 - **Pack/unpack helpers** are exported (`ternary_pack_row`, `ternary_unpack_row`) so the export pipeline can produce v10 binaries from a QAT'd MEGA checkpoint and the engine can validate round-trip parity.
 

@@ -38,6 +38,72 @@ BUNDLE_CORPUS    = "corpus"
 # (and does not recurse into them).
 RESERVED_DIRS = {"corpus", "common", "__pycache__", ".git", "node_modules"}
 
+# Synthetic in-tree trainer. Shown to the user as a regular trainer so they can
+# train / refine / continue any size from the dashboard without dropping a
+# plugin folder. The dashboard form is schema-driven (TRAINER_SCHEMA in
+# static/index.js), so all knobs render and route through the same CLI surface.
+NATIVE_TRAINER_ID   = "native/trainer"
+NATIVE_TRAINER_PATH = os.path.normpath(os.path.join(paths.MRI_ROOT, "native_trainer.py"))
+NATIVE_TRAINER_MANIFEST = {
+    "name":        "Native trainer (no plugin)",
+    "description": "Train, continue, or refine any size from the dashboard. Canonical Veritate (GELU FFN + RMSNorm + learned pos-emb + tied LM head); QAT-aware; same save.save / append_train_row contract as a plugin.",
+    "kind":        "trainer",
+    "flow":        ["scratch", "continue"],
+    "sizes": {
+        "5m":   {"layers":  6, "hidden":  256, "ffn":  1024, "heads":  4, "params":      5000000},
+        "7m":   {"layers":  8, "hidden":  256, "ffn":  1024, "heads":  4, "params":      7000000},
+        "10m":  {"layers":  8, "hidden":  320, "ffn":  1280, "heads":  8, "params":     10000000},
+        "20m":  {"layers":  8, "hidden":  512, "ffn":  2048, "heads":  8, "params":     20000000},
+        "30m":  {"layers": 10, "hidden":  512, "ffn":  2048, "heads":  8, "params":     31000000},
+        "50m":  {"layers": 10, "hidden":  640, "ffn":  2560, "heads": 10, "params":     50000000},
+        "70m":  {"layers": 12, "hidden":  640, "ffn":  2560, "heads": 10, "params":     70000000},
+        "80m":  {"layers": 12, "hidden":  768, "ffn":  3072, "heads": 12, "params":     85000000},
+        "85m":  {"layers": 12, "hidden":  768, "ffn":  3072, "heads": 12, "params":     85000000},
+        "120m": {"layers": 12, "hidden":  896, "ffn":  3584, "heads": 14, "params":    115000000},
+        "160m": {"layers": 12, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    162000000},
+        "200m": {"layers": 16, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    202000000},
+        "350m": {"layers": 24, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    330000000},
+        "400m": {"layers": 24, "hidden": 1280, "ffn":  5120, "heads": 20, "params":    472000000},
+        "800m": {"layers": 28, "hidden": 1536, "ffn":  6144, "heads": 24, "params":    793000000},
+        "1b3":  {"layers": 24, "hidden": 2048, "ffn":  8192, "heads": 16, "params":   1300000000},
+        "2b":   {"layers": 24, "hidden": 2560, "ffn": 10240, "heads": 20, "params":   2700000000},
+        "3b":   {"layers": 32, "hidden": 2560, "ffn": 10240, "heads": 32, "params":   2900000000},
+        "4b5":  {"layers": 36, "hidden": 3200, "ffn": 12800, "heads": 25, "params":   4400000000},
+        "7b":   {"layers": 32, "hidden": 4096, "ffn": 18432, "heads": 32, "params":   7000000000},
+        "13b":  {"layers": 40, "hidden": 5120, "ffn": 21504, "heads": 40, "params":  13000000000},
+        "30b":  {"layers": 60, "hidden": 6656, "ffn": 26624, "heads": 52, "params":  32000000000},
+        "50b":  {"layers": 64, "hidden": 8192, "ffn": 32768, "heads": 64, "params":  52000000000}
+    },
+    "defaults": {
+        "size":         "85m",
+        "precision":    "bf16",
+        "vocab":        256,
+        "seq":          1024,
+        "total_steps":  20000,
+        "batch_size":   8,
+        "n_chunks":     1,
+        "base_lr":      3e-4,
+        "min_lr":       3e-6,
+        "warmup_steps": 200,
+        "lr_schedule":  "wsd",
+        "wsd_decay_frac": 0.1,
+        "wsd_decay_kind": "sqrt",
+        "weight_decay": 0.1,
+        "beta1":        0.9,
+        "beta2":        0.95,
+        "label_smoothing": 0.0,
+        "grad_clip":    1.0,
+        "ckpt_every":   500,
+        "log_every":    50,
+        "eval_every":   500,
+        "eval_iters":   16,
+        "seed":         0,
+        "use_act_ckpt": False,
+        "qat_enabled":  False,
+        "quant_mode":   "int8",
+    },
+}
+
 # ------------------------------------------------------------------------------------
 # Functions
 
@@ -101,8 +167,26 @@ def _walk(rel_path, out):
                 _walk(entry_rel, out)
 
 
+def _native_record():
+    """Synthetic trainer entry — no manifest on disk, persisted defaults live
+    in memory only (a future refinement could mirror them to a JSON next to
+    native_trainer.py). The runner builds argv off `path` like any plugin."""
+    return {
+        "id":                NATIVE_TRAINER_ID,
+        "file":              os.path.basename(NATIVE_TRAINER_PATH),
+        "path":              NATIVE_TRAINER_PATH,
+        "manifest":          dict(NATIVE_TRAINER_MANIFEST),  # copy so callers can't mutate the constant
+        "bundle_dir":        None,
+        "bundle_corpus_dir": None,
+        "native":            True,
+    }
+
+
 def scan():
     out = []
+    # Native trainer first — surfaces "no plugin needed" at the top of the picker.
+    if os.path.isfile(NATIVE_TRAINER_PATH):
+        out.append(_native_record())
     if not os.path.isdir(PLUGINS_ROOT):
         return out
     _walk("", out)
@@ -128,6 +212,10 @@ def update_defaults(plugin_id, args):
     (corpus, model, description, step) do not pollute the schema."""
     plugin = by_id(plugin_id)
     if plugin is None or not isinstance(args, dict):
+        return False
+    if plugin.get("native"):
+        # Native trainer has no on-disk manifest; defaults are constants.
+        # Skip the merge so we never try to write outside MRI_ROOT.
         return False
     mpath = _manifest_path(plugin)
     if not os.path.isfile(mpath):

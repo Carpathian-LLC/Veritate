@@ -26,7 +26,7 @@ summary: In-app updater no longer blocks on diverging branches or dirty trees; t
 ### corpus library
 
 - New **Corpus library** card in Settings → Update section. Apt-style installer that streams training data directly into `plugins/corpus/<stem>_train.bin` and `<stem>_val.bin`.
-- Local catalog ships in [veritate_mri/corpus_catalog.json](../../corpus_catalog.json), with 9 entries spanning every model size band:
+- Local catalog ships in [veritate_mri/sync/corpus_catalog.json](../../sync/corpus_catalog.json), with 9 entries spanning every model size band:
 
 | Stem | Source | Size cap | Best for |
 |---|---|---|---|
@@ -82,5 +82,5 @@ Click **+ custom** in the Corpus library card to add a corpus by direct URL. The
 ## known limitations
 
 - `deepmind/pg19` and `Skylion007/openwebtext` were historically distributed as HF dataset scripts. HuggingFace deprecated dataset scripts in `datasets` ≥ 3.0; if these specific corpora fail to install with `Dataset scripts are no longer supported`, the catalog entry's `format` and source fields can be swapped to `raw_bytes_zip` or a parquet-backed mirror.
-- Default caps on the very-large corpora (50 GB / 100 GB / 200 GB) are deliberately conservative. Raise `max_bytes_train` in [corpus_catalog.json](../../corpus_catalog.json) if you actually need the full 825 GB / 627B tokens / 30T tokens.
+- Default caps on the very-large corpora (50 GB / 100 GB / 200 GB) are deliberately conservative. Raise `max_bytes_train` in [corpus_catalog.json](../../sync/corpus_catalog.json) if you actually need the full 825 GB / 627B tokens / 30T tokens.
 - HF datasets occasionally gate behind a license click. If install fails with an authentication error, run `huggingface-cli login` once and retry.

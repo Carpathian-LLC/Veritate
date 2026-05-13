@@ -47,7 +47,7 @@ def synth_model_dir():
         shutil.rmtree(mdir)
     os.makedirs(os.path.join(mdir, "checkpoints"))
 
-    from veritate.model import Veritate
+    from veritate_core.model import Veritate
     model = Veritate(**SHAPE_TINY)
     torch.save({"model": model.state_dict()}, os.path.join(mdir, "checkpoints", "step_1.pt"))
 
@@ -70,7 +70,7 @@ def synth_model_dir():
 def test_export_v9_int8_writes_correct_magic_and_version(synth_model_dir):
     """export_checkpoint emits a .bin starting with VRTE magic + version=9 for a
     non-MoE INT8 checkpoint."""
-    from veritate_mri import export
+    from veritate_mri.training import export
 
     info = export.export_checkpoint(synth_model_dir, 1)
 
@@ -90,7 +90,7 @@ def test_export_v9_int8_writes_correct_magic_and_version(synth_model_dir):
 def test_export_v11_ternary_writes_qat_version_and_quant_mode(synth_model_dir):
     """export_checkpoint_ternary emits v11 + (quant_mode=TERNARY, n_experts=1,
     router_topk=1) header extension after the act_boost slot."""
-    from veritate_mri import export
+    from veritate_mri.training import export
 
     info = export.export_checkpoint_ternary(synth_model_dir, 1)
 
@@ -113,7 +113,7 @@ def test_export_v11_ternary_writes_qat_version_and_quant_mode(synth_model_dir):
 def test_export_v11_quant_constants_match_engine_header():
     """The Python-side quant_mode integers must equal the C-side defines in
     veritate.h. A drift here corrupts every v11 binary."""
-    from veritate_mri import export
+    from veritate_mri.training import export
 
     h_path = os.path.join(os.path.dirname(__file__), "..", "..",
                           "veritate_engine", "v1", "src", "veritate.h")
@@ -138,7 +138,7 @@ def test_export_ternary_packed_size_matches_5_trits_per_byte(synth_model_dir):
     """A v11 ternary .bin must be substantially smaller than the v9 INT8 .bin
     of the same model (5 trits/byte vs 1 weight/byte). Sanity check on the
     packing path."""
-    from veritate_mri import export
+    from veritate_mri.training import export
 
     int8_info    = export.export_checkpoint(synth_model_dir, 1)
     ternary_info = export.export_checkpoint_ternary(synth_model_dir, 1)

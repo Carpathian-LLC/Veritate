@@ -24,7 +24,7 @@ Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 t
 
 ## Get started
 
-**Setup happens in the dashboard.** Two short CLI commands to install Python and start the server. Everything else (building the C engine, pulling updates, switching release channels, training your first model) is done from the GUI.
+**One launcher per OS, double-click to run.** The launcher creates its own Python virtual environment, installs every dependency on first launch, and starts the dashboard. Subsequent launches are instant. Everything else (building the C engine, pulling updates, switching release channels, training your first model) is done from the GUI.
 
 <br/>
 
@@ -33,11 +33,11 @@ Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 t
 | | Requirement | Notes |
 |---|---|---|
 | **1** | **Git** | Already on macOS (via Xcode CLT) and most Linux distros. On Windows install [Git for Windows](https://git-scm.com/download/win) or run `winget install Git.Git`. |
-| **2** | **Python 3.10+** | For the dashboard, training plugins, and PyTorch fallback. On Windows: `winget install Python.Python.3.12`. |
-| **3** | **A C compiler** | The dashboard builds the C engine for you. You just need `clang` (macOS / Linux) or MSVC / `clang` (Windows) installed. See the per-OS install steps below. |
+| **2** | **Python 3.10+** | The launcher handles everything else (venv, pip install, dashboard launch). On Windows: `winget install Python.Python.3.12`. |
+| **3** | **A C compiler** *(optional)* | Only needed for the hand-tuned C engine. The PyTorch backend works without it. See [Compiling the C engine](#compiling-the-c-engine-optional) below. |
 | **4** | **CUDA toolkit** *(optional)* | Only for GPU training on NVIDIA. CPU and Apple Silicon work without it. |
 
-[`models/`](./) is gitignored. A fresh clone ships **no weights**. You'll train your first model from the dashboard's [**Training**](#tabs) tab in step 4.
+[`models/`](./) is gitignored. A fresh clone ships **no weights**. You'll train your first model from the dashboard's [**Training**](#tabs) tab in step 3.
 
 <br/>
 
@@ -45,17 +45,14 @@ Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 t
 
 <br/>
 
-## Step 1 &nbsp;·&nbsp; Clone and install Python deps
-
-Same commands work in bash, zsh, and PowerShell.
+## Step 1 &nbsp;·&nbsp; Clone
 
 ```sh
 git clone https://github.com/Carpathian-LLC/Veritate.git
 cd Veritate
-pip install -r requirements.txt
 ```
 
-On Windows use `py -m pip install -r requirements.txt` if `pip` isn't on PATH.
+That's the only manual install step. The launcher in step 2 handles the rest.
 
 <br/>
 
@@ -63,9 +60,51 @@ On Windows use `py -m pip install -r requirements.txt` if `pip` isn't on PATH.
 
 <br/>
 
-## Steps 2 &amp; 3 &nbsp;·&nbsp; Install and run &nbsp;<sub>*(per platform)*</sub>
+## Step 2 &nbsp;·&nbsp; Launch the dashboard
 
-**Click your platform below to expand its install steps.** Each block contains the C compiler install plus the dashboard launch command for that OS.
+Double-click the launcher for your OS, or run it from a terminal. First launch creates the venv and installs all Python dependencies (this can take a few minutes — `torch` is ~2 GB). Re-launches are instant.
+
+| OS | Double-click | From terminal |
+|---|---|---|
+| **Windows** | [`start.bat`](start.bat) | `start.bat` |
+| **macOS**   | [`start.command`](start.command) | `./start.command` |
+| **Linux**   | *(no GUI launcher)* | `python veritate.py` |
+
+The dashboard opens automatically at **[http://localhost:8001/](http://localhost:8001/)**.
+
+<br/>
+
+To pass flags (custom port, preload a model, skip the engine build) invoke the central entry point directly:
+
+```sh
+python veritate.py --port 9000 --threads 8
+```
+
+<br/>
+
+[`veritate.py`](veritate.py) is the single entry point. It auto-builds the C engine in the background for your OS and arch, then serves the MRI dashboard. PyTorch is available immediately; the C backend lights up when the build finishes. Watch the [**Logs**](#tabs) tab to see build progress.
+
+<br/>
+
+**Available flags**
+
+| Flag | Description |
+|---|---|
+| `--model <name>` | Preload a model on startup. Defaults to `auto` (latest in [`models/`](./)). |
+| `--port <n>` | HTTP port. Default `8001`. |
+| `--threads <n>` | PyTorch CPU threads. `0` auto-picks physical cores capped at 16. |
+| `--skip-build` | Skip auto-building the engine. PyTorch only. |
+| `--no-browser` | Don't auto-open the dashboard URL in a web browser. |
+
+<br/>
+
+---
+
+<br/>
+
+## Compiling the C engine (optional)
+
+The dashboard auto-builds the C engine in the background once a compiler is installed. PyTorch is available immediately; the C backend lights up when the build finishes. Skip this section if you only want the PyTorch backend.
 
 <br/>
 
@@ -73,8 +112,6 @@ On Windows use `py -m pip install -r requirements.txt` if `pip` isn't on PATH.
 <summary><h3 style="display:inline">&nbsp;&nbsp; macOS &nbsp;<sub><em>(click to expand)</em></sub></h3></summary>
 
 <br/>
-
-#### Step 2 &nbsp;·&nbsp; Install a C compiler &nbsp;<sub>*(one-time)*</sub>
 
 Apple ships clang as part of the Xcode Command Line Tools.
 
@@ -90,16 +127,6 @@ bash veritate_engine/v1/build/setup.sh
 
 See [`veritate_engine/v1/build/setup.sh`](veritate_engine/v1/build/setup.sh).
 
-<br/>
-
-#### Step 3 &nbsp;·&nbsp; Start the dashboard
-
-```sh
-python run.py --port 8001 --threads 8
-```
-
-Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
-
 </details>
 
 <br/>
@@ -108,8 +135,6 @@ Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
 <summary><h3 style="display:inline">&nbsp;&nbsp; Windows &nbsp;<sub><em>(click to expand)</em></sub></h3></summary>
 
 <br/>
-
-#### Step 2 &nbsp;·&nbsp; Install a C compiler &nbsp;<sub>*(one-time)*</sub>
 
 The bundled installer uses `winget` to install LLVM (clang) and NASM if they're missing. Run it from the repo root in Windows PowerShell:
 
@@ -123,17 +148,7 @@ If you have PowerShell 7+ installed, this also works:
 pwsh -ExecutionPolicy Bypass -File veritate_engine\v1\build\setup.ps1
 ```
 
-After it finishes, **open a new terminal** so the updated `PATH` takes effect, then `cd` back into the repo. See [`veritate_engine/v1/build/setup.ps1`](veritate_engine/v1/build/setup.ps1).
-
-<br/>
-
-#### Step 3 &nbsp;·&nbsp; Start the dashboard
-
-```powershell
-py run.py --port 8001 --threads 8
-```
-
-Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
+After it finishes, **open a new terminal** so the updated `PATH` takes effect, then re-launch the dashboard. See [`veritate_engine/v1/build/setup.ps1`](veritate_engine/v1/build/setup.ps1).
 
 </details>
 
@@ -144,8 +159,6 @@ Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
 
 <br/>
 
-#### Step 2 &nbsp;·&nbsp; Install a C compiler &nbsp;<sub>*(one-time)*</sub>
-
 The bundled script auto-detects your package manager (`apt`, `dnf`, `pacman`) and installs clang.
 
 ```sh
@@ -154,36 +167,7 @@ bash veritate_engine/v1/build/setup.sh
 
 See [`veritate_engine/v1/build/setup.sh`](veritate_engine/v1/build/setup.sh).
 
-<br/>
-
-#### Step 3 &nbsp;·&nbsp; Start the dashboard
-
-```sh
-python run.py --port 8001 --threads 8
-```
-
-Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
-
 </details>
-
-<br/>
-
-**Skip the C compiler** if you only want the PyTorch backend. The dashboard still works; the C engine just won't be available.
-
-<br/>
-
-[`run.py`](run.py) auto-builds the C engine in the background for your OS and arch, then serves the MRI dashboard. PyTorch is available immediately; the C backend lights up when the build finishes. Watch the [**Logs**](#tabs) tab to see the build progress.
-
-<br/>
-
-**Available flags**
-
-| Flag | Description |
-|---|---|
-| `--model <name>` | Preload a model on startup. Defaults to `auto` (latest in [`models/`](./)). |
-| `--port <n>` | HTTP port. Default `8001`. |
-| `--threads <n>` | PyTorch CPU threads. `0` auto-picks physical cores capped at 16. |
-| `--skip-build` | Skip auto-building the engine. PyTorch only. |
 
 <br/>
 
@@ -191,7 +175,7 @@ Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
 
 <br/>
 
-## Step 4 &nbsp;·&nbsp; The rest is in the dashboard
+## Step 3 &nbsp;·&nbsp; The rest is in the dashboard
 
 From the [**Settings**](#tabs) tab you can:
 
@@ -252,9 +236,9 @@ Plugins and models are tracked as **separate git remotes** with their own sync b
 
 ## Running the C engine directly
 
-Skip this section if you're using the dashboard. [`run.py`](run.py) already drives the engine. These commands are for benchmarking or scripted inference.
+Skip this section if you're using the dashboard. [`veritate.py`](veritate.py) already drives the engine. These commands are for benchmarking or scripted inference.
 
-If you didn't let `run.py` auto-build, build manually.
+If you didn't let `veritate.py` auto-build, build manually.
 
 <br/>
 
@@ -441,7 +425,7 @@ A project by **[Carpathian, LLC](https://carpathian.ai/veritate)**. **Distributi
 |---|---|
 | [`veritate_engine/`](veritate_engine/) | C inference engine. Versioned subtrees (currently [`v1/`](veritate_engine/v1/)) hold `src/`, `kernels/<arch>/`, `build/`, `bin/<os>/<arch>/`, and `engine_versions.json`. |
 | [`veritate_mri/`](veritate_mri/) | MRI server, dashboard, [`save.py`](veritate_mri/save.py) (checkpoint + dump suite), [`readers/`](veritate_mri/readers/), [`atlas.py`](veritate_mri/atlas.py). |
-| [`veritate/`](veritate/) | Python package. `veritate.plugin` is the only surface plugins may import. |
+| [`veritate_core/`](veritate_core/) | Python package. `veritate_core.plugin` is the only surface plugins may import. |
 | [`plugins/`](plugins/) | Plugin implementations. [`common/`](plugins/common/) for shared helpers, [`corpus/`](plugins/corpus/) for `.bin` training data. See [`plugins/readme.md`](plugins/readme.md). |
 | `models/` | One self-contained subdir per model (gitignored). |
 | [`documentation/`](documentation/) | Current platform contracts (committed). Subfolders: [`hooks/`](documentation/hooks/), [`kernels/`](documentation/kernels/). |

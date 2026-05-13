@@ -33,8 +33,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
 sys.path.insert(0, ROOT)
 
-from veritate.model import Veritate
-from veritate import qat as vqat
+from veritate_core.model import Veritate
+from veritate_core import qat as vqat
 
 VERITATE_TRACE_MAGIC   = b"VRMR"
 VERITATE_TRACE_VERSION = 8
