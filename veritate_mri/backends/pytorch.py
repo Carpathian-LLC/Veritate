@@ -594,7 +594,7 @@ class Brain:
             ids = torch.tensor([b for b in prompt_bytes], dtype=torch.long).unsqueeze(0)
             if ids.size(1) >= m.seq:
                 ids = ids[:, -(m.seq - 1):]
-            logits_fp, _ = m(ids)
+            logits_fp, *_ = m(ids)
             p_fp = F.softmax(logits_fp[0, -1], dim=-1)
             backup = {}
             for name, p in m.named_parameters():
@@ -605,7 +605,7 @@ class Brain:
                 scale = max_abs / n_levels
                 p.data = torch.clamp(torch.round(p.data / scale), -n_levels, n_levels) * scale
             try:
-                logits_q, _ = m(ids)
+                logits_q, *_ = m(ids)
                 p_q = F.softmax(logits_q[0, -1], dim=-1)
             finally:
                 for name, p in m.named_parameters():
@@ -677,7 +677,7 @@ class Brain:
         for _ in range(max_new):
             t0 = time.perf_counter()
             with torch.no_grad():
-                logits, _ = m(ids)
+                logits, *_ = m(ids)
             fwd_ms = (time.perf_counter() - t0) * 1000
             T = ids.size(1)
             last_logits = logits[0, -1]

@@ -7252,12 +7252,13 @@ function _trClearHintPop(hint) {
 // (form -> config.json) already happens: native_trainer._save_args_for_config
 // rewrites the model's config.json on every checkpoint.
 function _trApplyResumeConfig(modelName) {
-  if (!modelName) return;
+  if (!modelName) { trainState._resumeSize = null; _trCheckSizeMismatch(); return; }
   fetch(`/run/${encodeURIComponent(modelName)}/config?` + Date.now(), { cache: "no-store" })
     .then(r => r.ok ? r.json() : null)
     .then(cfg => {
       if (!cfg) return;
       const ta = cfg.training_args || {};
+      trainState._resumeSize = ta.size || null;
       const sch = TRAINER_SCHEMA[trainState.flow] || [];
       const schemaNames = new Set(sch.map(a => a.name));
       for (const k of Object.keys(ta)) {
@@ -7275,8 +7276,33 @@ function _trApplyResumeConfig(modelName) {
       _trUpdateCorpusMeta();
       _trUpdateVramEstimate();
       _trUpdateComposedName();
+      _trCheckSizeMismatch();
     })
     .catch(() => {});
+}
+
+// Highlight the trainer picker red when the resumed model's size is not in
+// the selected plugin's manifest.sizes (e.g. 80m plugin picked for an 85m
+// model — the trainer would crash with "unknown size: 85m" otherwise).
+function _trCheckSizeMismatch() {
+  const picker = document.getElementById("trainPicker");
+  if (!picker) return;
+  let note = document.getElementById("trainSizeMismatch");
+  picker.style.borderColor = "";
+  if (note) note.remove();
+
+  const p = trainState.selected;
+  const modelSize = trainState._resumeSize;
+  if (!p || !p.manifest || !modelSize) return;
+  const allowed = Object.keys(p.manifest.sizes || {});
+  if (!allowed.length || allowed.includes(modelSize)) return;
+
+  picker.style.borderColor = "var(--hot)";
+  note = document.createElement("span");
+  note.id = "trainSizeMismatch";
+  note.style.cssText = "color:var(--hot);font-size:11px;flex-basis:100%";
+  note.textContent = `size mismatch: model is "${modelSize}", "${p.id}" supports ${allowed.join(", ")}`;
+  picker.parentElement.appendChild(note);
 }
 
 function _trWireArgListeners() {
@@ -7650,6 +7676,7 @@ document.addEventListener("DOMContentLoaded", () => {
     trainState.selected = trainState.list.find(p => p.id === sel.value) || null;
     _trRenderForm();
     _trRenderStatus();
+    _trCheckSizeMismatch();
   });
   const refresh = _trEl("trainRefresh");
   if (refresh) refresh.addEventListener("click", _trPoll);
@@ -7658,6 +7685,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const err = _trValidateArgs();
     if (err) { alert(err); return; }
     const p = trainState.selected;
+    const ms = trainState._resumeSize;
+    const allowed = p && p.manifest ? Object.keys(p.manifest.sizes || {}) : [];
+    if (ms && allowed.length && !allowed.includes(ms)) {
+      alert(`Size mismatch: model is "${ms}", trainer "${p.id}" supports ${allowed.join(", ")}.\nPick the matching trainer.`);
+      return;
+    }
     fetch("/plugins/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
