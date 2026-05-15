@@ -122,7 +122,7 @@ two FMA units per core × 8 cores ≈ ~8 TOPS aggregate INT8 throughput.
 A 1024×1024×1024 INT8 matmul = 2 GOps. At 1 TOPS effective (single core, AVX2) that's 2 ms.
 At 4 TOPS (multi-core AVX-512 VNNI) it's ~0.5 ms. Sub-millisecond is achievable but not free.
 
-Every commit must benchmark and log the result in `docs/WORKBOOK.md`. Regressions revert.
+Every commit must benchmark and log the result alongside the change. Regressions revert.
 
 # ------------------------------------------------------------------------------------
 # What we're NOT doing

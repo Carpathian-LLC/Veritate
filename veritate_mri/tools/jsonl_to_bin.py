@@ -9,9 +9,9 @@
 # - Each input record is a JSON object with at minimum a `trace_bytes` field
 #   (either a list of ints 0..255, a base64 string, or a utf-8 string). We
 #   accept any of those forms.
-# - Output: one concatenated .bin under plugins/corpus/<stem>_train.bin.
+# - Output: one concatenated .bin under trainers/corpus/<stem>_train.bin.
 #   Records are joined with a separator byte sequence (default: the literal
-#   bytes "<|endoftext|>" — used by the trainer's tokenizer-free byte
+#   bytes "<|endoftext|>", used by the trainer's tokenizer-free byte
 #   shuffler to know where a record ends).
 # - This is the LAST mile from "we generated 110k traces" to "we can train
 #   on them." Trivial code; the value is in the data, not the bridge.
@@ -78,7 +78,7 @@ def jsonl_to_bin(jsonl_path, out_bin_path, separator=DEFAULT_SEPARATOR,
     """Concatenate JSONL traces into a flat .bin. Returns dict of stats.
 
     If val_split_ratio > 0, the trailing fraction of records goes to
-    val_bin_path. Default 0 (no val split — train.bin only).
+    val_bin_path. Default 0 (no val split, train.bin only).
     """
     if not os.path.isfile(jsonl_path):
         raise FileNotFoundError(jsonl_path)
@@ -190,9 +190,9 @@ def main():
             print(f"  {k:>14}: {v}")
     print()
     print(f"Ready for training. To use:")
-    print(f"  cp {stats['train_bin']} plugins/corpus/tool_sft_train.bin")
+    print(f"  cp {stats['train_bin']} trainers/corpus/tool_sft_train.bin")
     if stats.get("val_bin"):
-        print(f"  cp {stats['val_bin']} plugins/corpus/tool_sft_val.bin")
+        print(f"  cp {stats['val_bin']} trainers/corpus/tool_sft_val.bin")
     print(f"  # then train the 800M plugin with --corpus tool_sft")
 
 

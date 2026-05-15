@@ -58,7 +58,7 @@ def _binary_is_stale():
     """True if any .c/.h under veritate_engine/src/ is newer than the binary.
     Returns False if binary doesn't exist (let _refresh_present handle that case)
     or if src dir is missing. Guards against the silent stale-binary failure mode
-    where source got updated but the binary wasn't rebuilt — Python parser ends
+    where source got updated but the binary wasn't rebuilt, Python parser ends
     up expecting a wire format the engine doesn't emit, causing pipe desync."""
     bin_path = _STATE["binary_path"]
     if not os.path.isfile(bin_path):
@@ -159,7 +159,7 @@ def stop():
         proc = _PROC
     if proc is None:
         return False
-    logmod.warn("build", "stop requested — killing build subprocess")
+    logmod.warn("build", "stop requested, killing build subprocess")
     try:
         if os.name == "nt":
             subprocess.run(["taskkill", "/PID", str(int(proc.pid)), "/T", "/F"],
@@ -187,7 +187,7 @@ def start():
         _set(status=STATUS_OK)
         return state()
     if _refresh_present() and _binary_is_stale():
-        logmod.warn("build", "binary present but source is newer — forcing rebuild to avoid wire-format mismatch")
+        logmod.warn("build", "binary present but source is newer, forcing rebuild to avoid wire-format mismatch")
     t = threading.Thread(target=_run_build, name="build-runner", daemon=True)
     t.start()
     return state()

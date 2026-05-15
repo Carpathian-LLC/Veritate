@@ -1,30 +1,24 @@
-"""Build a unigram + bigram index over a corpus .bin file.
-
-The writing-health probe (checkpoint_probe.dump_writing_health) consumes this
-index to compute PMI (pointwise mutual information) of adjacent word pairs in
-the model's own generations. PMI is corpus-relative -- each model trained on
-a different corpus needs its own index sitting next to its corpus .bin.
-
-Output schema (npz):
-    vocab    : array of unique tokens, shape (N,) dtype <Uk
-    uni_c    : unigram counts, shape (N,) dtype int64
-    bi_keys  : packed bigram keys (uint64 = (i << 32) | j), shape (M,) dtype uint64
-    bi_c     : bigram counts, shape (M,) dtype int64
-    n_tokens : total tokens scanned, scalar int64
-    n_bigrams: total bigrams scanned, scalar int64
-    config   : json blob with build params
-
-The probe loads this once per corpus path, indexes by (i, j) pair lookups, and
-falls back to a small negative penalty for OOV pairs.
-
-Usage:
-    python veritate_mri/tools/build_bigram_index.py --corpus tinystories
-    python veritate_mri/tools/build_bigram_index.py --corpus children_classics --top-bigrams 250000
-    python veritate_mri/tools/build_bigram_index.py --all   # build for every *_train.bin
-
-The index is written next to the corpus as <stem>_bigrams.npz so the probe
-locates it from the corpus_path alone.
-"""
+# ------------------------------------------------------------------------------------
+# Developed by Carpathian, LLC.
+# ------------------------------------------------------------------------------------
+# Legal Notice: Distribution Not Authorized.
+# ------------------------------------------------------------------------------------
+# Notes:
+# - Build a unigram + bigram index over a corpus .bin file. Consumed by the
+#   writing-health probe (checkpoint_probe.dump_writing_health) to compute PMI
+#   of adjacent word pairs in model generations.
+# - Output (.npz next to the corpus, <stem>_bigrams.npz):
+#     vocab     unique tokens (N,) <Uk
+#     uni_c     unigram counts (N,) int64
+#     bi_keys   packed bigram keys uint64 = (i<<32)|j  (M,)
+#     bi_c      bigram counts (M,) int64
+#     n_tokens, n_bigrams, config
+# - Usage:
+#     python veritate_mri/tools/build_bigram_index.py --corpus tinystories
+#     python veritate_mri/tools/build_bigram_index.py --all
+# veritate_mri/tools/build_bigram_index.py
+# ------------------------------------------------------------------------------------
+# Imports:
 
 import argparse
 import json
@@ -37,11 +31,18 @@ from pathlib import Path
 
 import numpy as np
 
+
+# ------------------------------------------------------------------------------------
+# Constants
+
 WORD_RE = re.compile(rb"[a-z][a-z']*")
 DEFAULT_TOP_UNI     = 150_000
 DEFAULT_TOP_BIGRAMS = 500_000
 CHUNK_BYTES         = 64 * 1024 * 1024   # 64 MB chunks; PG19 (10 GB) needs streaming
 
+
+# ------------------------------------------------------------------------------------
+# Functions
 
 def iter_words(corpus_path: str):
     """Yield lowercase byte-tokens from the corpus, streaming in chunks so we
@@ -165,11 +166,11 @@ def write_index(corpus_path: str, top_uni: int, top_bigrams: int, max_bytes: int
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus",      type=str, default=None,
-                    help="corpus stem (e.g. tinystories) -- looks up plugins/corpus/<stem>_train.bin")
+                    help="corpus stem (e.g. tinystories) -- looks up trainers/corpus/<stem>_train.bin")
     ap.add_argument("--corpus-path", type=str, default=None,
                     help="explicit absolute path to a corpus .bin")
     ap.add_argument("--all",         action="store_true",
-                    help="build indexes for every plugins/corpus/*_train.bin (skip pg19 unless --include-pg19)")
+                    help="build indexes for every trainers/corpus/*_train.bin (skip pg19 unless --include-pg19)")
     ap.add_argument("--include-pg19", action="store_true",
                     help="also index pg19 (~10 GB; slow)")
     ap.add_argument("--top-uni",     type=int, default=DEFAULT_TOP_UNI)

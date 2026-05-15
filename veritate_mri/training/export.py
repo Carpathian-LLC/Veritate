@@ -63,7 +63,7 @@ def quantize_matmul(w):
     # Convert here so the .bin holds bytes in [in, out] order and the engine's
     # load_b -> prep_b path does the right thing without any transpose at load.
     # Without this transpose, prep_b reads PyTorch's [out, in] bytes as [in, out]
-    # which scrambles the matmul totally — see HOW_WE_DID_IT.md for the full story.
+    # which scrambles the matmul totally, see HOW_WE_DID_IT.md for the full story.
     arr = np.ascontiguousarray(np.asarray(w, dtype=np.float32).T)
     max_abs = float(np.max(np.abs(arr))) if arr.size else 0.0
     if max_abs == 0.0:
@@ -86,7 +86,7 @@ def quantize_activation(w):
 # [in, out] = [k, n] layout (transposed from PyTorch's [out, in] like int8 path)
 # plus a single int32 gamma_q24 = round(gamma * ACT_INT8_SCALE * 2^24).
 # Engine load path: load_b_ternary in v2 reads packed bytes, decodes into a
-# {-1,0,+1}-valued INT8 buffer, and runs the existing prep_b — so the engine's
+# {-1,0,+1}-valued INT8 buffer, and runs the existing prep_b, so the engine's
 # INT8 hot path runs unchanged on ternary checkpoints. The trit-packed disk
 # format gives the 5x density that matters at 5B+; the standalone NEON ternary
 # kernel (compiled into v2 but unused at runtime today) is the future fast

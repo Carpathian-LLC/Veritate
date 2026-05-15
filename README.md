@@ -189,7 +189,7 @@ From the [**Training**](#tabs) tab you can:
 - Pick a plugin (e.g. `example_plugin`), configure the run, and click **Start**.
 - Training writes checkpoints + a per-step CSV to [`models/<name>/`](./).
 
-See [`plugins/readme.md`](plugins/readme.md) for the plugin contract and how to author your own.
+See [`trainers/readme.md`](trainers/readme.md) for the plugin contract and how to author your own.
 
 <br/>
 
@@ -318,7 +318,7 @@ Three independent pieces.
 
 | Piece | What it is | Language | Runs on | Output |
 |---|---|---|---|---|
-| **[Plugins](plugins/readme.md)** | Training scripts + manifests. Each plugin trains, fine-tunes, or distills a model. | PyTorch | GPU | `models/<name>/checkpoints/` |
+| **[Plugins](trainers/readme.md)** | Training scripts + manifests. Each plugin trains, fine-tunes, or distills a model. | PyTorch | GPU | `models/<name>/checkpoints/` |
 | **[Inference engine](veritate_engine/)** | Loads converted INT8 or ternary weights, generates text. Hand-written C + architecture-specific assembly. | C + asm | CPU | tokens via stdin/stdout, sub-ms |
 | **[Project MRI](veritate_mri/)** | Web app to watch the model think while it generates. Visualization + debugging tool. | Flask + JS | CPU | live UI on [http://localhost:8001](http://localhost:8001) |
 
@@ -348,7 +348,7 @@ Tools take `--model <name>` and resolve paths from `config.json`.
 
 Each subsystem is standalone. None of them launches another. They communicate through files on disk only:
 
-- **[Plugins](plugins/)** write checkpoints + the per-step CSV to `models/<name>/`.
+- **[Plugins](trainers/)** write checkpoints + the per-step CSV to `models/<name>/`.
 - **[`veritate_mri/`](veritate_mri/)** reads checkpoints + the per-step CSV from `models/<name>/`.
 - **[`veritate_engine/`](veritate_engine/)** reads exported `.bin` files from `models/<name>/`.
 
@@ -426,6 +426,6 @@ A project by **[Carpathian, LLC](https://carpathian.ai/veritate)**. **Distributi
 | [`veritate_engine/`](veritate_engine/) | C inference engine. Versioned subtrees (currently [`v1/`](veritate_engine/v1/)) hold `src/`, `kernels/<arch>/`, `build/`, `bin/<os>/<arch>/`, and `engine_versions.json`. |
 | [`veritate_mri/`](veritate_mri/) | MRI server, dashboard, [`save.py`](veritate_mri/save.py) (checkpoint + dump suite), [`readers/`](veritate_mri/readers/), [`atlas.py`](veritate_mri/atlas.py). |
 | [`veritate_core/`](veritate_core/) | Python package. `veritate_core.plugin` is the only surface plugins may import. |
-| [`plugins/`](plugins/) | Plugin implementations. [`common/`](plugins/common/) for shared helpers, [`corpus/`](plugins/corpus/) for `.bin` training data. See [`plugins/readme.md`](plugins/readme.md). |
+| [`trainers/`](trainers/) | Plugin implementations. [`common/`](trainers/common/) for shared helpers, [`corpus/`](trainers/corpus/) for `.bin` training data. See [`trainers/readme.md`](trainers/readme.md). |
 | `models/` | One self-contained subdir per model (gitignored). |
 | [`documentation/`](documentation/) | Current platform contracts (committed). Subfolders: [`hooks/`](documentation/hooks/), [`kernels/`](documentation/kernels/). |

@@ -282,7 +282,7 @@ if __name__ == "__main__":
 
 
 def generate_plugin(src_name, src_step, plan, report, corpus_stem, plugins_dir=None):
-    """Write a one-shot plugin folder under plugins/ that applies the given plan
+    """Write a one-shot plugin folder under trainers/ that applies the given plan
     to the source checkpoint. Returns (plugin_dir, plugin_id)."""
     plugins_dir = plugins_dir or os.path.join(paths.REPO_ROOT, "plugins")
     plugin_id = f"prune_{src_name}_step{src_step}"
@@ -325,7 +325,7 @@ def generate_plugin(src_name, src_step, plan, report, corpus_stem, plugins_dir=N
         corpus_stem=corpus_stem,
         generated_at=time.strftime("%Y-%m-%d %H:%M:%S"),
     )
-    with open(os.path.join(plugin_dir, "plugin.py"), "w", encoding="utf-8") as f:
+    with open(os.path.join(plugin_dir, "trainer.py"), "w", encoding="utf-8") as f:
         f.write(script)
 
     return plugin_dir, plugin_id

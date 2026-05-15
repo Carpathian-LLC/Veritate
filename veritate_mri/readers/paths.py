@@ -20,11 +20,17 @@ import sys
 
 REPO_ROOT       = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 MODELS_ROOT     = os.path.join(REPO_ROOT, "models")
-PLUGINS_ROOT    = os.path.join(REPO_ROOT, "plugins")
+PLUGINS_ROOT    = os.path.join(REPO_ROOT, "trainers")
 CORPUS_ROOT     = os.path.join(PLUGINS_ROOT, "corpus")
 MRI_ROOT        = os.path.join(REPO_ROOT, "veritate_mri")
-GRADE_EVAL_ROOT = os.path.join(MRI_ROOT, "grade_eval")
-WIKI_ROOT       = os.path.join(MRI_ROOT, "wiki")
+# Platform-level data lives under veritate_mri/data/. eval/grade/ holds the
+# committed grade-level eval corpora; eval/samples/ holds the small smoke
+# subsets of MMLU / HellaSwag / IFEval; wiki/ holds dashboard wiki markdown.
+DATA_ROOT          = os.path.join(MRI_ROOT, "data")
+EVAL_ROOT          = os.path.join(DATA_ROOT, "eval")
+GRADE_EVAL_ROOT    = os.path.join(EVAL_ROOT, "grade")
+EVAL_SAMPLES_ROOT  = os.path.join(EVAL_ROOT, "samples")
+WIKI_ROOT          = os.path.join(DATA_ROOT, "wiki")
 ENGINE_ROOT     = os.path.join(REPO_ROOT, "veritate_engine")
 # v1 is the primary (and only built) engine. v2 is an empty scratchpad folder
 # reserved for future engine experiments (see documentation/engine/v2.md).

@@ -188,10 +188,8 @@ def record_error_tick(source="", msg=""):
 
 
 def record_training_event(model_name, arch, started_at=None):
-    """Append a training-start event to the pending queue. Drained on the
-    next heartbeat send when advanced telemetry is enabled; the build runner
-    calls this regardless of consent so flipping the toggle on later still
-    lets the next ping carry whatever has accumulated since."""
+    """Queue a training-start event. Drained on next heartbeat when advanced
+    telemetry is enabled."""
     if not isinstance(model_name, str) or not model_name:
         return
     s = _state()

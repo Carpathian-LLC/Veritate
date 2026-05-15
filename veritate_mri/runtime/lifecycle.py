@@ -24,20 +24,15 @@ import threading
 import time
 
 from training import build_runner
-from training import plugin_runner
+from training import trainer_runner as plugin_runner
 from . import logs as logmod
 
 # ------------------------------------------------------------------------------------
 # Constants
 
-# Brief pause before tearing down the current process. Two purposes: the HTTP
-# response to /lifecycle/restart needs time to flush to the client, and any
-# concurrent request handlers need a beat to exit. 200ms is plenty for both
-# and keeps the perceived restart well under a second.
-DELAY_SECS    = 0.2
-# Pause between cleanup and detached relaunch. Old port releases instantly
-# under SO_REUSEADDR (Werkzeug's default), so a small fence is enough.
-RELAUNCH_GAP  = 0.1
+DELAY_SECS     = 0.2
+RELAUNCH_GAP   = 0.1
+RELAUNCH_FLAGS = ("--skip-build", "--no-browser")
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -58,7 +53,7 @@ def _detached_popen_kwargs():
         kwargs["start_new_session"] = True
     return kwargs
 
-def _cleanup(app_config, stop_plugin=False):
+def _cleanup(app_config, stop_plugin=False, stop_build=True):
     if stop_plugin:
         try:
             if plugin_runner.is_running():
@@ -66,11 +61,12 @@ def _cleanup(app_config, stop_plugin=False):
                 logmod.warn("lifecycle", "stopped active plugin run")
         except Exception as e:
             logmod.error("lifecycle", f"plugin stop: {e}")
-    try:
-        if build_runner.stop():
-            logmod.warn("lifecycle", "stopped active engine build")
-    except Exception as e:
-        logmod.error("lifecycle", f"build stop: {e}")
+    if stop_build:
+        try:
+            if build_runner.stop():
+                logmod.warn("lifecycle", "stopped active engine build")
+        except Exception as e:
+            logmod.error("lifecycle", f"build stop: {e}")
     try:
         sub = app_config.get("C_SUBPROCESS") if app_config is not None else None
         if sub is not None:
@@ -80,54 +76,42 @@ def _cleanup(app_config, stop_plugin=False):
         logmod.error("lifecycle", f"c subprocess close: {e}")
 
 
-def _do_restart(app_config, launch_cmd):
-    time.sleep(DELAY_SECS)
-    _cleanup(app_config, stop_plugin=False)
+def _relaunch(launch_cmd, mode):
+    """Shared exec-self relaunch for restart and soft_reload. mode is a label
+    for the log line; launch_cmd is mutated in place to carry RELAUNCH_FLAGS."""
     if not launch_cmd:
-        logmod.error("lifecycle", "no LAUNCH_CMD captured; cannot restart in place. "
-                                  "falling back to kill. re-run the launcher manually.")
+        logmod.error("lifecycle", f"no LAUNCH_CMD captured; cannot {mode}.")
         os._exit(2)
-    if "--skip-build" not in launch_cmd:
-        launch_cmd = launch_cmd + ["--skip-build"]
+    for flag in RELAUNCH_FLAGS:
+        if flag not in launch_cmd:
+            launch_cmd = launch_cmd + [flag]
     time.sleep(RELAUNCH_GAP)
-    logmod.warn("lifecycle", f"detached relaunch (training preserved): {' '.join(launch_cmd)}")
+    logmod.warn("lifecycle", f"{mode} (training preserved): {' '.join(launch_cmd)}")
     try:
         subprocess.Popen(launch_cmd, **_detached_popen_kwargs())
     except Exception as e:
-        logmod.error("lifecycle", f"detached relaunch failed: {e}")
+        logmod.error("lifecycle", f"{mode} failed: {e}")
         os._exit(4)
     os._exit(0)
 
 
+def _do_restart(app_config, launch_cmd):
+    time.sleep(DELAY_SECS)
+    _cleanup(app_config, stop_plugin=False, stop_build=True)
+    _relaunch(launch_cmd, "detached relaunch")
+
+
 def _do_kill(app_config):
     time.sleep(DELAY_SECS)
-    _cleanup(app_config, stop_plugin=True)
+    _cleanup(app_config, stop_plugin=True, stop_build=True)
     logmod.warn("lifecycle", "server kill requested (training stopped). exiting.")
     os._exit(0)
 
 
 def _do_soft_reload(app_config, launch_cmd):
     time.sleep(DELAY_SECS)
-    try:
-        sub = app_config.get("C_SUBPROCESS") if app_config is not None else None
-        if sub is not None:
-            sub.close()
-            logmod.ok("lifecycle", "closed c engine subprocess (training subprocess preserved)")
-    except Exception as e:
-        logmod.error("lifecycle", f"c subprocess close: {e}")
-    if not launch_cmd:
-        logmod.error("lifecycle", "no LAUNCH_CMD captured; cannot soft-reload.")
-        os._exit(2)
-    if "--skip-build" not in launch_cmd:
-        launch_cmd = launch_cmd + ["--skip-build"]
-    time.sleep(RELAUNCH_GAP)
-    logmod.warn("lifecycle", f"soft reload (training preserved): {' '.join(launch_cmd)}")
-    try:
-        subprocess.Popen(launch_cmd, **_detached_popen_kwargs())
-    except Exception as e:
-        logmod.error("lifecycle", f"soft reload failed: {e}")
-        os._exit(4)
-    os._exit(0)
+    _cleanup(app_config, stop_plugin=False, stop_build=False)
+    _relaunch(launch_cmd, "soft reload")
 
 
 def restart(app_config):

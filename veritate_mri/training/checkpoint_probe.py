@@ -61,7 +61,7 @@ GRADE_PPL_CEILING   = 32.0        # absolute sanity ceiling: above this the mode
 GRADE_BYTES     = 8192            # probe window per band; sources author at >=8 KB to give it room
 
 # smartness-meter axes beyond reading. each axis is a directory of jsonl
-# tier files under veritate_mri/grade_eval/<axis>/. tier order here drives
+# tier files under veritate_mri/data/eval/grade/<axis>/. tier order here drives
 # the dashboard ladder order.
 EVAL_ROOT       = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "grade_eval"))
 MATH_TIERS      = ["t1_arith1", "t2_arith2", "t3_algebra", "t4_word", "t5_multi"]
@@ -111,7 +111,7 @@ def _resolve_corpus(corpus_path):
         return corpus_path
     raise FileNotFoundError(
         f"memory probe corpus not found: corpus_path={corpus_path!r}. "
-        f"set the model's corpus_stem and pre-build plugins/corpus/<stem>_train.bin, "
+        f"set the model's corpus_stem and pre-build trainers/corpus/<stem>_train.bin, "
         f"or pass corpus_path= explicitly."
     )
 
@@ -389,7 +389,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
     Memory fingerprint probe runs first: builds top-k activating stories per
     (layer, neuron) from a sampled slice of corpus_path, then each per-token
     frame's memory[] is filled by _memory_lookup. Defaults to
-    plugins/corpus/tinystories_train.bin."""
+    trainers/corpus/tinystories_train.bin."""
     t0 = time.time()
     os.makedirs(out_dir, exist_ok=True)
     device = next(model.parameters()).device
@@ -805,7 +805,7 @@ def _bytes_perplexity(model, raw: bytes, device):
 @torch.no_grad()
 def dump_grades(model, out_dir: str, step: int):
     """Write grades_step_<N>.json: per-grade-band byte perplexity for any
-    available plugins/corpus/grade_<level>_eval.bin. Missing bins are skipped."""
+    available trainers/corpus/grade_<level>_eval.bin. Missing bins are skipped."""
     t0 = time.time()
     os.makedirs(out_dir, exist_ok=True)
     device = next(model.parameters()).device
@@ -896,7 +896,7 @@ def dump_grades(model, out_dir: str, step: int):
 # to cluster around 0.30-0.35 from local cues; genuine context use shows up
 # as 0.50+ on easier bands.
 #
-# Probe data lives at veritate_mri/grade_eval/comprehension_<band>.json;
+# Probe data lives at veritate_mri/data/eval/grade/comprehension_<band>.json;
 # build with veritate_mri/tools/build_comprehension_probe.py.
 
 COMPREHENSION_LEVELS = GRADE_LEVELS    # share grade ordering with the fluency tile

@@ -53,16 +53,16 @@ def test_plugin_exports_qat():
 
 
 def test_plugin_all_lists_documented_surface():
-    """veritate_core.plugin.__all__ matches the four documented modules and nothing else."""
+    """veritate_core.plugin.__all__ matches the documented surface and nothing else."""
     import veritate_core.plugin
-    assert set(veritate_core.plugin.__all__) == {"save", "paths", "model", "qat"}, \
+    assert set(veritate_core.plugin.__all__) == {"save", "paths", "model", "qat", "get_teacher_client"}, \
         "adding to __all__ requires updating documentation/plugins/contract.md"
 
 
 def test_plugins_dir_is_not_imported_via_sys_path_injection():
-    """Tests that veritate_core.plugin does NOT add plugins/ to sys.path. Plugins import
-    veritate_core.plugin; veritate_core.plugin must not silently reach back into plugins/."""
+    """Tests that veritate_core.plugin does NOT add trainers/ to sys.path. Plugins import
+    veritate_core.plugin; veritate_core.plugin must not silently reach back into trainers/."""
     import sys
     import veritate_core.plugin                # noqa: F401
-    bad = [p for p in sys.path if p.endswith("/plugins") or p.endswith("/plugins/")]
-    assert not bad, f"plugins/ leaked into sys.path: {bad}"
+    bad = [p for p in sys.path if p.endswith("/plugins") or p.endswith("/trainers/")]
+    assert not bad, f"trainers/ leaked into sys.path: {bad}"

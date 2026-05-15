@@ -11,7 +11,7 @@
 #   chosen step file is not the one currently being written by save().
 # veritate_mri/tools/sample_diverse.py
 # ------------------------------------------------------------------------------------
-# Imports
+# Imports:
 
 import argparse
 import json
@@ -25,11 +25,11 @@ import torch.nn.functional as F
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, REPO)
-sys.path.insert(0, os.path.join(REPO, "plugins", "veritate_mega"))
-sys.path.insert(0, os.path.join(REPO, "plugins", "multimind_m3"))
+sys.path.insert(0, os.path.join(REPO, "trainers", "veritate_mega"))
+sys.path.insert(0, os.path.join(REPO, "trainers", "multimind_m3"))
 
 from veritate_core.plugin import qat as qat_helpers
-from veritate_mri.addons import build_chain, list_addons
+from veritate_mri.inference.addons import build_chain, list_addons
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -116,7 +116,7 @@ def build_model_from_config(cfg, device):
 def load_state(model, ckpt_path, device):
     # Load to CPU first so we never spike VRAM with the unused optimizer state
     # that the trainer wrote to the .pt. For a 1B mega checkpoint, the
-    # optimizer dict (AdamW m + v fp32) is ~8 GB — bigger than the model
+    # optimizer dict (AdamW m + v fp32) is ~8 GB, bigger than the model
     # itself. Dropping it immediately keeps resident RAM near the model size.
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     sd = ckpt["model"]

@@ -29,9 +29,10 @@ import time
 
 import torch
 
+from readers import paths
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DATA = os.path.join(HERE, "data", "ifeval_sample.json")
+
+DEFAULT_DATA = os.path.join(paths.EVAL_SAMPLES_ROOT, "ifeval_sample.json")
 
 
 def _model_device(model) -> torch.device:
@@ -94,12 +95,6 @@ CHECKERS = {
     "json":              check_json,
     "sentence_count":    check_sentence_count,
     "forbidden_letter":  check_forbidden_letter,
-    # TODO: port the full Google IFEval ruleset:
-    # - keywords_existence, keywords_frequency, keywords_forbidden
-    # - language (detect-locale), response_length (words/sentences/paragraphs),
-    # - format_constraints (title_case, all_uppercase, json_format, markdown_format),
-    # - punctuation_no_comma, end_with, start_with, ...
-    # Each is a deterministic str -> bool. Drop them in this dict by name.
 }
 
 

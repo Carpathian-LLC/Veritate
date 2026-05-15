@@ -53,9 +53,9 @@ QAT_MODES         = ("int8", "int4", "ternary")
 CKPT_PREFIX       = "step_"
 CKPT_SUFFIX       = ".pt"
 
-# Size catalog (mirror of TRAINER_SCHEMA._TR_SIZE_PRESETS on the dashboard).
-# Trainer accepts hidden/layers/ffn/heads explicitly via args, but if the form
-# sent only --size we fall back to the catalog to fill the shape.
+# Size catalog. Used as a fallback when the form / CLI passes only --size; the
+# dashboard's per-trainer manifest.sizes blocks are the primary source. Native
+# trainer (no plugin manifest loaded) needs a self-contained table.
 SIZE_PRESETS = {
     "5m":   dict(hidden=256,  layers=6,  ffn=1024,  heads=4),
     "7m":   dict(hidden=256,  layers=8,  ffn=1024,  heads=4),
@@ -190,7 +190,7 @@ def _resolve_output_dir(args):
 
 def _resolve_corpus(args):
     """Map --corpus stem to (train_path, val_path). Continue flow may leave
-    `corpus` blank — in that case the source model's `config.json` carries the
+    `corpus` blank, in that case the source model's `config.json` carries the
     original corpus stem and we restore it (matches the plugin contract:
     "leave blank to keep the original corpus this model was trained on")."""
     if args.resume and not args.corpus:
@@ -310,7 +310,7 @@ def _parse_args():
     ap.add_argument("--qat_enabled",  action=argparse.BooleanOptionalAction, default=False)
     ap.add_argument("--quant_mode", type=str, default="int8", choices=QAT_MODES)
     # The dashboard form renders the FULL TRAINER_SCHEMA for every trainer (the
-    # schema is the source of truth — see plugins/readme.md). The native
+    # schema is the source of truth, see trainers/readme.md). The native
     # trainer ignores knobs it does not implement (MTP heads, M3 adapter, MoE
     # router, freeze_base, etc.); parse_known_args() silently drops them so a
     # user toggling, say, `freeze_base` on the form does not crash this run.
@@ -352,7 +352,7 @@ def main():
         print(f"[native] resumed from step {start_step}", flush=True)
     if start_step >= args.total_steps:
         print(f"[native] start_step ({start_step}) >= total_steps ({args.total_steps}). "
-              f"Nothing to do — bump --total_steps to continue.", flush=True)
+              f"Nothing to do, bump --total_steps to continue.", flush=True)
         return
 
     train_draw, n_train = _make_loader(args.corpus_bin, args.seq, args.batch_size, args.seed)
@@ -383,7 +383,7 @@ def main():
             _, loss = model(toks, tgts)
 
         if torch.isnan(loss) or torch.isinf(loss):
-            print(f"[native] step {step}: NaN/Inf loss — skipping", flush=True)
+            print(f"[native] step {step}: NaN/Inf loss, skipping", flush=True)
             continue
 
         loss.backward()

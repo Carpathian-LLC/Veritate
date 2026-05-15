@@ -23,6 +23,8 @@
 
 import torch
 
+from . import qat_triton as _qt
+
 INT8_MAX        = 127
 INT4_MAX        = 7
 ACT_INT8_SCALE  = 32.0
@@ -49,11 +51,17 @@ def round_ste(x):
 
 
 def fake_quant_weight(w):
-    """Per-tensor symmetric maxabs INT8. Default Veritate quant scheme."""
-    max_abs = w.detach().abs().amax().clamp_min(1e-8)
+    """Per-tensor symmetric maxabs INT8. Default Veritate quant scheme.
+    The fp32 internal precision matches the Triton kernel; the bf16-storage
+    cast at the end matches the in-place dtype of the model parameter."""
+    if _qt.triton_enabled(w):
+        return _qt.fake_quant_weight_triton(w)
+    orig = w.dtype
+    wf = w.to(torch.float32)
+    max_abs = wf.detach().abs().amax().clamp_min(1e-8)
     scale   = max_abs / INT8_MAX
-    q       = round_ste(w / scale).clamp(-INT8_MAX, INT8_MAX)
-    return q * scale
+    q       = round_ste(wf / scale).clamp(-INT8_MAX, INT8_MAX)
+    return (q * scale).to(orig)
 
 
 def fake_quant_weight_int4(w):
@@ -87,12 +95,16 @@ def fake_quant_weight_mode(w, mode):
 
 
 def fake_quant_act(x, scale=ACT_INT8_SCALE):
+    if _qt.triton_enabled(x):
+        return _qt.fake_quant_act_triton(x, scale)
     s = float(scale)
     q = round_ste(x * s).clamp(-INT8_MAX, INT8_MAX)
     return q / s
 
 
 def fake_quant_ln_weight(w, scale=LN_FIXED_SCALE):
+    if _qt.triton_enabled(w):
+        return _qt.fake_quant_ln_weight_triton(w, scale)
     s = float(scale)
     q = round_ste(w * s).clamp(-INT8_MAX, INT8_MAX)
     return q / s

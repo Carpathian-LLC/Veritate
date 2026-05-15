@@ -1,32 +1,27 @@
 # ------------------------------------------------------------------------------------
+# Developed by Carpathian, LLC.
+# ------------------------------------------------------------------------------------
+# Legal Notice: Distribution Not Authorized.
+# ------------------------------------------------------------------------------------
+# Notes:
+# - Byte-level sequence scorer. Used by every MCQ eval (MMLU, HellaSwag) to
+#   rank candidate answers.
+# - score_sequence returns mean per-byte log-likelihood (nats/byte) of
+#   completion_bytes given prompt_bytes. Length-normalized; matches lm-eval-
+#   harness acc_norm.
+# - Inputs are raw bytes; each byte is a vocab id in [0, 256).
 # veritate_mri/eval/score.py
 # ------------------------------------------------------------------------------------
-# Byte-level sequence scorer (production copy used by the MRI dashboard's deep-eval
-# panel; mirrors experiments/v2/eval_harness/score.py).
-#
-# `score_sequence(model, prompt_bytes, completion_bytes)` returns the mean per-byte
-# log-likelihood of `completion_bytes` conditioned on `prompt_bytes`. Used by every
-# multiple-choice suite (MMLU, HellaSwag, etc.) to rank candidate answers.
-#
-# Algorithm:
-#   1. Concatenate prompt + completion -> ids of length P + C.
-#   2. Run the model on the full sequence.
-#      Logit at position t predicts byte t+1.
-#   3. Take logits at positions P-1 .. P+C-2  (these predict bytes P .. P+C-1).
-#   4. log-softmax, gather at the target byte indices, sum.
-#   5. Divide by C (mean per-byte log-likelihood, units: nats/byte).
-#
-# Length-normalization is critical: longer candidates would otherwise be penalized.
-# This matches the standard `acc_norm` metric in lm-eval-harness.
-#
-# Inputs are raw `bytes`; each byte is a vocab id in [0, 256).
-# Outputs are Python floats (nats per byte; higher = more likely under the model).
-# ------------------------------------------------------------------------------------
+# Imports:
 
 from __future__ import annotations
 
 import torch
 import torch.nn.functional as F
+
+
+# ------------------------------------------------------------------------------------
+# Functions
 
 
 def _bytes_to_ids(b: bytes) -> torch.Tensor:
@@ -64,7 +59,7 @@ def score_sequence(model, prompt_bytes: bytes, completion_bytes: bytes,
     # If the prompt is empty we still need at least one context byte for the first
     # completion token to be predicted from. Convention: prepend a zero byte (NUL)
     # as a BOS-like anchor; the per-byte loss on the very first completion byte
-    # will be conditioned on NUL — a fine baseline for a byte-level LM.
+    # will be conditioned on NUL, a fine baseline for a byte-level LM.
     if P == 0:
         prompt_bytes = b"\x00"
         P = 1

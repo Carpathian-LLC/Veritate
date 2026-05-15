@@ -4,11 +4,13 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - per-layer C-vs-PyTorch divergence. loads the VRMR trace from veritate.exe trace
+# - per-layer C-vs-PyTorch divergence. loads the VRMR trace from veritate.exe
 #   and runs the same prompt through the pytorch checkpoint with hooks.
-# - emits per-layer cosine distance / rms / max-abs at residual_pre, residual_post,
-#   ffn_neurons (post-gelu).
+# - emits per-layer cosine distance / rms / max-abs at residual_pre,
+#   residual_post, ffn_neurons (post-gelu).
+# veritate_mri/tools/diff.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 import argparse
 import os
@@ -24,6 +26,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "..")))
 from veritate_core.model import Veritate
 
+
+# ------------------------------------------------------------------------------------
+# Constants
+
 VERITATE_TRACE_MAGIC   = b"VRMR"
 VERITATE_TRACE_VERSION = 8
 
@@ -38,6 +44,9 @@ HEAD_DIM = V_HIDDEN // V_HEADS
 
 ACTIVATION_INT8_SCALE = 32.0
 
+
+# ------------------------------------------------------------------------------------
+# Functions
 
 def c_trace(exe, model_bin, prompt, out_path):
     env = os.environ.copy()
@@ -205,9 +214,9 @@ def diff_traces(c, py, pos=None, scale=ACTIVATION_INT8_SCALE):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default=os.path.join(os.environ.get("LOCALAPPDATA", ""), "veritate", "veritate.exe"))
-    ap.add_argument("--bin",       default="models/tinystories-80m-fp32/veritate.bin")
-    ap.add_argument("--checkpoint",default="models/tinystories-80m-fp32/checkpoints/step_45000.pt")
+    ap.add_argument("--exe",        required=True, help="path to veritate engine binary")
+    ap.add_argument("--bin",        required=True, help="path to models/<name>/veritate.bin")
+    ap.add_argument("--checkpoint", required=True, help="path to models/<name>/checkpoints/step_<N>.pt")
     ap.add_argument("--prompt",    default="Once upon a time")
     ap.add_argument("--out",       default="c_trace.bin")
     ap.add_argument("--scale",     type=float, default=ACTIVATION_INT8_SCALE)

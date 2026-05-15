@@ -10,7 +10,7 @@
 #   ckpts and as the inference class for any RoPE-only checkpoint without an
 #   MTP head.
 # - For the variant with an MTP head (the 800M training plugin), see
-#   `plugins/veritate_800m/plugin.py::Veritate800M`. This file is the no-MTP
+#   `trainers/veritate_800m/trainer.py::Veritate800M`. This file is the no-MTP
 #   sibling; both share the same block API (`attn.qkv`, `attn.proj`, `ff.up`,
 #   `ff.down`, `n1`, `n2`) so the MRI's per-block forward hooks attach the
 #   same way.
@@ -158,18 +158,62 @@ class VeritateRoPE(nn.Module):
         self.rope_cos = cos
         self.rope_sin = sin
 
-    def embed(self, tokens):
+    def ensure_context(self, T):
+        if T > self.rope_cos.shape[0]:
+            self.extend_rope(T)
+
+    def run_blocks(self, x, start_pos=0, exit_after=None):
+        n = self.layers if exit_after is None else min(int(exit_after), self.layers)
+        for L in range(n):
+            x = self.run_block(x, L, start_pos=start_pos)
+        return x
+
+    def run_block(self, x, L, start_pos=0):
+        return self.blocks[L](x, self.rope_cos, self.rope_sin)
+
+    def project_byte0(self, residual):
+        return self.lm_head(self.n_out(residual))
+
+    def supports_mtp_decode(self):
+        return False
+
+    def embed(self, tokens, start_pos=0):
         return self.tok_emb(tokens)
+
+    def kv_cache_patch_attn(self, attn_mod, cache, get_start_pos):
+        def fwd(x, rope_cos, rope_sin):
+            B, T, C = x.shape
+            h, d = attn_mod.h, attn_mod.d
+            qkv = attn_mod.qkv(x).view(B, T, 3, h, d).permute(2, 0, 3, 1, 4)
+            q, k, v = qkv[0], qkv[1], qkv[2]
+            start = get_start_pos()
+            cos_slice = rope_cos[start:start + T].to(q.dtype)
+            sin_slice = rope_sin[start:start + T].to(q.dtype)
+            q = apply_rope(q, cos_slice, sin_slice)
+            k = apply_rope(k, cos_slice, sin_slice)
+            cache.append(k, v)
+            K, V = cache.view()
+            if T == 1:
+                out = F.scaled_dot_product_attention(q, K, V, is_causal=False)
+            else:
+                S = K.size(2)
+                abs_start = cache.length - T
+                i_idx = torch.arange(T, device=x.device).view(T, 1) + abs_start
+                j_idx = torch.arange(S, device=x.device).view(1, S)
+                mask = (j_idx <= i_idx)
+                attn_mask = torch.zeros(T, S, device=x.device, dtype=q.dtype)
+                attn_mask = attn_mask.masked_fill(~mask, float("-inf"))
+                out = F.scaled_dot_product_attention(q, K, V, attn_mask=attn_mask, is_causal=False)
+            out = out.transpose(1, 2).contiguous().view(B, T, C)
+            return attn_mod.proj(out)
+        return fwd
 
     def forward(self, tokens, targets=None):
         B, T = tokens.shape
-        if T > self.rope_cos.shape[0]:
-            self.extend_rope(T)
+        self.ensure_context(T)
         x = self.embed(tokens)
-        for blk in self.blocks:
-            x = blk(x, self.rope_cos, self.rope_sin)
-        x = self.n_out(x)
-        logits = self.lm_head(x)
+        x = self.run_blocks(x)
+        logits = self.project_byte0(x)
         loss = None
         if targets is not None:
             loss = F.cross_entropy(

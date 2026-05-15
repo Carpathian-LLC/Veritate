@@ -8,6 +8,7 @@ veritate_engine/**/bin/
 *.log
 .vscode/
 .claude/
+.claude_review/
 .venv/
 ..venv/
 venv/
@@ -20,7 +21,7 @@ c_trace_*.bin
 *.orig
 .plugin_pid.json
 .plugin_run.log
-/plugins/
+/trainers/
 data/*
 /*de.md
 .DS_Store
@@ -32,3 +33,4 @@ veritate_trace.bin
 *.vrmr
 *.tern
 .pytest_cache
+/synth_jobs/

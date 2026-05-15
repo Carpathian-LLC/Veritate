@@ -48,6 +48,9 @@ _ADAPTER_TTL = 60.0
 _LIVE_TTL = 1.0
 _NV_CACHE = (0.0, [])
 _MAC_LOAD_CACHE = (0.0, None)
+_CPU_TEMP_CACHE = (0.0, None)
+_LHM_TEMP_CACHE = (0.0, None)
+_LHM_NAMESPACE = None
 
 _INSTALLED_RAM = None  # bytes; one-shot at startup, doesn't change at runtime
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -72,7 +75,7 @@ def _nvidia_query():
         return _NV_CACHE[1]
     out = _run([
         "nvidia-smi",
-        "--query-gpu=name,utilization.gpu,memory.used,memory.total",
+        "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
         "--format=csv,noheader,nounits",
     ])
     rows = []
@@ -82,6 +85,12 @@ def _nvidia_query():
             if len(parts) < 4:
                 continue
             try:
+                temp = None
+                if len(parts) >= 5 and parts[4] not in ("", "N/A", "[N/A]"):
+                    try:
+                        temp = float(parts[4])
+                    except ValueError:
+                        temp = None
                 rows.append({
                     "name": parts[0],
                     "vendor": "NVIDIA",
@@ -89,6 +98,7 @@ def _nvidia_query():
                     "load_pct": float(parts[1]),
                     "vram_used": int(parts[2]) * 1024 * 1024,
                     "vram_total": int(parts[3]) * 1024 * 1024,
+                    "temp_c": temp,
                 })
             except ValueError:
                 continue
@@ -116,11 +126,107 @@ def _mac_adapters():
             "load_pct": None,
             "vram_used": None,
             "vram_total": None,
+            "temp_c": None,
         })
     return rows
 
 
 _IOREG_UTIL_RE = re.compile(r'"Device Utilization %"\s*=\s*(\d+)')
+
+
+def _psutil_cpu_temp():
+    """psutil.sensors_temperatures. Works on Linux (coretemp/k10temp/cpu_thermal)
+    and some macOS builds. Returns Celsius or None. Empty on Windows."""
+    if not _PSUTIL_OK or not hasattr(psutil, "sensors_temperatures"):
+        return None
+    try:
+        temps = psutil.sensors_temperatures() or {}
+    except (AttributeError, OSError):
+        return None
+    for key in ("coretemp", "k10temp", "zenpower", "cpu_thermal", "acpitz"):
+        for e in temps.get(key) or []:
+            if e.current and e.current > 0:
+                return float(e.current)
+    for entries in temps.values():
+        for e in entries or []:
+            label = (getattr(e, "label", "") or "").lower()
+            if "cpu" in label or "package" in label or "tdie" in label or "tctl" in label:
+                if e.current and e.current > 0:
+                    return float(e.current)
+    return None
+
+
+def _lhm_sensors():
+    """Query the LibreHardwareMonitor / OpenHardwareMonitor WMI namespace if
+    running. Returns dict {'cpu': float|None, 'gpus': [{'name': str, 'temp_c': float}]}
+    or None when no provider is reachable. 1s memoized. No-op off Windows."""
+    global _LHM_TEMP_CACHE, _LHM_NAMESPACE
+    if not sys.platform.startswith("win"):
+        return None
+    now = time.time()
+    if (now - _LHM_TEMP_CACHE[0]) < _LIVE_TTL:
+        return _LHM_TEMP_CACHE[1]
+    namespaces = [_LHM_NAMESPACE] if _LHM_NAMESPACE else ["root/LibreHardwareMonitor", "root/OpenHardwareMonitor"]
+    result = None
+    for ns in namespaces:
+        out = _run([
+            "powershell", "-NoProfile", "-Command",
+            f"Get-CimInstance -Namespace '{ns}' -ClassName Sensor -ErrorAction Stop | "
+            "Where-Object { $_.SensorType -eq 'Temperature' } | "
+            "Select-Object Name,Parent,Value | ConvertTo-Json -Compress",
+        ], timeout=2.0)
+        if not out or not out.strip():
+            continue
+        try:
+            blob = json.loads(out)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(blob, dict):
+            blob = [blob]
+        cpu_val = None
+        gpus = []
+        for s in blob:
+            name = (s.get("Name") or "").strip()
+            parent = (s.get("Parent") or "").lower()
+            val = s.get("Value")
+            if val is None:
+                continue
+            try:
+                val = float(val)
+            except (TypeError, ValueError):
+                continue
+            if val <= 0 or val > 150:
+                continue
+            low = name.lower()
+            if "cpu" in parent or "cpu" in low or "package" in low or "tctl" in low or "tdie" in low:
+                if cpu_val is None or (("package" in low) and val > 0):
+                    cpu_val = val
+            elif "gpu" in parent or "gpu" in low:
+                gpus.append({"name": name, "temp_c": val})
+        if cpu_val is not None or gpus:
+            _LHM_NAMESPACE = ns
+            result = {"cpu": cpu_val, "gpus": gpus}
+            break
+    _LHM_TEMP_CACHE = (now, result)
+    return result
+
+
+def _cpu_temp():
+    """Best-effort CPU package temperature in Celsius. Tries psutil first
+    (Linux/Mac); on Windows falls back to LibreHardwareMonitor / OpenHardware-
+    Monitor WMI namespaces if either daemon is running. None when unreadable.
+    1s memoized."""
+    global _CPU_TEMP_CACHE
+    now = time.time()
+    if (now - _CPU_TEMP_CACHE[0]) < _LIVE_TTL:
+        return _CPU_TEMP_CACHE[1]
+    val = _psutil_cpu_temp()
+    if val is None:
+        lhm = _lhm_sensors()
+        if lhm and lhm.get("cpu") is not None:
+            val = lhm["cpu"]
+    _CPU_TEMP_CACHE = (now, val)
+    return val
 
 
 def _mac_apple_gpu_load():
@@ -179,6 +285,7 @@ def _win_adapters():
             "load_pct": None,
             "vram_used": None,
             "vram_total": ram_int,
+            "temp_c": None,
         })
     return rows
 
@@ -212,6 +319,7 @@ def _linux_adapters():
             "load_pct": load,
             "vram_used": None,
             "vram_total": None,
+            "temp_c": None,
         })
     return rows
 
@@ -242,7 +350,7 @@ def _adapters():
 
 def _installed_ram_bytes():
     """Physical RAM installed in the machine. Differs from psutil's vm.total on
-    Windows by the hardware-reserved region (typically 0.5-1 GB) — Task Manager
+    Windows by the hardware-reserved region (typically 0.5-1 GB), Task Manager
     shows installed; psutil shows OS-visible. We use installed so HUD numbers
     match what users see. Cached forever; RAM doesn't change at runtime."""
     global _INSTALLED_RAM
@@ -281,7 +389,7 @@ def _gpus():
     """Merge cached adapter list with fresh utilization. NVIDIA cards get filled
     by nvidia-smi (cross-platform). On macOS, the integrated Apple GPU gets
     ioreg-derived load. Windows non-NVIDIA and Linux non-AMD adapters report
-    load_pct=null — vendor SDKs needed for telemetry, not worth the per-poll
+    load_pct=null, vendor SDKs needed for telemetry, not worth the per-poll
     cost."""
     adapters = [dict(a) for a in _adapters()]
     nvidia = _nvidia_query()
@@ -294,6 +402,7 @@ def _gpus():
                     a["load_pct"]   = nv["load_pct"]
                     a["vram_used"]  = nv["vram_used"]
                     a["vram_total"] = nv["vram_total"]
+                    a["temp_c"]     = nv.get("temp_c")
                     break
     if sys.platform == "darwin":
         load = _mac_apple_gpu_load()
@@ -302,6 +411,21 @@ def _gpus():
                 if "apple" in a["name"].lower() or a["integrated"]:
                     a["load_pct"] = load
                     break
+    if sys.platform.startswith("win"):
+        lhm = _lhm_sensors()
+        if lhm and lhm.get("gpus"):
+            for a in adapters:
+                if a.get("temp_c") is not None:
+                    continue
+                key = a["name"].lower()
+                for g in lhm["gpus"]:
+                    nk = g["name"].lower()
+                    if any(tok and tok in key for tok in nk.split()):
+                        a["temp_c"] = g["temp_c"]
+                        break
+                else:
+                    if lhm["gpus"]:
+                        a["temp_c"] = lhm["gpus"][0]["temp_c"]
     return adapters
 
 
@@ -313,6 +437,7 @@ def snapshot():
             "available": False,
             "reason": "psutil not installed (pip install psutil)",
             "cpu_pct": None, "rss_bytes": None, "sys_mem_total": None,
+            "cpu_temp_c": None,
             "gpus": [],
         }
     cpu_pct = _PROC.cpu_percent(None)
@@ -323,6 +448,7 @@ def snapshot():
         "available": True,
         "cpu_pct":          round(cpu_pct, 1),
         "cpu_count":        _CPU_COUNT,
+        "cpu_temp_c":       _cpu_temp(),
         "rss_bytes":        int(rss),
         "sys_mem_total":      int(installed),
         "sys_mem_total_os":   int(vm.total),
@@ -334,9 +460,7 @@ def snapshot():
 
 
 # ------------------------------------------------------------------------------------
-# Saved system spec file. Captured on demand from the settings UI; future
-# features compare requirements against the user's machine without re-running
-# the (slow) adapter discovery commands. Lives under data/, gitignored.
+# Saved system spec file. Captured on demand from settings; lives under data/.
 
 SPECS_PATH = os.path.join(REPO_ROOT, "data", "system_specs.json")
 

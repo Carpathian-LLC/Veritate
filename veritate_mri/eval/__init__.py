@@ -4,7 +4,7 @@
 # Byte-level eval harness, in-tree copy that the MRI dashboard drives at runtime.
 #
 # This is the *production* path (the dashboard's "deep eval" panel imports from here).
-# The development sandbox lives at experiments/v2/eval_harness/ and stays untouched —
+# The development sandbox lives at experiments/v2/eval_harness/ and stays untouched , 
 # changes flow from there into this directory once they're ready to ship.
 #
 # Standard eval harnesses (lm-eval-harness, Eleuther's) assume a tokenized model and

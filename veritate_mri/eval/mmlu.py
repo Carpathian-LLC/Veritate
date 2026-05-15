@@ -1,29 +1,18 @@
 # ------------------------------------------------------------------------------------
+# Developed by Carpathian, LLC.
+# ------------------------------------------------------------------------------------
+# Legal Notice: Distribution Not Authorized.
+# ------------------------------------------------------------------------------------
+# Notes:
+# - MMLU byte-level evaluation. 4-way MCQ over 57 academic subjects.
+# - For each question: build 4 (prompt, completion) pairs, score via
+#   score_sequence, predict highest-scoring choice. Two modes:
+#     "letter": completion = " A" / " B" / " C" / " D"  (cheap baseline)
+#     "text":   completion = " <answer text>"           (semantic)
+# - Sample data ships ~20 questions; pass --mmlu-data for full benchmark.
 # veritate_mri/eval/mmlu.py
 # ------------------------------------------------------------------------------------
-# MMLU (Massive Multitask Language Understanding) byte-level evaluation.
-#
-# For each question we build 4 (prompt, completion) pairs — one per choice A/B/C/D —
-# score them with `score_sequence`, and predict the highest-scoring choice. Two
-# scoring conventions are supported:
-#   - "letter":   completion = " A" / " B" / " C" / " D"      (cheap, common baseline)
-#   - "text":     completion = " <answer text>"                (uses semantic content)
-# Both are reported; "text" is the metric people care about (it forces the model to
-# actually understand the answer, not just letter biases).
-#
-# Data format (`mmlu_sample.json`):
-#   {
-#     "questions": [
-#       {"subject": "...", "question": "...",
-#        "choices": ["A_text","B_text","C_text","D_text"], "answer": 0..3},
-#       ...
-#     ]
-#   }
-#
-# The repo ships ~20 hand-picked sample questions for the smoke test. To run on the
-# full ~14k-question benchmark, download the official MMLU release (see README.md)
-# and pass `data_path=path/to/mmlu_full.json` (or `--mmlu-data` on the CLI).
-# ------------------------------------------------------------------------------------
+# Imports:
 
 from __future__ import annotations
 
@@ -32,13 +21,21 @@ import os
 import time
 from collections import defaultdict
 
+from readers import paths
+
 from .score import score_sequence
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DATA = os.path.join(HERE, "data", "mmlu_sample.json")
+# ------------------------------------------------------------------------------------
+# Constants
+
+DEFAULT_DATA = os.path.join(paths.EVAL_SAMPLES_ROOT, "mmlu_sample.json")
 
 LETTERS = ["A", "B", "C", "D"]
+
+
+# ------------------------------------------------------------------------------------
+# Functions
 
 
 def _format_prompt(question: str, choices: list[str]) -> str:
@@ -56,7 +53,7 @@ def run_mmlu(model, data_path: str = DEFAULT_DATA, mode: str = "text",
     """Run MMLU. `mode` is "letter", "text", or "both" (returns both metrics).
 
     `progress_cb`, if supplied, is called as `progress_cb(i, n, item_dict)` after
-    each question — used by the dashboard to surface live progress.
+    each question, used by the dashboard to surface live progress.
     """
     if not os.path.isfile(data_path):
         raise FileNotFoundError(

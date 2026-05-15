@@ -6,17 +6,17 @@ This is a versioned contract. Adding, removing, or changing the signature of any
 
 ## scope
 
-A plugin is a script + manifest under `plugins/<name>/`. The platform exposes a small set of helpers for the things every plugin needs to do consistently: name a model, hash its corpus, write a checkpoint, log a training row, find paths on disk. Everything specific to the plugin's job (the model, the optimizer, the training loop) is the plugin's own.
+A plugin is a script + manifest under `trainers/<name>/`. The platform exposes a small set of helpers for the things every plugin needs to do consistently: name a model, hash its corpus, write a checkpoint, log a training row, find paths on disk. Everything specific to the plugin's job (the model, the optimizer, the training loop) is the plugin's own.
 
 ## import path
 
 Plugins import the surface from `veritate_core.plugin`:
 
 ```python
-from veritate_core.plugin import save, paths, model, qat
+from veritate_core.plugin import save, paths, model, qat, get_teacher_client
 ```
 
-`save`, `paths`, `model`, and `qat` are the namespaces in this contract. Nothing else in the parent repo is callable from a plugin.
+`save`, `paths`, `model`, and `qat` are the namespaces in this contract. `get_teacher_client` is a helper that returns a configured teacher-model `Client` (provider-agnostic API or local) for distillation, or `None` if no teacher provider is set in settings. Nothing else in the parent repo is callable from a plugin.
 
 ## save
 
@@ -81,7 +81,7 @@ Returns the trimmed description, or raises `ValueError` if it's empty or non-str
 
 ### `save.resolve_corpus(stem) -> (str, str | None)`
 
-Returns `(train_path, val_path)` for a corpus stem. Searches the shared corpus folder (`plugins/corpus/`) and the calling plugin's bundled corpus folder (`plugins/<id>/corpus/`). Raises `FileNotFoundError` if no train file exists. `val_path` is `None` if there's no val file.
+Returns `(train_path, val_path)` for a corpus stem. Searches the shared corpus folder (`trainers/corpus/`) and the calling plugin's bundled corpus folder (`trainers/<id>/corpus/`). Raises `FileNotFoundError` if no train file exists. `val_path` is `None` if there's no val file.
 
 ## model
 
@@ -159,15 +159,15 @@ Recursively set `.qat = bool(value)` on every submodule that has the attribute. 
 | `paths.hooks_dir(name)` | `models/<name>/hooks/` |
 | `paths.hook_step_dir(name, step)` | `models/<name>/hooks/step_<N>/` |
 | `paths.hook_artifact_path(name, step, artifact)` | path to one of the dump files (`"probe"`, `"lens"`, `"classroom"`, `"grades"`, `"concepts"`, `"surprise"`, `"quant_kl"`, `"generation"`) |
-| `paths.corpus_dir()` | `plugins/corpus/` |
-| `paths.corpus_train_path(stem)` | `plugins/corpus/<stem>_train.bin` |
-| `paths.corpus_val_path(stem)` | `plugins/corpus/<stem>_val.bin` |
+| `paths.corpus_dir()` | `trainers/corpus/` |
+| `paths.corpus_train_path(stem)` | `trainers/corpus/<stem>_train.bin` |
+| `paths.corpus_val_path(stem)` | `trainers/corpus/<stem>_val.bin` |
 
 Plugins should not assemble these paths themselves. If the platform reorganizes the layout, every plugin breaks unless they all go through `paths.*`.
 
 ## manifest format
 
-Every plugin ships a `manifest.json` next to its `plugin.py`. The dashboard reads it to render the trainer form; the plugin's own `parse_args` reads it to bootstrap `argparse` defaults.
+Every trainer ships a `manifest.json` next to its `trainer.py`. The dashboard reads it to render the trainer form; the trainer's own `parse_args` reads it to bootstrap `argparse` defaults.
 
 ### top-level shape
 
@@ -424,4 +424,4 @@ Adding, removing, or renaming any function or field above requires:
 1. The implementation in `veritate_mri/training/save.py` or `veritate_mri/readers/paths.py` is updated.
 2. The re-export in `veritate_core/plugin/__init__.py` is updated.
 3. This file's table is updated in the same commit.
-4. Any plugin shipped with the platform (`plugins/multimind_m3/`, etc.) is updated and verified in the same commit.
+4. Any plugin shipped with the platform (`trainers/multimind_m3/`, etc.) is updated and verified in the same commit.

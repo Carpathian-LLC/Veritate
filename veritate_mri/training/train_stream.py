@@ -23,6 +23,10 @@ QUEUE_MAX        = 256
 SUBSCRIBER_LOCK  = threading.Lock()
 SUBSCRIBERS      = []
 
+# Wakeup period for subscribe()'s blocking get. Lets the route emit a keepalive
+# and lets generator close drain the queue when the client disconnects.
+SUBSCRIBE_TICK_S = 15.0
+
 # ------------------------------------------------------------------------------------
 # Functions
 
@@ -41,13 +45,19 @@ def publish(payload):
 
 def subscribe():
     """Generator: registers a fresh queue, yields each payload as it arrives.
-    Always unregisters on generator close."""
+    Yields None on each SUBSCRIBE_TICK_S timeout so the SSE route can emit a
+    keepalive comment and so a disconnected client's GeneratorExit fires
+    promptly (rather than blocking forever in q.get())."""
     q = queue.Queue(maxsize=QUEUE_MAX)
     with SUBSCRIBER_LOCK:
         SUBSCRIBERS.append(q)
     try:
         while True:
-            payload = q.get()
+            try:
+                payload = q.get(timeout=SUBSCRIBE_TICK_S)
+            except queue.Empty:
+                yield None
+                continue
             yield payload
     finally:
         with SUBSCRIBER_LOCK:

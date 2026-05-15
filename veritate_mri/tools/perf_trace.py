@@ -4,11 +4,13 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - one-shot harness. spawns chat_traced, runs a fixed 16-token generation, captures
-#   per-frame timing from c_engine.CTracedSubprocess.last_trace, prints the breakdown
-#   and writes docs/PERF_TRACE_RESULTS.md. no flask, no mri json, no browser.
-# - usage: py mri/server/perf_trace.py [--exe path] [--model path] [--max-new N]
+# - one-shot harness. spawns chat_traced, runs a fixed 16-token generation,
+#   captures per-frame timing from c_engine.CTracedSubprocess.last_trace,
+#   prints the breakdown. no flask, no mri json, no browser.
+# - usage: py veritate_mri/tools/perf_trace.py [--exe path] [--model path] [--max-new N]
+# veritate_mri/tools/perf_trace.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 import argparse
 import glob
@@ -19,10 +21,13 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
-sys.path.insert(0, os.path.join(HERE, "..", "backends"))
+sys.path.insert(0, os.path.join(HERE, "..", "inference", "backends"))
 
 from c_engine import CTracedSubprocess, FRAME_PAYLOAD_BYTES
 
+
+# ------------------------------------------------------------------------------------
+# Functions
 
 def _percentile(values, p):
     if not values: return 0.0
@@ -139,7 +144,7 @@ def render_markdown(result, agg, exe, model, prompt):
     lines.append("## per-stage stats (ms)")
     lines.append("")
     lines.append("> **read pipe** blocks on the engine, so it includes engine compute + pipe transfer.")
-    lines.append("> **engine inter-frame** is the gap between consecutive `_read_exact` start calls — near zero")
+    lines.append("> **engine inter-frame** is the gap between consecutive `_read_exact` start calls, near zero")
     lines.append("> because Python re-enters the read loop immediately after parse.")
     lines.append("")
     lines.append("| stage              |   avg |   p50 |   p99 |   min |   max |")
@@ -175,13 +180,13 @@ def render_markdown(result, agg, exe, model, prompt):
     parse_p50 = agg["parse"]["p50"]
     lines.append("## top-3 wins (ranked by ms saved per token, p50)")
     lines.append("")
-    lines.append(f"1. **shrink the frame payload** — current {agg['frame_size_bytes'] / 1024:.0f} KB / token. "
+    lines.append(f"1. **shrink the frame payload**, current {agg['frame_size_bytes'] / 1024:.0f} KB / token. "
                  f"FFN neurons (36 KB) + attention floats (147 KB) + lens logits (12 KB) dominate. "
                  f"Switching attention from f32 -> u8 (or downsampling to top-k) saves ~{pipe_overhead_p50 * 0.7:.2f} ms p50 by cutting bytes-on-pipe.")
-    lines.append(f"2. **parse frame in one shot** — current {parse_p50:.3f} ms p50 from many `np.frombuffer` calls "
+    lines.append(f"2. **parse frame in one shot**, current {parse_p50:.3f} ms p50 from many `np.frombuffer` calls "
                  f"with per-call dtype dispatch. A single structured-dtype view over the whole payload (or a flat memcpy "
                  f"into a pre-allocated buffer) saves ~{max(0.0, parse_p50 - 0.02):.3f} ms p50.")
-    lines.append(f"3. **read full frame in one syscall** — current `_read_exact` loops {1 + (FRAME_PAYLOAD_BYTES // 65536) + 1} times "
+    lines.append(f"3. **read full frame in one syscall**, current `_read_exact` loops {1 + (FRAME_PAYLOAD_BYTES // 65536) + 1} times "
                  f"on a 64 KB pipe buffer. Increasing the engine's stdout buffer via `setvbuf` + a single big `read()` "
                  f"saves ~0.1-0.3 ms p50 from per-chunk overhead.")
     lines.append("")
@@ -197,7 +202,7 @@ def render_markdown(result, agg, exe, model, prompt):
     lines.append("")
     lines.append("Conclusion: the user's 4 ms/byte browser wall is mostly the **prefill on frame 0** smeared")
     lines.append("across 16 tokens (41 ms / 16 = ~2.6 ms/token contribution). Steady-state per-token is ~1.6 ms.")
-    lines.append("Flask/SSE/WS/render sit on top of that but are NOT the dominant cost — pipe + numpy parse is.")
+    lines.append("Flask/SSE/WS/render sit on top of that but are NOT the dominant cost, pipe + numpy parse is.")
     lines.append("")
     return "\n".join(lines)
 
@@ -211,7 +216,7 @@ def main():
     ap.add_argument("--top-k", type=int, default=40)
     ap.add_argument("--max-new", type=int, default=16)
     ap.add_argument("--warmup", type=int, default=1)
-    ap.add_argument("--out", default=os.path.join(ROOT, "docs", "PERF_TRACE_RESULTS.md"))
+    ap.add_argument("--out", default=os.path.join(ROOT, "models", "perf_trace_results.md"))
     args = ap.parse_args()
 
     exe = _resolve_exe(args.exe)

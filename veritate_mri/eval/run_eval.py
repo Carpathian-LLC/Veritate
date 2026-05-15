@@ -47,41 +47,9 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 
-def _shape_from_state_dict(sd, cfg):
-    vocab, hidden = sd["tok_emb.weight"].shape
-    if "pos_emb.weight" in sd:
-        seq = sd["pos_emb.weight"].shape[0]
-    else:
-        seq = int(cfg.get("seq") or 0)
-        if seq <= 0:
-            raise RuntimeError(
-                "No pos_emb.weight in checkpoint and no seq in cfg/args. "
-                "RoPE-based checkpoints must record `seq` in training_args."
-            )
-    layers = 1 + max(int(k.split(".")[1]) for k in sd if k.startswith("blocks."))
-    ffn_per_layer = [sd[f"blocks.{L}.ff.up.weight"].shape[0] for L in range(layers)]
-    ffn = ffn_per_layer[0] if all(f == ffn_per_layer[0] for f in ffn_per_layer) else ffn_per_layer
-    heads = int(cfg.get("heads") or 0)
-    if heads <= 0 or hidden % heads != 0:
-        target = max(1, hidden // 64)
-        for h in sorted({d for d in range(1, hidden + 1) if hidden % d == 0},
-                        key=lambda d: (abs(d - target), -d)):
-            heads = h
-            break
-    return {"vocab": vocab, "hidden": hidden, "layers": layers,
-            "ffn": ffn, "heads": heads, "seq": seq}
-
-
-def _is_800m(sd):
-    return "pos_emb.weight" not in sd and any(k.startswith("mtp.transforms.") for k in sd)
-
-
-def _is_rope_only(sd):
-    return "pos_emb.weight" not in sd and not any(k.startswith("mtp.transforms.") for k in sd)
-
-
 def load_checkpoint(ckpt_path: str, device: str = "cpu"):
     """Load any Veritate-family ckpt onto `device` and return a model in eval() mode."""
+    from veritate_core.load import load_from_state_dict, shape_from_state_dict
     s = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     cfg = dict(s.get("args", {}))
     sd = s["model"]
@@ -91,34 +59,8 @@ def load_checkpoint(ckpt_path: str, device: str = "cpu"):
             "Checkpoint has no tok_emb.weight; non-vanilla architectures (MoE etc.) "
             "are not supported by this eval harness."
         )
-    shape = _shape_from_state_dict(sd, cfg)
-
-    if _is_800m(sd):
-        plugin_dir = os.path.join(REPO_ROOT, "plugins", "veritate_800m")
-        if plugin_dir not in sys.path:
-            sys.path.insert(0, plugin_dir)
-        from plugin import Veritate800M  # type: ignore
-        n_predict = int(cfg.get("n_predict") or 4)
-        rope_base = float(cfg.get("rope_base") or 10000.0)
-        model = Veritate800M(
-            vocab=shape["vocab"], hidden=shape["hidden"], layers=shape["layers"],
-            ffn=shape["ffn"], heads=shape["heads"], seq=shape["seq"],
-            n_predict=n_predict, rope_base=rope_base,
-        )
-        model.load_state_dict(sd, strict=False)
-    elif _is_rope_only(sd):
-        from experiments.v2.rope_85m.model_rope85m import VeritateRoPE85M
-        model = VeritateRoPE85M(
-            vocab=shape["vocab"], hidden=shape["hidden"], layers=shape["layers"],
-            ffn=shape["ffn"] if isinstance(shape["ffn"], int) else shape["ffn"][0],
-            heads=shape["heads"], seq=shape["seq"],
-        )
-        model.load_state_dict(sd, strict=False)
-    else:
-        from veritate_core.model import Veritate
-        model = Veritate(**shape)
-        model.load_state_dict(sd, strict=True)
-
+    shape = shape_from_state_dict(sd, cfg)
+    model = load_from_state_dict(sd, cfg)
     del sd
     model.to(device).eval()
     return model, cfg, shape

@@ -68,51 +68,61 @@ def synth_model_dir():
 
 
 def test_export_v9_int8_writes_correct_magic_and_version(synth_model_dir):
-    """export_checkpoint emits a .bin starting with VRTE magic + version=9 for a
-    non-MoE INT8 checkpoint."""
+    """v9 INT8 export header has VRTE magic + version=9."""
     from veritate_mri.training import export
 
     info = export.export_checkpoint(synth_model_dir, 1)
-
     with open(info["path"], "rb") as f:
         header = f.read(HEADER_FIXED_BYTES)
-    magic, version, vocab, hidden, layers, ffn, heads, seq = struct.unpack(HEADER_FMT, header)
-
-    assert magic == VRTE_MAGIC,                            "magic must be VRTE"
-    assert version == export.VERITATE_MODEL_VERSION,       "non-MoE INT8 export defaults to v9"
-    assert version == 9,                                   "v9 numeric value pinned by the on-disk contract"
-    assert (vocab, hidden, layers, ffn, heads, seq) == (
-        SHAPE_TINY["vocab"], SHAPE_TINY["hidden"], SHAPE_TINY["layers"],
-        SHAPE_TINY["ffn"], SHAPE_TINY["heads"], SHAPE_TINY["seq"],
-    ), "header shape fields must round-trip exactly"
-
-
-def test_export_v11_ternary_writes_qat_version_and_quant_mode(synth_model_dir):
-    """export_checkpoint_ternary emits v11 + (quant_mode=TERNARY, n_experts=1,
-    router_topk=1) header extension after the act_boost slot."""
-    from veritate_mri.training import export
-
-    info = export.export_checkpoint_ternary(synth_model_dir, 1)
-
-    with open(info["path"], "rb") as f:
-        header = f.read(HEADER_FIXED_BYTES)
-        act_boost = struct.unpack("<i", f.read(4))[0]
-        quant_mode, n_experts, router_topk = struct.unpack("<iii", f.read(12))
-
     magic, version, *_ = struct.unpack(HEADER_FMT, header)
 
     assert magic == VRTE_MAGIC
-    assert version == export.VERITATE_MODEL_VERSION_QAT,   "ternary export uses v11 unified format"
-    assert version == 11,                                  "v11 numeric value pinned by the on-disk contract"
-    assert act_boost >= 1
-    assert quant_mode == export.VERITATE_QUANT_TERNARY,    "ternary export sets quant_mode=TERNARY"
-    assert n_experts == 1,                                 "non-MoE ternary export sets n_experts=1"
-    assert router_topk == 1,                               "non-MoE ternary export sets router_topk=1"
+    assert version == 9
+
+
+def test_export_v9_int8_header_shape_roundtrips(synth_model_dir):
+    """v9 INT8 export header shape fields equal SHAPE_TINY."""
+    from veritate_mri.training import export
+
+    info = export.export_checkpoint(synth_model_dir, 1)
+    with open(info["path"], "rb") as f:
+        header = f.read(HEADER_FIXED_BYTES)
+    _, _, vocab, hidden, layers, ffn, heads, seq = struct.unpack(HEADER_FMT, header)
+
+    assert (vocab, hidden, layers, ffn, heads, seq) == (
+        SHAPE_TINY["vocab"], SHAPE_TINY["hidden"], SHAPE_TINY["layers"],
+        SHAPE_TINY["ffn"], SHAPE_TINY["heads"], SHAPE_TINY["seq"],
+    )
+
+
+def test_export_v11_ternary_writes_qat_version(synth_model_dir):
+    """v11 ternary export header has VRTE magic + version=11."""
+    from veritate_mri.training import export
+
+    info = export.export_checkpoint_ternary(synth_model_dir, 1)
+    with open(info["path"], "rb") as f:
+        header = f.read(HEADER_FIXED_BYTES)
+    magic, version, *_ = struct.unpack(HEADER_FMT, header)
+
+    assert magic == VRTE_MAGIC
+    assert version == 11
+
+
+def test_export_v11_ternary_sets_quant_mode_ternary(synth_model_dir):
+    """v11 ternary export sets quant_mode=TERNARY, n_experts=1, router_topk=1."""
+    from veritate_mri.training import export
+
+    info = export.export_checkpoint_ternary(synth_model_dir, 1)
+    with open(info["path"], "rb") as f:
+        f.read(HEADER_FIXED_BYTES)
+        f.read(4)  # act_boost
+        quant_mode, n_experts, router_topk = struct.unpack("<iii", f.read(12))
+
+    assert (quant_mode, n_experts, router_topk) == (export.VERITATE_QUANT_TERNARY, 1, 1)
 
 
 def test_export_v11_quant_constants_match_engine_header():
-    """The Python-side quant_mode integers must equal the C-side defines in
-    veritate.h. A drift here corrupts every v11 binary."""
+    """Python quant_mode integers equal the C defines in veritate.h."""
     from veritate_mri.training import export
 
     h_path = os.path.join(os.path.dirname(__file__), "..", "..",

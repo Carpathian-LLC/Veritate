@@ -18,26 +18,17 @@ from . import paths
 # ------------------------------------------------------------------------------------
 # Constants
 
-# Two accepted shapes:
-#   (legacy) <corpus>_<size>_<precision>_<version>[_<variant>] — kept so existing
-#            models like "fineweb_edu_800m_bf16_v1" still validate.
-#   (new)    <user_slug>_<size> — the user picks any slug; the form auto-appends
-#            <size> (e.g. "chatty_otter_85m"). Spec details (corpus, precision,
-#            version, variant) move into the description.
-# Size token: <digits><m|b>[optional digits], so 85m, 1b, 1b3 (1.3B), 1b5 all pass.
-NAME_RE_LEGACY = re.compile(
-    r"^[a-z0-9]+(?:_[a-z0-9]+)*_[0-9]+[mb][0-9]*_[a-z0-9]+_v[0-9]+[a-z]?(?:_[a-z][a-z0-9]*)?$"
-)
-NAME_RE_USER = re.compile(
-    r"^[a-z0-9]+(?:_[a-z0-9]+)*_[0-9]+[mb][0-9]*$"
-)
+# Names must be filesystem-safe: lowercase letters, digits, and underscores
+# only; no leading or trailing underscore; at least one char. Anything else
+# (size tokens, version tags, corpus prefixes) is descriptive and lives in
+# config.json, not in the directory name.
+NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_]*[a-z0-9])?$")
 
 # ------------------------------------------------------------------------------------
 # Functions
 
 def is_valid_name(name):
-    n = name or ""
-    return bool(NAME_RE_USER.match(n) or NAME_RE_LEGACY.match(n))
+    return bool(NAME_RE.match(name or ""))
 
 
 def slugify_user_name(text):

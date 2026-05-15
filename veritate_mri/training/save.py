@@ -237,7 +237,7 @@ def truncate_train_csv_at(name, resume_step):
 
     Called by plugin trainers immediately after loading a checkpoint, BEFORE
     the training loop starts. Resuming from step_<N>.pt means everything that
-    was logged after step N never made it to disk — those rows are stale and
+    was logged after step N never made it to disk, those rows are stale and
     will be retrained, producing different loss values. Leaving them in place
     creates duplicate step numbers that confuse the dashboard's loss curve and
     training-health widget.
@@ -352,7 +352,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     # loss), the partial file is named step_N.pt.tmp and is invisible to the
     # `step_*.pt` parser in every plugin's latest_checkpoint_step. Without
     # this, a partial step_N.pt would be picked as the resume target and crash
-    # torch.load on next start — or worse, silently misload.
+    # torch.load on next start, or worse, silently misload.
     tmp_path = ckpt_path + ".tmp"
     torch.save(state, tmp_path)
     os.replace(tmp_path, ckpt_path)
@@ -361,7 +361,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     # The dump suite walks a canonical Veritate. Non-canonical models (MoE,
     # multimind sidecars) expose a hook_spec() that returns a canonical-shaped
     # adapter; canonical models return self. Plain nn.Modules that haven't
-    # opted in fall back to themselves and may fail mid-dump — that's fine,
+    # opted in fall back to themselves and may fail mid-dump, that's fine,
     # the per-dump try/except below logs and continues.
     view = model.hook_spec() if hasattr(model, "hook_spec") else model
 
@@ -393,7 +393,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
             logmod.error("save", (
                 f"generation dump skipped: corpus stem {corpus_stem!r} resolves to "
                 f"{corpus_path!r} which does not exist. expected a prepped bin at "
-                f"plugins/corpus/{corpus_stem}_train.bin."
+                f"trainers/corpus/{corpus_stem}_train.bin."
             ))
             skip.add("generation")
     dumps = [

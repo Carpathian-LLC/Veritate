@@ -1,6 +1,7 @@
 # veritate_mri
 
-The MRI server. Hosts the dashboard, runs the two inference backends, and is the only entry point users invoke.
+The MRI server: dashboard host, two inference backends, and the only entry
+point into the platform.
 
 ## what runs where
 
@@ -24,30 +25,40 @@ veritate_mri/
     perf_trace.py     per-stage timing capture.
     build_memory.py   neuron-memory probe builder.
   static/
-    index.html        the dashboard. three tabs: Generation, Learning, Live Training.
-  logs/               in-memory build and runtime status. moved here from repo root.
+    index.html        dashboard. three tabs: Generation, Learning, Live Training.
+  logs/               in-memory build and runtime status.
   readme.md           this file.
 ```
 
 ## data flow
 
-A dashboard request lands at `app.py`. The route hands the model name to the matching reader. The reader resolves the path via `readers/paths.py`, parses the artifact, returns a Python dict. The route serializes JSON back to the frontend. No glob, no path string, no file open lives outside `readers/`.
+A dashboard request lands at `app.py`. The route hands the model name to the
+matching reader. The reader resolves the path via `readers/paths.py`, parses
+the artifact, returns a Python dict. The route serializes JSON back to the
+frontend. No glob, no path string, no file open lives outside `readers/`.
 
-The two backends are wired into `app.py` once at startup:
+The two backends wire into `app.py` at startup:
 
-- `BRAIN` is a PyTorch `Brain` instance loaded from the model the user picked at launch (`models/<name>/checkpoints/step_<N>.pt`). It serves `/generate?backend=pytorch` and `/neuron/...`.
-- `C_SUBPROCESS` is a `CTracedSubprocess` running `veritate.exe chat_traced` against `models/<name>/veritate.bin`. It serves `/generate?backend=c`. If the binary for the current OS+arch is absent the subprocess is `None` and the C backend is disabled in the dashboard.
+- `BRAIN` is a PyTorch `Brain` instance loaded from the active model
+  (`models/<name>/checkpoints/step_<N>.pt`). Serves `/generate?backend=pytorch`
+  and `/neuron/...`.
+- `C_SUBPROCESS` is a `CTracedSubprocess` running `veritate.exe chat_traced`
+  against `models/<name>/veritate.bin`. Serves `/generate?backend=c`. When the
+  binary for the host OS+arch is absent the subprocess is `None` and the C
+  backend is disabled in the dashboard.
 
 ## adding a new artifact
 
-Per the project rule "no ad-hoc code anywhere": every artifact has exactly one reader.
+One artifact, one reader.
 
-1. Add the file name and parser kind to `readers/paths.py::HOOK_ARTIFACTS` (or write a sibling reader if it lives outside `hooks/`).
+1. Add the file name and parser kind to `readers/paths.py::HOOK_ARTIFACTS`
+   (or write a sibling reader for non-`hooks/` artifacts).
 2. Update `documentation/hooks/contract.md` to list the new field set.
 3. Add a render path in the dashboard.
 
-No route, backend, or tool touches paths directly. Layout changes are localized to `readers/paths.py`.
+Layout changes are localized to `readers/paths.py`.
 
 ## adding a new route
 
-Routes are thin. Read inputs from `request`, ask one or more readers for parsed data, return JSON. No file system, no parsing. About 5 to 20 lines per route.
+Routes are thin: read inputs from `request`, ask one or more readers for
+parsed data, return JSON. No file system, no parsing. 5 to 20 lines per route.

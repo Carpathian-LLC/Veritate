@@ -86,7 +86,7 @@ void ternary_unpack_row(const uint8_t* bytes, int32_t k, int8_t* out_trits);
 
 `dispatch_init` selects the best available implementation at startup. Function-pointer aliases are not exposed at this stage (the matmul_int8 path remains the primary interface for non-ternary models). Models that flag ternary weights call the prep_ternary path explicitly through `model.c::forward_decode` once the MoE block lands.
 
-Future bump (phase D in `docs/c_engine_ternary_moe_tracking.md`) will add a `quant_mode` field to the model header and route through the dispatch table per-block based on that field.
+A future bump will add a `quant_mode` field to the model header and route through the dispatch table per-block based on that field.
 
 # ------------------------------------------------------------------------------------
 # Memory budget

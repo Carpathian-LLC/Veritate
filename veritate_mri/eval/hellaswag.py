@@ -1,23 +1,18 @@
 # ------------------------------------------------------------------------------------
+# Developed by Carpathian, LLC.
+# ------------------------------------------------------------------------------------
+# Legal Notice: Distribution Not Authorized.
+# ------------------------------------------------------------------------------------
+# Notes:
+# - HellaSwag byte-level evaluation. 4-way MCQ: pick the ending whose
+#   (context + ending) scores highest under score_sequence.
+# - Data format (hellaswag_sample.json):
+#     {"items": [{"ctx": "...", "endings": ["e0","e1","e2","e3"],
+#                 "label": 0..3, "activity": "..."}, ...]}
+# - Full val set (~10k items) lives on HuggingFace; see README.md.
 # veritate_mri/eval/hellaswag.py
 # ------------------------------------------------------------------------------------
-# HellaSwag byte-level evaluation.
-#
-# HellaSwag asks "given this context, which of these 4 endings is the natural next
-# sentence?" Three of the endings are adversarial distractors (machine-generated and
-# human-filtered to be plausible-but-wrong). The eval is byte-level identical to
-# MMLU's text-mode: score `context + ending` for each candidate, pick the highest.
-#
-# Data format (`hellaswag_sample.json`):
-#   {
-#     "items": [
-#       {"ctx": "...", "endings": ["e0","e1","e2","e3"], "label": 0..3, "activity": "..."},
-#       ...
-#     ]
-#   }
-#
-# The full HellaSwag val set (~10k items) lives on HuggingFace; see README.md.
-# ------------------------------------------------------------------------------------
+# Imports:
 
 from __future__ import annotations
 
@@ -25,11 +20,19 @@ import json
 import os
 import time
 
+from readers import paths
+
 from .score import score_sequence
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DATA = os.path.join(HERE, "data", "hellaswag_sample.json")
+# ------------------------------------------------------------------------------------
+# Constants
+
+DEFAULT_DATA = os.path.join(paths.EVAL_SAMPLES_ROOT, "hellaswag_sample.json")
+
+
+# ------------------------------------------------------------------------------------
+# Functions
 
 
 def run_hellaswag(model, data_path: str = DEFAULT_DATA,
