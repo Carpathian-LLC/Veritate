@@ -96,6 +96,14 @@ def _read_bin_shape(path):
     magic, version, vocab, hidden, layers, ffn, heads, seq = struct.unpack(HEADER_FMT, hdr)
     if magic != VERITATE_MODEL_MAGIC:
         raise RuntimeError(f"veritate.bin bad magic {magic!r}: {path}")
+    # Pre-empt the one genuinely retired version with a clear message; for
+    # everything else, defer to the C engine's actual dispatch (model.c).
+    if int(version) == 10:
+        raise RuntimeError(
+            f"veritate.bin v10 is retired (assigned twice on different branches "
+            f"during the v11 merge). Re-export from the latest .pt checkpoint. "
+            f"Path: {path}"
+        )
     return {
         "version": int(version),
         "vocab":   int(vocab),
@@ -156,11 +164,12 @@ class CTracedSubprocess:
         env = os.environ.copy()
         if self.model_path:
             env["VERITATE_MODEL_PATH"] = self.model_path
-        # Let the engine load act_boost>1 models. Default-deny was too strict
-        # for the dashboard's iterative workflow: users want to chat with a
-        # partially-QAT-trained model and see the gibberish. The warning is
-        # surfaced by the UI's act_boost badge, not by blocking the load.
-        env.setdefault("VERITATE_ALLOW_HIGH_ACT_BOOST", "1")
+        # Let the engine load act_boost>1 models. The engine's act_boost>1 refusal
+        # is a magnitude heuristic; QAT-trained checkpoints can still produce
+        # act_boost>1 when embeddings are small. The authoritative QAT signal lives
+        # in config.json training_args.qat_enabled; the dashboard checks it. Force
+        # the bypass here (not setdefault) so a parent-shell "0" cannot override.
+        env["VERITATE_ALLOW_HIGH_ACT_BOOST"] = "1"
         # VERITATE_ADDONS=<csv> is inherited from the parent env automatically
         # via os.environ.copy(). set it before starting the MRI server to
         # enable engine-side addons. per-request addon selection from the
@@ -173,16 +182,30 @@ class CTracedSubprocess:
             env=env,
             creationflags=_NO_WINDOW,
         )
-        line = self.proc.stderr.readline()
-        if not line.strip().startswith(b"ready"):
+        # Engine may print warnings (e.g. "model_load: act_boost=...") to stderr
+        # before "ready". Drain lines until "ready" arrives, the process dies,
+        # or a bounded prelude budget is exceeded.
+        warnings = []
+        ready = False
+        for _ in range(16):
+            line = self.proc.stderr.readline()
+            if not line:
+                break
+            if line.strip().startswith(b"ready"):
+                ready = True
+                break
+            warnings.append(line.strip())
+        if not ready:
             # kill before draining: a refusal that doesn't exit (random-fallback
             # branch in chat_traced_loop) leaves stderr open, so stderr.read()
             # would block forever waiting for EOF.
             try: self.proc.kill()
             except Exception: pass
-            try: err = self.proc.stderr.read()
-            except Exception: err = b""
-            raise RuntimeError(f"chat_traced not ready: {line!r} {err!r}")
+            try: tail = self.proc.stderr.read()
+            except Exception: tail = b""
+            raise RuntimeError(f"chat_traced not ready: {warnings!r} {tail!r}")
+        for w in warnings:
+            logmod.warn("c engine", w.decode("latin-1", "replace"))
 
     def _ensure_alive(self):
         if self.proc is None or self.proc.poll() is not None:

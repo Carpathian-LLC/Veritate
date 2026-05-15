@@ -39,6 +39,11 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 PYTORCH_ALLOC_ENV_KEY     = "PYTORCH_CUDA_ALLOC_CONF"
 PYTORCH_ALLOC_ENV_DEFAULT = "expandable_segments:True"
 
+# Mirror of save.PLUGIN_ID_ENV. Duplicated to avoid pulling save.py into the
+# runner's import graph (save.py imports torch lazily; the runner runs in
+# the parent process and shouldn't pay that cost).
+PLUGIN_ID_ENV = "VERITATE_PLUGIN_ID"
+
 _LOCK = threading.Lock()
 _STATE = {
     "status":      STATUS_IDLE,
@@ -262,6 +267,9 @@ def _run(plugin, args):
          started_at=time.time(), finished_at=None, exit_code=None)
     env = os.environ.copy()
     env.setdefault(PYTORCH_ALLOC_ENV_KEY, PYTORCH_ALLOC_ENV_DEFAULT)
+    # Tell save() which trainer is writing so it can route capability updates
+    # to the right tier. See readers/capabilities.py + save._sync_capabilities.
+    env[PLUGIN_ID_ENV] = str(plugin["id"])
     try:
         log_fp = open(RUN_LOG_FILE, "w", encoding="utf-8", buffering=1)
     except Exception as e:

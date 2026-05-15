@@ -1261,6 +1261,7 @@ function setMeta(m) {
     <span class="stat">heads <b>${m.heads}</b></span>
     <span class="stat">ffn <b>${m.ffn}</b></span>
   `;
+  if (typeof _applyModeAvailability === "function") _applyModeAvailability();
 }
 
 // ---- addons ----
@@ -1303,9 +1304,90 @@ function _esc(s) {
 }
 const EMPTY_PALE = "color:var(--warm);font-style:italic;padding:6px 4px";
 
+// Mode tiers must match readers/capabilities.py::TIERS. The picker enables
+// only tiers the loaded model has been trained for.
+const GEN_MODE_TIERS = ["autocomplete", "chat", "agent"];
+const GEN_MODE_DEFAULT = "autocomplete";
+
 function _genMode() {
   const r = document.querySelector('input[name="genMode"]:checked');
-  return r ? r.value : "chat";
+  return r ? r.value : GEN_MODE_DEFAULT;
+}
+
+// Pull the active-backend's capabilities block out of /meta. Falls back to
+// the legacy block (autocomplete trained only) when the field is absent so
+// older servers still render a usable picker.
+function _activeCapabilities() {
+  const m = meta || {};
+  const backend = ($("backend") || { value: "c" }).value;
+  if (backend === "pytorch") return m.pytorch_capabilities || _legacyCaps();
+  return m.c_model_capabilities || _legacyCaps();
+}
+
+function _legacyCaps() {
+  return {
+    autocomplete: { status: "trained" },
+    chat:         { status: "untrained" },
+    agent:        { status: "untrained" },
+  };
+}
+
+function _highestTrainedTier(caps) {
+  for (let i = GEN_MODE_TIERS.length - 1; i >= 0; i--) {
+    const t = GEN_MODE_TIERS[i];
+    if (caps && caps[t] && caps[t].status === "trained") return t;
+  }
+  return null;
+}
+
+const TIER_NEEDS = { chat: "chat SFT", agent: "tool SFT" };
+
+function _tierTooltip(tier, entry) {
+  const status  = (entry && entry.status) || "untrained";
+  const tag     = entry && entry.trainer ? ` (${entry.trainer}@${entry.step || "?"})` : "";
+  if (status === "trained") {
+    if (tier === "autocomplete") return "autocomplete: any byte-level model";
+    return `${tier}: trained${tag}`;
+  }
+  if (status === "in_progress") return `${tier}: ${TIER_NEEDS[tier] || "training"} in progress${tag}`;
+  if (status === "failed")      return `${tier}: ${TIER_NEEDS[tier] || "training"} failed${tag}`;
+  return tier === "autocomplete"
+    ? "autocomplete: not trained yet"
+    : `${tier}: needs ${TIER_NEEDS[tier] || "training"}`;
+}
+
+function _applyModeAvailability() {
+  const caps = _activeCapabilities();
+  const labels = document.querySelectorAll('#modeRow label[data-tier]');
+  let firstAvailable = null;
+  let checkedTier = null;
+  labels.forEach(lab => {
+    const tier  = lab.dataset.tier;
+    const input = lab.querySelector('input[name="genMode"]');
+    if (!input) return;
+    const entry = (caps && caps[tier]) || { status: "untrained" };
+    const trained = entry.status === "trained";
+    input.disabled = !trained;
+    lab.style.opacity = trained ? "" : "0.45";
+    lab.style.cursor  = trained ? "" : "not-allowed";
+    // Disabled inputs swallow pointer events, so the tooltip lives on BOTH
+    // the label (catches hovers over the text) and the input (catches the
+    // radio dot, which the browser still routes to the input).
+    const tip = _tierTooltip(tier, entry);
+    lab.title   = tip;
+    input.title = tip;
+    if (trained && firstAvailable === null) firstAvailable = tier;
+    if (input.checked) checkedTier = tier;
+  });
+  const checked = document.querySelector('input[name="genMode"]:checked');
+  if (checked && checked.disabled) {
+    const next = firstAvailable || GEN_MODE_DEFAULT;
+    const pick = document.querySelector(`input[name="genMode"][value="${next}"]`);
+    if (pick) { pick.checked = true; applyGenMode(); }
+  } else if (checked === null && firstAvailable) {
+    const pick = document.querySelector(`input[name="genMode"][value="${firstAvailable}"]`);
+    if (pick) pick.checked = true;
+  }
 }
 
 function resetRagPanel() {
@@ -1356,6 +1438,27 @@ function showAgentEmpty(reason) {
   const meta = $("agentPanelMeta"); if (meta) meta.textContent = "—";
 }
 
+// ---- ChatML framing (documentation/corpus/framing.md) ----
+// Frames are literal byte sequences the chat-trained model learned in SFT.
+// vocab=256, so these are just bytes, not special tokens.
+const CHATML_IM_START = "<|im_start|>";
+const CHATML_IM_END   = "<|im_end|>";
+const CHATML_EOT      = "<|endoftext|>";
+function wrapChatML(prompt) {
+  return `${CHATML_IM_START}user\n${prompt}${CHATML_IM_END}\n${CHATML_IM_START}assistant\n`;
+}
+function stripChatMLResponse(text) {
+  // Trim everything from the first <|im_end|> or <|endoftext|> onward.
+  // Defensive against the model emitting a stray <|im_start|> next-turn header.
+  const cuts = [CHATML_IM_END, CHATML_EOT, `${CHATML_IM_START}user`, `${CHATML_IM_START}tool`];
+  let cut = text.length;
+  for (const m of cuts) {
+    const i = text.indexOf(m);
+    if (i >= 0 && i < cut) cut = i;
+  }
+  return text.slice(0, cut).replace(/\s+$/, "");
+}
+
 // ---- chat history (localStorage) ----
 const CHAT_KEY = "veritate_chat_history_v1";
 function loadChatHistory() {
@@ -1398,25 +1501,32 @@ function clearChatHistory() {
 // ---- mode toggle wiring ----
 function applyGenMode() {
   const mode = _genMode();
-  const isChat = (mode === "chat");
+  const isConversational = (mode === "chat" || mode === "agent");
+  const isAgent = (mode === "agent");
   const chat = $("chatHistory");
-  if (chat && !isChat) chat.style.display = "none";
+  if (chat) chat.style.display = isConversational ? "" : "none";
   const agentRow = $("agentRow");
-  if (agentRow) agentRow.style.display = isChat ? "" : "none";
+  if (agentRow) agentRow.style.display = isAgent ? "" : "none";
   const agentPanel = $("agentPanel");
-  if (agentPanel && !isChat) agentPanel.style.display = "none";
+  if (agentPanel && !isAgent) agentPanel.style.display = "none";
   const promptBox = $("prompt");
   if (promptBox) {
-    promptBox.placeholder = isChat
+    promptBox.placeholder = isConversational
       ? 'Ask a question, e.g. "what is the Eiffel Tower\'s height?"'
       : "Start a sentence, the model finishes it…";
-    promptBox.rows = isChat ? 2 : 3;
+    promptBox.rows = isConversational ? 2 : 3;
   }
   const hint = $("promptModeHint");
-  if (hint) hint.textContent = isChat
-    ? "ask the model a question. answers go in the conversation below."
-    : "type the start of a sentence. the model autocompletes byte-by-byte.";
-  if (isChat) renderChatHistory();
+  if (hint) {
+    if (isAgent) {
+      hint.textContent = "ask the model to use a tool. responses run through a ReAct loop.";
+    } else if (mode === "chat") {
+      hint.textContent = "ask the model a question. answers go in the conversation below.";
+    } else {
+      hint.textContent = "type the start of a sentence. the model autocompletes byte-by-byte.";
+    }
+  }
+  if (isConversational) renderChatHistory();
 }
 document.querySelectorAll('input[name="genMode"]').forEach(r => {
   r.addEventListener("change", applyGenMode);
@@ -1586,13 +1696,19 @@ const _GenThink = (() => {
     e.style.display = "none";
     state = "idle";
   }
-  function showError(msg) {
+  function showError(msg, actionsHtml) {
     el = $("genThinking"); if (!el) return;
     _clearTimers();
     el.classList.remove("fading");
     el.classList.add("error");
     el.style.display = "";
-    el.textContent = msg || "generation failed";
+    if (actionsHtml) {
+      const safe = (msg || "generation failed").replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+      el.innerHTML = `${safe} ${actionsHtml}`;
+      if (typeof _wireCEngineActions === "function") _wireCEngineActions(el);
+    } else {
+      el.textContent = msg || "generation failed";
+    }
     state = "error";
   }
   function clearError() {
@@ -1624,12 +1740,12 @@ $("go").addEventListener("click", async () => {
 
   const backend = $("backend").value;
 
-  // Auto-load the PyTorch backend if it isn't loaded yet. Chat mode always
-  // uses BRAIN (agent loop); complete mode uses it only when backend=pytorch.
-  // The idle watcher may have unloaded it, or the user may never have
-  // explicitly loaded it. Use the model currently selected in the picker;
-  // fall back to whatever the server picks via "auto".
-  const needsBrain = (_genMode() === "chat") || (backend === "pytorch");
+  // Auto-load the PyTorch backend if it isn't loaded yet. Agent mode always
+  // uses BRAIN (ReAct loop); autocomplete / chat use it only when
+  // backend=pytorch. The idle watcher may have unloaded it, or the user may
+  // never have explicitly loaded it. Use the model currently selected in the
+  // picker; fall back to whatever the server picks via "auto".
+  const needsBrain = (_genMode() === "agent") || (backend === "pytorch");
   if (needsBrain) {
     await _pollBackends();
     if (!backendsState.pytorch.loaded) {
@@ -1677,16 +1793,17 @@ $("go").addEventListener("click", async () => {
   }
   const ragStatEl = $("ragStat"); if (ragStatEl) ragStatEl.textContent = ragCorpus ? "indexing..." : "";
 
-  // Mode: chat with tools (agent loop) or plain text completion
+  // Mode: agent (tool-use, requires tool SFT) or chat / autocomplete (both go
+  // through /generate; chat just adds the conversation panel and history).
   const mode = _genMode();
   resetAgentPanel();
-  if (mode === "chat") {
+  if (mode === "agent") {
     pushChatMessage("you", prompt);
     const checkedTools = Array.from(document.querySelectorAll(".agentTool"))
       .filter(cb => cb.checked).map(cb => cb.dataset.tool);
     if (checkedTools.length === 0) {
-      // chat with no tools selected — still readable in history, but warn
-      showAgentEmpty("No tools selected. Check one in Advanced → tools to let the model use them, or switch to autocomplete mode.");
+      // agent with no tools selected — still readable in history, but warn
+      showAgentEmpty("No tools selected. Check one in Advanced → tools to let the model use them, or switch to chat / autocomplete mode.");
     } else {
       const fsRoot = (($("agentFsRoot") || { value: "" }).value || "").trim();
       const maxT = parseInt(($("agentMaxTurns") || { value: "6" }).value, 10) || 6;
@@ -1697,12 +1814,18 @@ $("go").addEventListener("click", async () => {
       const aurl = `/agent/stream?prompt=${encodeURIComponent(prompt)}&temperature=${temp}&top_k=${topk}&max_turns=${maxT}&best_of_n=${bon}${corpusQ}${fsQ}${toolsQ}`;
       evtSrc = new EventSource(aurl);
       let agentGotAnswer = false;
+      // Set when the server's data stream ends cleanly (answer or stop event).
+      // Flask closes the SSE connection after the generator returns, which
+      // fires EventSource.onerror; without this flag, onerror would overwrite
+      // the real end-of-loop message with a misleading transport error.
+      let agentStreamEnded = false;
       evtSrc.onmessage = (e) => {
         if (!e.data) return;
         const ev = JSON.parse(e.data);
         appendAgentEvent(ev);
         if (ev.kind === "answer") {
           agentGotAnswer = true;
+          agentStreamEnded = true;
           generatedBytes = Array.from(new TextEncoder().encode(ev.text));
           _GenThink.showText(promptBytes, generatedBytes, false);
           renderResponse();
@@ -1712,29 +1835,31 @@ $("go").addEventListener("click", async () => {
           _GenThink.showError(ev.message || "stream error");
         }
         if (ev.kind === "stop") {
+          agentStreamEnded = true;
           // Agent loop ran but never emitted an answer — the underlying model
           // likely isn't agent-trained (its outputs don't parse into Thought/
           // Action/Answer). Tell the user instead of leaving them blank.
           if (!agentGotAnswer) {
             const reason = ev.reason ? ` (${ev.reason})` : "";
-            _GenThink.showError(`Agent loop ended without an answer${reason}. This model isn't agent-trained — switch to autocomplete mode.`);
+            _GenThink.showError(`Agent loop ended without an answer${reason}. This model is not tool-SFT trained: switch to chat or autocomplete mode.`);
           }
           _resetGenButton();
         }
       };
       evtSrc.addEventListener("stop", () => {
+        agentStreamEnded = true;
         evtSrc?.close(); evtSrc = null;
         if (!agentGotAnswer) {
-          _GenThink.showError("Agent loop ended without an answer. Switch to autocomplete mode.");
+          _GenThink.showError("Agent loop ended without an answer. Switch to chat or autocomplete mode.");
         }
         _resetGenButton();
       });
       evtSrc.onerror = () => {
         try { evtSrc.close(); } catch (_) {}
         evtSrc = null;
-        // If nothing visible was produced, surface that as an error so the
-        // user isn't left staring at a vanished spinner.
-        if (generatedBytes.length === 0) {
+        // Only surface a transport error if the stream never reached a
+        // graceful end. A clean server-side close also fires onerror.
+        if (!agentStreamEnded && generatedBytes.length === 0) {
           _GenThink.showError("agent stream failed — re-check backend/model selection");
           _pollBackends();
         }
@@ -1744,7 +1869,11 @@ $("go").addEventListener("click", async () => {
     }
   }
 
-  const url = `/generate?prompt=${encodeURIComponent(prompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}${ragParam}`;
+  if (mode === "chat") pushChatMessage("you", prompt);
+  // ChatML wrap for chat mode so a chat-SFT model recognizes the frame it
+  // learned. Autocomplete mode sends the raw prompt.
+  const wirePrompt = (mode === "chat") ? wrapChatML(prompt) : prompt;
+  const url = `/generate?prompt=${encodeURIComponent(wirePrompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}${ragParam}`;
   evtSrc = new EventSource(url);
   const t0 = performance.now();
   evtSrc.onmessage = (e) => {
@@ -1764,7 +1893,8 @@ $("go").addEventListener("click", async () => {
       // backend signaled an error mid-stream (e.g., c-engine pipe desync,
       // pytorch oom). surface it instead of silently hanging.
       const msg = ev.message || "(no message)";
-      _GenThink.showError(msg);
+      const actions = (backend === "c" && /not loaded|engine/i.test(msg)) ? _cEngineActionsHtml() : "";
+      _GenThink.showError(msg, actions);
       try { evtSrc.close(); } catch (_) {}
       evtSrc = null;
       _resetGenButton();
@@ -1833,6 +1963,13 @@ $("go").addEventListener("click", async () => {
     _resetGenButton();
     live = false; renderResponse();
     setReplayMode("ready");
+    if (mode === "chat" && generatedBytes.length > 0) {
+      try {
+        const raw   = new TextDecoder("utf-8", { fatal: false }).decode(Uint8Array.from(generatedBytes));
+        const clean = stripChatMLResponse(raw);
+        if (clean) pushChatMessage("model", clean);
+      } catch (_) {}
+    }
   });
   evtSrc.onerror = () => {
     evtSrc?.close(); evtSrc = null;
@@ -1840,7 +1977,12 @@ $("go").addEventListener("click", async () => {
     // HTTP error before the stream opened (503 = backend not loaded, etc.).
     // EventSource doesn't expose the status, so surface a hint and re-poll.
     if (frames.length === 0 && generatedBytes.length === 0) {
-      _GenThink.showError("generation stream failed — re-check backend/model selection");
+      const cNotLoaded = (backend === "c") && !(backendsState.c && backendsState.c.loaded);
+      const msg = cNotLoaded
+        ? "C engine not loaded."
+        : "generation stream failed — re-check backend/model selection";
+      const actions = cNotLoaded ? _cEngineActionsHtml() : "";
+      _GenThink.showError(msg, actions);
       _pollBackends();
     }
     _resetGenButton();
@@ -2007,13 +2149,15 @@ const _cModelMeta = {};
 
 function _qatWarningFor(opt) {
   if (!opt) return "";
+  const qat = opt.dataset.qatEnabled === "1";
+  if (qat) return "";
   const v = parseInt(opt.dataset.binVersion || "0", 10);
   if (v && v < 9) {
     return "pre-v9 binary. no INT8/QAT metadata. output may be incoherent if the model was not QAT-trained.";
   }
   const boost = opt.dataset.actBoost === "" ? null : parseInt(opt.dataset.actBoost, 10);
   if (boost !== null && !Number.isNaN(boost) && boost > 1) {
-    return `model not QAT-refined (act_boost=${boost}). embeddings fall below INT8 resolution. output may be incoherent.`;
+    return `not QAT-trained (act_boost=${boost}). output may be incoherent on the C engine.`;
   }
   return "";
 }
@@ -2103,6 +2247,7 @@ function refreshCModels() {
       o.textContent = `[${prec}${train}] ${m.name}`;
       o.dataset.binVersion = String(m.bin_version || 0);
       o.dataset.actBoost   = (m.act_boost === null || m.act_boost === undefined) ? "" : String(m.act_boost);
+      o.dataset.qatEnabled = m.qat_enabled ? "1" : "0";
       o.dataset.training   = m.training || "";
       if (m.is_current) o.selected = true;
       sel.appendChild(o);
@@ -2188,6 +2333,9 @@ function postPytorchSwap(name, step) {
 }
 
 $("backend").addEventListener("change", applyBackendUI);
+$("backend").addEventListener("change", () => {
+  if (typeof _applyModeAvailability === "function") _applyModeAvailability();
+});
 
 // "follow latest" — poll /c-models every 15s; if a fresher mtime than what's
 // active appears, switch automatically. lets new training exports go live with
@@ -2270,7 +2418,12 @@ const _GenPrefs = (() => {
       else el.value = p[id];
     }
     if (p.genMode) {
-      const r = document.querySelector(`input[name=genMode][value="${p.genMode}"]`);
+      // Migrate pre-tier-rename values: old "chat" was the tool-use agent
+      // flow; old "complete" was autocomplete. New picker is
+      // autocomplete / chat / agent.
+      const legacy = { "complete": "autocomplete" };
+      const v = legacy[p.genMode] || p.genMode;
+      const r = document.querySelector(`input[name=genMode][value="${v}"]`);
       if (r) r.checked = true;
     }
     if (Array.isArray(p.agentTools)) {
@@ -3250,14 +3403,43 @@ async function loadRunsList() {
       sel.value = (withRows ? withRows.name : trainRuns[0].name);
     }
     trainSelectedRun = sel.value || null;
+    _updateRunCapBadges();
   } catch (e) {
     sel.innerHTML = `<option value="">- load failed -</option>`;
     $("runCsvStatus").textContent = "runs error: " + e.message;
   }
 }
 
+// Capability summary line. Tier label is white; status word is green when
+// trained, red otherwise (untrained / in_progress / failed). Trainer + step
+// suffix is dim when present so the user can trace who set the state.
+function _renderCapBadges(hostId, caps) {
+  const host = $(hostId);
+  if (!host) return;
+  if (!caps || typeof caps !== "object") { host.innerHTML = ""; return; }
+  const tiers = ["autocomplete", "chat", "agent"];
+  const parts = tiers.map(t => {
+    const entry = caps[t] || { status: "untrained" };
+    const statusColor = entry.status === "trained" ? "var(--data-pos)" : "var(--hot)";
+    let suffix = "";
+    if (entry.trainer && entry.step != null) {
+      suffix = ` <span style="color:var(--dim)">(${_esc(entry.trainer)} @${_esc(String(entry.step))})</span>`;
+    } else if (entry.trainer) {
+      suffix = ` <span style="color:var(--dim)">(${_esc(entry.trainer)})</span>`;
+    }
+    return `<span class="stat" style="color:var(--text)">${_esc(t)}: <b style="color:${statusColor}">${_esc(entry.status)}</b>${suffix}</span>`;
+  });
+  host.innerHTML = parts.join("");
+}
+
+function _updateRunCapBadges() {
+  const run = (trainRuns || []).find(r => r && r.name === trainSelectedRun);
+  _renderCapBadges("runCapBadges", run && run.capabilities);
+}
+
 async function loadTrainCsv() {
   if (!trainSelectedRun) return;
+  _updateRunCapBadges();
   try {
     const url = `/run/${encodeURIComponent(trainSelectedRun)}/csv?` + Date.now();
     const r = await fetch(url, { cache: "no-store" });
@@ -3282,6 +3464,7 @@ document.addEventListener("DOMContentLoaded", () => {
     trainLastText = null;
     loadTrainCsv();
     loadClassroomForRun(trainSelectedRun);
+    _updateRunCapBadges();
   });
   const btn = document.getElementById("runRefresh");
   if (btn) btn.addEventListener("click", async () => {
@@ -6450,11 +6633,95 @@ function _renderBackendState() {
   // C backend pre-build-7 used to refuse non-QAT models; now it loads them
   // anyway with VERITATE_ALLOW_HIGH_ACT_BOOST=1 and the UI surfaces an
   // act_boost warning via the bin picker badge. No hard block here.
-  const err = backendsState.lastError ? ` <span style="color:var(--hot)">${backendsState.lastError}</span>` : "";
-  lbl.innerHTML = (s.loaded
-    ? `<b style="color:var(--data-pos)">ready</b>`
-    : `<b style="color:var(--dim)">not loaded</b>`) + err;
+  const errRaw = backendsState.lastError || "";
+  const failed = !s.loaded && !!errRaw;
+  const cActions = (which === "c" && !s.loaded) ? ` ${_cEngineActionsHtml()}` : "";
+  let head;
+  if (s.loaded) {
+    head = `<b style="color:var(--data-pos)">ready</b>`;
+  } else if (failed) {
+    head = `<b style="color:var(--hot)">load failed:</b> <span style="color:var(--hot)">${errRaw}</span>`;
+  } else {
+    head = `<b style="color:var(--dim)">not loaded</b>`;
+  }
+  lbl.innerHTML = head + cActions;
+  if (cActions) _wireCEngineActions(lbl);
   _applyGenerateGate();
+}
+
+// Single inline action surfaced wherever the C engine reports "not loaded".
+// Triggers POST /engine/build and replaces the host message with the outcome
+// when the build settles. The host element passes itself in via _wireCEngineActions
+// so the same action works in the backend-state label and the generate-error overlay.
+function _cEngineActionsHtml() {
+  return `<a href="#" data-c-engine-action="rebuild" style="color:var(--accent);margin-left:6px">rebuild</a>`;
+}
+
+function _wireCEngineActions(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-c-engine-action='rebuild']").forEach(a => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      _cEngineRebuild(root);
+    });
+  });
+}
+
+function _cEngineRebuild(host) {
+  if (host) host.innerHTML = `<span class="spinner"></span> <b style="color:var(--warm)">rebuilding engine&hellip;</b>`;
+  backendsState.lastError = "";
+  backendsState.busy = true;
+  // force:true tells the server to bypass the stale-skip and always run a fresh
+  // compile. Users click rebuild because they want a rebuild, not a cache hit.
+  return fetch("/engine/build", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force: true }),
+  })
+    .then(r => r.ok ? r.json().catch(() => ({})) : r.text().then(t => { throw new Error(t || `http ${r.status}`); }))
+    .then(() => _waitUntilCEngineSettled(host))
+    .catch(err => _cEngineRebuildFailed(host, String(err && err.message || err)));
+}
+
+function _waitUntilCEngineSettled(host, deadlineMs) {
+  const end = deadlineMs || (Date.now() + 10 * 60 * 1000);
+  const tick = () => fetch("/engine/status").then(r => r.json()).then(s => {
+    const status = (s && s.status) || "idle";
+    if (status === "building") {
+      if (Date.now() > end) { _cEngineRebuildFailed(host, "build timed out"); return; }
+      setTimeout(tick, 1500); return;
+    }
+    if (status === "failed") {
+      _cEngineRebuildFailed(host, (s && s.error) || "build failed");
+      return;
+    }
+    // Build is done (ok / idle / "binary already present"). Spawn the c subprocess
+    // so the dashboard reflects a real loaded state, not a stale "not loaded".
+    backendsState.busy = false;
+    if (host) host.innerHTML = `<span class="spinner"></span> <b style="color:var(--warm)">loading engine&hellip;</b>`;
+    _toggleBackend("c", "load").then(() => {
+      const cs = backendsState.c || {};
+      if (cs.loaded) {
+        if (host === $("genThinking") && typeof _GenThink !== "undefined") _GenThink.clearError();
+        else _renderBackendState();
+      } else {
+        _cEngineRebuildFailed(host, backendsState.lastError || "engine did not load after build");
+      }
+    });
+  }).catch(err => _cEngineRebuildFailed(host, String(err && err.message || err)));
+  tick();
+}
+
+function _cEngineRebuildFailed(host, msg) {
+  backendsState.busy = false;
+  const safe = (msg || "rebuild failed").replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  if (host) {
+    host.innerHTML = `<b style="color:var(--hot)">rebuild failed:</b> ${safe} ${_cEngineActionsHtml()}`;
+    _wireCEngineActions(host);
+  } else {
+    backendsState.lastError = `rebuild failed: ${msg}`;
+    _renderBackendState();
+  }
 }
 
 function _applyGenerateGate() {
@@ -6774,8 +7041,8 @@ const TRAINER_SCHEMA = {
     { name: "batch_size",   type: "int",   required: true,   label: "batch size",               help: "rows processed per step. Higher = faster wall-clock and smoother gradients but more VRAM." },
     { name: "seq",          type: "int",   required: true,   label: "sequence length",          help: "bytes of context the model sees per row. Bigger = more per-step learning + more VRAM (linear in attention here, quadratic without flash-attn)." },
     { name: "n_chunks",     type: "int",                     label: "TBPTT chunks per step",    help: "more bytes per step; doesn't change VRAM (that's bptt_window)." },
-    { name: "base_lr",      type: "float",                   label: "learning rate (peak)",     help: "the highest LR the cosine schedule ramps up to. typical 1e-4 to 5e-4. higher = faster, riskier." },
-    { name: "min_lr",       type: "float",                   label: "learning rate (floor)",    help: "the lowest LR the schedule decays to. typical 1e-5." },
+    { name: "base_lr",      type: "float",                   label: "learning rate peak (base_lr)",   help: "base_lr: the highest LR the schedule ramps up to. typical 1e-4 to 5e-4. must be >= min_lr." },
+    { name: "min_lr",       type: "float",                   label: "learning rate floor (min_lr)",   help: "min_lr: the lowest LR the schedule decays to. typical 1e-5 to 1e-6. must be <= base_lr." },
     { name: "warmup_steps", type: "int",                     label: "warmup steps",             help: "slower ramp from 0 to peak LR." },
     { name: "lr_schedule",  type: "str",                     label: "lr schedule",              help: "cosine smooth decay, linear straight, constant flat, wsd warmup-stable-decay.", choices: ["cosine","linear","constant","wsd"] },
     { name: "weight_decay", type: "float",                   label: "weight decay",             help: "stronger = more regularization." },
@@ -6837,8 +7104,8 @@ const TRAINER_SCHEMA = {
     { name: "total_steps",  type: "int",                        label: "total training steps",  help: "extend or shorten the run." },
     { name: "batch_size",   type: "int",                        label: "batch size",            help: "higher = faster, more VRAM." },
     { name: "n_chunks",     type: "int",                        label: "TBPTT chunks per step", help: "more bytes per step; doesn't change VRAM." },
-    { name: "base_lr",      type: "float",                      label: "learning rate (peak)",  help: "the highest LR the cosine schedule ramps up to. lower this for fine-tuning. typical 1e-4." },
-    { name: "min_lr",       type: "float",                      label: "learning rate (floor)", help: "the lowest LR the schedule decays to. typical 1e-5." },
+    { name: "base_lr",      type: "float",                      label: "learning rate peak (base_lr)",   help: "base_lr: the highest LR the schedule ramps up to. lower this for fine-tuning. typical 1e-4. must be >= min_lr." },
+    { name: "min_lr",       type: "float",                      label: "learning rate floor (min_lr)",   help: "min_lr: the lowest LR the schedule decays to. typical 1e-5 to 1e-6. must be <= base_lr." },
     { name: "warmup_steps", type: "int",                        label: "warmup steps",          help: "usually irrelevant on resume." },
     { name: "lr_schedule",  type: "str",                        label: "lr schedule",           help: "cosine smooth, linear straight, constant flat, wsd warmup-stable-decay.", choices: ["cosine","linear","constant","wsd"] },
     { name: "weight_decay", type: "float",                      label: "weight decay",          help: "stronger = more regularization." },
@@ -7245,15 +7512,15 @@ function _trUpdateCorpusMeta() {
     const matchLabel = nMatches === 0
       ? '<span style="color:var(--dim)">no models trained on this corpus yet</span>'
       : `<span style="color:var(--data-pos)">shared with ${nMatches} model${nMatches === 1 ? "" : "s"}</span>: ${(d.models || []).map(m => _trEsc(m.name)).join(", ")}`;
-    let html = `<div style="color:var(--text);margin-bottom:4px">about this training data file</div>`;
-    html += `<div><b>training file</b> &mdash; ${_trEsc(stem)}_train.bin &middot; ${_trFmtBytes(tr.bytes)} &middot; fingerprint <span style="color:var(--accent)">${_trEsc(tr.sha256.substring(0, 12))}</span> &middot; saved ${_trFmtAge(tr.mtime)}</div>`;
+    let html = `<div style="color:var(--text);margin-bottom:4px">corpus</div>`;
+    html += `<div><b>train</b> ${_trEsc(stem)}_train.bin &middot; ${_trFmtBytes(tr.bytes)} &middot; <span style="color:var(--accent)">${_trEsc(tr.sha256.substring(0, 12))}</span> &middot; ${_trFmtAge(tr.mtime)}</div>`;
     if (va) {
-      html += `<div><b>validation file</b> &mdash; ${_trEsc(stem)}_val.bin &middot; ${_trFmtBytes(va.bytes)} &middot; fingerprint <span style="color:var(--accent)">${_trEsc(va.sha256.substring(0, 12))}</span> &middot; saved ${_trFmtAge(va.mtime)}</div>`;
+      html += `<div><b>val</b> ${_trEsc(stem)}_val.bin &middot; ${_trFmtBytes(va.bytes)} &middot; <span style="color:var(--accent)">${_trEsc(va.sha256.substring(0, 12))}</span> &middot; ${_trFmtAge(va.mtime)}</div>`;
     } else {
-      html += `<div style="color:var(--warm)"><b>validation file</b> &mdash; none on disk (the trainer will skip val loss)</div>`;
+      html += `<div style="color:var(--warm)"><b>val</b> none on disk &middot; val loss skipped</div>`;
     }
     html += `<div style="margin-top:4px">${matchLabel}</div>`;
-    html += `<div style="margin-top:4px;font-family:inherit;color:var(--dim)">the fingerprint (sha256) is recorded in the new model's config so two models can be compared honestly: same fingerprint = same training data, byte-for-byte.</div>`;
+    html += `<div title="sha256 of the .bin file. Recorded in config.json so two models can be compared on the exact same data." style="margin-top:4px;color:var(--dim);font-size:10px">fingerprint = sha256 (hover)</div>`;
     box.innerHTML = html;
     box.dataset.loaded = "1";
   }).catch(e => {
@@ -7649,8 +7916,7 @@ function _trRenderForkButton() {
   const wrap = document.createElement("div");
   wrap.style.cssText = "margin-top:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap";
   wrap.innerHTML = `
-    <button type="button" class="action train-fork-btn" style="font-size:10.5px;padding:2px 8px">fork to new model</button>
-    <span class="meta train-fork-hint" style="font-size:10px;color:var(--dim)">copies the latest checkpoint into a new model dir so you can train it on a different corpus.</span>
+    <button type="button" class="action train-fork-btn" style="font-size:10.5px;padding:2px 8px" title="Copy the latest checkpoint into a new model dir so you can train it on a different corpus.">fork to new model</button>
   `;
   cell.appendChild(wrap);
   wrap.querySelector(".train-fork-btn").addEventListener("click", () => {
@@ -7916,6 +8182,43 @@ function _corePluginsArgs() {
 }
 
 
+// Compact manifest summary: chips for shape, params, corpus, output dir,
+// engine target, QAT, teaches. Replaces the multi-line paragraph from
+// manifest.description, which still lives in the form's tooltip on hover.
+function _trRenderManifestSummary(m) {
+  if (!m || typeof m !== "object") return "";
+  const d = m.defaults || {};
+  const sizeKey = d.size || (m.sizes && Object.keys(m.sizes)[0]) || null;
+  const sz = (m.sizes && sizeKey && m.sizes[sizeKey]) || {};
+  const layers = d.layers ?? sz.layers;
+  const hidden = d.hidden ?? sz.hidden;
+  const ffn    = d.ffn    ?? sz.ffn;
+  const heads  = d.heads  ?? sz.heads;
+  const params = sz.params;
+  const fmtP = (n) => n == null ? null : (n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : (n / 1e6).toFixed(0) + "M");
+  const chips = [];
+  const push = (label, value) => {
+    if (value == null || value === "") return;
+    chips.push(`<span class="stat" style="color:var(--dim)">${_trEsc(label)} <b style="color:var(--text)">${_trEsc(String(value))}</b></span>`);
+  };
+  push("teaches",  m.teaches || "autocomplete");
+  if (layers || hidden || ffn || heads) {
+    push("shape", `h=${hidden ?? "?"} L=${layers ?? "?"} ffn=${ffn ?? "?"} heads=${heads ?? "?"}`);
+  }
+  push("params",  fmtP(params));
+  push("seq",     d.seq);
+  push("corpus",  d.corpus);
+  push("steps",   d.total_steps);
+  push("qat",     d.qat_enabled === true ? "on" : (d.qat_enabled === false ? "off" : null));
+  if (m.engine_export_format) push("engine", m.engine_export_format);
+  const head = `<div style="margin-bottom:4px"><b style="color:var(--text)">${_trEsc(m.name || "")}</b></div>`;
+  const row  = `<div style="display:flex;flex-wrap:wrap;gap:6px 10px">${chips.join("")}</div>`;
+  const full = m.description
+    ? `<div title="${_trEsc(m.description)}" style="color:var(--dim);font-size:10px;margin-top:4px">hover for full manifest description</div>`
+    : "";
+  return head + row + full;
+}
+
 function _trRenderForm() {
   const p      = trainState.selected;
   const wrap   = _trEl("trainFormWrap");
@@ -7929,10 +8232,11 @@ function _trRenderForm() {
     if (argsEl) argsEl.innerHTML = "";
     return;
   }
-  if (descEl) descEl.textContent = p.manifest.description || "";
+  if (descEl) descEl.innerHTML = _trRenderManifestSummary(p.manifest);
   const introEl = _trEl("trainFormIntro");
   if (introEl) {
-    introEl.innerHTML = `<b>${_trEsc(p.manifest.name || p.id)}</b> &middot; fields marked <span style="color:var(--hot)">*</span> are required &middot; settings render in the order this trainer's manifest declares them.`;
+    const teaches = _trEsc((p.manifest.teaches || "autocomplete"));
+    introEl.innerHTML = `teaches <b>${teaches}</b> &middot; <span style="color:var(--hot)">*</span> required`;
   }
   // Responsive grid: small fields auto-pack into columns; wide types (text/path/tools)
   // and bool span the full row. Help text is condensed to a hoverable blue ? badge so
@@ -8091,6 +8395,17 @@ function _trRenderPicker() {
   const sel  = _trEl("trainPicker");
   const row  = _trEl("trainPickerRow");
   const hint = _trEl("trainEmptyHint");
+  const flowLabel = _trEl("trainFlowCurrent");
+  if (flowLabel) {
+    const labels = { scratch: "from scratch", continue: "continue saved", distill: "distill", synth: "synthetic corpus", export: "export .bin" };
+    if (trainState.flow) {
+      flowLabel.textContent = labels[trainState.flow] || trainState.flow;
+      flowLabel.style.color = "var(--accent)";
+    } else {
+      flowLabel.textContent = "no action picked yet";
+      flowLabel.style.color = "var(--dim)";
+    }
+  }
   if (!sel || !row) return;
   if (!trainState.flow || trainState.flow === "export") { row.style.display = "none"; return; }
   row.style.display = "flex";
@@ -8108,11 +8423,6 @@ function _trRenderPicker() {
     if (hint) hint.style.display = "none";
     if (cur && list.some(p => p.id === cur)) sel.value = cur;
   }
-  document.querySelectorAll(".trainFlowBtn").forEach(b => {
-    const on = b.dataset.flow === trainState.flow;
-    b.style.fontWeight  = on ? "700" : "400";
-    b.style.borderColor = on ? "var(--accent)" : "";
-  });
 }
 
 function _trPoll() {
@@ -8317,20 +8627,51 @@ function _trGotoTeacherSettings(ev) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  document.querySelectorAll(".trainFlowBtn").forEach(b => {
-    b.addEventListener("click", () => {
-      trainState.flow = b.dataset.flow;
-      trainState.selected = null;
-      // Core Plugins list is flow-scoped; force a refetch on the next render.
-      corePluginsState.ready = false;
-      _trShowSynthPanel(trainState.flow === "synth");
-      _trUpdateTeacherGate();
-      if (trainState.flow === "synth" && !synthState.seeds.length) _synthLoadSeeds();
-      _trRenderPicker();
-      _trRenderForm();
-      _trRenderStatus();
-      _exRender();
+  const flowModal = $("trainFlowModal");
+  const flowOpen  = $("trainFlowOpenBtn");
+  const flowClose = $("trainFlowModalClose");
+  const flowUse   = $("trainFlowUseBtn");
+  const flowSetActive = (flow) => {
+    if (!flowModal) return;
+    flowModal.querySelectorAll(".train-flow-tab").forEach(t => {
+      t.classList.toggle("active", t.dataset.flowTab === flow);
     });
+    flowModal.querySelectorAll(".train-flow-pane").forEach(p => {
+      p.classList.toggle("active", p.dataset.flowPane === flow);
+    });
+    if (flowUse) flowUse.style.display = (flow === "pipeline") ? "none" : "";
+  };
+  const flowOpenModal = () => {
+    flowSetActive(trainState.flow || "pipeline");
+    flowModal.classList.remove("hidden");
+    document.body.style.overflow = "hidden";
+  };
+  const flowCloseModal = () => {
+    flowModal.classList.add("hidden");
+    document.body.style.overflow = "";
+  };
+  if (flowOpen && flowModal) flowOpen.addEventListener("click", flowOpenModal);
+  if (flowClose && flowModal) flowClose.addEventListener("click", flowCloseModal);
+  if (flowModal) {
+    flowModal.querySelectorAll(".train-flow-tab").forEach(t => {
+      t.addEventListener("click", () => flowSetActive(t.dataset.flowTab));
+    });
+  }
+  if (flowUse && flowModal) flowUse.addEventListener("click", () => {
+    const activeTab = flowModal.querySelector(".train-flow-tab.active");
+    const flow = activeTab ? activeTab.dataset.flowTab : "scratch";
+    trainState.flow = flow;
+    trainState.selected = null;
+    // Core Plugins list is flow-scoped; force a refetch on the next render.
+    corePluginsState.ready = false;
+    _trShowSynthPanel(flow === "synth");
+    _trUpdateTeacherGate();
+    if (flow === "synth" && !synthState.seeds.length) _synthLoadSeeds();
+    _trRenderPicker();
+    _trRenderForm();
+    _trRenderStatus();
+    _exRender();
+    flowCloseModal();
   });
   const gotoLink = $("teacherGotoSettings");
   if (gotoLink) gotoLink.addEventListener("click", _trGotoTeacherSettings);
@@ -9155,35 +9496,6 @@ function _appUpdatePullWithGuards() {
   })
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
     .finally(() => { if (upb) upb.disabled = false; _refreshUpdateStatus(); });
-}
-
-// Stale-bin banner. /models/bin_health reports any .bin in models/<name>/
-// that the current engine refuses to load (e.g. retired format versions left
-// over from a merge). Hovering the banner shows which models are affected;
-// users re-export from the most recent .pt checkpoint to clear it.
-function _renderBinHealth(data) {
-  const el = $("staleBinBanner");
-  if (!el || !data) return;
-  const stale = (data.models || []).filter(m => m.stale);
-  if (stale.length === 0) {
-    el.style.display = "none";
-    return;
-  }
-  el.style.display = "";
-  el.textContent = `${stale.length} stale .bin · re-export`;
-  el.title = stale
-    .map(m => `${m.name}  v${m.version} (${m.label}): ${m.reason || "stale"}`)
-    .join("\n");
-}
-
-function _refreshBinHealth() {
-  fetch("/models/bin_health").then(r => r.json()).then(_renderBinHealth).catch(() => {});
-}
-
-if (typeof window !== "undefined") {
-  // Poll once on load and every 30s; cheap header-only reads.
-  _refreshBinHealth();
-  setInterval(_refreshBinHealth, 30000);
 }
 
 function _saveSettings(patch) {
@@ -11020,17 +11332,18 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(_refreshUpdateStatus, 60000);
   const bb = $("settingsBuildBtn");
   if (bb) bb.addEventListener("click", () => {
-    // The actual build runs in the background — the POST returns immediately
-    // and _pollBuildStatus picks up the new status on the next tick. Briefly
-    // mark the button busy so the click registers visually before the poll.
+    // Shared rebuild flow: same fetch (force:true), same status polling, same
+    // post-build c-engine load attempt as the Generation tab's inline rebuild
+    // link. The button host is the buildStatusLine span next to it so progress
+    // and failure messages land in the existing settings row layout.
     bb.disabled = true;
     setLoading(bb, true, { size: "sm" });
-    fetch("/engine/build", { method: "POST" }).catch(() => {});
-    setTimeout(() => {
+    const host = $("buildStatusLine");
+    Promise.resolve(_cEngineRebuild(host)).finally(() => {
       setLoading(bb, false);
       bb.disabled = false;
       _pollBuildStatus();
-    }, 400);
+    });
   });
   _pollBuildStatus();
   setInterval(_pollBuildStatus, 3000);
@@ -11054,15 +11367,11 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(_modelsRefreshStatus, 15000);
 
   // ---- Corpus library wiring ----
-  const corpusHeader = $("corpusLibraryHeader");
-  const corpusBody   = $("corpusLibraryBody");
-  const corpusChev   = $("corpusLibraryChevron");
-  const corpusActions = $("corpusLibraryActions");
-  if (corpusHeader && corpusBody) {
-    corpusHeader.addEventListener("click", (e) => {
-      // Don't toggle when clicking action buttons / inputs inside the header
-      if (corpusActions && corpusActions.contains(e.target)) return;
-      if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT") return;
+  const corpusTitle = $("corpusLibraryTitle");
+  const corpusBody  = $("corpusLibraryBody");
+  const corpusChev  = $("corpusLibraryChevron");
+  if (corpusTitle && corpusBody) {
+    corpusTitle.addEventListener("click", () => {
       const open = corpusBody.style.display !== "none";
       corpusBody.style.display = open ? "none" : "flex";
       if (corpusChev) corpusChev.style.transform = open ? "rotate(0deg)" : "rotate(90deg)";

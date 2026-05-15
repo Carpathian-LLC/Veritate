@@ -4,8 +4,7 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - per-model bin health + models repo git sync + fork + open-folder, plus
-#   the pytorch-models picker list.
+# - models repo git sync + fork + open-folder, plus the pytorch-models picker list.
 # veritate_mri/routes/models_routes.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -14,7 +13,9 @@ import os
 
 from flask import current_app, request
 
-from readers import bin as binr, checkpoints, config as cfg_reader, models, paths
+from readers import (
+    capabilities as caps_reader, checkpoints, config as cfg_reader, models, paths,
+)
 from training import fork as fork_mod
 from training.sync import models_sync
 
@@ -28,23 +29,6 @@ from ._common import open_folder
 # Functions
 
 def register(app):
-    @app.route("/models/bin_health")
-    def models_bin_health():
-        """Per-model .bin header health for every model dir on disk."""
-        out = []
-        for name in models.list_models():
-            h = binr.health(name)
-            out.append({
-                "name":    name,
-                "version": h["version"],
-                "label":   h["label"],
-                "present": h["present"],
-                "stale":   h["stale"],
-                "reason":  h["reason"],
-            })
-        stale_count = sum(1 for r in out if r["stale"])
-        return {"models": out, "stale_count": stale_count}
-
     @app.route("/models/git/status")
     def models_git_status():
         return models_sync.status()
@@ -109,6 +93,7 @@ def register(app):
                 "layers":      shape.get("layers"),
                 "description": cfg_reader.description(name) or "",
                 "mtime":       mtime,
+                "capabilities": caps_reader.read(name),
             })
         out.sort(key=lambda r: -r["mtime"])
         return {"models": out}

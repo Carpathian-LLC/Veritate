@@ -4,7 +4,9 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - Builds the chat_starter corpus shipped at carpathian-llc/Veritate-Corpus.
+# - Builds the chat byte-level corpus shipped at carpathian-llc/Veritate-Corpus.
+# - Format: ChatML. Each turn is <|im_start|>{role}\n...<|im_end|>. Examples
+#   are separated by <|endoftext|>. Industry-standard frame, byte-level emitted.
 # - Source 1: public-domain Project Gutenberg text already cached at
 #     trainers/corpus/_pg_cache/*.txt
 # - Source 2: hand-written templates (facts, definitions, simple math).
@@ -14,8 +16,9 @@
 #   and we want the sha256 stable across rebuilds.
 # - Run:
 #     python veritate_mri/tools/build_chat_corpus.py \
-#       --out-train  C:/GitHub/Veritate-Corpus/chat_starter_train.bin \
-#       --out-val    C:/GitHub/Veritate-Corpus/chat_starter_val.bin
+#       --out-train  C:/GitHub/Veritate-Corpus/chat_50mb_train.bin \
+#       --out-val    C:/GitHub/Veritate-Corpus/chat_50mb_val.bin \
+#       --target-mb  50
 # veritate_mri/tools/build_chat_corpus.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -31,11 +34,9 @@ import sys
 
 PG_CACHE_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "trainers", "corpus", "_pg_cache"))
 
-USER_OPEN  = "<|user|>"
-USER_CLOSE = "<|/user|>"
-ASST_OPEN  = "<|assistant|>"
-ASST_CLOSE = "<|/assistant|>"
-EOT        = "<|endoftext|>"
+IM_START = "<|im_start|>"
+IM_END   = "<|im_end|>"
+EOT      = "<|endoftext|>"
 
 DEFAULT_SEED        = 20260514
 DEFAULT_VAL_RATIO   = 0.02
@@ -280,7 +281,8 @@ def _pg_passage_qa(rng, count, max_pg_files=10):
 # Conversation assembly
 
 def _wrap_turn(user_text, asst_text):
-    return f"{USER_OPEN}{user_text}{USER_CLOSE}\n{ASST_OPEN}{asst_text}{ASST_CLOSE}"
+    return (f"{IM_START}user\n{user_text}{IM_END}\n"
+            f"{IM_START}assistant\n{asst_text}{IM_END}")
 
 def _wrap_conversation(pairs):
     """One conversation = N turn-pairs joined by newlines, ending with EOT."""
@@ -345,7 +347,7 @@ def build(out_train, out_val, target_mb, val_ratio, seed):
     }
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Build the chat_starter byte-level corpus.")
+    ap = argparse.ArgumentParser(description="Build the chat byte-level corpus.")
     ap.add_argument("--out-train",  required=True)
     ap.add_argument("--out-val",    required=True)
     ap.add_argument("--target-mb",  type=int,   default=DEFAULT_TARGET_MB)
@@ -354,7 +356,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     stats = build(args.out_train, args.out_val, args.target_mb, args.val_ratio, args.seed)
-    print(f"chat_starter built:")
+    print(f"chat built:")
     print(f"  train: {stats['train_path']}  ({stats['train_bytes']/1e6:.2f} MB)")
     print(f"  val:   {stats['val_path']}    ({stats['val_bytes']/1e6:.2f} MB)")
     print(f"  qa_pool size: {stats['qa_pool_size']}")

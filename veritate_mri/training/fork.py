@@ -7,7 +7,7 @@
 # - Fork = "branch" a model. Copies ONLY the latest checkpoint + config.json
 #   from source into a new model directory. The new model becomes an
 #   independent training root that can be continued or fine-tuned on a
-#   different corpus (chat, agent_json, ...) without touching the source.
+#   different corpus (chat, agent, ...) without touching the source.
 # - Copied alongside the checkpoint:
 #     * hooks/step_<latest>/      (per-step probe / lens / generation; these
 #                                  are point-in-time snapshots, not history)

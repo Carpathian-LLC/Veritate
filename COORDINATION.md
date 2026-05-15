@@ -4,9 +4,9 @@
 
 Platform audit running. Fixing as found.
 
-**My lane:** routes/, inference/, training/ (not teacher), runtime/, readers/, tools/, veritate_core/ (not `plugin/__init__.py`), documentation/ (not plugins/contract.md), tests/ (not tests/teacher/), CLAUDE.md.
+**My lane:** routes/, inference/, training/ (not teacher), runtime/, readers/, tools/, veritate_core/ (not `plugin/__init__.py`), documentation/ (not trainers/contract.md), tests/ (not tests/teacher/), CLAUDE.md.
 
-**Your lane (untouched):** teacher/, data/seeds/, web/, settings.py teacher_* keys, `veritate_core/plugin/__init__.py`, documentation/plugins/contract.md, app.py register line.
+**Your lane (untouched):** teacher/, data/seeds/, web/, settings.py teacher_* keys, `veritate_core/plugin/__init__.py`, documentation/trainers/contract.md, app.py register line.
 
 ## agent-2 (teacher model) — DONE
 

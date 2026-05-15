@@ -4,14 +4,14 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - Builds the agent_json starter corpus shipped at carpathian-llc/Veritate-Corpus.
-# - Output: schema-strict JSON turns per documentation/corpus/framing.md.
-#   Each example is one or more single-line JSON objects (thought / tool_call /
-#   observation / answer), terminated by <|endoftext|>.
-# - Three example kinds:
-#     direct      , one {thought, answer} object
-#     two-turn    , {thought} then {answer}
-#     calculator  , {thought, tool_call} then {observation} then {answer}
+# - Builds the agent byte-level corpus shipped at carpathian-llc/Veritate-Corpus.
+# - Format: Hermes function-calling on top of ChatML (per
+#   documentation/corpus/framing.md). System turn lists tools; assistant
+#   emits <tool_call>{...}</tool_call>; tool role replies with
+#   <tool_response>{...}</tool_response>. Examples end with <|endoftext|>.
+# - Two example kinds:
+#     direct      , system + user + assistant answer
+#     calculator  , system + user + assistant tool_call + tool response + assistant answer
 # - Deterministic via fixed PRNG seed so the produced .bin has a stable
 #   sha256 across rebuilds.
 # veritate_mri/tools/build_agent_corpus.py
@@ -27,7 +27,15 @@ import sys
 # ------------------------------------------------------------------------------------
 # Constants
 
-EOT = "<|endoftext|>"
+IM_START = "<|im_start|>"
+IM_END   = "<|im_end|>"
+EOT      = "<|endoftext|>"
+
+SYSTEM_PROMPT = (
+    "You may call tools by emitting a single <tool_call>...</tool_call> block "
+    "with a JSON object {\"name\": str, \"arguments\": object}. Tools available: "
+    "calculator(expression: str) -> number."
+)
 
 DEFAULT_SEED        = 20260514
 DEFAULT_VAL_RATIO   = 0.02
@@ -120,27 +128,32 @@ def _calc_examples(rng, count):
 # ------------------------------------------------------------------------------------
 # Sample writers
 
-def _line(obj):
-    """One JSON object on one line. ensure_ascii=False keeps non-ASCII
-    intact, but for byte-level training it doesn't matter much, most of
-    the corpus is ASCII anyway."""
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ": ")) + "\n"
+def _json(obj):
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ": "))
 
-def _direct_example(prompt, thought, answer):
-    """Single object {thought, answer}."""
-    return _line({"thought": thought, "answer": answer}) + EOT + "\n"
+def _turn(role, body):
+    return f"{IM_START}{role}\n{body}{IM_END}\n"
 
-def _two_turn_example(prompt, thought, answer):
-    """Two objects: {thought} then {answer}."""
-    return _line({"thought": thought}) + _line({"answer": answer}) + EOT + "\n"
+def _system_turn():
+    return _turn("system", SYSTEM_PROMPT)
 
-def _calc_example(human_q, thought, expression, answer_str):
-    """Three objects: {thought, tool_call} → {observation} → {answer}."""
-    t1 = _line({"thought": thought,
-                "tool_call": {"name": "calculator", "args": {"expression": expression}}})
-    t2 = _line({"observation": answer_str})
-    t3 = _line({"answer": answer_str})
-    return t1 + t2 + t3 + EOT + "\n"
+def _direct_example(prompt, answer):
+    return (_system_turn()
+            + _turn("user", prompt)
+            + _turn("assistant", answer)
+            + EOT + "\n")
+
+def _calc_example(human_q, expression, answer_str):
+    call_obj = _json({"name": "calculator", "arguments": {"expression": expression}})
+    resp_obj = _json({"name": "calculator", "result": answer_str})
+    assistant_call = f"<tool_call>\n{call_obj}\n</tool_call>"
+    tool_resp      = f"<tool_response>\n{resp_obj}\n</tool_response>"
+    return (_system_turn()
+            + _turn("user", human_q)
+            + _turn("assistant", assistant_call)
+            + _turn("tool", tool_resp)
+            + _turn("assistant", answer_str)
+            + EOT + "\n")
 
 # ------------------------------------------------------------------------------------
 # Assembly
@@ -150,19 +163,12 @@ def _assemble(rng, target_bytes):
     out = []
     written = 0
     while written < target_bytes:
-        r = rng.random()
-        if r < 0.45:
-            # direct
-            prompt, thought, answer = rng.choice(fact_pool)
-            chunk = _direct_example(prompt, thought, answer).encode("utf-8")
-        elif r < 0.75:
-            # two-turn
-            prompt, thought, answer = rng.choice(fact_pool)
-            chunk = _two_turn_example(prompt, thought, answer).encode("utf-8")
+        if rng.random() < 0.6:
+            prompt, _thought, answer = rng.choice(fact_pool)
+            chunk = _direct_example(prompt, answer).encode("utf-8")
         else:
-            # calculator
-            human_q, thought, expression, answer_str = rng.choice(_calc_examples(rng, 1))
-            chunk = _calc_example(human_q, thought, expression, answer_str).encode("utf-8")
+            human_q, _thought, expression, answer_str = _calc_examples(rng, 1)[0]
+            chunk = _calc_example(human_q, expression, answer_str).encode("utf-8")
         out.append(chunk)
         written += len(chunk)
     return b"".join(out)
@@ -194,7 +200,7 @@ def build(out_train, out_val, target_mb, val_ratio, seed):
     }
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Build the agent_json byte-level corpus.")
+    ap = argparse.ArgumentParser(description="Build the agent byte-level corpus.")
     ap.add_argument("--out-train",  required=True)
     ap.add_argument("--out-val",    required=True)
     ap.add_argument("--target-mb",  type=int,   default=DEFAULT_TARGET_MB)
@@ -203,7 +209,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     stats = build(args.out_train, args.out_val, args.target_mb, args.val_ratio, args.seed)
-    print(f"agent_json built:")
+    print(f"agent built:")
     print(f"  train: {stats['train_path']}  ({stats['train_bytes']/1e6:.2f} MB)")
     print(f"  val:   {stats['val_path']}    ({stats['val_bytes']/1e6:.2f} MB)")
 

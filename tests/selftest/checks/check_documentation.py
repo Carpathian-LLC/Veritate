@@ -27,7 +27,7 @@ REQUIRED_DOCS  = (
     "kernels/architecture.md",
     "kernels/engine_versions.md",
     "kernels/platforms.md",
-    "plugins/contract.md",
+    "trainers/contract.md",
 )
 
 # ------------------------------------------------------------------------------------

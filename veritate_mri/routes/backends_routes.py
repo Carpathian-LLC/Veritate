@@ -31,7 +31,8 @@ from inference.backends.pytorch import (
     ACTIVATION_INT8_SCALE, NEURON_TOP_K, load_memory,
 )
 from readers import (
-    bin as binr, checkpoints, config as cfg_reader, engine, models, paths,
+    bin as binr, capabilities as caps_reader, checkpoints,
+    config as cfg_reader, engine, models, paths,
 )
 from runtime import logs as logmod
 from training import build_runner
@@ -70,6 +71,37 @@ _STOP_PRESETS = {
     "double_newline":   b"\n\n",
     "eos":              b"</s>",
 }
+
+CHATML_IM_END  = b"<|im_end|>"
+CHATML_IM_START = b"<|im_start|>"
+
+def _is_chatml_prompt(prompt):
+    if not isinstance(prompt, str):
+        return False
+    return "<|im_start|>" in prompt
+
+def _stop_on_bytes(gen, stop_bytes):
+    """Wrap an SSE-event generator and halt after the byte stream from
+    token/fast_byte events ends with `stop_bytes`. Emits a synthetic
+    {kind:'stop', reason:'chatml'} just before returning."""
+    if not stop_bytes:
+        for ev in gen:
+            yield ev
+        return
+    tail = bytearray()
+    cap = len(stop_bytes)
+    for ev in gen:
+        yield ev
+        k = ev.get("kind") if isinstance(ev, dict) else None
+        if k in ("token", "fast_byte"):
+            b = ev.get("byte")
+            if isinstance(b, int):
+                tail.append(b & 0xff)
+                if len(tail) > cap:
+                    del tail[:len(tail) - cap]
+                if len(tail) == cap and bytes(tail) == stop_bytes:
+                    yield {"kind": "stop", "reason": "chatml_im_end"}
+                    return
 
 _RAG_TOOL_CACHE = {}
 _RAG_CACHE_LOCK = threading.Lock()
@@ -309,8 +341,9 @@ def ensure_c_loaded(cfg, model_override=None):
             return
         model_dir = os.path.basename(os.path.dirname(model))
         boost = binr.act_boost(model_dir)
-        if boost is not None and boost > 1:
-            logmod.warn("backends", f"c engine: {model_dir} act_boost={boost} (untrusted); loading anyway via VERITATE_ALLOW_HIGH_ACT_BOOST=1, output may be gibberish")
+        qat = cfg_reader.qat_enabled(model_dir)
+        if boost is not None and boost > 1 and not qat:
+            logmod.warn("backends", f"c engine: {model_dir} act_boost={boost} and config.qat_enabled is not set; output may be gibberish")
         cfg["C_BLOCKED_REASON"] = None
         cfg["C_BLOCKED_MODEL"]  = None
         _spawn_c_subprocess(cfg, exe, model)
@@ -579,12 +612,18 @@ def register(app):
         c_model_dir = None
         c_description = ""
         c_act_boost = None
+        c_qat_enabled = False
+        c_capabilities = None
         if c_model_path and os.path.isfile(c_model_path):
             c_model_dir = os.path.basename(os.path.dirname(c_model_path))
             c_precision, c_version = binr.header(c_model_dir)
             c_training, c_activation = cfg_reader.training_kind(c_model_dir)
             c_description = cfg_reader.description(c_model_dir) or ""
             c_act_boost = binr.act_boost(c_model_dir)
+            c_qat_enabled = cfg_reader.qat_enabled(c_model_dir)
+            c_capabilities = caps_reader.read(c_model_dir)
+        brain_name = cfg.get("BRAIN_MODEL")
+        pytorch_capabilities = caps_reader.read(brain_name) if brain_name else None
         return {
             "checkpoint": brain.checkpoint if brain else None,
             "n_params":   brain.n_params if brain else 0,
@@ -611,6 +650,9 @@ def register(app):
             "c_model_activation":  c_activation,
             "c_model_description": c_description,
             "c_model_act_boost":   c_act_boost,
+            "c_model_qat_enabled": c_qat_enabled,
+            "c_model_capabilities": c_capabilities,
+            "pytorch_capabilities": pytorch_capabilities,
         }
 
     @app.route("/addons")
@@ -657,9 +699,11 @@ def register(app):
                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             def stream_c():
                 try:
-                    for ev in _c_engine_stream(cfg, prompt, max_new, temperature=temperature, top_k=top_k,
-                                               ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
-                                               addons_csv=",".join(addons_sel)):
+                    base = _c_engine_stream(cfg, prompt, max_new, temperature=temperature, top_k=top_k,
+                                            ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
+                                            addons_csv=",".join(addons_sel))
+                    stop_seq = CHATML_IM_END if _is_chatml_prompt(prompt) else None
+                    for ev in _stop_on_bytes(base, stop_seq):
                         yield f"data: {json.dumps(ev)}\n\n"
                     yield "event: done\ndata: {}\n\n"
                 except GeneratorExit:
@@ -781,7 +825,8 @@ def register(app):
                     else:
                         gen = brain.stream(effective_prompt, temperature, top_k, max_new,
                                            addons_chain=chain, constraint=constraint)
-                    for ev in gen:
+                    stop_seq = CHATML_IM_END if _is_chatml_prompt(effective_prompt) else None
+                    for ev in _stop_on_bytes(gen, stop_seq):
                         ev["backend"] = "pytorch"
                         yield f"data: {json.dumps(ev)}\n\n"
                     yield "event: done\ndata: {}\n\n"

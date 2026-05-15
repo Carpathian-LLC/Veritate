@@ -21,7 +21,8 @@ import time
 from flask import Response, current_app, request, send_from_directory
 
 from readers import (
-    checkpoints, config as cfg_reader, hooks, models, paths, train_csv,
+    capabilities as caps_reader, checkpoints, config as cfg_reader, hooks,
+    models, paths, train_csv,
 )
 from runtime import logs as logmod
 
@@ -265,6 +266,7 @@ def register(app):
                 "mtime": st.st_mtime if st else 0,
                 "size":  st.st_size  if st else 0,
                 "n_rows": len(rows),
+                "capabilities": caps_reader.read(name),
             })
         out.sort(key=lambda r: -r["mtime"])
         return {"runs": out}

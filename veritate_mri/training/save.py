@@ -29,7 +29,7 @@ _MRI_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file
 if _MRI_ROOT not in sys.path:
     sys.path.insert(0, _MRI_ROOT)
 
-from readers import paths, models, config as cfg_reader
+from readers import paths, models, config as cfg_reader, capabilities as caps_reader, trainers as trainers_reader
 from runtime import logs as logmod
 
 # ------------------------------------------------------------------------------------
@@ -40,6 +40,11 @@ CSV_HEADER = ["step", "split", "loss", "lr", "grad_norm", "tok_per_s", "wall_s",
 NAME_SEP = "_"
 
 SHA256_CHUNK = 1024 * 1024
+
+# Trainer runner exports the active plugin id so save() can resolve which
+# capability tier the trainer teaches. Absent in standalone / test runs; the
+# capability update is a no-op in that case.
+PLUGIN_ID_ENV = "VERITATE_PLUGIN_ID"
 
 # canonical dump filenames inside hooks/step_<N>/. dump_* in
 # training/checkpoint_probe.py emit prefixed names; we rename to these.
@@ -214,14 +219,77 @@ def _validate_description(name, args):
 
 def _ensure_config(name, args):
     cfg_path = paths.config_path(name)
-    if os.path.isfile(cfg_path):
+    if not os.path.isfile(cfg_path):
+        if not isinstance(args, dict):
+            raise ValueError(f"no config.json at {cfg_path} and no args dict provided to bootstrap one.")
+        os.makedirs(paths.model_dir(name), exist_ok=True)
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(args, f, indent=2, ensure_ascii=False)
+        logmod.info("save", f"wrote new config.json for {name}")
+    _sync_qat_flag(name, args)
+
+
+def _sync_capabilities(name, step, args):
+    """Promote the active trainer's capability tier to in_progress (or trained
+    on the final step). Reads the plugin id from PLUGIN_ID_ENV, resolves the
+    teaches tier from the trainer manifest, and writes via capabilities.mark.
+
+    No-op when:
+        * PLUGIN_ID_ENV is unset (standalone runs, tests).
+        * config.json is missing (mark returns None).
+
+    Total-steps resolution looks at the live args dict first, then the
+    persisted training_args block, so resumed runs that override --total_steps
+    on the CLI promote to trained at the right moment."""
+    plugin_id = os.environ.get(PLUGIN_ID_ENV)
+    if not plugin_id:
         return
-    if not isinstance(args, dict):
-        raise ValueError(f"no config.json at {cfg_path} and no args dict provided to bootstrap one.")
-    os.makedirs(paths.model_dir(name), exist_ok=True)
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump(args, f, indent=2, ensure_ascii=False)
-    logmod.info("save", f"wrote new config.json for {name}")
+    tier = trainers_reader.teaches(plugin_id)
+    total_steps = None
+    if isinstance(args, dict) and args.get("total_steps") is not None:
+        try: total_steps = int(args["total_steps"])
+        except (TypeError, ValueError): total_steps = None
+    if total_steps is None:
+        cfg = cfg_reader.load(name) or {}
+        ta = cfg.get("training_args") or {}
+        if isinstance(ta, dict) and ta.get("total_steps") is not None:
+            try: total_steps = int(ta["total_steps"])
+            except (TypeError, ValueError): total_steps = None
+    try:
+        caps_reader.mark(name, tier, caps_reader.STATUS_IN_PROGRESS,
+                         trainer=plugin_id, step=int(step),
+                         total_steps=total_steps)
+    except (OSError, ValueError) as e:
+        logmod.warn("save", f"capability mark failed: {e}")
+
+
+def _sync_qat_flag(name, args):
+    """Promote training_args.qat_enabled to a top-level qat_enabled key on every
+    save. The trainer plugin contract says training_args is vars(args), which
+    means qat_enabled lands nested; readers want one canonical top-level key so
+    the engine wiring, dashboard badge, and bin-picker warning all consult the
+    same field. No-op when the flag is already mirrored."""
+    cfg_path = paths.config_path(name)
+    if not os.path.isfile(cfg_path):
+        return
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    ta = data.get("training_args") if isinstance(data.get("training_args"), dict) else {}
+    nested = ta.get("qat_enabled")
+    from_args = args.get("qat_enabled") if isinstance(args, dict) else None
+    flag = bool(from_args) if from_args is not None else bool(nested)
+    if data.get("qat_enabled") is flag and ta.get("qat_enabled") is flag:
+        return
+    data["qat_enabled"] = flag
+    if isinstance(data.get("training_args"), dict):
+        data["training_args"]["qat_enabled"] = flag
+    tmp = cfg_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, cfg_path)
 
 
 def _rename_dumps(step_dir, step):
@@ -334,6 +402,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     _validate_name(name)
     _ensure_config(name, args)
     _validate_description(name, args)
+    _sync_capabilities(name, step, args)
 
     if prompt is None:
         prompt = PROBE_PROMPT

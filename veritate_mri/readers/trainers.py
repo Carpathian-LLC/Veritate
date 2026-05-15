@@ -200,6 +200,20 @@ def by_id(plugin_id):
     return None
 
 
+def teaches(plugin_id):
+    """Return the capability tier the trainer claims to teach. Falls back to
+    the autocomplete default when no manifest declares it. Keeps the dashboard
+    and save.py from needing to know which trainers are pretraining vs SFT."""
+    from . import capabilities as caps
+    p = by_id(plugin_id) if plugin_id else None
+    if p is None:
+        return caps.DEFAULT_TEACHES
+    val = (p.get("manifest") or {}).get("teaches")
+    if isinstance(val, str) and val in caps.TIERS:
+        return val
+    return caps.DEFAULT_TEACHES
+
+
 def _manifest_path(plugin):
     if plugin.get("bundle_dir"):
         return os.path.join(plugin["bundle_dir"], BUNDLE_MANIFEST)

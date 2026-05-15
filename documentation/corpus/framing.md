@@ -1,77 +1,75 @@
 # corpus framing conventions
 
-Veritate is byte-level (vocab=256). To train a model on something more structured than raw prose — chat turns, agent JSON, tool calls — the structure has to be visible *in the byte stream*. There are no special tokens; we use literal printable byte sequences as frames.
+Veritate is byte-level (vocab=256). Structure is encoded as literal printable byte sequences, not tokenizer special tokens. Every corpus shipped under [Veritate-Corpus](https://github.com/Carpathian-LLC/Veritate-Corpus) follows the spec on this page.
 
-This document is the contract every corpus shipped under [/Veritate-Corpus](https://github.com/Carpathian-LLC/Veritate-Corpus) follows, and what training-data tooling in this repo emits.
+Veritate complies with two industry standards: **ChatML** for chat, **Hermes function-calling** for agent. The byte sequences below match the literal strings used by major open-weights stacks (Mistral, Hermes, Qwen, OpenChat, NousResearch), with one Veritate addition: the `<|endoftext|>` record separator.
 
 ## record separator (all modes)
 
-The boundary between independent documents / conversations / examples is the literal ASCII bytes:
+Documents, conversations, and examples are separated by the literal ASCII bytes:
 
 ```
 <|endoftext|>
 ```
 
-This matches `veritate_mri/tools/jsonl_to_bin.py:DEFAULT_SEPARATOR`. The trainer's byte shuffler uses it to know where a record ends.
+Matches `veritate_mri/tools/jsonl_to_bin.py:DEFAULT_SEPARATOR`. The byte shuffler uses it to find record boundaries.
 
 ## autocomplete mode
 
-No framing. The corpus is raw bytes. Records (if any) are joined with `<|endoftext|>`.
+Raw bytes. Records (if any) joined by `<|endoftext|>`. Examples: `fineweb_edu`, `wikitext103`, `pg19`.
 
-`fineweb_edu`, `wikitext103`, `pg19`, etc. are autocomplete corpora.
-
-## chat mode
-
-Each turn is wrapped in opening and closing frames. A conversation is one or more turn-pairs separated by single newlines; conversations are separated by `<|endoftext|>`.
+## chat mode (ChatML)
 
 ```
-<|user|>What is the capital of France?<|/user|>
-<|assistant|>Paris.<|/assistant|>
-<|user|>And of Spain?<|/user|>
-<|assistant|>Madrid.<|/assistant|>
+<|im_start|>user
+What is the capital of France?<|im_end|>
+<|im_start|>assistant
+Paris.<|im_end|>
+<|im_start|>user
+And of Spain?<|im_end|>
+<|im_start|>assistant
+Madrid.<|im_end|>
 <|endoftext|>
 ```
 
-Properties:
+Rules:
 
-- Frames are plain printable ASCII. They will never collide with a frame inside natural prose at random because of the `<|...|>` shape — the same convention OpenAI/HF use for special tokens, but here they are literal bytes the model sees and learns.
-- The trailing `<|/assistant|>` is what tells a chat-mode dashboard when to stop emitting. Inference can hard-stop on this byte sequence regardless of the model's logits.
-- A conversation with one user turn and no assistant reply (i.e. the prompt at inference time) ends with `<|/user|>` and the model is expected to emit `<|assistant|>...<|/assistant|>`.
+- Each turn opens with `<|im_start|>{role}\n` and closes with `<|im_end|>`. Role is `system`, `user`, `assistant`, or `tool`.
+- Inference hard-stops on `<|im_end|>` regardless of logits.
+- A prompt at inference time ends after the user's `<|im_end|>`; the model emits `<|im_start|>assistant\n...<|im_end|>`.
 
-## agent JSON mode
+## agent mode (Hermes function-calling)
 
-The corpus is a stream of single-line JSON objects, one per turn, separated by newlines. Each example (one or more turns + an answer) is separated from the next by `<|endoftext|>`.
-
-The schema matches what `veritate_mri/agent/loop.py` parses:
+System turn lists tools. Assistant emits `<tool_call>...</tool_call>`; the host responds with a `tool` role turn carrying `<tool_response>...</tool_response>`.
 
 ```
-{"thought": "France is in western Europe.", "answer": "Paris."}
+<|im_start|>system
+You may call: calculator(expression: str) -> number.<|im_end|>
+<|im_start|>user
+What is 37 * 42?<|im_end|>
+<|im_start|>assistant
+<tool_call>
+{"name": "calculator", "arguments": {"expression": "37*42"}}
+</tool_call><|im_end|>
+<|im_start|>tool
+<tool_response>
+{"name": "calculator", "result": 1554}
+</tool_response><|im_end|>
+<|im_start|>assistant
+1554.<|im_end|>
 <|endoftext|>
-{"thought": "I should compute this.", "tool_call": {"name": "calculator", "args": {"expression": "37*42"}}}
-{"observation": "1554"}
-{"answer": "1554."}
-<|endoftext|>
 ```
 
-Properties:
+Rules:
 
-- One JSON object per line. No nested newlines inside the object — strings escape `\n` if needed.
-- Top-level must be an object. Bare scalars (`true`, `42`) are exactly the failure mode the agent loop rejects.
-- The model emits `\n` between turns inside an example, and `<|endoftext|>` ends the example.
-- `tool_call` / `observation` turns are optional. A simple answer is two turns: thought, then answer. Or one turn with both keys.
+- The tool-call payload is a single-line JSON object: `{"name": str, "arguments": object}`. Schema-strict; the agent loop rejects malformed JSON.
+- The tool-response payload is `{"name": str, "result": any}` or `{"name": str, "error": str}`.
+- A "no tool needed" answer skips the call/response pair and goes straight to `<|im_start|>assistant\nANSWER<|im_end|>`.
 
-## model config flag
+## capabilities flag
 
-A model declares which modes it was trained for in its `config.json`:
-
-```json
-"trained_modes": ["autocomplete", "chat"]
-```
-
-The dashboard's mode dropdown uses this to badge modes the model wasn't trained for. The agent loop reads it to decide whether to apply the JSON-schema retry policy or fall back to raw text.
-
-The trainer writes this automatically from which corpus plugin was active. Users should not edit it by hand.
+`models/<name>/config.json` declares trained tiers under `capabilities` (see [documentation/training/pipeline.md](../training/pipeline.md)). The dashboard and the agent loop read it to decide which modes are exposed.
 
 ## why bytes, not tokens
 
-Constraint #1 in `CLAUDE.md`: vocab=256, byte-level only. Every other LLM stack handles structure with a tokenizer (`<|im_start|>` becomes a single int). Here it stays as the literal 13 bytes `<|im_start|>` and the model has to learn the sequence. This is a documented cost of byte-level training. The upside is that the frames are inspectable, debuggable, and engine-agnostic — there is no tokenizer that has to agree with the model.
+vocab=256, byte-level only (CLAUDE.md constraint 1). Other stacks treat `<|im_start|>` as one int; here it is the literal 12 bytes the model learns. Cost: a few extra bytes per turn. Benefit: frames are inspectable, debuggable, and tokenizer-agnostic.

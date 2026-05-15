@@ -38,7 +38,8 @@ def register(app):
 
     @app.route("/engine/build", methods=["POST"])
     def engine_build_trigger():
-        return build_runner.start()
+        body = request.get_json(silent=True) or {}
+        return build_runner.start(force=bool(body.get("force")))
 
     @app.route("/c-engines")
     def c_engines_index():
@@ -83,6 +84,7 @@ def register(app):
                 "training":    training,
                 "activation":  activation,
                 "act_boost":   binr.act_boost(name),
+                "qat_enabled": cfg_reader.qat_enabled(name),
                 "description": cfg_reader.description(name),
             })
         out.sort(key=lambda r: -r["mtime"])
@@ -106,8 +108,9 @@ def register(app):
             except Exception: pass
         name = os.path.basename(os.path.dirname(new_model)) if new_model else None
         boost = binr.act_boost(name) if name else None
-        if boost is not None and boost > 1:
-            logmod.warn("backends", f"c-config: {name} act_boost={boost} (untrusted); engine loads anyway via VERITATE_ALLOW_HIGH_ACT_BOOST=1, output may be gibberish")
+        qat = cfg_reader.qat_enabled(name) if name else False
+        if boost is not None and boost > 1 and not qat:
+            logmod.warn("backends", f"c-config: {name} act_boost={boost} and config.qat_enabled is not set; output may be gibberish")
         try:
             sub = CTracedSubprocess(new_exe, new_model)
         except Exception as e:
@@ -133,4 +136,5 @@ def register(app):
             "c_model_training":    training,
             "c_model_activation":  activation,
             "c_model_act_boost":   boost,
+            "c_model_qat_enabled": bool(qat),
         }

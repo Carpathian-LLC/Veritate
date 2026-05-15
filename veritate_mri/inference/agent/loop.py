@@ -4,31 +4,28 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - AgentLoop: a ReAct-style multi-turn loop that drives any object exposing
-#   `stream(prompt, ..., constraint=...)` (matches Brain.stream signature) and
-#   wraps it in tool-call dispatch.
-# - Each turn the model produces ONE JSON object under JSONConstraint. The
-#   object is one of:
-#     {"action": "<tool_name>", "args": {...}, "thought": "<optional>"}
-#     {"answer": "<final user-facing response>", "thought": "<optional>"}
-#   Schema is validated AFTER parse (constraint enforces JSON well-formedness;
-#   the loop enforces the schema). Bad schema -> a synthetic error observation
-#   is injected and the loop continues. The model gets to recover.
-# - Termination: explicit {"answer": ...} OR max_turns reached OR
-#   constraint-allowed-no-bytes (rare; treated as fatal).
-# - History format injected into the next prompt is a compact transcript:
-#     [thought ...]
-#     [action <tool>(<args_json>)]
-#     [observation <text>]
-#     ...
-# veritate_mri/agent/loop.py
+# - AgentLoop: ReAct-style multi-turn loop driving any backend exposing
+#   `stream(prompt, ..., constraint=...)` (matches Brain.stream).
+# - Wire format: ChatML + Hermes function-calling, per
+#   documentation/corpus/framing.md. Each model turn is an assistant block
+#   bounded by <|im_start|>assistant\n...<|im_end|>. Tool calls are emitted
+#   as <tool_call>{"name": str, "arguments": object}</tool_call> blocks
+#   inside the assistant turn. Tool replies are injected as a tool-role
+#   ChatML turn: <|im_start|>tool\n<tool_response>{"name", "result"}
+#   </tool_response><|im_end|>.
+# - Termination: assistant turn without a <tool_call> -> treated as the
+#   final answer; OR max_turns reached; OR backend stop.
+# - Constraint: StopOnConstraint(b"<|im_end|>") so each turn halts at the
+#   end of the assistant block rather than running through max_new.
+# veritate_mri/inference/agent/loop.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .tools import Toolbox
 
@@ -37,7 +34,13 @@ from .tools import Toolbox
 
 _DEFAULT_MAX_TURNS  = 8
 _DEFAULT_MAX_NEW    = 384
-_DEFAULT_OBS_TRIM   = 1024     # observation truncation length
+_DEFAULT_OBS_TRIM   = 1024
+
+IM_START = "<|im_start|>"
+IM_END   = "<|im_end|>"
+IM_END_B = b"<|im_end|>"
+
+_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -45,8 +48,6 @@ _DEFAULT_OBS_TRIM   = 1024     # observation truncation length
 
 @dataclass
 class AgentTurn:
-    """One iteration of the loop. Captures what the model emitted + what
-    happened when (if anything) we ran the requested tool."""
     raw_bytes:    bytes = b""
     parsed:       Optional[Dict[str, Any]] = None
     parse_error:  Optional[str] = None
@@ -62,55 +63,59 @@ class AgentTurn:
 
 @dataclass
 class AgentResult:
-    """Loop output. `final_answer` is None if the loop stopped without one."""
     final_answer: Optional[str] = None
     turns:        List[AgentTurn] = field(default_factory=list)
     stop_reason:  str = ""
     total_elapsed_s: float = 0.0
 
 
+def _chatml_turn(role, body):
+    return f"{IM_START}{role}\n{body}{IM_END}\n"
+
+
 def _build_system_prompt(toolbox: Toolbox) -> str:
-    """The prompt header. Tool list + JSON schema instructions."""
     return (
         "You are a careful assistant that solves the user's task by reasoning and using tools.\n"
         + toolbox.prompt_block() + "\n\n"
-        "Every response you produce MUST be a single JSON object on one line.\n"
-        "To use a tool, emit: "
-        '{"thought": "what you are reasoning", "action": "<tool_name>", "args": {<arg>: <value>}}\n'
-        'To answer the user, emit: {"thought": "what you are reasoning", "answer": "<final answer>"}\n'
-        "After you emit a tool action, you will see the observation. Use it to decide the next step.\n"
-        "Always finish with an {\"answer\": ...} object."
+        "To call a tool, emit a single line:\n"
+        "<tool_call>\n"
+        '{"name": "<tool_name>", "arguments": {<arg>: <value>}}\n'
+        "</tool_call>\n"
+        "Wait for the tool response, then continue. To finish, reply normally without a <tool_call> block."
     )
 
 
-def _format_history(turns: List[AgentTurn]) -> str:
-    """Compact transcript of prior turns for prompt injection."""
-    if not turns:
-        return ""
-    lines = ["", "Transcript so far:"]
+def _render_history(turns: List[AgentTurn]) -> str:
+    """Render prior turns as ChatML transcript: assistant turns echo the
+    model's bytes; observations become tool-role turns."""
+    parts = []
     for t in turns:
-        if t.thought:
-            lines.append(f"[thought] {t.thought}")
         if t.action is not None:
-            args_json = json.dumps(t.args or {}, separators=(",", ":"))
-            lines.append(f"[action] {t.action}({args_json})")
-        if t.observation is not None:
-            obs = t.observation
+            call_obj = json.dumps({"name": t.action, "arguments": t.args or {}},
+                                  ensure_ascii=False, separators=(",", ": "))
+            body = f"<tool_call>\n{call_obj}\n</tool_call>"
+            if t.thought:
+                body = f"{t.thought}\n{body}"
+            parts.append(_chatml_turn("assistant", body))
+            obs = t.observation if t.observation is not None else ""
             if len(obs) > _DEFAULT_OBS_TRIM:
                 obs = obs[:_DEFAULT_OBS_TRIM] + f"\n... [truncated, {len(t.observation) - _DEFAULT_OBS_TRIM} more bytes]"
-            lines.append(f"[observation] {obs}")
-        if t.schema_error:
-            lines.append(f"[error] {t.schema_error}")
-    return "\n".join(lines)
+            resp_obj = json.dumps({"name": t.action, "result": obs},
+                                  ensure_ascii=False, separators=(",", ": "))
+            parts.append(_chatml_turn("tool", f"<tool_response>\n{resp_obj}\n</tool_response>"))
+        elif t.schema_error:
+            parts.append(_chatml_turn("tool", f"<tool_response>\n"
+                                              f'{{"error": {json.dumps(t.schema_error)}}}\n'
+                                              f"</tool_response>"))
+    return "".join(parts)
 
 
 def _build_turn_prompt(system: str, user: str, turns: List[AgentTurn]) -> str:
-    history = _format_history(turns)
-    return f"{system}\n\nUser: {user}\n{history}\n\nAssistant: "
+    head = _chatml_turn("system", system) + _chatml_turn("user", user)
+    return head + _render_history(turns) + f"{IM_START}assistant\n"
 
 
-def _collect_bytes(stream_gen) -> tuple:
-    """Drain a Brain.stream generator. Returns (bytes_out, stop_reason)."""
+def _collect_bytes(stream_gen):
     out = bytearray()
     stop = None
     for ev in stream_gen:
@@ -132,19 +137,48 @@ def _collect_bytes(stream_gen) -> tuple:
     return bytes(out), stop
 
 
+def _strip_imend(s: str) -> str:
+    i = s.find(IM_END)
+    if i >= 0:
+        s = s[:i]
+    return s.rstrip()
+
+
+def _parse_assistant_turn(raw_bytes: bytes):
+    """Parse a raw assistant-turn byte stream into (thought, tool_call, answer)
+    where tool_call is a dict {name, arguments} or None.
+
+    Hermes spec: a <tool_call>...</tool_call> block means the model is
+    invoking a tool; everything before it is treated as thought. Without a
+    tool_call block, the entire turn (sans <|im_end|>) is the answer."""
+    text = raw_bytes.decode("utf-8", errors="replace")
+    text = _strip_imend(text)
+    m = _TOOL_CALL_RE.search(text)
+    if not m:
+        return (None, None, text or None, None)
+    inner = m.group(1).strip()
+    try:
+        obj = json.loads(inner)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        return (None, None, None, f"tool_call JSON parse error: {type(e).__name__}: {e}")
+    if not isinstance(obj, dict) or "name" not in obj:
+        return (None, None, None, "tool_call missing 'name' field")
+    args = obj.get("arguments")
+    if args is None:
+        args = obj.get("args") or {}
+    if not isinstance(args, dict):
+        return (None, None, None, "tool_call 'arguments' must be an object")
+    pre = text[:m.start()].strip()
+    thought = pre or None
+    return (thought, {"name": obj["name"], "arguments": args}, None, None)
+
+
 class AgentLoop:
     """Tool-using loop on top of a Brain-shaped backend.
 
     Required `backend` interface:
         backend.stream(prompt, temperature, top_k_sample, max_new,
                        addons_chain=None, constraint=None) -> generator
-
-    Brain (the MRI PyTorch backend) and Brain.stream_fast both satisfy this.
-
-    Set `best_of_n > 1` to run K independent samples per turn and pick the
-    one with valid schema + best score (lowest mean NLL by default). This
-    is the published +20-30% inference-time quality lever, works on any
-    model without retraining.
     """
 
     def __init__(self, backend, toolbox: Toolbox,
@@ -164,26 +198,31 @@ class AgentLoop:
         self.seed_base = int(seed_base)
         self.system_prompt = _build_system_prompt(toolbox)
 
-    def run_streaming(self, user_input: str):
-        """Generator variant of run() that yields per-event dicts as the
-        loop progresses. Event shapes:
-            {kind: "turn_start", turn: <i>}
-            {kind: "thought",    turn: <i>, text: <str>}
-            {kind: "action",     turn: <i>, tool: <str>, args: <dict>}
-            {kind: "observation",turn: <i>, text: <str>, elapsed_s: <f>}
-            {kind: "schema_err", turn: <i>, error: <str>, raw_head: <str>}
-            {kind: "answer",     turn: <i>, text: <str>}
-            {kind: "stop",       reason: <str>, total_elapsed_s: <f>}
-        Consumers (SSE, log tail) read the same shape. Internally delegates
-        the run-once-and-collect path; the loop body is duplicated minimally
-        to preserve `run()` for non-streaming callers."""
-        from inference.decode import JSONConstraint
+    def _sample_turn(self, prompt, turn_i):
+        from inference.decode import StopOnConstraint
         import torch
+        candidates = []
+        for k in range(self.best_of_n):
+            torch.manual_seed(self.seed_base + turn_i * self.best_of_n + k)
+            constraint = StopOnConstraint(IM_END_B)
+            gen = self.backend.stream(prompt,
+                                      temperature=self.temperature,
+                                      top_k_sample=self.top_k,
+                                      max_new=self.max_new,
+                                      constraint=constraint)
+            raw, stop = _collect_bytes(gen)
+            candidates.append((raw, stop))
+        # Pick first candidate that parses cleanly (has tool_call or non-empty answer).
+        for raw, stop in candidates:
+            thought, tc, ans, err = _parse_assistant_turn(raw)
+            if err is None and (tc is not None or (ans and ans.strip())):
+                return raw, stop, thought, tc, ans, None
+        # Fall back to the longest candidate's parse for diagnostics.
+        longest = max(candidates, key=lambda c: len(c[0]))
+        thought, tc, ans, err = _parse_assistant_turn(longest[0])
+        return longest[0], longest[1], thought, tc, ans, err
 
-        class _AgentJSONConstraint(JSONConstraint):
-            def prime(self, prefix: bytes) -> None:
-                return
-
+    def run_streaming(self, user_input: str):
         result = AgentResult()
         t_start = time.time()
         for turn_i in range(self.max_turns):
@@ -192,85 +231,24 @@ class AgentLoop:
             t0 = time.time()
             prompt = _build_turn_prompt(self.system_prompt, user_input, result.turns)
 
-            candidates = []
-            for k in range(self.best_of_n):
-                torch.manual_seed(self.seed_base + turn_i * self.best_of_n + k)
-                constraint = _AgentJSONConstraint()
-                gen = self.backend.stream(prompt,
-                                          temperature=self.temperature,
-                                          top_k_sample=self.top_k,
-                                          max_new=self.max_new,
-                                          constraint=constraint)
-                raw, stop = _collect_bytes(gen)
-                candidates.append((raw, stop))
-
-            chosen_raw, chosen_stop = candidates[0]
-            chosen_obj = None
-            for raw, stop in candidates:
-                try:
-                    obj = json.loads(raw.decode("utf-8", errors="replace"))
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    continue
-                if isinstance(obj, dict) and ("action" in obj or "answer" in obj):
-                    chosen_raw, chosen_stop, chosen_obj = raw, stop, obj
-                    break
-            if chosen_obj is None:
-                longest = max(candidates, key=lambda c: len(c[0]))
-                chosen_raw, chosen_stop = longest
-
-            raw, stop = chosen_raw, chosen_stop
+            raw, stop, thought, tool_call, answer, err = self._sample_turn(prompt, turn_i)
             turn.raw_bytes = raw
             turn.stop_reason = stop
             turn.elapsed_s = time.time() - t0
+            turn.thought = thought
+            if thought:
+                yield {"kind": "thought", "turn": turn_i, "text": thought}
 
-            try:
-                obj = json.loads(raw.decode("utf-8", errors="replace"))
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                turn.parse_error = f"{type(e).__name__}: {e}"
-                turn.schema_error = "model emitted incomplete JSON; retry"
-                head = raw[:120].decode("utf-8", errors="replace")
-                yield {"kind": "schema_err", "turn": turn_i,
-                       "error": turn.schema_error, "raw_head": head}
+            if err is not None:
+                turn.schema_error = err
+                yield {"kind": "schema_err", "turn": turn_i, "error": err,
+                       "raw_head": raw[:120].decode("utf-8", errors="replace")}
                 result.turns.append(turn)
                 continue
 
-            if not isinstance(obj, dict):
-                turn.schema_error = f"top-level JSON must be an object, got {type(obj).__name__}"
-                yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
-                result.turns.append(turn)
-                continue
-            turn.parsed = obj
-            turn.thought = obj.get("thought") if isinstance(obj.get("thought"), str) else None
-            if turn.thought:
-                yield {"kind": "thought", "turn": turn_i, "text": turn.thought}
-
-            if "answer" in obj:
-                ans = obj.get("answer")
-                if not isinstance(ans, str):
-                    turn.schema_error = "'answer' must be a string"
-                    yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
-                    result.turns.append(turn)
-                    continue
-                turn.answer = ans
-                yield {"kind": "answer", "turn": turn_i, "text": ans}
-                result.turns.append(turn)
-                result.final_answer = ans
-                result.stop_reason = "answer"
-                break
-
-            if "action" in obj:
-                action = obj.get("action")
-                args = obj.get("args") or {}
-                if not isinstance(action, str):
-                    turn.schema_error = "'action' must be a string"
-                    yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
-                    result.turns.append(turn)
-                    continue
-                if not isinstance(args, dict):
-                    turn.schema_error = "'args' must be an object"
-                    yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
-                    result.turns.append(turn)
-                    continue
+            if tool_call is not None:
+                action = tool_call["name"]
+                args = tool_call["arguments"]
                 tool = self.toolbox.get(action)
                 if tool is None:
                     turn.schema_error = f"unknown tool {action!r}; available: {self.toolbox.names()}"
@@ -283,7 +261,6 @@ class AgentLoop:
                 tool_t0 = time.time()
                 turn.observation = tool.call(args)
                 tool_dt = time.time() - tool_t0
-                # Trim observation to keep SSE payload bounded
                 obs_view = turn.observation
                 if len(obs_view) > _DEFAULT_OBS_TRIM:
                     obs_view = obs_view[:_DEFAULT_OBS_TRIM] + " ... [trimmed]"
@@ -292,7 +269,15 @@ class AgentLoop:
                 result.turns.append(turn)
                 continue
 
-            turn.schema_error = "JSON object must contain either 'answer' or 'action'"
+            if answer is not None and answer.strip():
+                turn.answer = answer
+                yield {"kind": "answer", "turn": turn_i, "text": answer}
+                result.turns.append(turn)
+                result.final_answer = answer
+                result.stop_reason = "answer"
+                break
+
+            turn.schema_error = "assistant turn was empty (no tool_call and no answer)"
             yield {"kind": "schema_err", "turn": turn_i, "error": turn.schema_error}
             result.turns.append(turn)
 
@@ -304,109 +289,27 @@ class AgentLoop:
                "turns": len(result.turns)}
 
     def run(self, user_input: str) -> AgentResult:
-        # Avoid cycle: local import. We need a JSONConstraint subclass that
-        # skips Brain.stream's "prime with full prompt" step, because the
-        # agent prompt is natural language up to the Assistant: prefix, not
-        # a JSON document. Priming on the prompt corrupts the parser state.
-        from inference.decode import JSONConstraint
-
-        class _AgentJSONConstraint(JSONConstraint):
-            def prime(self, prefix: bytes) -> None:
-                return  # no-op; the prompt is not JSON
-
         res = AgentResult()
         t_start = time.time()
-        import torch
         for turn_i in range(self.max_turns):
             turn = AgentTurn()
             t0 = time.time()
             prompt = _build_turn_prompt(self.system_prompt, user_input, res.turns)
 
-            # Sample K candidates. K=1 is the default cheap path.
-            # Pick the first that produces a valid (parseable + schema-correct)
-            # action-or-answer JSON. If none do, take the longest output as a
-            # representative for the error log.
-            candidates = []
-            for k in range(self.best_of_n):
-                torch.manual_seed(self.seed_base + turn_i * self.best_of_n + k)
-                constraint = _AgentJSONConstraint()
-                gen = self.backend.stream(prompt,
-                                          temperature=self.temperature,
-                                          top_k_sample=self.top_k,
-                                          max_new=self.max_new,
-                                          constraint=constraint)
-                raw, stop = _collect_bytes(gen)
-                candidates.append((raw, stop))
-
-            # Try each candidate in order; the first one that parses cleanly +
-            # has a valid schema wins. Otherwise fall back to the longest
-            # output for diagnostics.
-            chosen_raw, chosen_stop = candidates[0]
-            chosen_obj = None
-            chosen_parse_err = None
-            for raw, stop in candidates:
-                try:
-                    obj = json.loads(raw.decode("utf-8", errors="replace"))
-                except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                    if chosen_parse_err is None:
-                        chosen_parse_err = f"{type(e).__name__}: {e}"
-                    continue
-                if isinstance(obj, dict) and ("action" in obj or "answer" in obj):
-                    chosen_raw, chosen_stop, chosen_obj = raw, stop, obj
-                    chosen_parse_err = None
-                    break
-            # If none of the candidates had a valid schema, pick the longest
-            # output (most informative for the error log).
-            if chosen_obj is None:
-                longest = max(candidates, key=lambda c: len(c[0]))
-                chosen_raw, chosen_stop = longest
-
-            raw, stop = chosen_raw, chosen_stop
+            raw, stop, thought, tool_call, answer, err = self._sample_turn(prompt, turn_i)
             turn.raw_bytes = raw
             turn.stop_reason = stop
             turn.elapsed_s = time.time() - t0
+            turn.thought = thought
 
-            # Parse the JSON. The constraint guarantees well-formedness, but
-            # only IF the model emitted enough bytes before max_new. Truncated
-            # output is still possible. Catch + recover.
-            try:
-                obj = json.loads(raw.decode("utf-8", errors="replace"))
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                turn.parse_error = f"{type(e).__name__}: {e}"
-                turn.schema_error = "model emitted incomplete JSON; retry"
+            if err is not None:
+                turn.schema_error = err
                 res.turns.append(turn)
                 continue
 
-            if not isinstance(obj, dict):
-                turn.schema_error = f"top-level JSON must be an object, got {type(obj).__name__}"
-                res.turns.append(turn)
-                continue
-            turn.parsed = obj
-            turn.thought = obj.get("thought") if isinstance(obj.get("thought"), str) else None
-
-            # Branch on schema:
-            if "answer" in obj:
-                ans = obj.get("answer")
-                if not isinstance(ans, str):
-                    turn.schema_error = "'answer' must be a string"
-                    res.turns.append(turn)
-                    continue
-                turn.answer = ans
-                res.turns.append(turn)
-                res.final_answer = ans
-                res.stop_reason = "answer"
-                break
-            if "action" in obj:
-                action = obj.get("action")
-                args = obj.get("args") or {}
-                if not isinstance(action, str):
-                    turn.schema_error = "'action' must be a string"
-                    res.turns.append(turn)
-                    continue
-                if not isinstance(args, dict):
-                    turn.schema_error = "'args' must be an object"
-                    res.turns.append(turn)
-                    continue
+            if tool_call is not None:
+                action = tool_call["name"]
+                args = tool_call["arguments"]
                 tool = self.toolbox.get(action)
                 if tool is None:
                     turn.schema_error = f"unknown tool {action!r}; available: {self.toolbox.names()}"
@@ -417,10 +320,16 @@ class AgentLoop:
                 turn.observation = tool.call(args)
                 res.turns.append(turn)
                 continue
-            # Neither answer nor action present.
-            turn.schema_error = "JSON object must contain either 'answer' or 'action'"
+
+            if answer is not None and answer.strip():
+                turn.answer = answer
+                res.turns.append(turn)
+                res.final_answer = answer
+                res.stop_reason = "answer"
+                break
+
+            turn.schema_error = "assistant turn was empty (no tool_call and no answer)"
             res.turns.append(turn)
-            continue
 
         if res.final_answer is None:
             res.stop_reason = res.stop_reason or "max_turns"

@@ -1759,30 +1759,16 @@ int model_load(model_t* m, const char* path) {
         }
     }
 
-    // gibberish prevention: act_boost > 1 means this binary was exported from a
-    // non-QAT-trained checkpoint, where weight magnitudes fall below the engine's
-    // INT8 quantization-noise floor. the boost helps the embedding tier but the
-    // matmul accumulator noise still dominates. running gives gibberish. refuse
-    // and message the user. fix: retrain with qat_enabled=true. context:
-    // docs/c_engine_120m_fix_tracking.md.
+    // act_boost > 1 is a magnitude observation, not a QAT verdict. QAT-trained
+    // checkpoints with small embeddings legitimately export act_boost > 1. The
+    // authoritative QAT signal lives in the model's config.json (qat_enabled),
+    // which the engine cannot read. Warn but do not refuse; the dashboard
+    // suppresses the warning when config.qat_enabled is true.
     if (m->act_boost > 1) {
-        const char* bypass = getenv("VERITATE_ALLOW_HIGH_ACT_BOOST");
-        if (bypass && bypass[0] && bypass[0] != '0') {
-            fprintf(stderr,
-                "model_load: act_boost=%d but VERITATE_ALLOW_HIGH_ACT_BOOST is set. "
-                "loading anyway. expect noisy or gibberish output until the model "
-                "is QAT-converged enough for act_boost=1.\n", m->act_boost);
-        } else {
-            fprintf(stderr,
-                "model_load: refusing to load. act_boost=%d means this model was "
-                "trained without QAT; matmul accumulator quantization noise will "
-                "dominate the signal and the engine will produce gibberish. "
-                "retrain with qat_enabled=true (multimind_mega trainer in the "
-                "dashboard) or use the PyTorch backend for non-QAT checkpoints. "
-                "set VERITATE_ALLOW_HIGH_ACT_BOOST=1 to force-load for dev testing. "
-                "context: docs/c_engine_120m_fix_tracking.md.\n", m->act_boost);
-            fclose(f); model_free(m); return -1;
-        }
+        fprintf(stderr,
+            "model_load: act_boost=%d (embeddings small relative to INT8 range). "
+            "Output may be noisy if the checkpoint was not QAT-trained.\n",
+            m->act_boost);
     }
 
     if (fread(m->embed,     (size_t)V * H, 1, f) != 1) { fclose(f); return -1; }

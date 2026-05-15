@@ -55,30 +55,36 @@ def _refresh_present():
 
 
 def _binary_is_stale():
-    """True if any .c/.h under veritate_engine/src/ is newer than the binary.
-    Returns False if binary doesn't exist (let _refresh_present handle that case)
-    or if src dir is missing. Guards against the silent stale-binary failure mode
-    where source got updated but the binary wasn't rebuilt, Python parser ends
-    up expecting a wire format the engine doesn't emit, causing pipe desync."""
+    """True if any .c/.h/.S under the engine's src/ or kernels/ is newer than
+    the binary. Returns False if binary doesn't exist (let _refresh_present
+    handle that case) or if both source roots are missing. Guards against the
+    silent stale-binary failure mode where source got updated but the binary
+    wasn't rebuilt, Python parser ends up expecting a wire format the engine
+    doesn't emit, causing pipe desync."""
     bin_path = _STATE["binary_path"]
     if not os.path.isfile(bin_path):
         return False
-    src_dir = os.path.join(paths.ENGINE_ROOT, "src")
-    if not os.path.isdir(src_dir):
+    roots = [
+        os.path.join(paths.ENGINE_PRIMARY, "src"),
+        os.path.join(paths.ENGINE_PRIMARY, "kernels"),
+    ]
+    roots = [r for r in roots if os.path.isdir(r)]
+    if not roots:
         return False
     try:
         bin_mtime = os.path.getmtime(bin_path)
     except OSError:
         return False
-    for root, _dirs, files in os.walk(src_dir):
-        for fn in files:
-            if not (fn.endswith(".c") or fn.endswith(".h") or fn.endswith(".S")):
-                continue
-            try:
-                if os.path.getmtime(os.path.join(root, fn)) > bin_mtime:
-                    return True
-            except OSError:
-                continue
+    for src_dir in roots:
+        for root, _dirs, files in os.walk(src_dir):
+            for fn in files:
+                if not (fn.endswith(".c") or fn.endswith(".h") or fn.endswith(".S")):
+                    continue
+                try:
+                    if os.path.getmtime(os.path.join(root, fn)) > bin_mtime:
+                        return True
+                except OSError:
+                    continue
     return False
 
 
@@ -116,7 +122,10 @@ def _run_build():
         except Exception as e:
             logmod.warn("build", f"pre-build hook failed: {e}")
     logmod.info("build", f"starting build for {_STATE['os']}/{_STATE['arch']}: {os.path.basename(script)}")
-    _set(status=STATUS_BUILDING, started_at=time.time(),
+    # start() already set STATUS_BUILDING synchronously; this is the worker
+    # confirming the running state. left intentionally so the worker can be
+    # invoked directly in tests without going through start().
+    _set(status=STATUS_BUILDING, started_at=_STATE.get("started_at") or time.time(),
          finished_at=None, exit_code=None, error=None)
     try:
         if _STATE["os"] == paths.OS_WINDOWS:
@@ -177,17 +186,29 @@ def stop():
     return True
 
 
-def start():
-    """Kick off a background build. Returns immediately. No-op if already building."""
+def start(force=False):
+    """Kick off a background build. Returns immediately. No-op if already
+    building. When force is False, a fresh-looking binary (present and not
+    stale) short-circuits with STATUS_OK. When force is True (user clicked
+    rebuild), we always run the build, even if the binary looks fresh.
+
+    Sets STATUS_BUILDING synchronously before returning when an actual build
+    will happen, so callers polling /engine/status immediately after the POST
+    cannot observe a transient idle/ok state and skip the wait."""
     with _LOCK:
-        if _STATE["status"] == STATUS_BUILDING:
-            return state()
-    if _refresh_present() and not _binary_is_stale():
+        already_building = _STATE["status"] == STATUS_BUILDING
+    if already_building:
+        return state()
+    if not force and _refresh_present() and not _binary_is_stale():
         logmod.info("build", f"binary already present for {_STATE['os']}/{_STATE['arch']}: skipping build")
         _set(status=STATUS_OK)
         return state()
     if _refresh_present() and _binary_is_stale():
         logmod.warn("build", "binary present but source is newer, forcing rebuild to avoid wire-format mismatch")
+    elif force:
+        logmod.info("build", "user-triggered rebuild: forcing fresh compile")
+    _set(status=STATUS_BUILDING, started_at=time.time(),
+         finished_at=None, exit_code=None, error=None)
     t = threading.Thread(target=_run_build, name="build-runner", daemon=True)
     t.start()
     return state()
