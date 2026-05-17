@@ -22,6 +22,7 @@
 # Imports:
 
 import io
+import json
 import os
 import ssl
 import tarfile
@@ -68,14 +69,55 @@ def _tarball_url(branch):
     return f"https://codeload.github.com/{REPO_OWNER}/{REPO_NAME}/tar.gz/refs/heads/{branch}"
 
 
+def _branches_api_url():
+    return f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/branches"
+
+
+class _EmptyRemote(Exception):
+    """Raised when the upstream repo exists but has no branches yet — i.e. it's
+    a placeholder. UI treats this as 'no trainers published yet', not as an
+    error to surface."""
+
+
+def _remote_has_no_branches():
+    """Probe the GitHub branches API. Returns True iff the repo is reachable
+    and its branch list is empty. Any other outcome (network failure, repo
+    missing, non-empty list) returns False — caller falls back to the original
+    error path."""
+    req = urllib.request.Request(_branches_api_url(),
+                                 headers={"User-Agent": "veritate-mri/sync",
+                                          "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
+            if getattr(resp, "status", 200) != 200:
+                return False
+            body = resp.read()
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+        return False
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return False
+    return isinstance(data, list) and len(data) == 0
+
+
 def _download_tarball(branch):
     url = _tarball_url(branch)
     req = urllib.request.Request(url, headers={"User-Agent": "veritate-mri/sync"})
-    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_S, context=_SSL_CTX) as resp:
-        code = getattr(resp, "status", 200)
-        if code != 200:
-            raise RuntimeError(f"http {code} from {url}")
-        return resp.read()
+    try:
+        with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_S, context=_SSL_CTX) as resp:
+            code = getattr(resp, "status", 200)
+            if code != 200:
+                raise RuntimeError(f"http {code} from {url}")
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        # 404 on a tarball URL can mean (a) the repo doesn't exist, (b) the
+        # branch doesn't exist on it, or (c) the repo is empty (no branches).
+        # Distinguish (c) so the UI can show a clean "not published yet"
+        # message instead of a raw HTTP error.
+        if e.code == 404 and _remote_has_no_branches():
+            raise _EmptyRemote() from e
+        raise
 
 
 def _strip_top_dir(name):
@@ -152,6 +194,20 @@ def files():
     branch = DEFAULT_BRANCH
     try:
         remote = _fetch_remote_files(branch)
+    except _EmptyRemote:
+        msg = "remote repo has no published trainers yet"
+        logmod.info("plugins-sync", msg)
+        _record("files", True, msg)
+        return {
+            "ok":            True,
+            "action":        "files",
+            "branch":        branch,
+            "remote_url":    DEFAULT_REMOTE_URL,
+            "files":         [],
+            "counts":        {},
+            "empty_remote":  True,
+            "status":        status(),
+        }
     except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, OSError) as e:
         msg = f"could not reach {DEFAULT_REMOTE_URL}: {e}"
         logmod.error("plugins-sync", msg)
@@ -218,6 +274,11 @@ def sync(actions=None, branch=None):
 
         try:
             remote = _fetch_remote_files(branch, use_cache=False)
+        except _EmptyRemote:
+            msg = "remote repo has no published trainers yet — nothing to sync"
+            logmod.info("plugins-sync", msg)
+            _record("sync", True, msg)
+            return {"ok": True, "empty_remote": True, "message": msg, "status": status()}
         except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, OSError) as e:
             msg = f"could not reach {DEFAULT_REMOTE_URL}: {e}"
             logmod.error("plugins-sync", msg)

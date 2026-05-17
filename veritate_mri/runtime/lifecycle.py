@@ -74,6 +74,11 @@ def _cleanup(app_config, stop_plugin=False, stop_build=True):
             logmod.ok("lifecycle", "closed c engine subprocess")
     except Exception as e:
         logmod.error("lifecycle", f"c subprocess close: {e}")
+    try:
+        from runtime import sys_metrics
+        sys_metrics.stop()
+    except Exception as e:
+        logmod.error("lifecycle", f"sys_metrics stop: {e}")
 
 
 def _relaunch(launch_cmd, mode):

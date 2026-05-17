@@ -121,6 +121,27 @@ def _open_browser_after_delay(url: str, delay: float) -> None:
     threading.Thread(target=_go, daemon=True).start()
 
 
+def _wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
+    """Block until a fresh bind on (0.0.0.0, port) succeeds, or timeout.
+    Used on relaunch to defeat the race where the parent's socket is still in
+    TIME_WAIT when the child tries to start serving. connect-probes don't help
+    here — TIME_WAIT blocks bind() but no listener is accepting connects."""
+    import socket as _sock
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        try:
+            s.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
+            s.bind(("0.0.0.0", port))
+            s.close()
+            return True
+        except OSError:
+            try: s.close()
+            except OSError: pass
+            time.sleep(0.25)
+    return False
+
+
 def _parse_launch_args():
     import argparse
     ap = argparse.ArgumentParser(
@@ -169,6 +190,9 @@ def _launch_dashboard() -> int:
 
     import app as mri_app  # noqa: E402
     mri_app.app.config["LAUNCH_CMD"] = relaunch_cmd
+    if not _wait_for_port_free(args.port, timeout=10.0):
+        logmod.error("veritate", f"port {args.port} still bound after 10s — aborting launch")
+        return 3
     mri_app.main()
     return 0
 

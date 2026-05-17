@@ -39,6 +39,7 @@ from readers import paths
 from runtime import logs as logmod
 from runtime import settings as settings_mod
 from training import trainer_runner as plugin_runner
+from . import sync_common as sc
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -67,9 +68,12 @@ CHANNEL_BRANCHES = {
 BRANCH_TO_CHANNEL = {v: k for k, v in CHANNEL_BRANCHES.items()}
 ALL_CHANNELS = (CHANNEL_STABLE, CHANNEL_EXPERIMENTAL, CHANNEL_DEVELOPMENT)
 
-# Top-level dirs in the repo root that hold gitignored user data or virtualenvs
-# and must NEVER be overwritten by an update.
-DEFAULT_SKIP_DIRS = ("data", "models", "plugins", "experiments", ".git", ".venv")
+# Derived from paths.py so any future rename of the user-data roots flows
+# through automatically.
+DEFAULT_SKIP_DIRS = tuple(sorted(set(
+    [os.path.basename(paths.MODELS_ROOT), os.path.basename(paths.PLUGINS_ROOT)]
+    + ["data", "experiments", ".git", ".venv", "venv", "__pycache__"]
+)))
 
 _REPO_URL_ENV         = "VERITATE_REPO_URL"
 _REPO_URL_PLACEHOLDER = "https://github.com/<owner>/<repo>"
@@ -462,6 +466,24 @@ def local_edits(skip_dirs=None):
                 "baseline_sha": base_sha,
                 "local_sha":    local_sha,
             })
+
+    # Self-heal: if the baseline barely matches reality (mass rename, manual
+    # restore, dev did `git pull`, user unzipped over the install), treat it
+    # as obsolete and report no baseline. The next successful pull writes a
+    # fresh baseline naturally; healthy installs never hit this branch.
+    if len(missing) >= max(20, len(baseline) // 2):
+        logmod.warn("http-updater",
+                    f"baseline appears stale ({len(missing)}/{len(baseline)} files "
+                    f"missing); ignoring it — next pull will rebuild")
+        return {
+            "ok":             True,
+            "has_baseline":   False,
+            "stale_baseline": True,
+            "modified":       [],
+            "missing":        [],
+            "added":          [],
+            "counts":         {"modified": 0, "missing": 0, "added": 0},
+        }
 
     # Pass 2: surface files the user added that aren't in baseline. Only check
     # source-y extensions so we don't flood the dashboard with pyc, generated

@@ -3369,6 +3369,23 @@ var trainPollTimer = null;
 var trainLastText = null;
 var trainRuns = [];
 var trainSelectedRun = null;
+// Cached model config for the currently-selected run. Used by the plateau
+// advisor to compute tokens-seen / param so it can distinguish a real
+// late-stage plateau from a saddle in an undertrained model.
+var trainModelCfg = null;
+var trainModelCfgName = null;
+
+function _trLoadModelCfg(name) {
+  if (!name) { trainModelCfg = null; trainModelCfgName = null; return; }
+  if (name === trainModelCfgName && trainModelCfg) return;
+  trainModelCfgName = name;
+  fetch(`/run/${encodeURIComponent(name)}/config?` + Date.now(), { cache: "no-store" })
+    .then(r => r.ok ? r.json() : null)
+    .then(cfg => {
+      if (trainModelCfgName === name) trainModelCfg = cfg || null;
+    })
+    .catch(() => {});
+}
 
 async function loadRunsList() {
   const sel = $("runPicker");
@@ -3440,6 +3457,7 @@ function _updateRunCapBadges() {
 async function loadTrainCsv() {
   if (!trainSelectedRun) return;
   _updateRunCapBadges();
+  _trLoadModelCfg(trainSelectedRun);
   try {
     const url = `/run/${encodeURIComponent(trainSelectedRun)}/csv?` + Date.now();
     const r = await fetch(url, { cache: "no-store" });
@@ -3462,6 +3480,9 @@ document.addEventListener("DOMContentLoaded", () => {
   if (sel) sel.addEventListener("change", () => {
     trainSelectedRun = sel.value;
     trainLastText = null;
+    trainModelCfg = null;
+    trainModelCfgName = null;
+    _trLoadModelCfg(trainSelectedRun);
     loadTrainCsv();
     loadClassroomForRun(trainSelectedRun);
     _updateRunCapBadges();
@@ -3727,6 +3748,25 @@ function deltaSpanT(p) {
   return `<span style="color:#ff7d7d">+${p.toFixed(2)}%</span>`;
 }
 
+// Compute tokens-seen-per-parameter for the currently-selected run. Returns
+// null when we don't have enough config to compute it (e.g. cfg still loading,
+// or the model is missing n_params_total / batch / seq). The ratio gates the
+// plateau advice: < ~5 tok/param means the model is undertrained and a "flat"
+// val is almost certainly a saddle that more training will break out of,
+// not a real convergence plateau.
+function _trTokPerParam(latestStep) {
+  if (!latestStep || latestStep <= 0) return null;
+  const cfg = trainModelCfg;
+  if (!cfg) return null;
+  const params = Number(cfg.n_params_total || 0);
+  const ta = cfg.training_args || {};
+  const batch = Number(ta.batch_size || 0);
+  const seq = Number(ta.seq || cfg.seq || 0);
+  if (!params || !batch || !seq) return null;
+  const tokens = latestStep * batch * seq;
+  return tokens / params;
+}
+
 function renderTrainPlateau(valPoints) {
   const r = detectPlateauT(valPoints);
   const colors = {
@@ -3745,13 +3785,46 @@ function renderTrainPlateau(valPoints) {
     plateau:    { what: "Val has flatlined across 4 evals. Diminishing returns.",                                      act: "Stop training, or sharply cool LR for one more pass to extract a final 1-3%." },
     regressing: { what: "Val loss is rising on average.",                                                              act: "Lower LR. If it persists, restart from the last good checkpoint. Check for overfitting." },
   };
+
+  // Data-exposure override: Chinchilla-optimal is ~20 tok/param; below ~5
+  // the model is severely undertrained and a flat val is a saddle, not a
+  // real plateau. Override the advice text accordingly so the panel doesn't
+  // tell users to stop training when they're 5% of the way through their
+  // data budget. The state badge (color + label) still reflects the raw
+  // slope verdict — only the prose under it changes.
+  const lastVal = valPoints.length ? valPoints[valPoints.length - 1] : null;
+  const latestStep = lastVal ? lastVal.x : 0;
+  const tpp = _trTokPerParam(latestStep);
+  let exposureStage = null;          // "early" | "mid" | "late" | null (unknown)
+  if (tpp != null) {
+    if (tpp < 5)       exposureStage = "early";
+    else if (tpp < 10) exposureStage = "mid";
+    else                exposureStage = "late";
+  }
+  // Only override "stop or cool LR" style advice when there's clearly more
+  // data to absorb. "improving" / "warming" advice doesn't change with
+  // exposure since "keep training" is already the right call.
+  if (exposureStage === "early") {
+    notes.plateau    = { what: `Val has flatlined, but tokens-per-param is only ${tpp.toFixed(2)} — far below the ~20 Chinchilla-optimal ratio. This is almost certainly a saddle in an undertrained model, not real convergence.`, act: "Keep training. The current LR is likely too high for fine progress at this scale — let the cosine schedule keep cooling it. Don't stop." };
+    notes.regressing = { what: `Val is ticking up, but tokens-per-param is only ${tpp.toFixed(2)}. With this little data exposure, real overfitting is very unlikely — more probable causes are eval-set noise (bump eval_iters) or LR still too hot.`, act: "Keep training. Watch over the next 4-6 evals; if the rise is consistent, lower LR rather than stop." };
+    notes.bouncing   = { what: `Val is noisy and tokens-per-param is only ${tpp.toFixed(2)}. Normal early-training behavior — the loss surface is rough and the model is still finding its footing.`, act: "Keep training. Consider bumping eval_iters for a cleaner val signal." };
+    notes.slowing    = { what: `Val is improving slowly. Tokens-per-param is only ${tpp.toFixed(2)} (well below Chinchilla-optimal ~20), so the slowdown is unlikely to be true diminishing returns yet.`, act: "Keep training. Slow gains will compound with more data exposure." };
+  } else if (exposureStage === "mid") {
+    notes.plateau    = { what: `Val has flatlined. Tokens-per-param is ${tpp.toFixed(2)} — meaningful training but not yet Chinchilla-optimal (~20). Could be a saddle or could be early convergence.`, act: "Probably keep training another ~1-2x your current step count and reassess. Sharply cooling LR now is an option if you need to ship soon." };
+    notes.regressing = { what: `Val is rising on average. Tokens-per-param is ${tpp.toFixed(2)} — overfitting is possible but not the most likely cause this early.`, act: "Lower LR. If the rise persists for 4+ more evals, consider rolling back to the last good checkpoint." };
+  }
+
   const c = colors[r.state] || colors.warming;
   const n = notes[r.state] || notes.warming;
+  const exposureBadge = (tpp != null)
+    ? `<span class="meta" title="tokens-seen / n_params_total. Chinchilla-optimal is ~20.">tok/param: <b style="color:${exposureStage === "early" ? "var(--warm)" : exposureStage === "mid" ? "var(--accent)" : "var(--data-pos)"}">${tpp.toFixed(2)}</b> (${exposureStage})</span>`
+    : "";
   let html = `<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
     <span style="font-size:18px;font-weight:700;letter-spacing:.04em;padding:4px 12px;border-radius:4px;background:${c.bg};color:${c.fg}">${c.label}</span>`;
   if (r.state !== "warming") {
     html += `<span class="meta">slope per eval over last ${r.recent.length} points: ${deltaSpanT(r.avgPct)}</span>`;
   }
+  if (exposureBadge) html += exposureBadge;
   html += `</div>
     <p style="margin:4px 0 6px;color:var(--text)">${n.what}</p>
     ${n.act ? `<p style="margin:4px 0 12px;color:${c.fg}"><b>→ what to do:</b> ${n.act}</p>` : ""}`;
@@ -9023,10 +9096,14 @@ function _renderHudPreview(snap) {
   const statusEl = $("cpuTempStatus");
   if (statusEl) {
     if (snap && snap.available && snap.cpu_temp_c == null) {
-      const isWin = navigator.userAgent.includes("Windows");
-      statusEl.textContent = isWin
-        ? "CPU temp sensor unavailable. Install + run LibreHardwareMonitor (Options > Enable WMI Provider) and the HUD will pick it up automatically."
-        : "CPU temp sensor unavailable. On Linux ensure lm-sensors is installed; on macOS the CPU package temp is not exposed without elevated tools.";
+      const ua = navigator.userAgent;
+      if (ua.includes("Windows")) {
+        statusEl.textContent = "CPU/GPU temp sensors unavailable. Install + run LibreHardwareMonitor (Options > Enable WMI Provider) and the HUD will pick them up automatically.";
+      } else if (ua.includes("Mac")) {
+        statusEl.textContent = "CPU/GPU temp sensors unavailable. macOS does not expose them without a helper. Apple Silicon: brew install macmon (sudoless, covers CPU + GPU). Intel: brew install osx-cpu-temp (CPU only). Restart the dashboard after install.";
+      } else {
+        statusEl.textContent = "CPU/GPU temp sensors unavailable. On Linux ensure lm-sensors is installed (sudo apt install lm-sensors && sudo sensors-detect) and rerun the dashboard.";
+      }
       statusEl.style.display = "";
     } else {
       statusEl.style.display = "none";
@@ -10389,6 +10466,10 @@ const corpusLibState = {
   installing: new Set(), // stems currently being installed (UI lock)
 };
 
+// Only these Veritate-native corpora are available; everything else is gated
+// behind a "coming soon" disabled button until the rest of the catalog ships.
+const CORPUS_ALLOWLIST = new Set(["chat_50mb", "agent_15mb"]);
+
 function _corpusFmtBytes(n) {
   if (n == null) return "?";
   if (n < 1024) return n + " B";
@@ -10525,7 +10606,10 @@ function _corpusRenderCatalog(data) {
     // Primary install gets accent border so it stands out from the secondary
     // "remove" button.
     let actions = "";
-    if (downloading) {
+    const gated = !isUser && !CORPUS_ALLOWLIST.has(c.stem);
+    if (gated) {
+      actions = `<button class="action" type="button" disabled title="not yet available">coming soon</button>`;
+    } else if (downloading) {
       actions = `<button class="action" type="button" disabled>downloading...</button>`;
     } else if (installed) {
       actions = `<button class="action" type="button" data-corpus-uninstall="${_corpusEsc(c.stem)}">remove</button>`;

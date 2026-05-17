@@ -156,6 +156,117 @@ def _psutil_cpu_temp():
     return None
 
 
+# macmon has a ~8s startup cost when stdout is piped, so per-poll subprocess
+# calls would freeze the HUD. We run it once as a persistent streaming process
+# and read JSON samples from a background thread.
+_MAC_MACMON_PROC   = None
+_MAC_MACMON_LATEST = None  # {"cpu": float|None, "gpu": float|None, "ts": float}
+_MAC_MACMON_LOCK   = threading.Lock()
+_MAC_MACMON_STALE_S = 5.0
+
+
+def _mac_macmon_reader(proc):
+    global _MAC_MACMON_LATEST
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                blob = json.loads(line)
+            except (ValueError, json.JSONDecodeError):
+                continue
+            temp = blob.get("temp") or {}
+            cpu = temp.get("cpu_temp_avg")
+            gpu = temp.get("gpu_temp_avg")
+            with _MAC_MACMON_LOCK:
+                _MAC_MACMON_LATEST = {
+                    "cpu": float(cpu) if isinstance(cpu, (int, float)) and 0 < cpu < 150 else None,
+                    "gpu": float(gpu) if isinstance(gpu, (int, float)) and 0 < gpu < 150 else None,
+                    "ts":  time.time(),
+                }
+    except (OSError, ValueError):
+        pass
+
+
+def _mac_macmon_start():
+    global _MAC_MACMON_PROC
+    if sys.platform != "darwin":
+        return
+    if _MAC_MACMON_PROC is not None and _MAC_MACMON_PROC.poll() is None:
+        return
+    # Reap any orphan macmons from a prior dashboard instance whose os._exit
+    # bypassed atexit cleanup. Only kills processes owned by the current user.
+    try:
+        subprocess.run(["pkill", "-U", str(os.getuid()), "-x", "macmon"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=1.0)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        proc = subprocess.Popen(
+            ["macmon", "pipe", "-i", "1000"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, text=True, bufsize=1,
+        )
+    except (FileNotFoundError, OSError):
+        return
+    _MAC_MACMON_PROC = proc
+    threading.Thread(target=_mac_macmon_reader, args=(proc,),
+                     name="macmon-reader", daemon=True).start()
+
+
+def stop():
+    """Terminate any background subprocesses (currently: macmon).
+    Lifecycle calls this before os._exit so we don't orphan helpers."""
+    global _MAC_MACMON_PROC
+    p = _MAC_MACMON_PROC
+    _MAC_MACMON_PROC = None
+    if p is None:
+        return
+    try:
+        if p.poll() is None:
+            p.terminate()
+    except OSError:
+        pass
+
+
+def _mac_macmon_sample():
+    if sys.platform != "darwin":
+        return None
+    if _MAC_MACMON_PROC is None:
+        _mac_macmon_start()
+        return None
+    with _MAC_MACMON_LOCK:
+        if _MAC_MACMON_LATEST is None:
+            return None
+        if time.time() - _MAC_MACMON_LATEST["ts"] > _MAC_MACMON_STALE_S:
+            return None
+        return {"cpu": _MAC_MACMON_LATEST["cpu"], "gpu": _MAC_MACMON_LATEST["gpu"]}
+
+
+def _mac_cpu_temp():
+    s = _mac_macmon_sample()
+    if s and s.get("cpu") is not None:
+        return s["cpu"]
+    out = _run(["osx-cpu-temp", "-c"], timeout=1.5)
+    if out:
+        m = re.search(r"(\d+(?:\.\d+)?)", out)
+        if m:
+            try:
+                v = float(m.group(1))
+                if 0 < v < 150:
+                    return v
+            except ValueError:
+                pass
+    return None
+
+
+def _mac_gpu_temp():
+    s = _mac_macmon_sample()
+    return s.get("gpu") if s else None
+
+
 def _lhm_sensors():
     """Query the LibreHardwareMonitor / OpenHardwareMonitor WMI namespace if
     running. Returns dict {'cpu': float|None, 'gpus': [{'name': str, 'temp_c': float}]}
@@ -221,6 +332,8 @@ def _cpu_temp():
     if (now - _CPU_TEMP_CACHE[0]) < _LIVE_TTL:
         return _CPU_TEMP_CACHE[1]
     val = _psutil_cpu_temp()
+    if val is None and sys.platform == "darwin":
+        val = _mac_cpu_temp()
     if val is None:
         lhm = _lhm_sensors()
         if lhm and lhm.get("cpu") is not None:
@@ -383,6 +496,9 @@ def warm():
         _ADAPTERS_REFRESHING = True
         threading.Thread(target=_refresh_adapters, name="sys-adapters-warm", daemon=True).start()
     threading.Thread(target=_installed_ram_bytes, name="sys-ram-warm", daemon=True).start()
+    _mac_macmon_start()
+    import atexit as _atexit
+    _atexit.register(stop)
 
 
 def _gpus():
@@ -410,6 +526,12 @@ def _gpus():
             for a in adapters:
                 if "apple" in a["name"].lower() or a["integrated"]:
                     a["load_pct"] = load
+                    break
+        gpu_t = _mac_gpu_temp()
+        if gpu_t is not None:
+            for a in adapters:
+                if a.get("temp_c") is None and ("apple" in a["name"].lower() or a["integrated"]):
+                    a["temp_c"] = gpu_t
                     break
     if sys.platform.startswith("win"):
         lhm = _lhm_sensors()
