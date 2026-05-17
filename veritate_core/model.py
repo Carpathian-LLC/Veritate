@@ -52,12 +52,20 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         # F.rms_norm fuses the fp32 reduction + scale into one kernel (~6x
         # speedup vs the unfused manual chain on CUDA; equivalent on CPU/MPS).
+        # Added in torch 2.4. On older torch (e.g. 2.2 which is the Intel-Mac
+        # ceiling) we fall back to the manual chain — correct, slower.
         # Weight is cast to x.dtype because the fused dispatcher falls back to
         # scalar when input/weight dtypes mismatch.
         w = _qat.fake_quant_ln_weight(self.weight) if self.qat else self.weight
         if w.dtype != x.dtype:
             w = w.to(x.dtype)
-        return F.rms_norm(x, self._normalized_shape, w, self.eps)
+        if hasattr(F, "rms_norm"):
+            return F.rms_norm(x, self._normalized_shape, w, self.eps)
+        # Manual RMSNorm: y = x * rsqrt(mean(x^2, last_dims) + eps) * weight.
+        # Reduction in fp32 for stability, output cast back to input dtype.
+        dims = tuple(range(-len(self._normalized_shape), 0))
+        ms = x.float().pow(2).mean(dim=dims, keepdim=True)
+        return (x * torch.rsqrt(ms + self.eps).to(x.dtype)) * w
 
 
 class QuantLinear(nn.Linear):

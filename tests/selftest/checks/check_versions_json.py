@@ -19,7 +19,7 @@ from tests.selftest import _status
 # Constants
 
 AREA           = "platform"
-REQUIRED_KEYS  = ("build", "engine", "mri", "format", "plugins")
+REQUIRED_KEYS  = ("build", "engine", "mri", "format", "trainers")
 
 # ------------------------------------------------------------------------------------
 # Functions

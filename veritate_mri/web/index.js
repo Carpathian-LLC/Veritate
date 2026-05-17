@@ -7909,8 +7909,8 @@ function _trAutoPickBundledCorpus() {
 
 // ---------------------------------------------------------------
 // Core Plugins. Dashboard-selectable recipe knobs that inject
-// trainer args at run time. Catalog comes from /core_plugins (which
-// reads veritate_core/core_plugins.py). Plugins in the same `group`
+// trainer args at run time. Catalog comes from /core_trainers (which
+// reads veritate_core/core_trainers.py). Plugins in the same `group`
 // are mutually exclusive; defaults seed the initial selection.
 // ---------------------------------------------------------------
 const corePluginsState = {
@@ -7936,10 +7936,10 @@ function _corePluginsLoad() {
     return;
   }
   corePluginsState.flow = flow;
-  fetch(`/core_plugins?flow=${encodeURIComponent(flow)}`)
+  fetch(`/core_trainers?flow=${encodeURIComponent(flow)}`)
     .then(r => r.ok ? r.json() : null)
     .then(data => {
-      corePluginsState.list = (data && Array.isArray(data.plugins)) ? data.plugins : [];
+      corePluginsState.list = (data && Array.isArray(data.trainers)) ? data.trainers : [];
       corePluginsState.selected = new Set(corePluginsState.list.filter(p => p.default).map(p => p.id));
       corePluginsState.ready = true;
       _corePluginsRender();
@@ -8281,10 +8281,10 @@ function _trRenderPicker() {
 function _trPoll() {
   if (!_isTabActive("training")) return Promise.resolve();
   return Promise.all([
-    fetch("/plugins").then(r => r.json()),
+    fetch("/trainers").then(r => r.json()),
     fetch("/train/discovery").then(r => r.json()),
   ]).then(([plug, disc]) => {
-    trainState.list      = plug.plugins || [];
+    trainState.list      = plug.trainers || [];
     trainState.running   = plug.running || { status: "idle" };
     trainState.discovery = disc || { corpora: [], models: [] };
     // Only treat the selected trainer as "gone" if the scan returned a non-empty
@@ -9655,24 +9655,24 @@ function _renderDownloadRow(s, prefix) {
   }
 }
 
-function _pluginsApplyStatus(s) {
-  _renderDownloadRow(s, "plugins");
+function _trainersApplyStatus(s) {
+  _renderDownloadRow(s, "trainers");
 }
 
-function _pluginsRefreshStatus() {
-  fetch("/trainers/git/status").then(r => r.json()).then(_pluginsApplyStatus).catch(() => {});
+function _trainersRefreshStatus() {
+  fetch("/trainers/git/status").then(r => r.json()).then(_trainersApplyStatus).catch(() => {});
 }
 
-function _pluginsCheckTrigger() {
-  const btn = $("pluginsCheckBtn");
-  const lab = $("pluginsSyncStatus");
+function _trainersCheckTrigger() {
+  const btn = $("trainersCheckBtn");
+  const lab = $("trainersSyncStatus");
   if (btn) btn.disabled = true;
   if (lab) { lab.textContent = "checking…"; lab.style.color = "var(--warm)"; }
   fetch("/trainers/git/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
     .then(r => r.json())
     .then(res => {
-      if (res.status) _pluginsApplyStatus(res.status);
-      else _pluginsRefreshStatus();
+      if (res.status) _trainersApplyStatus(res.status);
+      else _trainersRefreshStatus();
       if (lab) {
         if (res.ok) {
           const n = res.new_files ?? 0;
@@ -9695,9 +9695,9 @@ function _pluginsCheckTrigger() {
       }
       // Auto-populate the details panel if it's open so the user sees the
       // breakdown without an extra click.
-      const panel = $("pluginsFilesPanel");
+      const panel = $("trainersFilesPanel");
       if (panel && panel.style.display !== "none" && res.files) {
-        _syncRenderPanel("plugins", res);
+        _syncRenderPanel("trainers", res);
       }
     })
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
@@ -9715,7 +9715,7 @@ function _activeTrainingName() {
   return r.model || r.name || "the active run";
 }
 
-function _pluginsUpdateTrigger() {
+function _trainersUpdateTrigger() {
   const active = _activeTrainingName();
   if (active) {
     const ok = confirm(
@@ -9727,8 +9727,8 @@ function _pluginsUpdateTrigger() {
     );
     if (!ok) return;
   }
-  const btn = $("pluginsUpdateBtn");
-  const lab = $("pluginsSyncStatus");
+  const btn = $("trainersUpdateBtn");
+  const lab = $("trainersSyncStatus");
   if (btn) btn.disabled = true;
   if (lab) { lab.textContent = "syncing…"; lab.style.color = "var(--warm)"; }
   // Bulk "safe" sync: pass no actions dict — server applies default policy
@@ -9742,13 +9742,13 @@ function _pluginsUpdateTrigger() {
           lab.textContent = _syncResultSummary(r);
           lab.style.color = (r.errors && r.errors.length) ? "var(--hot)" : "var(--data-pos)";
         }
-        _pluginsRefreshStatus();
+        _trainersRefreshStatus();
         // If the details panel is open, refresh it so the user sees the new state.
-        const panel = $("pluginsFilesPanel");
-        if (panel && panel.style.display !== "none") _syncFilesFetch("plugins");
+        const panel = $("trainersFilesPanel");
+        if (panel && panel.style.display !== "none") _syncFilesFetch("trainers");
       } else {
         if (lab) { lab.textContent = `failed: ${res.error || "unknown error"}`; lab.style.color = "var(--hot)"; }
-        _pluginsRefreshStatus();
+        _trainersRefreshStatus();
       }
     })
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
@@ -9873,8 +9873,8 @@ const SYNC_STATE_META = {
 };
 
 const _syncState = {
-  plugins: { last: null, inflight: false },
-  models:  { last: null, inflight: false, progressTimer: null },
+  trainers: { last: null, inflight: false },
+  models:   { last: null, inflight: false, progressTimer: null },
 };
 
 function _syncFmtBytes(n) {
@@ -10058,7 +10058,7 @@ function _syncRenderPanel(scope, data) {
 function _syncConfirmDestructive(scope, action, path, row) {
   const sp = _syncSplitPath(path);
   const lines = [];
-  const scopeLabel = scope === "plugins" ? "plugin" : "model";
+  const scopeLabel = scope === "trainers" ? "plugin" : "model";
   if (sp.parent) {
     lines.push(`File:    ${sp.file}`);
     lines.push(`Inside:  ${sp.parent}   (${scopeLabel})`);
@@ -10159,7 +10159,7 @@ function _syncFilesAction(scope, path, action, row) {
           lab.style.color = "var(--hot)";
         }
       }
-      if (scope === "plugins") _pluginsRefreshStatus();
+      if (scope === "trainers") _trainersRefreshStatus();
       else                     _modelsRefreshStatus();
       // refresh the detail panel so the row's state advances
       return _syncFilesFetch(scope);
@@ -11085,7 +11085,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // Detect active training before firing the switch.
       let trainingActive = false;
       try {
-        const pl = await fetch("/plugins").then(x => x.json());
+        const pl = await fetch("/trainers").then(x => x.json());
         trainingActive = !!(pl && pl.running && pl.running.status === "running");
       } catch (_) { /* if /plugins is down, fall through and let the switch try */ }
 
@@ -11274,14 +11274,14 @@ document.addEventListener("DOMContentLoaded", () => {
   _pollBuildStatus();
   setInterval(_pollBuildStatus, 3000);
 
-  const pcb = $("pluginsCheckBtn");
-  if (pcb) pcb.addEventListener("click", _pluginsCheckTrigger);
-  const pub = $("pluginsUpdateBtn");
-  if (pub) pub.addEventListener("click", _pluginsUpdateTrigger);
-  const pdb = $("pluginsDetailsBtn");
-  if (pdb) pdb.addEventListener("click", () => _syncTogglePanel("plugins"));
-  _pluginsRefreshStatus();
-  setInterval(_pluginsRefreshStatus, 15000);
+  const pcb = $("trainersCheckBtn");
+  if (pcb) pcb.addEventListener("click", _trainersCheckTrigger);
+  const pub = $("trainersUpdateBtn");
+  if (pub) pub.addEventListener("click", _trainersUpdateTrigger);
+  const pdb = $("trainersDetailsBtn");
+  if (pdb) pdb.addEventListener("click", () => _syncTogglePanel("trainers"));
+  _trainersRefreshStatus();
+  setInterval(_trainersRefreshStatus, 15000);
 
   const mcb = $("modelsCheckBtn");
   if (mcb) mcb.addEventListener("click", _modelsCheckTrigger);
@@ -11604,7 +11604,7 @@ async function loadVersions() {
     engine:  "Veritate Engine",
     mri:     "MRI",
     format:  "Model API",
-    plugins: "Plugin Engine",
+    trainers: "Trainer Contract",
   };
   const EXPLAIN = {
     channel: {
@@ -11627,12 +11627,12 @@ async function loadVersions() {
       title: "Model API",
       body:  "Version of the on-disk model contract: the .bin layout the engine consumes, the checkpoint shape PyTorch saves, and the config.json keys readers expect. Bumps when a new field is added or an existing one changes meaning. Older models may still load, but only when the engine knows how to interpret the older revision."
     },
-    plugins: {
-      title: "Plugin Engine",
-      body:  "Version of the plugin contract surfaced by veritate_core.plugin: manifest schema, lifecycle hooks, and the platform calls a plugin is allowed to make. Bumps when a hook is added, renamed, or removed. Plugins compiled against an older contract version may refuse to load."
+    trainers: {
+      title: "Trainer Contract",
+      body:  "Version of the trainer contract surfaced by veritate_core.plugin: manifest schema, lifecycle hooks, and the platform calls a trainer is allowed to make. Bumps when a hook is added, renamed, or removed. Trainers compiled against an older contract version may refuse to load."
     },
   };
-  const ORDER = ["channel", "build", "engine", "mri", "format", "plugins"];
+  const ORDER = ["channel", "build", "engine", "mri", "format", "trainers"];
   const SEP = '<span style="color:var(--text);font-size:14px;font-weight:300;margin:0 4px">|</span>';
   function channelMeta(raw) {
     const s = (raw || "").toString().toLowerCase();

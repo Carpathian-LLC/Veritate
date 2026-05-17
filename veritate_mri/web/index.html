@@ -1302,19 +1302,19 @@
             </label>
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="pluginsSyncRow">
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="trainersSyncRow">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Trainers</div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="pluginsRemote">.</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">local: <span id="pluginsLocal">.</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">status: <span id="pluginsBehind">unknown</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="trainersRemote">.</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">local: <span id="trainersLocal">.</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">status: <span id="trainersBehind">unknown</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">Per-file three-state sync from the public Veritate-Trainers repo. Files you've edited locally are flagged and never auto-overwritten. The "update" button installs missing files and updates clean-but-outdated ones; locally-modified files require an explicit "force" from the details panel below. Refuses to sync while a trainer is running.</div>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
-              <button id="pluginsCheckBtn"   class="action" type="button">check</button>
-              <button id="pluginsUpdateBtn"  class="action" type="button">update</button>
-              <button id="pluginsDetailsBtn" class="action" type="button">details</button>
+              <button id="trainersCheckBtn"   class="action" type="button">check</button>
+              <button id="trainersUpdateBtn"  class="action" type="button">update</button>
+              <button id="trainersDetailsBtn" class="action" type="button">details</button>
             </div>
-            <span id="pluginsSyncStatus" class="meta" style="font-size:10.5px"></span>
-            <div id="pluginsFilesPanel" style="display:none;margin-top:6px;padding-top:6px;border-top:1px solid var(--line)"></div>
+            <span id="trainersSyncStatus" class="meta" style="font-size:10.5px"></span>
+            <div id="trainersFilesPanel" style="display:none;margin-top:6px;padding-top:6px;border-top:1px solid var(--line)"></div>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="modelsSyncRow">

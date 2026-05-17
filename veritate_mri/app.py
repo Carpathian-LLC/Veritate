@@ -96,7 +96,7 @@ def _pytorch_idle_watcher():
 
 from routes import (
     atlas_routes, backends_routes, corpus_routes, engine_routes,
-    lifecycle_routes, logs_routes, models_routes, plugins_routes,
+    lifecycle_routes, logs_routes, models_routes, trainers_routes,
     pruning_routes, runs_routes, settings_routes, sys_routes,
     teacher_routes, train_routes, wiki_routes,
 )
@@ -107,7 +107,7 @@ engine_routes.register(app)
 lifecycle_routes.register(app)
 logs_routes.register(app)
 models_routes.register(app)
-plugins_routes.register(app)
+trainers_routes.register(app)
 pruning_routes.register(app)
 runs_routes.register(app)
 settings_routes.register(app)

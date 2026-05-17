@@ -281,6 +281,16 @@ def _run(plugin, args):
     pref = (settings_mod.get().get("device_preference") or "auto").strip().lower()
     if pref and pref != "auto":
         env[DEVICE_ENV] = pref
+    else:
+        # auto: platform overrides only where we know the trainer's torch-based
+        # detection would mislead it. Specifically: macOS x86_64 (Intel Mac)
+        # reports torch.backends.mps.is_available() == True, but MPS only
+        # really works on Apple Silicon — using it crashes mid-step. Force
+        # CPU on that tier. Apple Silicon and Linux/Windows hosts get full
+        # auto-detect by the trainer.
+        import platform as _plat
+        if _plat.system() == "Darwin" and _plat.machine().lower() != "arm64":
+            env[DEVICE_ENV] = "cpu"
     # Match BLAS and OpenMP thread budgets to the physical-core count so libtorch
     # and oneDNN parallelize across the same number of cores the trainer asks for.
     # Caller-set values win; we only fill in when the user hasn't already.
