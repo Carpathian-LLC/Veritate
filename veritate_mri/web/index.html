@@ -898,10 +898,12 @@
     <h2>train a model <em>new, continue, distill, or export</em></h2>
     <div class="body">
 
-      <div style="color:var(--dim);font-size:11px;margin-bottom:6px">step 1 &mdash; what to do?</div>
-      <div class="controls" style="margin-bottom: 18px;gap:10px;flex-wrap:wrap;align-items:center">
-        <button id="trainFlowOpenBtn" type="button" style="border-color:var(--accent);color:var(--accent);font-weight:600">Choose action&hellip;</button>
-        <span id="trainFlowCurrent" class="meta" style="font-size:11.5px;color:var(--dim)">no action picked yet</span>
+      <div id="trainStep1Row">
+        <div style="color:var(--dim);font-size:11px;margin-bottom:6px">step 1 &mdash; what to do?</div>
+        <div class="controls" style="margin-bottom: 18px;gap:10px;flex-wrap:wrap;align-items:center">
+          <button id="trainFlowOpenBtn" type="button" style="border-color:var(--accent);color:var(--accent);font-weight:600">Choose action&hellip;</button>
+          <span id="trainFlowCurrent" class="meta" style="font-size:11.5px;color:var(--dim)">no action picked yet</span>
+        </div>
       </div>
 
       <div id="teacherGate" class="teacher-gate" style="display:none">

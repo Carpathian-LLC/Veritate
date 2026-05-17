@@ -8445,11 +8445,9 @@ function _trRenderStatus() {
   el.innerHTML = `<b style="color:${c}">${s.status}</b>${id}`;
   if (stop) stop.disabled = s.status !== "running";
   if (run)  run.disabled  = s.status === "running" || !trainState.selected;
-  // Whenever a plugin is in flight, the stop button MUST be reachable. Some
-  // earlier states could collapse trainRunRow (e.g. a transient empty plugin
-  // list nulling trainState.selected). Force-show it here so the user can
-  // always cancel a running run.
   if (runRow && s.status === "running") runRow.style.display = "flex";
+  const isRunning = s.status === "running";
+  document.body.classList.toggle("training-active", isRunning);
   if (typeof _trUpdateTeacherGate === "function") _trUpdateTeacherGate();
 }
 
