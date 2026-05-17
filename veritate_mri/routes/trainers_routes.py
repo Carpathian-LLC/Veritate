@@ -16,20 +16,10 @@
 from flask import request
 
 from readers import models, trainers as trainers_reader
-from runtime import logs as logmod
 from training import trainer_runner
 from training.sync import trainers_sync
 
-from ._common import open_folder
-
-
-def _safe(source, fn, *a, **kw):
-    try:
-        return fn(*a, **kw)
-    except Exception as e:
-        msg = f"{type(e).__name__}: {e}"
-        logmod.error(source, msg)
-        return ({"ok": False, "error": msg}, 500)
+from ._common import open_folder, safe_route as _safe
 
 
 def register(app):

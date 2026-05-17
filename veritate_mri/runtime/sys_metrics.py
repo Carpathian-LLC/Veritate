@@ -582,13 +582,20 @@ def snapshot():
             "cpu_temp_c": None,
             "gpus": [],
         }
-    cpu_pct = _PROC.cpu_percent(None)
+    # cpu_pct is system-wide across all cores (0-100). This is what users
+    # expect the HUD to spike on — trainers run in subprocesses, so the
+    # dashboard's own process_cpu_pct stays near zero even when the box is
+    # pegged. psutil.cpu_percent uses delta-since-last-call when interval=None;
+    # the HUD polls regularly so the first reading after launch may be 0.
+    sys_cpu_pct     = psutil.cpu_percent(interval=None)
+    process_cpu_pct = _PROC.cpu_percent(None)
     rss     = _PROC.memory_info().rss
     vm      = psutil.virtual_memory()
     installed = _installed_ram_bytes() or vm.total
     return {
         "available": True,
-        "cpu_pct":          round(cpu_pct, 1),
+        "cpu_pct":          round(sys_cpu_pct, 1),
+        "process_cpu_pct":  round(process_cpu_pct, 1),
         "cpu_count":        _CPU_COUNT,
         "cpu_temp_c":       _cpu_temp(),
         "rss_bytes":        int(rss),

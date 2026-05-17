@@ -8,9 +8,9 @@
 //   threadgroup shared memory. Naive on purpose: correctness before tuning.
 // - Compatible with Metal 1 family (Mac Pro 2013 AMD Tahiti). Avoids
 //   simdgroup intrinsics, fp16 atomics, and other newer-family features.
-// - Shape convention: a is [M x K] row-major, b is [K x N] column-major,
-//   c is [M x N] row-major. Same as kernels/scalar/matmul_scalar.c so
-//   verify_metal can bit-compare against it.
+// - Shape convention (matches kernels/scalar/matmul_scalar.c so verify_metal
+//   can bit-compare): a is [M x K] row-major, b is [K x N] row-major, c is
+//   [M x N] row-major. c[m,n] = sum_k a[m,k] * b[k,n].
 // - PHASE 2: unverified on real hardware. expected to compile cleanly but
 //   may need driver-specific tweaks. paired with src/metal_dispatch.m.
 // veritate_engine/v1/kernels/metal/matmul_int8.metal
@@ -42,13 +42,12 @@ kernel void matmul_int8(
     if (m >= p.M || n >= p.N) return;
 
     int acc = 0;
-    int row_base = m * p.K;
-    int col_base = n * p.K;
+    int a_row_base = m * p.K;
     for (int k = 0; k < p.K; ++k) {
         // a is row-major: a[m,k] = a[m*K + k]
-        // b is column-major: b[k,n] = b[n*K + k]
-        int av = int(a[row_base + k]);
-        int bv = int(b[col_base + k]);
+        // b is row-major: b[k,n] = b[k*N + n]
+        int av = int(a[a_row_base + k]);
+        int bv = int(b[k * p.N + n]);
         acc += av * bv;
     }
     c[m * p.N + n] = acc;

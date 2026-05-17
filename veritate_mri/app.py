@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 
-from flask import Flask, send_from_directory
+from flask import Flask, request, send_from_directory
 from werkzeug.serving import WSGIRequestHandler
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,6 +61,23 @@ app.config["BRAIN_LAST_USED"] = 0.0
 @app.route("/")
 def index():
     return send_from_directory(STATIC_DIR, "index.html")
+
+
+@app.errorhandler(Exception)
+def _route_exception_to_log(e):
+    """Catch any uncaught exception in any route. Logs to the dashboard ring
+    so users see it in the Logs tab, returns parseable JSON so the frontend's
+    r.json() doesn't choke on Flask's HTML 500 page (WebKit reports that as
+    'string did not match the expected pattern' which is opaque)."""
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        # Flask's own 404/405/etc. JSON-ify them too so the same contract
+        # holds (no HTML reaching r.json()).
+        logmod.warn("route", f"HTTP {e.code} {request.method} {request.path}")
+        return ({"ok": False, "error": e.description or e.name, "status": e.code}, e.code)
+    msg = f"{type(e).__name__}: {e}"
+    logmod.error("route", f"{request.method} {request.path} -> {msg}")
+    return ({"ok": False, "error": msg}, 500)
 
 
 from routes._brain import (

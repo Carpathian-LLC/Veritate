@@ -75,8 +75,58 @@ If `verify-metal` PASSes, the shader is correct on that GPU and we can move to t
 
 ## Mac Pro 2013 / FirePro D500 specifics
 
-- GPU is AMD Tahiti (GCN 1.0), 2× 3 GB VRAM, supports Metal 1 family.
-- macOS Monterey (12.x) is the highest the machine supports.
-- Metal compute shaders work but are limited to Metal 1 — no SIMD-group instructions, no atomic ops beyond i32 add, max threadgroup size depends on memory pressure.
+- GPU is AMD Tahiti (GCN 1.0), 2× 3 GB VRAM, supports **Metal 2 family** (`spdisplays_mtlgpufamilymac2` confirmed from a real diagnostics dump).
+- macOS Monterey 12.7.6 (confirmed). Last Xcode compatible: **Xcode 14**.
+- Metal 2 family unlocks more than I assumed: SIMD-group instructions, fp16 math, indirect command buffers. Good news for shader perf.
 - VRAM is only 3 GB per GPU; even a small model's KV cache will pressure it. Plan on aggressive int8 quantization + sequence-length capping.
 - Two GPUs in the box: Metal command queues per device, no automatic data-parallel. We'd manually split work across them or pick one as primary.
+
+## GPU **inference** roadmap (tractable: 3–4 weeks focused work)
+
+Phase 2 scaffold is here. Today: bridge compiles, `metal-info` works, shader code exists but unvalidated. To get from scaffold to "Veritate runs inference on the AMD GPUs":
+
+1. **Install full Xcode 14 on the Mac Pro.** `xcrun metal` lives in Xcode proper, not CLT. Then `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`, rebuild.
+2. **`verify-metal` PASSes.** First signal the matmul shader is bit-correct against the CPU reference. May need 1–3 rounds of iteration on shader indexing or threadgroup size.
+3. **Write the other forward-pass shaders:** attention (SDPA-style), layernorm, softmax, gelu, embedding lookup. ~1–2 weeks of focused on-machine work each iteration.
+4. **Backend integration:** add `metal` as an inference device option alongside `pytorch` and `c_engine`. Load model weights to Metal buffers once at init, dispatch the forward path per generation step.
+5. **Two-GPU strategy:** simplest is "use device 0, keep device 1 as warm spare." Real data-parallel across both is a stretch goal — would cut sequence-length budget further.
+
+What this gets you: byte-level inference at GPU speed (probably 5–10× faster than CPU on this hardware for small models). The 3 GB VRAM ceiling means you're capped at roughly **80–200M params for INT8** with realistic context windows.
+
+## GPU **training** roadmap (hard: 6–10 weeks, marginal value on this hardware)
+
+Training on Metal needs more than inference:
+- All forward shaders (same as above)
+- Backward shaders for each op (gradient computation; matches PyTorch's autograd surface)
+- Optimizer step shader (AdamW kernel)
+- Gradient accumulation buffer management
+- Loss computation + backward seed
+
+This is essentially "build a tiny PyTorch for AMD-on-macOS." Reasonable for a research project; **not a great use of time on a 2013 Mac Pro specifically** because:
+- 3 GB VRAM caps the trainable model size to ~10–30M params with QAT
+- Even at full GPU utilization, you'd be ~3–5× faster than CPU on this hardware
+- CPU on this box trains 10M models at ~1000 tok/s already (your latest log)
+
+Stronger move: **train on CPU here, serve inference on GPU here.** That's the Phase 2 inference roadmap above and it's the natural arc.
+
+## What Sam can do RIGHT NOW to unblock Phase 2
+
+```
+# 1. Install Xcode 14 from App Store on the Mac Pro.
+# 2. Point CLT at it:
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+# 3. Rebuild — should now produce default.metallib:
+bash veritate_engine/v1/build/build.sh
+# Expect: "build.sh: built /path/to/default.metallib"
+
+# 4. First signal:
+veritate_engine/v1/bin/macos/x86_64/veritate verify-metal
+# Outcomes:
+#   "PASS" — shader is bit-correct; we move on to attention
+#   "FAIL N/64 outputs mismatched" — shader has a bug; paste output, I iterate
+#   "command buffer error: ..." — Metal driver complaint; paste output, I iterate
+#   "library not found" — Xcode not switched, see step 2
+```
+
+Each `verify-metal` run is one diagnostic message you paste back. We iterate from there. Estimate: 1–3 rounds to get PASS, then each subsequent shader is 2–4 rounds.

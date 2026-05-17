@@ -59,9 +59,14 @@ HOST_TOKEN_LEN = 12
 PROTOCOL_VERSION = 2
 TRAINING_EVENTS_PER_PING_MAX = 32
 ERRORS_PER_PING_MAX = 20
-DIAGNOSTICS_LOG_TAIL    = 200
-DIAGNOSTICS_PLUGIN_TAIL = 400
-DIAGNOSTICS_PLUGIN_BYTES = 64 * 1024
+# Tighter caps for the diagnostics block: the webhook returns 413 above ~256KB
+# and a single torch traceback can be many KB. Truncate per-field so the
+# payload survives even a compile-error-spamming session.
+DIAGNOSTICS_LOG_TAIL     = 60
+DIAGNOSTICS_LOG_MSG_MAX  = 400
+DIAGNOSTICS_PLUGIN_TAIL  = 120
+DIAGNOSTICS_PLUGIN_BYTES = 16 * 1024
+DIAGNOSTICS_PAYLOAD_MAX  = 200 * 1024
 ERROR_SOURCE_MAX  = 32
 ERROR_MESSAGE_MAX = 240
 
@@ -383,16 +388,24 @@ def _scrub_paths(obj, pairs):
 def _diagnostics_block():
     """Full hardware dump (everything sys_metrics.detect_specs reports) plus
     the tail of the in-memory log ring and the plugin run log. Only included
-    when diagnostics_logs_enabled is True. Lets us debug crashes the user
-    couldn't surface any other way. All string fields are run through
-    _scrub_paths to redact /Users/<name> and the repo root before send."""
+    when diagnostics_logs_enabled is True. Each field is bounded by
+    DIAGNOSTICS_* constants so the payload stays under typical webhook size
+    limits even when the log ring is full of compiler-error tracebacks. All
+    string fields are run through _scrub_paths to redact user paths."""
     try:
         specs = sys_metrics.detect_specs()
     except Exception:
         specs = None
     try:
         from runtime import logs as _logmod
-        recent = _logmod.snapshot(limit=DIAGNOSTICS_LOG_TAIL)
+        recent_raw = _logmod.snapshot(limit=DIAGNOSTICS_LOG_TAIL)
+        recent = []
+        for e in (recent_raw or []):
+            msg = e.get("msg") if isinstance(e, dict) else None
+            if isinstance(msg, str) and len(msg) > DIAGNOSTICS_LOG_MSG_MAX:
+                e = dict(e)
+                e["msg"] = msg[:DIAGNOSTICS_LOG_MSG_MAX] + " …[truncated]"
+            recent.append(e)
     except Exception:
         recent = []
     plugin_tail = None
@@ -409,7 +422,20 @@ def _diagnostics_block():
         "recent_logs": recent,
         "plugin_run_tail": plugin_tail,
     }
-    return _scrub_paths(block, _path_scrub_pairs())
+    block = _scrub_paths(block, _path_scrub_pairs())
+    # Final budget check: if scrubbed block is still too big (e.g. an unusually
+    # large `specs` from an exotic host), drop recent_logs/plugin_run_tail in
+    # order of size until under the cap. specs is preserved — that's the
+    # value-bearing payload for debugging.
+    encoded = json.dumps(block, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > DIAGNOSTICS_PAYLOAD_MAX:
+        block["plugin_run_tail"] = None
+        block["_truncated"] = ["plugin_run_tail"]
+        encoded = json.dumps(block, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > DIAGNOSTICS_PAYLOAD_MAX:
+        block["recent_logs"] = (block.get("recent_logs") or [])[:10]
+        block["_truncated"] = sorted(set((block.get("_truncated") or []) + ["recent_logs"]))
+    return block
 
 
 def preview_payload():

@@ -775,12 +775,12 @@
   .wiki-xref { color: var(--text); }
   .wiki-xref-path { color: var(--dim); font-size: 11px; font-family: ui-monospace, monospace; }
 
-  /* ---- Core Plugins section (Training tab) ---- */
-  .core-plugins-wrap { margin: 4px 0 16px; padding: 12px 14px; background: #0a0c12; border: 1px solid var(--line); border-radius: 5px; }
-  .core-plugins-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
-  .core-plugins-title { color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
-  .core-plugins-sub { color: var(--dim); font-size: 10.5px; line-height: 1.45; }
-  .core-plugins-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  /* ---- Core Trainers section (Training tab) ---- */
+  .core-trainers-wrap { margin: 4px 0 16px; padding: 12px 14px; background: #0a0c12; border: 1px solid var(--line); border-radius: 5px; }
+  .core-trainers-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
+  .core-trainers-title { color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+  .core-trainers-sub { color: var(--dim); font-size: 10.5px; line-height: 1.45; }
+  .core-trainers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
   .core-plugin-box { position: relative; padding: 10px 12px 11px; background: #060709; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; transition: border-color .12s ease, background .12s ease; display: flex; flex-direction: column; gap: 6px; min-height: 92px; }
   .core-plugin-box:hover { border-color: var(--accent); background: rgba(106,166,255,0.04); }
   .core-plugin-box.is-selected { border-color: var(--data-pos); background: rgba(93,156,117,0.08); }
@@ -790,7 +790,7 @@
   .core-plugin-group { margin-left: auto; color: var(--dim); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; font-weight: 500; }
   .core-plugin-desc { color: var(--dim); font-size: 11px; line-height: 1.45; }
   .core-plugin-args { color: var(--accent); font-size: 10.5px; font-family: ui-monospace, monospace; opacity: .8; }
-  .core-plugins-empty { color: var(--dim); font-size: 11px; padding: 6px 2px; }
+  .core-trainers-empty { color: var(--dim); font-size: 11px; padding: 6px 2px; }
 
   /* teacher model + synth panel */
   .teacher-status { font-size: 11px; padding: 4px 8px; border-radius: 3px; background: #0a0c12; border: 1px solid var(--line); color: var(--warm); display: inline-block; }

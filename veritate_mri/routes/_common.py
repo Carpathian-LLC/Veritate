@@ -13,6 +13,8 @@ import os
 import platform
 import subprocess
 
+from runtime import logs as logmod
+
 # ------------------------------------------------------------------------------------
 # Constants
 
@@ -20,6 +22,20 @@ THREADS_AUTO_MAX = 16
 
 # ------------------------------------------------------------------------------------
 # Functions
+
+def safe_route(source, fn, *a, **kw):
+    """Run a route handler, log any exception to the dashboard's in-memory log
+    ring, return a JSON-friendly error body + 500 status so the frontend gets
+    parseable bytes instead of Flask's HTML error page. WebKit reports
+    HTML-where-JSON-expected as 'string did not match the expected pattern',
+    which is unhelpful — using this wrapper keeps the error visible and
+    diagnosable."""
+    try:
+        return fn(*a, **kw)
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        logmod.error(source, msg)
+        return ({"ok": False, "error": msg}, 500)
 
 def safe_name(name):
     if not name: return False

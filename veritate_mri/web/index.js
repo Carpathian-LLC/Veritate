@@ -7908,21 +7908,21 @@ function _trAutoPickBundledCorpus() {
 }
 
 // ---------------------------------------------------------------
-// Core Plugins. Dashboard-selectable recipe knobs that inject
+// Core Trainers. Dashboard-selectable recipe knobs that inject
 // trainer args at run time. Catalog comes from /core_trainers (which
 // reads veritate_core/core_trainers.py). Plugins in the same `group`
 // are mutually exclusive; defaults seed the initial selection.
 // ---------------------------------------------------------------
-const corePluginsState = {
+const coreTrainersState = {
   list:     [],   // fetched plugin metadata
   selected: new Set(),
   ready:    false,
   flow:     null,
 };
 
-function _corePluginsLoad() {
-  const wrap = _trEl("trainCorePluginsWrap");
-  const grid = _trEl("trainCorePluginsGrid");
+function _coreTrainersLoad() {
+  const wrap = _trEl("trainCoreTrainersWrap");
+  const grid = _trEl("trainCoreTrainersGrid");
   if (!wrap || !grid) return;
   // Only on the scratch flow for now. Continue / export do not need to
   // mutate architecture, and most plugins target from-scratch construction.
@@ -7931,34 +7931,34 @@ function _corePluginsLoad() {
     wrap.style.display = "none";
     return;
   }
-  if (corePluginsState.ready && corePluginsState.flow === flow) {
-    _corePluginsRender();
+  if (coreTrainersState.ready && coreTrainersState.flow === flow) {
+    _coreTrainersRender();
     return;
   }
-  corePluginsState.flow = flow;
+  coreTrainersState.flow = flow;
   fetch(`/core_trainers?flow=${encodeURIComponent(flow)}`)
     .then(r => r.ok ? r.json() : null)
     .then(data => {
-      corePluginsState.list = (data && Array.isArray(data.trainers)) ? data.trainers : [];
-      corePluginsState.selected = new Set(corePluginsState.list.filter(p => p.default).map(p => p.id));
-      corePluginsState.ready = true;
-      _corePluginsRender();
+      coreTrainersState.list = (data && Array.isArray(data.trainers)) ? data.trainers : [];
+      coreTrainersState.selected = new Set(coreTrainersState.list.filter(p => p.default).map(p => p.id));
+      coreTrainersState.ready = true;
+      _coreTrainersRender();
     })
     .catch(() => {
-      corePluginsState.list = [];
-      corePluginsState.ready = true;
-      _corePluginsRender();
+      coreTrainersState.list = [];
+      coreTrainersState.ready = true;
+      _coreTrainersRender();
     });
 }
 
-function _corePluginsRender() {
-  const wrap = _trEl("trainCorePluginsWrap");
-  const grid = _trEl("trainCorePluginsGrid");
+function _coreTrainersRender() {
+  const wrap = _trEl("trainCoreTrainersWrap");
+  const grid = _trEl("trainCoreTrainersGrid");
   if (!wrap || !grid) return;
-  const items = corePluginsState.list || [];
+  const items = coreTrainersState.list || [];
   if (!items.length) {
     wrap.style.display = "block";
-    grid.innerHTML = `<div class="core-plugins-empty">no core plugins available.</div>`;
+    grid.innerHTML = `<div class="core-trainers-empty">no core trainers available.</div>`;
     return;
   }
   wrap.style.display = "block";
@@ -7972,7 +7972,7 @@ function _corePluginsRender() {
   }, {});
 
   grid.innerHTML = items.map(p => {
-    const sel  = corePluginsState.selected.has(p.id);
+    const sel  = coreTrainersState.selected.has(p.id);
     const mode = (groupCounts[p.group] > 1) ? "radio" : "toggle";
     const argsStr = Object.entries(p.args || {})
       .map(([k, v]) => `${k}=${v}`).join("  ");
@@ -8004,13 +8004,13 @@ function _corePluginsRender() {
 }
 
 function _corePluginsToggle(id) {
-  const items = corePluginsState.list || [];
+  const items = coreTrainersState.list || [];
   const p = items.find(x => x.id === id);
   if (!p) return;
   const groupCounts = items.reduce((acc, x) => {
     acc[x.group] = (acc[x.group] || 0) + 1; return acc;
   }, {});
-  const sel = corePluginsState.selected;
+  const sel = coreTrainersState.selected;
   if (sel.has(id)) {
     sel.delete(id);
   } else {
@@ -8023,14 +8023,14 @@ function _corePluginsToggle(id) {
     }
     sel.add(id);
   }
-  _corePluginsRender();
+  _coreTrainersRender();
 }
 
 function _corePluginsArgs() {
-  const items = corePluginsState.list || [];
+  const items = coreTrainersState.list || [];
   const out = {};
   for (const p of items) {
-    if (!corePluginsState.selected.has(p.id)) continue;
+    if (!coreTrainersState.selected.has(p.id)) continue;
     Object.assign(out, p.args || {});
   }
   return out;
@@ -8170,7 +8170,7 @@ function _trRenderForm() {
   _trUpdateCorpusMeta();
   _trUpdateVramEstimate();
   _trCorpusSizeWarning();
-  _corePluginsLoad();
+  _coreTrainersLoad();
 }
 
 function _trCollectArgs() {
@@ -8511,8 +8511,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const flow = activeTab ? activeTab.dataset.flowTab : "scratch";
     trainState.flow = flow;
     trainState.selected = null;
-    // Core Plugins list is flow-scoped; force a refetch on the next render.
-    corePluginsState.ready = false;
+    // Core Trainers list is flow-scoped; force a refetch on the next render.
+    coreTrainersState.ready = false;
     _trShowSynthPanel(flow === "synth");
     _trUpdateTeacherGate();
     if (flow === "synth" && !synthState.seeds.length) _synthLoadSeeds();
@@ -8582,7 +8582,7 @@ document.addEventListener("DOMContentLoaded", () => {
       alert(`Size mismatch: model is "${ms}", trainer "${p.id}" supports ${allowed.join(", ")}.\nPick the matching trainer.`);
       return;
     }
-    // Core Plugins selected on the form inject args (activation, l1_lambda,
+    // Core Trainers selected on the form inject args (activation, l1_lambda,
     // etc.) on top of whatever the form fields hold. Core Plugin values win
     // since they represent an explicit research-arm choice; the trainer's
     // parse_known_args drops anything its argparse does not recognize.
@@ -8769,10 +8769,13 @@ function _renderHud(snap) {
     $("hudGpus").innerHTML = "";
     return;
   }
-  const cpuNorm = snap.cpu_count ? Math.min(100, snap.cpu_pct / snap.cpu_count) : snap.cpu_pct;
-  $("hudCpuFill").style.width = cpuNorm + "%";
-  $("hudCpuVal").textContent  = (snap.cpu_pct || 0).toFixed(0) + "%";
-  $("hudCpuDetail").textContent = `${cpuNorm.toFixed(1)}% norm · ${snap.cpu_count} cores`;
+  // snap.cpu_pct is system-wide 0-100 across all cores. Bar shows it directly.
+  // Detail line surfaces both system load and the dashboard's own process load.
+  const cpuPct = Math.min(100, snap.cpu_pct || 0);
+  $("hudCpuFill").style.width = cpuPct + "%";
+  $("hudCpuVal").textContent  = cpuPct.toFixed(0) + "%";
+  const procPct = snap.process_cpu_pct || 0;
+  $("hudCpuDetail").textContent = `system ${cpuPct.toFixed(1)}% · dashboard ${procPct.toFixed(1)}% · ${snap.cpu_count} cores`;
   const sysMemPct = snap.sys_mem_total ? (snap.sys_mem_used / snap.sys_mem_total * 100) : 0;
   const procMemPct = snap.sys_mem_total ? (snap.rss_bytes / snap.sys_mem_total * 100) : 0;
   $("hudMemFill").style.width = sysMemPct + "%";
@@ -8832,14 +8835,17 @@ function _renderSysmetrics(snap) {
     host.innerHTML = `<div class="meta">${snap && snap.reason ? snap.reason : "metrics unavailable"}</div>`;
     return;
   }
-  const cpuNorm = snap.cpu_count ? (snap.cpu_pct / snap.cpu_count).toFixed(1) : snap.cpu_pct.toFixed(1);
+  // snap.cpu_pct is system-wide (0-100). process_cpu_pct can exceed 100 on a
+  // multi-threaded dashboard process; that's intentional.
+  const sysCpu  = (snap.cpu_pct || 0).toFixed(1);
+  const procCpu = (snap.process_cpu_pct || 0).toFixed(1);
   const memUsedSys = _fmtBytes(snap.sys_mem_used);
   const memTotalSys = _fmtBytes(snap.sys_mem_total);
   const memPct = snap.sys_mem_total ? (snap.rss_bytes / snap.sys_mem_total * 100).toFixed(1) : "—";
   let html = "";
-  html += `<div class="group cpu"><h4>CPU — this process</h4>
-    <div class="row"><span class="k">total</span><span class="v">${snap.cpu_pct.toFixed(1)}%</span></div>
-    <div class="row"><span class="k">normalized</span><span class="v">${cpuNorm}% of ${snap.cpu_count} cores</span></div></div>`;
+  html += `<div class="group cpu"><h4>CPU</h4>
+    <div class="row"><span class="k">system</span><span class="v">${sysCpu}% across ${snap.cpu_count} cores</span></div>
+    <div class="row"><span class="k">dashboard process</span><span class="v">${procCpu}%</span></div></div>`;
   html += `<div class="group mem"><h4>Memory — this process</h4>
     <div class="row"><span class="k">RSS</span><span class="v">${_fmtBytes(snap.rss_bytes)}</span></div>
     <div class="row"><span class="k">% of system</span><span class="v">${memPct}%</span></div>

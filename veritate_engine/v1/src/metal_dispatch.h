@@ -62,8 +62,9 @@ void metal_print(const metal_caps_t* caps);
 //
 // SHAPES (matches CPU reference in kernels/scalar/matmul_scalar.c):
 //   a: [M x K] row-major
-//   b: [K x N] column-major
+//   b: [K x N] row-major
 //   c: [M x N] row-major
+//   c[m,n] = sum_k a[m,k] * b[k,n]
 //
 // PHASE 2 NOTE: first-pass shader is naive (one thread per output element,
 // no shared memory tiling). Correctness target before performance.
