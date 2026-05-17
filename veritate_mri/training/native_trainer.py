@@ -377,7 +377,7 @@ def main():
         opt.zero_grad(set_to_none=True)
 
         if amp_dtype is not None:
-            with torch.amp.autocast(device_type=device_type, dtype=amp_dtype):
+            with torch.autocast(device_type=device_type, dtype=amp_dtype):
                 _, loss = model(toks, tgts)
         else:
             _, loss = model(toks, tgts)
@@ -414,7 +414,7 @@ def main():
                     vtoks, vtgts = val_draw()
                     vtoks, vtgts = vtoks.to(device), vtgts.to(device)
                     if amp_dtype is not None:
-                        with torch.amp.autocast(device_type=device_type, dtype=amp_dtype):
+                        with torch.autocast(device_type=device_type, dtype=amp_dtype):
                             _, vloss = model(vtoks, vtgts)
                     else:
                         _, vloss = model(vtoks, vtgts)

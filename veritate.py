@@ -19,6 +19,7 @@
 
 import hashlib
 import os
+import platform
 import subprocess
 import sys
 import threading
@@ -38,10 +39,58 @@ DEFAULT_PORT     = 8001
 DEFAULT_THREADS  = 8
 BROWSER_DELAY_S  = 3.0
 PY_MIN           = (3, 10)
+PY_MAX_TESTED    = (3, 13)
 LAUNCH_PHASE_ENV = "VERITATE_LAUNCH_PHASE"   # set on re-exec; tells phase-2 to skip bootstrap
+TIER_ENV         = "VERITATE_TIER"           # propagated to runtime so feature gates can read it
+
+# Hardware tier labels. The Veritate mission requires runnability on older
+# consumer hardware, so the launcher detects the host and dispatches per-tier
+# dependency pins and runtime feature gates. Intel Mac specifically is capped
+# at torch 2.2 because PyTorch dropped Intel macOS wheels at 2.3.
+TIER_MAC_ARM     = "mac_arm"
+TIER_MAC_INTEL   = "mac_intel"
+TIER_LINUX_X86   = "linux_x86"
+TIER_LINUX_ARM   = "linux_arm"
+TIER_WINDOWS_X86 = "windows_x86"
+TIER_UNSUPPORTED = "unsupported"
+
+# (min_py, max_py) inclusive. max_py reflects what the tier's torch ceiling
+# was built against.
+TIER_PYTHON_RANGE = {
+    TIER_MAC_ARM:     ((3, 10), (3, 13)),
+    TIER_MAC_INTEL:   ((3, 10), (3, 11)),  # torch 2.2 supports through 3.11
+    TIER_LINUX_X86:   ((3, 10), (3, 13)),
+    TIER_LINUX_ARM:   ((3, 10), (3, 13)),
+    TIER_WINDOWS_X86: ((3, 10), (3, 13)),
+}
 
 # ------------------------------------------------------------------------------------
 # Bootstrap phase (runs under system python)
+
+def _detect_tier() -> str:
+    plat = sys.platform
+    arch = (platform.machine() or "").lower()
+    if plat == "darwin":
+        return TIER_MAC_ARM if arch == "arm64" else TIER_MAC_INTEL
+    if plat.startswith("linux"):
+        return TIER_LINUX_X86 if arch in ("x86_64", "amd64") else TIER_LINUX_ARM
+    if plat.startswith("win") or os.name == "nt":
+        return TIER_WINDOWS_X86
+    return TIER_UNSUPPORTED
+
+
+def _tier_install_hint(tier: str, py_max: tuple) -> str:
+    pmaj, pmin = py_max
+    if tier == TIER_MAC_ARM:
+        return f"brew install python@{pmaj}.{pmin} && /opt/homebrew/opt/python@{pmaj}.{pmin}/bin/python{pmaj}.{pmin} {os.path.abspath(__file__)}"
+    if tier == TIER_MAC_INTEL:
+        return f"brew install python@{pmaj}.{pmin} && /usr/local/opt/python@{pmaj}.{pmin}/bin/python{pmaj}.{pmin} {os.path.abspath(__file__)}"
+    if tier == TIER_LINUX_X86 or tier == TIER_LINUX_ARM:
+        return f"sudo apt install python{pmaj}.{pmin} python{pmaj}.{pmin}-venv  (or distro equivalent), then run with python{pmaj}.{pmin}"
+    if tier == TIER_WINDOWS_X86:
+        return f"install Python {pmaj}.{pmin} from python.org and re-launch via start.bat"
+    return ""
+
 
 def _venv_python() -> Path:
     if os.name == "nt":
@@ -68,11 +117,30 @@ def _ensure_venv_and_deps() -> None:
     if _deps_satisfied():
         return
 
-    if sys.version_info < PY_MIN:
+    tier = _detect_tier()
+    if tier == TIER_UNSUPPORTED:
         sys.exit(
-            f"[veritate] Python {PY_MIN[0]}.{PY_MIN[1]}+ required, but this "
-            f"interpreter is {sys.version_info.major}.{sys.version_info.minor}."
+            f"[veritate] unsupported platform: sys.platform={sys.version_info!r} "
+            f"machine={platform.machine()!r}. Supported tiers: macOS arm64/x86_64, "
+            f"Linux x86_64/arm64, Windows x86_64."
         )
+
+    py_min, py_max = TIER_PYTHON_RANGE[tier]
+    cur = sys.version_info
+    if (cur.major, cur.minor) < py_min:
+        sys.exit(
+            f"[veritate] tier={tier}: Python {py_min[0]}.{py_min[1]}+ required, "
+            f"got {cur.major}.{cur.minor}."
+        )
+    if (cur.major, cur.minor) > py_max:
+        hint = _tier_install_hint(tier, py_max)
+        sys.exit(
+            f"[veritate] tier={tier}: Python {py_max[0]}.{py_max[1]} is the newest "
+            f"supported on this hardware (you're on {cur.major}.{cur.minor}).\n"
+            f"This tier's torch ceiling doesn't have wheels for newer Python.\n"
+            f"To fix: {hint}"
+        )
+    print(f"[veritate] tier={tier} python={cur.major}.{cur.minor}")
 
     if not _venv_python().exists():
         print(f"[veritate] creating virtual environment at {VENV_DIR} ...")
@@ -102,6 +170,7 @@ def _reexec_under_venv() -> "int":
     """Hand off to the venv interpreter and return its exit code."""
     env = os.environ.copy()
     env[LAUNCH_PHASE_ENV] = "1"
+    env[TIER_ENV] = _detect_tier()
     args = [str(_venv_python()), str(Path(__file__).resolve())] + sys.argv[1:]
     try:
         return subprocess.call(args, env=env, cwd=str(HERE))
