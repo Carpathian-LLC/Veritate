@@ -331,11 +331,61 @@ def _build_payload(peek=False):
     return payload
 
 
+def _path_scrub_pairs():
+    """Returns [(needle, replacement), ...] used to redact user-identifying
+    absolute paths from diagnostic strings before they're sent over the wire.
+    Order matters: longer, more-specific paths first."""
+    pairs = []
+    try:
+        repo = os.path.realpath(paths.REPO_ROOT)
+        if repo: pairs.append((repo, "<repo>"))
+    except Exception:
+        pass
+    try:
+        home = os.path.realpath(os.path.expanduser("~"))
+        if home and home not in ("/", ""):
+            pairs.append((home, "<home>"))
+    except Exception:
+        pass
+    # Cover the parent /Users/<name>/ even if home didn't resolve. On macOS
+    # this catches paths like /Users/samuelmalkasian/anything outside the repo.
+    try:
+        home = os.path.expanduser("~")
+        parent = os.path.dirname(home.rstrip("/"))
+        leaf   = os.path.basename(home.rstrip("/"))
+        if parent and leaf and leaf not in ("", "Users", "home"):
+            pairs.append((os.path.join(parent, leaf), "<home>"))
+    except Exception:
+        pass
+    return pairs
+
+
+def _scrub_paths(obj, pairs):
+    """Recursively replace each pair[0] -> pair[1] in any string value inside
+    `obj`. Walks dicts, lists, and tuples; leaves other types alone."""
+    if not pairs:
+        return obj
+    if isinstance(obj, str):
+        out = obj
+        for needle, repl in pairs:
+            if needle and needle in out:
+                out = out.replace(needle, repl)
+        return out
+    if isinstance(obj, dict):
+        return {k: _scrub_paths(v, pairs) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub_paths(v, pairs) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_scrub_paths(v, pairs) for v in obj)
+    return obj
+
+
 def _diagnostics_block():
     """Full hardware dump (everything sys_metrics.detect_specs reports) plus
     the tail of the in-memory log ring and the plugin run log. Only included
     when diagnostics_logs_enabled is True. Lets us debug crashes the user
-    couldn't surface any other way."""
+    couldn't surface any other way. All string fields are run through
+    _scrub_paths to redact /Users/<name> and the repo root before send."""
     try:
         specs = sys_metrics.detect_specs()
     except Exception:
@@ -354,11 +404,12 @@ def _diagnostics_block():
                 plugin_tail = "".join(lines)[-DIAGNOSTICS_PLUGIN_BYTES:]
     except Exception:
         plugin_tail = None
-    return {
+    block = {
         "specs":       specs,
         "recent_logs": recent,
         "plugin_run_tail": plugin_tail,
     }
+    return _scrub_paths(block, _path_scrub_pairs())
 
 
 def preview_payload():
