@@ -106,7 +106,7 @@ case "$ARCH_DIR" in
   x86_64)
     compile_kernel "$ROOT/kernels/x86_64/matmul_avx2.c"          "-mavx2"
     compile_kernel "$ROOT/kernels/x86_64/matmul_vnni.c"          "-mavx2 -mavx512f -mavx512bw -mavx512vl -mavx512vnni"
-    compile_kernel "$ROOT/kernels/x86_64/matmul_int4.c"          "-mavx2"
+    compile_kernel "$ROOT/kernels/x86_64/matmul_int4.c"          "-mavx2 -mavx512f -mavx512bw -mavx512vl -mavx512vnni"
     compile_kernel "$ROOT/kernels/x86_64/matmul_ternary_vnni.c"  "-mavx2 -mavx512f -mavx512bw -mavx512vl -mavx512vnni"
     compile_kernel "$ROOT/kernels/x86_64/transformer_avx512.c"   "-mavx512f -mavx512bw -mavx512vl"
     ;;
