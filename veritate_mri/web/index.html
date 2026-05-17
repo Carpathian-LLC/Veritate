@@ -1465,6 +1465,31 @@
             </div>
           </div>
 
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Training device <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">override</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Forces trainers to use a specific device regardless of what's available. <b>Auto</b> picks the best supported device for your host (CUDA &rarr; MPS &rarr; CPU). Options below your hardware can't support are greyed out.</div>
+            <select id="devicePreferenceSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;margin-top:4px">
+              <option value="auto">Auto (recommended)</option>
+              <option value="cpu">CPU</option>
+              <option value="cuda" data-cap="can_use_cuda">CUDA (NVIDIA GPU)</option>
+              <option value="mps" data-cap="can_use_mps">MPS (Apple Silicon)</option>
+            </select>
+            <div id="devicePreferenceHint" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:2px"></div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Diagnostics <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">opt-in &middot; debugging</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Helps us debug crashes on your hardware. Sends the full hardware dump (CPU brand + features, OS version, GPU details), recent dashboard log entries with tracebacks, and per-trainer stderr tails. Only sent when this box is on.</div>
+            <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
+              <input type="checkbox" id="diagnosticsLogsEnable">
+              <span class="opt-title" style="margin:0;font-size:11.5px">Send diagnostic logs &amp; full hardware dump</span>
+            </label>
+            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button id="diagPreviewBtn" class="action" type="button">preview the payload</button>
+            </div>
+            <div id="diagPreviewBox" class="meta" style="display:none;font-size:10.5px;color:var(--dim);line-height:1.55;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:6px 8px;margin-top:4px;max-height:280px;overflow:auto;font-family:monospace;white-space:pre-wrap"></div>
+          </div>
+
         </div>
       </div>
 

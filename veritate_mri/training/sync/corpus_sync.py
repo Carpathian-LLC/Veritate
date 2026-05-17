@@ -59,6 +59,9 @@ LOCAL_CATALOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "c
 CATALOG_FETCH_TIMEOUT_SECS  = 15
 DOWNLOAD_TIMEOUT_SECS       = 60 * 60   # 1 hour cap per file
 DOWNLOAD_CHUNK_BYTES        = 1024 * 1024
+DOWNLOAD_MAX_ATTEMPTS       = 4
+DOWNLOAD_RETRY_BASE_S       = 2.0
+DOWNLOAD_RETRY_MAX_S        = 30.0
 
 SUPPORTED_FORMATS = {"raw_bytes", "hf_dataset", "raw_bytes_zip"}
 
@@ -268,51 +271,81 @@ def catalog():
 # ------------------------------------------------------------------------------------
 # Install / uninstall
 
+def _download_once(url, dest_path, stem, kind, tmp):
+    """One attempt. Caller handles retry/backoff. Raises on transient errors so
+    the caller can decide whether to retry; returns (wrote_bytes) on success."""
+    started = time.time()
+    req = urllib.request.Request(url, headers={"User-Agent": "Veritate-MRI"})
+    with urllib.request.urlopen(req, timeout=CATALOG_FETCH_TIMEOUT_SECS, context=_SSL_CTX) as resp:
+        total = None
+        try:
+            total = int(resp.headers.get("Content-Length") or 0) or None
+        except (TypeError, ValueError):
+            total = None
+        with _LOCK:
+            _PROGRESS[stem] = {"kind": kind, "bytes": 0, "total": total, "started_at": started}
+        wrote = 0
+        deadline = started + DOWNLOAD_TIMEOUT_SECS
+        with open(tmp, "wb") as out:
+            while True:
+                if time.time() > deadline:
+                    raise TimeoutError("download exceeded 1h cap")
+                chunk = resp.read(DOWNLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                out.write(chunk)
+                wrote += len(chunk)
+                with _LOCK:
+                    p = _PROGRESS.get(stem)
+                    if p is not None:
+                        p["bytes"] = wrote
+    return wrote
+
+
+def _is_retryable(exc):
+    """404 / 410 / 401 / 403 are terminal: retrying won't change the answer.
+    Everything else (timeouts, 5xx, connection resets, DNS hiccups, transient
+    firewall blocks) is worth another attempt."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code not in (400, 401, 403, 404, 410, 451)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, OSError))
+
+
 def _download(url, dest_path, stem, kind):
-    """Stream url -> dest_path.part -> rename. Updates _PROGRESS as it runs."""
+    """Stream url -> dest_path.part -> rename. Retries transient errors with
+    exponential backoff (DOWNLOAD_MAX_ATTEMPTS / DOWNLOAD_RETRY_BASE_S).
+    Terminal HTTP errors (404 etc.) fail immediately."""
     parent = os.path.dirname(dest_path)
     os.makedirs(parent, exist_ok=True)
     tmp = dest_path + ".part"
-    try:
-        if os.path.isfile(tmp):
-            os.remove(tmp)
-    except OSError:
-        pass
-    started = time.time()
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Veritate-MRI"})
-        with urllib.request.urlopen(req, timeout=CATALOG_FETCH_TIMEOUT_SECS, context=_SSL_CTX) as resp:
-            total = None
-            try:
-                total = int(resp.headers.get("Content-Length") or 0) or None
-            except (TypeError, ValueError):
-                total = None
-            with _LOCK:
-                _PROGRESS[stem] = {"kind": kind, "bytes": 0, "total": total, "started_at": started}
-            wrote = 0
-            deadline = started + DOWNLOAD_TIMEOUT_SECS
-            with open(tmp, "wb") as out:
-                while True:
-                    if time.time() > deadline:
-                        raise TimeoutError("download exceeded 1h cap")
-                    chunk = resp.read(DOWNLOAD_CHUNK_BYTES)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-                    wrote += len(chunk)
-                    with _LOCK:
-                        p = _PROGRESS.get(stem)
-                        if p is not None:
-                            p["bytes"] = wrote
-        os.replace(tmp, dest_path)
-        return True, wrote, None
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
+    last_err = None
+    for attempt in range(1, DOWNLOAD_MAX_ATTEMPTS + 1):
         try:
             if os.path.isfile(tmp):
                 os.remove(tmp)
         except OSError:
             pass
-        return False, 0, f"{type(e).__name__}: {e}"
+        try:
+            wrote = _download_once(url, dest_path, stem, kind, tmp)
+            os.replace(tmp, dest_path)
+            if attempt > 1:
+                logmod.ok("corpus-sync", f"{stem} {kind} succeeded on attempt {attempt}")
+            return True, wrote, None
+        except Exception as e:
+            last_err = e
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
+            if not _is_retryable(e) or attempt >= DOWNLOAD_MAX_ATTEMPTS:
+                return False, 0, f"{type(e).__name__}: {e}"
+            backoff = min(DOWNLOAD_RETRY_MAX_S, DOWNLOAD_RETRY_BASE_S * (2 ** (attempt - 1)))
+            logmod.warn("corpus-sync",
+                        f"{stem} {kind} attempt {attempt}/{DOWNLOAD_MAX_ATTEMPTS} failed "
+                        f"({type(e).__name__}: {e}); retrying in {backoff:.1f}s")
+            time.sleep(backoff)
+    return False, 0, f"{type(last_err).__name__}: {last_err}" if last_err else "unknown error"
 
 
 def hf_available():

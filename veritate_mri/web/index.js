@@ -6911,12 +6911,6 @@ const trainState = {
   selected: null,
   running: { status: "idle" },
   discovery: { corpora: [], models: [] },
-  // catalog: full corpus_sync.catalog() response — populated lazily so the
-  // training-tab corpus picker can show uninstalled stems alongside installed
-  // ones and warn (then revert) when the user picks something not on disk.
-  catalog: null,
-  catalogInflight: false,
-  corpusDownloadInflight: new Set(),
 };
 
 function _trEl(id) { return document.getElementById(id); }
@@ -6955,19 +6949,7 @@ function _trBuildInput(a) {
       if (source === "bundled") return c.source === "bundle" && c.plugin_id === selectedPluginId;
       return true;
     });
-    // Catalog-only stems (live in corpus_sync.catalog() but no train.bin on
-    // disk yet) — surface them in the dropdown for shared/any sources so the
-    // user discovers what's downloadable without leaving the training form.
-    // We tag them with data-not-installed so the change handler can show a
-    // warning + revert instead of letting the trainer start on a missing
-    // file.
-    const catalogStems = _trCatalogUninstalledStems();
-    const installedStems = new Set(filtered.map(c => c.stem));
-    const showCatalogExtras = (source === "shared" || source === "any");
-    const catalogExtras = showCatalogExtras
-      ? catalogStems.filter(s => !installedStems.has(s.stem))
-      : [];
-    if (filtered.length === 0 && catalogExtras.length === 0) {
+    if (filtered.length === 0) {
       const where = source === "bundled"
         ? `<code>trainers/${_trEsc(selectedPluginId || "<bundle>")}/corpus/&lt;name&gt;_train.bin</code>`
         : `<code>trainers/corpus/&lt;name&gt;_train.bin</code>`;
@@ -6977,14 +6959,9 @@ function _trBuildInput(a) {
       return `<p class="train-no-corpus-error">No training data file found in ${what}. Drop a <code>&lt;name&gt;_train.bin</code> file at ${where}, then click <i>refresh</i>.</p><input type="hidden" data-arg="${_trEsc(name)}" value="">`;
     }
     const opts = ['<option value="">- pick a training data file -</option>']
-      .concat(filtered.map(c => `<option value="${_trEsc(c.stem)}" ${c.stem === def ? "selected" : ""}>${_trEsc(c.label)}</option>`));
-    if (catalogExtras.length > 0) {
-      opts.push(`<option disabled>──── not downloaded ────</option>`);
-      for (const c of catalogExtras) {
-        opts.push(`<option value="${_trEsc(c.stem)}" data-not-installed="1">${_trEsc(c.label)} (download)</option>`);
-      }
-    }
-    return `<select data-arg="${_trEsc(name)}" data-arg-kind="corpus" style="${inputBase}">${opts.join("")}</select>`;
+      .concat(filtered.map(c => `<option value="${_trEsc(c.stem)}" ${c.stem === def ? "selected" : ""}>${_trEsc(c.label)}</option>`))
+      .join("");
+    return `<select data-arg="${_trEsc(name)}" data-arg-kind="corpus" style="${inputBase}">${opts}</select>`;
   }
   if (t === "model_name") {
     const opts = ['<option value="">- pick a model -</option>']
@@ -7689,178 +7666,6 @@ function _trCheckSizeMismatch() {
   picker.parentElement.appendChild(note);
 }
 
-// Snapshot of the catalog flattened to {stem, label} for stems that aren't
-// installed on disk. Used by _trBuildInput corpus type so undownloaded corpora
-// appear in the training picker as ghosted "(download)" entries. Falls back
-// to [] when the catalog hasn't been fetched yet.
-function _trCatalogUninstalledStems() {
-  const cat = trainState.catalog;
-  if (!cat || !Array.isArray(cat.corpora)) return [];
-  return cat.corpora
-    .filter(c => !c.installed_train && c.stem)
-    .map(c => ({ stem: c.stem, label: c.label || c.stem }));
-}
-
-// Lazy fetch — once per session is plenty unless the user clicks refresh.
-function _trFetchCatalog(force) {
-  if (trainState.catalogInflight) return Promise.resolve(trainState.catalog);
-  if (trainState.catalog && !force) return Promise.resolve(trainState.catalog);
-  trainState.catalogInflight = true;
-  return fetch("/corpus/library/catalog").then(r => r.json()).then(data => {
-    trainState.catalog = data || { corpora: [] };
-    trainState.catalogInflight = false;
-    return trainState.catalog;
-  }).catch(() => {
-    trainState.catalogInflight = false;
-    return trainState.catalog;
-  });
-}
-
-// Replace the corpus <select> with a warning panel when the user picks an
-// uninstalled stem. The panel: explains why, offers "Download now" inline,
-// links to the settings tab's corpus library, and a "back to default" that
-// dismisses the panel and reverts the field. Form state persists across the
-// navigation via _trSaveFormState (localStorage), so picking the settings
-// route doesn't lose the user's progress.
-function _trShowCorpusNotDownloadedWarning(argName, stem, parentCell) {
-  if (!parentCell) return;
-  const cat = trainState.catalog || { corpora: [] };
-  const entry = (cat.corpora || []).find(c => c.stem === stem);
-  const label = entry ? (entry.label || entry.stem) : stem;
-  const sizeMb = entry && entry.size_train ? (entry.size_train / 1e6).toFixed(1) + " MB" : null;
-  const downloading = trainState.corpusDownloadInflight.has(stem);
-  const wrap = document.createElement("div");
-  wrap.className = "train-corpus-warning";
-  wrap.dataset.stem = stem;
-  wrap.style.cssText = "margin-top:6px;padding:8px 10px;border:1px solid var(--warm);background:#221a08;border-radius:3px;font-size:11px;line-height:1.5";
-  wrap.innerHTML = `
-    <div style="color:var(--warm);font-weight:600;margin-bottom:4px">corpus not downloaded</div>
-    <div style="color:var(--text)"><b>${_trEsc(label)}</b>${sizeMb ? ` <span style="color:var(--dim)">(${sizeMb})</span>` : ""} hasn't been installed yet. Your training settings have been saved in your browser — they'll still be here when you come back.</div>
-    <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <button class="action train-corpus-dl-now" type="button" ${downloading ? "disabled" : ""}>${downloading ? "downloading…" : "download now"}</button>
-      <button class="action train-corpus-dl-all" type="button">download all missing</button>
-      <a href="#" class="train-corpus-goto-settings" style="color:var(--accent);text-decoration:underline">open settings → corpus library</a>
-      <button class="action train-corpus-dismiss" type="button" style="margin-left:auto">dismiss</button>
-    </div>
-    <div class="train-corpus-warning-status" style="margin-top:4px;color:var(--dim);font-size:10.5px"></div>
-  `;
-  // Remove any prior warning for this same arg.
-  parentCell.querySelectorAll(".train-corpus-warning").forEach(w => w.remove());
-  parentCell.appendChild(wrap);
-  const statusEl = wrap.querySelector(".train-corpus-warning-status");
-  wrap.querySelector(".train-corpus-dl-now").addEventListener("click", () => {
-    _trDownloadStem(stem, statusEl, argName);
-  });
-  wrap.querySelector(".train-corpus-dl-all").addEventListener("click", () => {
-    _trDownloadAllMissing(statusEl, argName);
-  });
-  wrap.querySelector(".train-corpus-goto-settings").addEventListener("click", (e) => {
-    e.preventDefault();
-    _trSaveFormState();
-    const tab = document.querySelector('.tab[data-tab="settings"]');
-    if (tab) tab.click();
-    // Open the corpus library panel if collapsed.
-    setTimeout(() => {
-      const body = document.getElementById("corpusLibraryBody");
-      const chev = document.getElementById("corpusLibraryChevron");
-      if (body && body.style.display === "none") {
-        body.style.display = "flex";
-        if (chev) chev.style.transform = "rotate(90deg)";
-      }
-      const el = document.getElementById("corpusLibraryHeader");
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 50);
-  });
-  wrap.querySelector(".train-corpus-dismiss").addEventListener("click", () => {
-    wrap.remove();
-  });
-}
-
-function _trDownloadStem(stem, statusEl, argName) {
-  if (trainState.corpusDownloadInflight.has(stem)) return;
-  const cat = trainState.catalog || { corpora: [] };
-  const entry = (cat.corpora || []).find(c => c.stem === stem);
-  if (!entry) {
-    if (statusEl) { statusEl.style.color = "var(--hot)"; statusEl.textContent = `stem ${stem} not in catalog`; }
-    return;
-  }
-  trainState.corpusDownloadInflight.add(stem);
-  if (statusEl) { statusEl.style.color = "var(--dim)"; statusEl.textContent = `downloading ${stem}…`; }
-  const body = {
-    stem:            entry.stem,
-    train_url:       entry.train_url,
-    val_url:         entry.val_url,
-    val_split_ratio: entry.val_split_ratio,
-    format:          entry.format || "raw_bytes",
-    sha256_train:    entry.sha256_train,
-    sha256_val:      entry.sha256_val,
-    confirm_large:   true,
-  };
-  fetch("/corpus/library/install", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).then(r => r.json()).then(out => {
-    trainState.corpusDownloadInflight.delete(stem);
-    if (out.ok) {
-      if (statusEl) { statusEl.style.color = "var(--data-pos)"; statusEl.textContent = `installed ${stem}.`; }
-      // Refetch discovery (so it shows up as installed) + catalog (so the
-      // dropdown rebuild on next render moves it out of the "download" list).
-      Promise.all([_trFetchCatalog(true), fetch("/train/discovery").then(r => r.json())])
-        .then(([_cat, disc]) => {
-          trainState.discovery = disc || trainState.discovery;
-          _trRenderForm();
-          // Re-apply the user's choice — it's now valid.
-          const el = _trArgEl(argName);
-          if (el) el.value = stem;
-          _trUpdateCorpusMeta();
-        });
-    } else {
-      if (statusEl) {
-        statusEl.style.color = "var(--hot)";
-        statusEl.textContent = `download failed: ${out.error || "unknown"}`;
-      }
-    }
-  }).catch(e => {
-    trainState.corpusDownloadInflight.delete(stem);
-    if (statusEl) { statusEl.style.color = "var(--hot)"; statusEl.textContent = "download error: " + String(e); }
-  });
-}
-
-function _trDownloadAllMissing(statusEl, argName) {
-  const stems = _trCatalogUninstalledStems().map(s => s.stem);
-  if (stems.length === 0) {
-    if (statusEl) { statusEl.style.color = "var(--dim)"; statusEl.textContent = "nothing to download"; }
-    return;
-  }
-  if (statusEl) { statusEl.style.color = "var(--dim)"; statusEl.textContent = `downloading ${stems.length} corpora sequentially…`; }
-  // Sequential to avoid hammering raw.githubusercontent.com in parallel.
-  const runNext = (i) => {
-    if (i >= stems.length) {
-      if (statusEl) { statusEl.style.color = "var(--data-pos)"; statusEl.textContent = "done"; }
-      _trFetchCatalog(true).then(() => {
-        fetch("/train/discovery").then(r => r.json()).then(disc => {
-          trainState.discovery = disc || trainState.discovery;
-          _trRenderForm();
-        });
-      });
-      return;
-    }
-    _trDownloadStem(stems[i], statusEl, argName);
-    // Poor-man's wait: poll the inflight set. _trDownloadStem deletes the
-    // stem from the set when the fetch resolves.
-    const tick = () => {
-      if (trainState.corpusDownloadInflight.has(stems[i])) {
-        setTimeout(tick, 400);
-      } else {
-        runNext(i + 1);
-      }
-    };
-    setTimeout(tick, 400);
-  };
-  runNext(0);
-}
-
 // Save/restore the in-form values keyed by plugin id + flow. This is the
 // "browser storage so they don't lose progress" piece — flipping to settings
 // to install a corpus is a round-trip, not a discard.
@@ -7906,29 +7711,6 @@ function _trWireArgListeners() {
     el.addEventListener("input",  fn);
     if (el.dataset.arg === "resume") {
       el.addEventListener("change", () => _trApplyResumeConfig(el.value));
-    }
-    // Catch the "user picked an uninstalled corpus" case: revert the select
-    // and surface a download/settings warning panel.
-    if (el.dataset.argKind === "corpus") {
-      let lastValid = el.value;
-      el.addEventListener("change", () => {
-        const opt = el.options[el.selectedIndex];
-        if (opt && opt.dataset && opt.dataset.notInstalled === "1") {
-          const stem = el.value;
-          // Revert the select to the previous valid value (or empty) so the
-          // form can't be submitted pointing at a non-existent file.
-          el.value = lastValid || "";
-          // Find the surrounding .cell and inject the warning.
-          const cell = el.closest(".cell") || el.parentElement;
-          _trShowCorpusNotDownloadedWarning(el.dataset.arg, stem, cell);
-          _trUpdateCorpusMeta();
-        } else {
-          lastValid = el.value;
-          // Clear any stale warning if user picked something installed.
-          const cell = el.closest(".cell");
-          if (cell) cell.querySelectorAll(".train-corpus-warning").forEach(w => w.remove());
-        }
-      });
     }
   });
   document.querySelectorAll('#trainArgs .hint').forEach(hint => {
@@ -8498,10 +8280,6 @@ function _trRenderPicker() {
 
 function _trPoll() {
   if (!_isTabActive("training")) return Promise.resolve();
-  // Fire the catalog fetch alongside discovery (it's cached so this is
-  // effectively a no-op after the first call). The dropdown rendering uses
-  // catalog data to surface uninstalled stems.
-  _trFetchCatalog();
   return Promise.all([
     fetch("/plugins").then(r => r.json()),
     fetch("/train/discovery").then(r => r.json()),
@@ -9165,6 +8943,13 @@ function _applySettingsToUI(s) {
   _applyHudVisibility(!!s.hud_enabled, !!s.hud_detailed);
   const adv = $("analyticsAdvancedEnable");
   if (adv) adv.checked = !!s.analytics_advanced_enabled;
+  const diag = $("diagnosticsLogsEnable");
+  if (diag) diag.checked = !!s.diagnostics_logs_enabled;
+  const dev = $("devicePreferenceSelect");
+  if (dev) {
+    dev.value = (s.device_preference || "auto");
+    _applyDevicePrefCapabilities();
+  }
   const errs = $("heartbeatSendErrorsEnable");
   if (errs) errs.checked = (s.heartbeat_send_errors !== false);
   const ch = s.update_channel || "stable";
@@ -10464,9 +10249,13 @@ const corpusLibState = {
   installing: new Set(), // stems currently being installed (UI lock)
 };
 
-// Only these Veritate-native corpora are available; everything else is gated
-// behind a "coming soon" disabled button until the rest of the catalog ships.
-const CORPUS_ALLOWLIST = new Set(["chat_50mb", "agent_15mb"]);
+// Veritate-native corpora that haven't been published yet; gated behind a
+// "coming soon" disabled button. Third-party HF datasets (fineweb_edu,
+// tinystories, etc.) install normally.
+const CORPUS_COMING_SOON = new Set([
+  "chat_500mb", "chat_5gb",
+  "agent_150mb", "agent_1500mb",
+]);
 
 function _corpusFmtBytes(n) {
   if (n == null) return "?";
@@ -10604,7 +10393,7 @@ function _corpusRenderCatalog(data) {
     // Primary install gets accent border so it stands out from the secondary
     // "remove" button.
     let actions = "";
-    const gated = !isUser && !CORPUS_ALLOWLIST.has(c.stem);
+    const gated = !isUser && CORPUS_COMING_SOON.has(c.stem);
     if (gated) {
       actions = `<button class="action" type="button" disabled title="not yet available">coming soon</button>`;
     } else if (downloading) {
@@ -11027,6 +10816,51 @@ async function showConsentModal({ allowDecline }) {
   _saveSettings({ analytics_advanced_enabled: advanced, consent_modal_seen: true });
 }
 
+function _applyDevicePrefCapabilities() {
+  const sel = $("devicePreferenceSelect");
+  const hint = $("devicePreferenceHint");
+  if (!sel) return;
+  const caps = (_sysSpecsCache && _sysSpecsCache.capabilities) || null;
+  let any_disabled = false;
+  Array.from(sel.options).forEach(opt => {
+    const need = opt.dataset && opt.dataset.cap;
+    if (!need) return;
+    const ok = !!(caps && caps[need]);
+    opt.disabled = !ok;
+    if (!ok) {
+      any_disabled = true;
+      if (!/—/.test(opt.textContent)) opt.textContent = opt.textContent + " — unsupported on this host";
+    }
+  });
+  if (hint) {
+    if (!caps) {
+      hint.textContent = "click “Detect now” above to populate option availability.";
+      hint.style.color = "var(--dim)";
+    } else if (any_disabled) {
+      hint.textContent = "Options requiring CUDA or MPS are disabled on this host.";
+      hint.style.color = "var(--warm)";
+    } else {
+      hint.textContent = "All options available on this host.";
+      hint.style.color = "var(--dim)";
+    }
+  }
+}
+
+function _showDiagnosticsPreview() {
+  const box = $("diagPreviewBox");
+  if (!box) return;
+  if (box.style.display !== "none") { box.style.display = "none"; return; }
+  box.style.display = "";
+  box.textContent = "fetching…";
+  fetch("/heartbeat/preview").then(r => r.json()).then(p => {
+    box.textContent = JSON.stringify(p, null, 2);
+    box.style.color = "var(--text)";
+  }).catch(e => {
+    box.textContent = "preview unavailable: " + (e && e.message || e);
+    box.style.color = "var(--hot)";
+  });
+}
+
 async function showConsentReviewModal() {
   const body = `
     <div style="display:grid;gap:10px">
@@ -11135,6 +10969,16 @@ document.addEventListener("DOMContentLoaded", () => {
   if (adv) adv.addEventListener("change", () => {
     _saveSettings({ analytics_advanced_enabled: adv.checked });
   });
+  const diag = $("diagnosticsLogsEnable");
+  if (diag) diag.addEventListener("change", () => {
+    _saveSettings({ diagnostics_logs_enabled: diag.checked });
+  });
+  const diagPrev = $("diagPreviewBtn");
+  if (diagPrev) diagPrev.addEventListener("click", () => { _showDiagnosticsPreview(); });
+  const devSel = $("devicePreferenceSelect");
+  if (devSel) devSel.addEventListener("change", () => {
+    _saveSettings({ device_preference: devSel.value });
+  });
   const errs = $("heartbeatSendErrorsEnable");
   if (errs) errs.addEventListener("change", () => {
     _saveSettings({ heartbeat_send_errors: errs.checked });
@@ -11148,11 +10992,11 @@ document.addEventListener("DOMContentLoaded", () => {
     detectBtn.textContent = "detecting…";
     fetch("/sys/detect", { method: "POST" })
       .then(r => r.json())
-      .then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoOptimizeVisibility(); })
+      .then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoOptimizeVisibility(); _applyDevicePrefCapabilities(); })
       .catch(() => {})
       .finally(() => { detectBtn.disabled = false; detectBtn.textContent = prev; });
   });
-  fetch("/sys/specs").then(r => r.json()).then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoOptimizeVisibility(); }).catch(() => {});
+  fetch("/sys/specs").then(r => r.json()).then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoOptimizeVisibility(); _applyDevicePrefCapabilities(); }).catch(() => {});
   const hbBtn = $("heartbeatSendBtn");
   if (hbBtn) hbBtn.addEventListener("click", () => {
     const lab = $("heartbeatSendStatus");

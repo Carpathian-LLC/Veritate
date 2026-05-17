@@ -20,6 +20,7 @@ import time
 
 from readers import paths, trainers as plugins_reader
 from runtime import logs as logmod
+from runtime import settings as settings_mod
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -43,6 +44,15 @@ PYTORCH_ALLOC_ENV_DEFAULT = "expandable_segments:True"
 # runner's import graph (save.py imports torch lazily; the runner runs in
 # the parent process and shouldn't pay that cost).
 PLUGIN_ID_ENV = "VERITATE_PLUGIN_ID"
+
+# Trainer device override. The settings-tab "Device preference" dropdown
+# writes this; trainers' pick_device() reads it. "auto" or unset = historical
+# best-available selection.
+DEVICE_ENV = "VERITATE_DEVICE"
+
+# Sane upper bound for BLAS / OpenMP threads. Going above this rarely helps and
+# often hurts (NUMA / thread-thrash / memory-bandwidth saturation).
+_BLAS_THREAD_CAP = 16
 
 _LOCK = threading.Lock()
 _STATE = {
@@ -267,9 +277,25 @@ def _run(plugin, args):
          started_at=time.time(), finished_at=None, exit_code=None)
     env = os.environ.copy()
     env.setdefault(PYTORCH_ALLOC_ENV_KEY, PYTORCH_ALLOC_ENV_DEFAULT)
-    # Tell save() which trainer is writing so it can route capability updates
-    # to the right tier. See readers/capabilities.py + save._sync_capabilities.
     env[PLUGIN_ID_ENV] = str(plugin["id"])
+    pref = (settings_mod.get().get("device_preference") or "auto").strip().lower()
+    if pref and pref != "auto":
+        env[DEVICE_ENV] = pref
+    # Match BLAS and OpenMP thread budgets to the physical-core count so libtorch
+    # and oneDNN parallelize across the same number of cores the trainer asks for.
+    # Caller-set values win; we only fill in when the user hasn't already.
+    try:
+        import psutil as _ps
+        _phys = int(_ps.cpu_count(logical=False) or 0)
+    except (ImportError, ValueError):
+        _phys = 0
+    if _phys:
+        _budget = str(min(_phys, _BLAS_THREAD_CAP))
+        env.setdefault("OMP_NUM_THREADS",       _budget)
+        env.setdefault("MKL_NUM_THREADS",       _budget)
+        env.setdefault("OPENBLAS_NUM_THREADS",  _budget)
+        env.setdefault("VECLIB_MAXIMUM_THREADS", _budget)
+        env.setdefault("NUMEXPR_NUM_THREADS",   _budget)
     try:
         log_fp = open(RUN_LOG_FILE, "w", encoding="utf-8", buffering=1)
     except Exception as e:

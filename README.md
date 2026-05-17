@@ -374,13 +374,21 @@ You can run any combination concurrently. The web server does not start training
 
 ## Supported hardware
 
-| Hardware | Training (PyTorch) | Inference (C engine) |
-|---|---|---|
-| **NVIDIA GPU** (CUDA) | yes (CUDA + bfloat16 AMP) | N/A (CPU engine) |
-| **Apple M-series** (MPS) | yes (fp32 only, MPS backend, no AMP) | ARM64 NEON SDOT (M1+); AMX empty |
-| **x86_64 CPU** (AVX-512 + VNNI) | yes (CPU fallback) | primary target (Zen 4+, Sapphire Rapids+) |
-| **x86_64 CPU** (AVX2) | yes (CPU fallback) | matmul done; transformer hot-path in progress |
-| **ARM64 CPU** (NEON only) | yes (CPU fallback) | matmul only |
+The launcher detects the host (OS + arch + CPU features) and dispatches per-tier dependency pins, Python version checks, and engine build flags. The C engine compiles every kernel into one binary and selects at runtime via CPUID, so a binary built on an AVX-512 host still runs on an Ivy Bridge CPU — shared TUs are pinned to SSE4.2 baseline so non-kernel code never emits an instruction the host can't run.
+
+| Tier | Hardware | Python | Torch | Training | C engine |
+|---|---|---|---|---|---|
+| **mac_arm** | Apple Silicon (M1–M4) | 3.10–3.13 | `~=2.11` | MPS + CPU | ARM64 NEON SDOT |
+| **mac_intel** | Intel Mac, AVX2+ (Haswell+) | 3.10–3.11 | `~=2.2` (last x86 macOS wheels) | CPU only | AVX2 / VNNI / AVX-512 kernels dispatched at runtime |
+| **mac_intel** | Intel Mac, AVX1 only (Ivy Bridge, Mac Pro 2013) | 3.10–3.11 | `~=2.2` | CPU only | scalar kernels + AVX1 (dispatched) |
+| **linux_x86** | x86_64 Linux, AVX-512+VNNI | 3.10–3.13 | `~=2.11` | CUDA + CPU | full kernel set |
+| **linux_x86** | x86_64 Linux, AVX2 | 3.10–3.13 | `~=2.11` | CUDA + CPU | AVX2 kernels dispatched |
+| **linux_arm** | ARM64 Linux (Jetson, Graviton, Pi 4) | 3.10–3.13 | `~=2.11` | CPU (CUDA on Jetson) | NEON SDOT kernels |
+| **windows_x86** | x86_64 Windows | 3.10–3.13 | `~=2.11` | CUDA + CPU | full kernel set |
+| **GPU (NVIDIA)** | CUDA on any tier above | — | `torch.cuda` | bfloat16 AMP | N/A (CPU engine) |
+| **GPU (AMD on macOS)** | Discrete AMD on Intel Mac | — | not supported by torch on macOS | CPU only | planned Metal compute path |
+
+Capability flags (`has_avx2`, `has_avx512vnni`, `can_use_mps`, `can_use_cuda`, etc.) are exposed in the hardware dump for any code that needs to gate features at runtime. See [`dev_documentation/platform/tiers.md`](dev_documentation/platform/tiers.md) for how the tier dispatch works.
 
 <br/>
 
@@ -390,18 +398,18 @@ You can run any combination concurrently. The web server does not start training
 
 ## Cross-platform plan
 
-Windows is the primary platform today. The structure is set up to add macOS and Linux as ports land. See [`documentation/kernels/platforms.md`](documentation/kernels/platforms.md) for the tier matrix, per-platform bench targets, and the function-pointer contract.
+[`build.bat`](veritate_engine/v1/build/build.bat) (Windows) and [`build.sh`](veritate_engine/v1/build/build.sh) (POSIX) compile shared translation units at the architecture's safe baseline (SSE4.2 on x86_64, ARMv8 on arm64) and apply per-kernel ISA flags only to the kernels that need them. `src/dispatch.c` picks at runtime via CPUID so a binary works on every CPU that meets the baseline, no matter how high the compile-time kernel ISA was. All kernels live under [`veritate_engine/v1/kernels/<arch>/`](veritate_engine/v1/kernels/) and [`veritate_engine/v1/kernels/scalar/`](veritate_engine/v1/kernels/scalar/). One binary per OS+arch. No fat universal binary.
 
-| Tier | Hardware | Status |
+| Kernel tier | Hardware | Status |
 |---|---|---|
-| **x86_64 + AVX-512 + VNNI** | Ryzen 9800X3D, Zen 4+, Sapphire Rapids+ | ![done](https://img.shields.io/badge/done-brightgreen) Primary target |
-| **x86_64 + AVX2** | Intel Haswell through Ice Lake, 2013+ consumer x86 | ![partial](https://img.shields.io/badge/partial-yellow) Matmul done; transformer hot-path not yet |
-| **ARM64 + NEON SDOT** | Apple M1+, Cortex-A76+ | ![done](https://img.shields.io/badge/done-brightgreen) Initial port landed; bench TBD |
+| **scalar C** | Anything | ![done](https://img.shields.io/badge/done-brightgreen) Always built; correctness oracle |
+| **x86_64 + AVX2** | Haswell+ (2013+ consumer), every x86 Mac with AVX2 | ![done](https://img.shields.io/badge/done-brightgreen) Matmul, INT4, ternary |
+| **x86_64 + AVX-512 + VNNI** | Zen 4+, Sapphire Rapids+, Mac Pro 2019 Xeon W | ![done](https://img.shields.io/badge/done-brightgreen) Full set |
+| **x86_64 + AVX1 only** | Ivy Bridge / Sandy Bridge / Mac Pro 2013 | ![partial](https://img.shields.io/badge/partial-yellow) Scalar fallback (AVX1-specific kernels not yet) |
+| **ARM64 + NEON SDOT** | Apple M1+, Cortex-A76+, ARMv8.2+dotprod | ![done](https://img.shields.io/badge/done-brightgreen) |
 | **ARM64 + NEON only** | Pi 4, older Android | ![partial](https://img.shields.io/badge/partial-yellow) Matmul only |
 | **ARM64 + AMX** | M-series Mac | ![planned](https://img.shields.io/badge/planned-lightgrey) Stretch goal |
-| **scalar C** | Anything | ![done](https://img.shields.io/badge/done-brightgreen) Correctness oracle for all other tiers |
-
-[`build.bat`](veritate_engine/v1/build/build.bat) (Windows) and [`build.sh`](veritate_engine/v1/build/build.sh) (POSIX) drive identical compile commands per OS. `build.sh` detects host via `uname -s/-m` and picks the matching kernel translation units. All kernels live under [`veritate_engine/v1/kernels/<arch>/`](veritate_engine/v1/kernels/) and [`veritate_engine/v1/kernels/scalar/`](veritate_engine/v1/kernels/scalar/). One binary per OS+arch. No fat universal binary.
+| **Metal compute (AMD GPU on macOS)** | Mac Pro 2013/2019 FirePro, AMD eGPU | ![planned](https://img.shields.io/badge/planned-lightgrey) Investigating |
 
 <br/>
 

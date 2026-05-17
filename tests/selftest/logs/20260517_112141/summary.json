@@ -1,0 +1,291 @@
+{
+  "run_id": "20260517_112141",
+  "elapsed": 4.972,
+  "counts": {
+    "ok": 24,
+    "skip": 2,
+    "fail": 1
+  },
+  "results": [
+    {
+      "name": "addons",
+      "status": "ok",
+      "summary": "1 addon(s) registered",
+      "details": {
+        "ids": [
+          "{'id': 'slot_table', 'manifest':"
+        ]
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_addons.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "agent_loop",
+      "status": "ok",
+      "summary": "toolbox built (size=3)",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_agent_loop.log",
+      "elapsed": 0.024
+    },
+    {
+      "name": "app_imports",
+      "status": "ok",
+      "summary": "flask app ok, 94 routes registered",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_app_imports.log",
+      "elapsed": 0.584
+    },
+    {
+      "name": "backend_c",
+      "status": "ok",
+      "summary": "class ok (engine binary present)",
+      "details": {
+        "exe": "/Users/mirach-00-usc1/Development/Veritate/veritate_engine/v1/bin/macos/arm64/veritate",
+        "exe_present": true
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_backend_c.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "backend_pytorch",
+      "status": "ok",
+      "summary": "Brain class ok (5 model dir(s) discoverable)",
+      "details": {
+        "models": [
+          "ckpt_final_tool_sft_v1",
+          "fineweb_edu_800m_bf16_v1",
+          "tinystories_200m_bf16_v1",
+          "tinystories_85m_fp32_v1_toolsft",
+          "tinystories_85m_fp32_v1_toolsftw15"
+        ]
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_backend_pytorch.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "core_model",
+      "status": "ok",
+      "summary": "forward shape (2, 8, 256)",
+      "details": {
+        "params": 25248
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_core_model.log",
+      "elapsed": 0.003
+    },
+    {
+      "name": "core_model_rope",
+      "status": "ok",
+      "summary": "forward shape (2, 8, 256)",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_core_model_rope.log",
+      "elapsed": 0.002
+    },
+    {
+      "name": "core_plugins",
+      "status": "ok",
+      "summary": "module imported (no list entry)",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_core_plugins.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "core_qat",
+      "status": "ok",
+      "summary": "all fake_quant ops + set_qat",
+      "details": {
+        "int8_max": 127,
+        "act_scale": 32.0,
+        "ln_scale": 64.0
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_core_qat.log",
+      "elapsed": 0.001
+    },
+    {
+      "name": "corpus_catalog",
+      "status": "ok",
+      "summary": "status 200",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_corpus_catalog.log",
+      "elapsed": 0.437
+    },
+    {
+      "name": "decode_imports",
+      "status": "ok",
+      "summary": "7 decode modules ok",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_decode_imports.log",
+      "elapsed": 0.001
+    },
+    {
+      "name": "documentation",
+      "status": "ok",
+      "summary": "6 required docs present",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_documentation.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "engine_binary",
+      "status": "ok",
+      "summary": "kernel verify + dispatch ok",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_engine_binary.log",
+      "elapsed": 3.156
+    },
+    {
+      "name": "engine_build_paths",
+      "status": "ok",
+      "summary": "v1/ layout ok",
+      "details": {
+        "engine_versions": [
+          "current",
+          "engines"
+        ]
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_engine_build_paths.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "engine_loads_models",
+      "status": "skip",
+      "summary": "no .bin files in models/",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_engine_loads_models.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "eval",
+      "status": "ok",
+      "summary": "4 suites + entry: run_suites_on_model",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_eval.log",
+      "elapsed": 0.001
+    },
+    {
+      "name": "export",
+      "status": "ok",
+      "summary": "bin written (25316 bytes)",
+      "details": {
+        "path": "/Users/mirach-00-usc1/Development/Veritate/models/selftestexport_1m_fp32_v1/veritate.bin"
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_export.log",
+      "elapsed": 0.553
+    },
+    {
+      "name": "mri_endpoints",
+      "status": "ok",
+      "summary": "21 endpoints ok",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_mri_endpoints.log",
+      "elapsed": 0.196
+    },
+    {
+      "name": "plugin_surface",
+      "status": "fail",
+      "summary": "__all__ {'get_teacher_client', 'save', 'model', 'qat', 'paths'} != {'save', 'model', 'paths', 'qat'}",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_plugin_surface.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "qat_triton_parity",
+      "status": "skip",
+      "summary": "cuda unavailable",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_qat_triton_parity.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "readers_misc",
+      "status": "ok",
+      "summary": "10 reader modules imported",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_readers_misc.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "readers_paths",
+      "status": "ok",
+      "summary": "14 helpers ok",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_readers_paths.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "runtime",
+      "status": "ok",
+      "summary": "6 runtime modules ok",
+      "details": {
+        "sys_metric_keys": [
+          "available",
+          "cpu_pct",
+          "cpu_count",
+          "cpu_temp_c",
+          "rss_bytes",
+          "sys_mem_total"
+        ]
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_runtime.log",
+      "elapsed": 0.0
+    },
+    {
+      "name": "save_roundtrip",
+      "status": "ok",
+      "summary": "4 params matched",
+      "details": {
+        "checkpoint": "/Users/mirach-00-usc1/Development/Veritate/models/selftestsave_1m_fp32_v1/checkpoints/step_1.pt",
+        "step": 1
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_save_roundtrip.log",
+      "elapsed": 0.004
+    },
+    {
+      "name": "trainers_discovery",
+      "status": "ok",
+      "summary": "12 trainers ok",
+      "details": {
+        "trainers": [
+          "veritate_10m",
+          "veritate_13b",
+          "veritate_1b",
+          "veritate_1b3",
+          "veritate_200m",
+          "veritate_3b",
+          "veritate_400m",
+          "veritate_50b",
+          "veritate_800m",
+          "veritate_80m",
+          "veritate_85m",
+          "veritate_tool_sft"
+        ]
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_trainers_discovery.log",
+      "elapsed": 0.001
+    },
+    {
+      "name": "training_modules",
+      "status": "ok",
+      "summary": "15 training modules imported",
+      "details": {},
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_training_modules.log",
+      "elapsed": 0.001
+    },
+    {
+      "name": "versions_json",
+      "status": "ok",
+      "summary": "build=7 engine=v1.3.0",
+      "details": {
+        "data": {
+          "channel": "development",
+          "build": 7,
+          "engine": "v1.3.0",
+          "mri": "v1.3.0",
+          "format": "v1.4.0",
+          "plugins": "v1.1.1"
+        }
+      },
+      "log_path": "/Users/mirach-00-usc1/Development/Veritate/tests/selftest/logs/20260517_112141/check_versions_json.log",
+      "elapsed": 0.0
+    }
+  ]
+}

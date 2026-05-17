@@ -36,6 +36,7 @@ from readers import paths, models as models_reader
 from . import logs as logmod
 from . import settings as settings_mod
 from . import sys_metrics
+from . import sys_metrics
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -58,6 +59,9 @@ HOST_TOKEN_LEN = 12
 PROTOCOL_VERSION = 2
 TRAINING_EVENTS_PER_PING_MAX = 32
 ERRORS_PER_PING_MAX = 20
+DIAGNOSTICS_LOG_TAIL    = 200
+DIAGNOSTICS_PLUGIN_TAIL = 400
+DIAGNOSTICS_PLUGIN_BYTES = 64 * 1024
 ERROR_SOURCE_MAX  = 32
 ERROR_MESSAGE_MAX = 240
 
@@ -206,25 +210,24 @@ def record_training_event(model_name, arch, started_at=None):
     _update_state({"pending_training_events": pend})
 
 
-def _consume_errors(with_detail):
+def _consume_errors(with_detail, peek=False):
     """Drains the pending error counter and the detail ring. Returns
     (count, detail_list_or_None). detail_list is None when the user has
     opted out of error-detail telemetry; the count itself is always part of
-    the minimal payload."""
+    the minimal payload. peek=True reads without mutating state (used by
+    preview_payload so the user can inspect without losing pending errors)."""
     s = _state()
     n = int(s.get("errors_pending") or 0)
     detail = None
     patch = {}
-    if n:
+    if n and not peek:
         patch["errors_pending"] = 0
     if with_detail:
         buf = s.get("errors_pending_detail") or []
         detail = buf[-ERRORS_PER_PING_MAX:] if isinstance(buf, list) and buf else []
-        if buf:
+        if buf and not peek:
             patch["errors_pending_detail"] = []
-    else:
-        # Opted out: drop the buffer so nothing carries over if the user
-        # toggles the checkbox on later. Their consent applies forward.
+    elif not peek:
         if s.get("errors_pending_detail"):
             patch["errors_pending_detail"] = []
     if patch:
@@ -265,7 +268,7 @@ def _hw_block():
     }
 
 
-def _build_payload():
+def _build_payload(peek=False):
     """Tiered payload:
       minimal (always sent if heartbeat enabled): machine_id, ts, uptime,
         restarts, error count, presence of training (no detail).
@@ -278,7 +281,7 @@ def _build_payload():
     cfg  = settings_mod.get()
     send_errors    = bool(cfg.get("heartbeat_send_errors"))
     send_analytics = bool(cfg.get("analytics_advanced_enabled"))
-    err_count, err_detail = _consume_errors(with_detail=send_errors)
+    err_count, err_detail = _consume_errors(with_detail=send_errors, peek=peek)
     payload = {
         "v":           PROTOCOL_VERSION,
         "machine_id":  _machine_id(),
@@ -321,7 +324,49 @@ def _build_payload():
         pend = s.get("pending_training_events") or []
         if isinstance(pend, list) and pend:
             payload["trainings"] = pend[:TRAINING_EVENTS_PER_PING_MAX]
+    if bool(cfg.get("diagnostics_logs_enabled")):
+        diag = _diagnostics_block()
+        if diag is not None:
+            payload["diagnostics"] = diag
     return payload
+
+
+def _diagnostics_block():
+    """Full hardware dump (everything sys_metrics.detect_specs reports) plus
+    the tail of the in-memory log ring and the plugin run log. Only included
+    when diagnostics_logs_enabled is True. Lets us debug crashes the user
+    couldn't surface any other way."""
+    try:
+        specs = sys_metrics.detect_specs()
+    except Exception:
+        specs = None
+    try:
+        from runtime import logs as _logmod
+        recent = _logmod.snapshot(limit=DIAGNOSTICS_LOG_TAIL)
+    except Exception:
+        recent = []
+    plugin_tail = None
+    try:
+        from training import trainer_runner as _tr
+        if os.path.isfile(_tr.RUN_LOG_FILE):
+            with open(_tr.RUN_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()[-DIAGNOSTICS_PLUGIN_TAIL:]
+                plugin_tail = "".join(lines)[-DIAGNOSTICS_PLUGIN_BYTES:]
+    except Exception:
+        plugin_tail = None
+    return {
+        "specs":       specs,
+        "recent_logs": recent,
+        "plugin_run_tail": plugin_tail,
+    }
+
+
+def preview_payload():
+    """Return exactly what _build_payload() would emit right now. Used by the
+    settings-tab 'preview the payload' button so users see precisely what is
+    sent under their current consent flags. Non-mutating: doesn't drain the
+    error queue or count this toward the runtime accumulator."""
+    return _build_payload(peek=True)
 
 
 def _post(payload):

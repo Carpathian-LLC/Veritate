@@ -9,5 +9,6 @@ Quick-reference notes on how the platform works internally. Folder layout mirror
 - `logs/` — log routing and tail
 - `settings/` — settings store, hooks, lifecycle
 - `wiki/` — embedded wiki
+- `platform/` — hardware tiers, OS compatibility, dependency matrix
 
 Each doc is intentionally short. Read the code for the long version; this folder is for orientation. New docs are added as systems are touched.

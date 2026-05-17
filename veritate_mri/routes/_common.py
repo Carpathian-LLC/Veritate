@@ -30,9 +30,21 @@ def safe_name(name):
 
 
 def auto_thread_count():
-    n = os.cpu_count() or 1
-    physical = n // 2 if n >= 2 else 1
-    return max(1, min(THREADS_AUTO_MAX, physical))
+    """Physical-core count capped at THREADS_AUTO_MAX. Uses psutil when available
+    for an accurate physical-vs-logical split (Apple Silicon has no SMT so the
+    old n//2 heuristic undercounted by 2x). Falls back to os.cpu_count // 2 only
+    when psutil is missing and the system reports an even logical count
+    (typical hyperthreaded Intel/AMD)."""
+    physical = None
+    try:
+        import psutil as _ps
+        physical = _ps.cpu_count(logical=False)
+    except ImportError:
+        physical = None
+    if not physical:
+        n = os.cpu_count() or 1
+        physical = max(1, n // 2 if n >= 2 else 1)
+    return max(1, min(THREADS_AUTO_MAX, int(physical)))
 
 
 def user_error(e, prefix=None):

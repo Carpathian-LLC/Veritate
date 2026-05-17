@@ -38,6 +38,8 @@ DEFAULTS = {
     "heartbeat_send_errors": True,
     "consent_modal_seen": False,
     "analytics_advanced_enabled": False,
+    "diagnostics_logs_enabled": False,
+    "device_preference": "auto",
     "update_channel": "stable",
     "auto_reload_on_update": True,
     "ai_enabled": False,

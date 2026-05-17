@@ -52,6 +52,10 @@ def register(app):
         ok_send = heartbeat_mod.send_now()
         return {"ok": bool(ok_send), **heartbeat_mod.status()}
 
+    @app.route("/heartbeat/preview")
+    def heartbeat_preview_route():
+        return heartbeat_mod.preview_payload()
+
     @app.route("/app/update_status")
     def app_update_status_route():
         return app_sync_mod.status()

@@ -36,7 +36,7 @@ VENV_DIR         = HERE / "venv"
 REQUIREMENTS     = HERE / "requirements.txt"
 HASH_SENTINEL    = VENV_DIR / ".req_hash"
 DEFAULT_PORT     = 8001
-DEFAULT_THREADS  = 8
+DEFAULT_THREADS  = 0   # 0 = auto: physical cores capped at 16. Was 8.
 BROWSER_DELAY_S  = 3.0
 PY_MIN           = (3, 10)
 PY_MAX_TESTED    = (3, 13)

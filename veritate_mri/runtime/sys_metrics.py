@@ -106,6 +106,24 @@ def _nvidia_query():
     return rows
 
 
+def _parse_size_str(s):
+    """Parse '3 GB' / '1536 MB' / '512 KB' to bytes; None if unparseable."""
+    if not s or not isinstance(s, str):
+        return None
+    parts = s.strip().split()
+    if len(parts) < 2:
+        return None
+    try:
+        n = float(parts[0])
+    except ValueError:
+        return None
+    u = parts[1].upper()
+    if u.startswith("GB"): return int(n * (1024 ** 3))
+    if u.startswith("MB"): return int(n * (1024 ** 2))
+    if u.startswith("KB"): return int(n * 1024)
+    return None
+
+
 def _mac_adapters():
     out = _run(["system_profiler", "SPDisplaysDataType", "-json"], timeout=4.0)
     if not out:
@@ -119,14 +137,16 @@ def _mac_adapters():
         name = d.get("sppci_model") or d.get("_name") or "GPU"
         vendor = d.get("spdisplays_vendor") or ""
         is_integrated = "Apple" in name or "integrated" in (d.get("sppci_bus") or "").lower()
+        vram_str = d.get("spdisplays_vram") or d.get("spdisplays_vram_shared")
         rows.append({
             "name": name,
             "vendor": vendor.replace("sppci_vendor_", "").upper() or "?",
             "integrated": is_integrated,
             "load_pct": None,
             "vram_used": None,
-            "vram_total": None,
+            "vram_total": _parse_size_str(vram_str),
             "temp_c": None,
+            "metal_family": d.get("spdisplays_metalfamily") or d.get("spdisplays_mtlgpufamilysupport"),
         })
     return rows
 
@@ -582,18 +602,189 @@ def snapshot():
 
 
 # ------------------------------------------------------------------------------------
+# Hardware capability probes. Cross-platform. Used by detect_specs() and the
+# settings-tab "what we collect" panel.
+
+# NEON/ASIMD are mandatory on ARMv8 so Apple doesn't expose a separate sysctl
+# for them on Apple Silicon. We treat them as always-present on arm64 macOS.
+_MAC_ARM_IMPLIED_FEATURES = ("NEON", "ASIMD")
+_MAC_ARM_FEATURE_PROBES = (
+    # (sysctl key, feature name we report). Apple Silicon ships these as
+    # hw.optional.arm.FEAT_*, each returning "1" when supported.
+    ("hw.optional.arm.FEAT_DotProd",       "ASIMDDP"),
+    ("hw.optional.arm.FEAT_FP16",          "FP16"),
+    ("hw.optional.arm.FEAT_BF16",          "BF16"),
+    ("hw.optional.arm.FEAT_I8MM",          "I8MM"),
+    ("hw.optional.arm.FEAT_FHM",           "ASIMDFHM"),
+    ("hw.optional.arm.FEAT_SHA512",        "SHA512"),
+    ("hw.optional.arm.FEAT_SHA3",          "SHA3"),
+    ("hw.optional.arm.FEAT_AES",           "AES"),
+)
+
+
+def _cpu_features_macos():
+    """Returns {brand, vendor, features:set, freq_max_hz}. Empty fields if a
+    probe fails — never raises. On Intel Macs reads machdep.cpu.{features,
+    leaf7_features}; on Apple Silicon probes hw.optional.* per-feature."""
+    out = {"brand": None, "vendor": None, "features": set(), "freq_max_hz": None}
+    brand = _run(["sysctl", "-n", "machdep.cpu.brand_string"], timeout=1.0)
+    if brand: out["brand"] = brand.strip()
+    vendor = _run(["sysctl", "-n", "machdep.cpu.vendor"], timeout=1.0)
+    if vendor and vendor.strip():
+        out["vendor"] = vendor.strip()
+    elif (platform.machine() or "").lower() == "arm64":
+        out["vendor"] = "Apple"
+
+    f1 = _run(["sysctl", "-n", "machdep.cpu.features"], timeout=1.0) or ""
+    f2 = _run(["sysctl", "-n", "machdep.cpu.leaf7_features"], timeout=1.0) or ""
+    for tok in (f1 + " " + f2).split():
+        out["features"].add(tok.upper().replace(".", "_"))
+
+    if (platform.machine() or "").lower() == "arm64":
+        for name in _MAC_ARM_IMPLIED_FEATURES:
+            out["features"].add(name)
+        for key, name in _MAC_ARM_FEATURE_PROBES:
+            v = _run(["sysctl", "-n", key], timeout=1.0)
+            if v and v.strip() == "1":
+                out["features"].add(name)
+
+    freq = _run(["sysctl", "-n", "hw.cpufrequency_max"], timeout=1.0)
+    if freq:
+        try: out["freq_max_hz"] = int(freq.strip())
+        except ValueError: pass
+    return out
+
+
+def _cpu_features_linux():
+    out = {"brand": None, "vendor": None, "features": set(), "freq_max_hz": None}
+    try:
+        with open("/proc/cpuinfo", "r") as f:
+            for raw in f:
+                if ":" not in raw: continue
+                k, _, v = raw.partition(":")
+                k = k.strip(); v = v.strip()
+                if k == "model name" and out["brand"] is None:
+                    out["brand"] = v
+                elif k == "vendor_id" and out["vendor"] is None:
+                    out["vendor"] = v
+                elif k == "flags" and not out["features"]:
+                    out["features"] = {tok.upper() for tok in v.split()}
+                elif k == "cpu MHz" and out["freq_max_hz"] is None:
+                    try: out["freq_max_hz"] = int(float(v) * 1_000_000)
+                    except ValueError: pass
+    except OSError:
+        pass
+    return out
+
+
+def _cpu_features_windows():
+    """Windows: CPU brand via WMI. Feature flags aren't exposed by WMI; we
+    infer the obvious ones (AVX, AVX2) from the brand string when we can,
+    leaving the set possibly incomplete."""
+    out = {"brand": None, "vendor": None, "features": set(), "freq_max_hz": None}
+    j = _run([
+        "powershell", "-NoProfile", "-Command",
+        "Get-CimInstance Win32_Processor | "
+        "Select-Object Name,Manufacturer,MaxClockSpeed | ConvertTo-Json -Compress",
+    ], timeout=4.0)
+    if j:
+        try:
+            blob = json.loads(j)
+            if isinstance(blob, list) and blob:
+                blob = blob[0]
+            if isinstance(blob, dict):
+                out["brand"] = (blob.get("Name") or "").strip() or None
+                out["vendor"] = (blob.get("Manufacturer") or "").strip() or None
+                mhz = blob.get("MaxClockSpeed")
+                if mhz:
+                    try: out["freq_max_hz"] = int(mhz) * 1_000_000
+                    except (TypeError, ValueError): pass
+        except (ValueError, json.JSONDecodeError):
+            pass
+    return out
+
+
+def _cpu_features():
+    """Cross-platform CPU brand + feature set. Always returns the same shape;
+    empty when nothing could be probed."""
+    if sys.platform == "darwin":   return _cpu_features_macos()
+    if sys.platform.startswith("linux"): return _cpu_features_linux()
+    if sys.platform.startswith("win"):   return _cpu_features_windows()
+    return {"brand": None, "vendor": None, "features": set(), "freq_max_hz": None}
+
+
+def _os_version():
+    """Product-level OS version string. macOS: `sw_vers -productVersion`.
+    Linux: best-effort from /etc/os-release. Windows: platform.win32_ver."""
+    if sys.platform == "darwin":
+        v = _run(["sw_vers", "-productVersion"], timeout=1.0)
+        b = _run(["sw_vers", "-buildVersion"],   timeout=1.0)
+        return {
+            "product": (v.strip() if v else None),
+            "build":   (b.strip() if b else None),
+        }
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/etc/os-release", "r") as f:
+                kv = {}
+                for line in f:
+                    if "=" not in line: continue
+                    k, _, val = line.partition("=")
+                    kv[k.strip()] = val.strip().strip('"')
+            return {
+                "product": kv.get("PRETTY_NAME") or kv.get("NAME"),
+                "build":   kv.get("BUILD_ID") or kv.get("VERSION_ID"),
+            }
+        except OSError:
+            return {"product": None, "build": None}
+    if sys.platform.startswith("win"):
+        rel, ver, csd, ptype = platform.win32_ver()
+        return {"product": rel or None, "build": ver or None}
+    return {"product": None, "build": None}
+
+
+def _disk_free_at_repo():
+    try:
+        s = os.statvfs(REPO_ROOT) if hasattr(os, "statvfs") else None
+        if s is not None:
+            return int(s.f_bavail) * int(s.f_frsize)
+        import shutil as _sh
+        return int(_sh.disk_usage(REPO_ROOT).free)
+    except (OSError, AttributeError):
+        return None
+
+
+# A stable, ordered list of CPU feature flag names that downstream code keys
+# off when picking kernels or warning the user. The presence/absence of each
+# is reported as a bool so consumers don't have to canonicalize a giant set.
+CPU_FEATURES_OF_INTEREST = (
+    "SSE2", "SSE3", "SSSE3", "SSE4_1", "SSE4_2",
+    "AVX1_0", "AVX2", "AVX512F", "AVX512BW", "AVX512VL", "AVX512VNNI",
+    "FMA", "F16C", "BMI1", "BMI2", "POPCNT", "AES", "PCLMULQDQ", "RDRAND",
+    "NEON", "ASIMD", "ASIMDDP", "ASIMDFHM", "FP16", "BF16", "I8MM",
+)
+
+
+# ------------------------------------------------------------------------------------
 # Saved system spec file. Captured on demand from settings; lives under data/.
 
 SPECS_PATH = os.path.join(REPO_ROOT, "data", "system_specs.json")
 
 
 def detect_specs():
-    """Cross-platform machine spec snapshot for the saved specs file.
-    Builds on snapshot() and adds static platform info (OS name+version,
-    Python version, CPU brand). Forces a synchronous adapter refresh so
-    GPU info is fresh when the user clicks 'detect'."""
+    """Cross-platform machine spec snapshot for the saved specs file. Includes
+    raw OS/CPU/GPU/memory details PLUS pre-derived `capabilities` booleans so
+    the dashboard doesn't have to re-derive them from feature flag strings.
+    Everything in this dict is what the heartbeat sends when the user opts
+    into hardware analytics."""
     _refresh_adapters()
     snap = snapshot()
+    cpu_info = _cpu_features()
+    feats = cpu_info.get("features") or set()
+    features_present = {name: (name in feats) for name in CPU_FEATURES_OF_INTEREST}
+    has_any_nvidia = any((g.get("vendor") or "").upper() == "NVIDIA" for g in (snap.get("gpus") or []))
+    is_apple_silicon = (sys.platform == "darwin" and (platform.machine() or "").lower() == "arm64")
+    os_v = _os_version()
     return {
         "captured_at": int(time.time()),
         "platform": {
@@ -603,16 +794,39 @@ def detect_specs():
             "machine":  platform.machine() or "",
             "processor": platform.processor() or "",
             "python":   platform.python_version(),
+            "os_product": os_v.get("product"),
+            "os_build":   os_v.get("build"),
         },
         "cpu": {
-            "count_logical": int(_CPU_COUNT),
+            "brand":          cpu_info.get("brand"),
+            "vendor":         cpu_info.get("vendor"),
+            "count_logical":  int(_CPU_COUNT),
             "count_physical": int(psutil.cpu_count(logical=False)) if _PSUTIL_OK else None,
+            "freq_max_hz":    cpu_info.get("freq_max_hz"),
+            "features":       sorted(feats),
+            "features_present": features_present,
         },
         "memory": {
             "total_bytes":     int(snap.get("sys_mem_total") or 0) or None,
             "available_bytes": int(snap.get("sys_mem_available") or 0) or None,
         },
+        "disk": {
+            "repo_free_bytes": _disk_free_at_repo(),
+        },
         "gpus": snap.get("gpus") or [],
+        "capabilities": {
+            "has_sse42":        features_present.get("SSE4_2", False),
+            "has_avx1":         features_present.get("AVX1_0", False) or features_present.get("AVX", False),
+            "has_avx2":         features_present.get("AVX2", False),
+            "has_avx512f":      features_present.get("AVX512F", False),
+            "has_avx512vnni":   features_present.get("AVX512VNNI", False),
+            "has_fma":          features_present.get("FMA", False),
+            "has_f16c":         features_present.get("F16C", False),
+            "is_apple_silicon": is_apple_silicon,
+            "can_use_cuda":     has_any_nvidia,
+            "can_use_mps":      is_apple_silicon,
+            "can_use_metal":    sys.platform == "darwin",
+        },
     }
 
 

@@ -11,6 +11,7 @@
 #include "veritate.h"
 #include "portability.h"
 #include "addons.h"
+#include "metal_dispatch.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1165,6 +1166,15 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && strcmp(argv[1], "bench") == 0) return bench_mode(argc, argv);
     if (argc > 1 && strcmp(argv[1], "ppl") == 0) return ppl_mode(argc, argv);
+#if METAL_DISPATCH_AVAILABLE
+    if (argc > 1 && strcmp(argv[1], "metal-info") == 0) {
+        metal_caps_t caps; metal_detect(&caps); metal_print(&caps);
+        return caps.available ? 0 : 1;
+    }
+    if (argc > 1 && strcmp(argv[1], "verify-metal") == 0) {
+        return metal_verify();
+    }
+#endif
 
     printf("veritate v%s\n", VERITATE_VERSION);
 

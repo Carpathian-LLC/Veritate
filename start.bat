@@ -14,7 +14,19 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 set "PY="
-where py        >nul 2>&1 && set "PY=py -3"
+REM Prefer the newest Python in the supported range [3.10, 3.13] via py launcher.
+REM Veritate's launcher does its own tier-aware version check; this just avoids
+REM picking a too-new Python (e.g. 3.14) when an in-range one is also present.
+where py >nul 2>&1
+if !ERRORLEVEL! EQU 0 (
+    for %%V in (3.13 3.12 3.11 3.10) do (
+        if "!PY!"=="" (
+            py -%%V -c "import sys" >nul 2>&1
+            if !ERRORLEVEL! EQU 0 set "PY=py -%%V"
+        )
+    )
+    if "!PY!"=="" set "PY=py -3"
+)
 if "!PY!"=="" ( where python  >nul 2>&1 && set "PY=python"  )
 if "!PY!"=="" ( where python3 >nul 2>&1 && set "PY=python3" )
 
