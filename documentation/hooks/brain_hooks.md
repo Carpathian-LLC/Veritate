@@ -1,13 +1,13 @@
 # brain hooks
 
-Which hook fields are available on which architecture and engine path. Field shapes are identical across paths so the MRI dashboard renders one shape regardless of source. Field index lives in `docs/hooks/contract.md`.
+Which hook fields are available on which architecture and engine path. Field shapes are identical across paths so the MRI dashboard renders one shape regardless of source. Field index lives in [contract.md](contract.md).
 
 ## paths
 
 | path | what it is | typical use |
 |---|---|---|
-| pytorch | `veritate_mri/backends/pytorch.py::Brain.stream` with forward hooks on each block | full activation capture, slow (~20-30 ms/token) |
-| engine | `engine/src/model.c::forward_decode` writing `trace_record_t` slices | INT8 inference, fast (~3 ms/token with full trace) |
+| pytorch | `veritate_mri/inference/backends/pytorch.py::Brain.stream` with forward hooks on each block | full activation capture, slow (~20-30 ms/token) |
+| engine | `veritate_engine/src/model.c::forward_decode` writing `trace_record_t` slices | INT8 inference, fast (~3 ms/token with full trace) |
 | training-time dump | `veritate_mri/save.py::save` walks `model.hook_spec()` at every checkpoint | per-step probe / lens / classroom / generation artifacts under `models/<name>/hooks/step_<N>/` |
 
 The training-time path uses the `hook_spec()` contract documented in [`contract.md`](contract.md#hook_spec-contract). Canonical models return `self`. Non-canonical trainers (e.g. `veritate_mega`) return a thin adapter that exposes canonical-shaped trace points so the dumper does not need to know the model's internal topology.

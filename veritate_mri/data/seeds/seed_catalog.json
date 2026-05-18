@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "seeds": [
+    {
+      "id": "gsm8k_sample",
+      "display_name": "GSM8K (math word problems, sample)",
+      "file": "gsm8k_sample.jsonl",
+      "count": 40,
+      "category": "math",
+      "license": "MIT",
+      "upstream_url": "https://github.com/openai/grade-school-math",
+      "description": "Grade-school math word problems."
+    },
+    {
+      "id": "math_sample",
+      "display_name": "MATH (competition math, sample)",
+      "file": "math_sample.jsonl",
+      "count": 30,
+      "category": "math_advanced",
+      "license": "MIT",
+      "upstream_url": "https://github.com/hendrycks/math",
+      "description": "Harder math: algebra, geometry, intro calculus, number theory."
+    },
+    {
+      "id": "humaneval_sample",
+      "display_name": "HumanEval (Python function completion, sample)",
+      "file": "humaneval_sample.jsonl",
+      "count": 30,
+      "category": "code",
+      "license": "MIT",
+      "upstream_url": "https://github.com/openai/human-eval",
+      "description": "Python function signatures plus docstrings to be implemented."
+    },
+    {
+      "id": "bfcl_schemas",
+      "display_name": "BFCL (tool use with inline schemas, sample)",
+      "file": "bfcl_schemas.jsonl",
+      "count": 40,
+      "category": "tool_use",
+      "license": "Apache-2.0",
+      "upstream_url": "https://gorilla.cs.berkeley.edu/leaderboard.html",
+      "description": "User requests that should be answered with a function call given an inline schema."
+    },
+    {
+      "id": "arc_sample",
+      "display_name": "AI2 ARC (multiple-choice reasoning, sample)",
+      "file": "arc_sample.jsonl",
+      "count": 40,
+      "category": "reasoning",
+      "license": "CC-BY-SA-4.0",
+      "upstream_url": "https://allenai.org/data/arc",
+      "description": "Multiple-choice science and reasoning questions with four options."
+    },
+    {
+      "id": "triviaqa_sample",
+      "display_name": "TriviaQA (short factual questions, sample)",
+      "file": "triviaqa_sample.jsonl",
+      "count": 40,
+      "category": "factual",
+      "license": "Apache-2.0",
+      "upstream_url": "https://nlp.cs.washington.edu/triviaqa/",
+      "description": "Short factual questions: general knowledge, history, geography, pop culture."
+    },
+    {
+      "id": "openbookqa_sample",
+      "display_name": "OpenBookQA (elementary science with fact, sample)",
+      "file": "openbookqa_sample.jsonl",
+      "count": 30,
+      "category": "science",
+      "license": "Apache-2.0",
+      "upstream_url": "https://allenai.org/data/open-book-qa",
+      "description": "Elementary science questions with a fact snippet, a question, and four options."
+    }
+  ]
+}

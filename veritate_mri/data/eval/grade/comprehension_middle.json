@@ -1,0 +1,315 @@
+{
+ "level": "middle",
+ "source": "grade_middle_source.txt",
+ "n_items": 30,
+ "seed": 17,
+ "config": {
+  "items_per_band": 30,
+  "prefix_max_bytes": 1024,
+  "min_prefix_bytes": 64,
+  "min_word_len": 4,
+  "length_tolerance": 2
+ },
+ "items": [
+  {
+   "prefix_bytes": "Twelve was the age when Eli finally decided he was old enough to know the truth about the house at the end of Maple ",
+   "correct": "Street",
+   "distractors": [
+    "relax",
+    "living",
+    "wide"
+   ],
+   "slot_offset": 116
+  },
+  {
+   "prefix_bytes": "Twelve was the age when Eli finally decided he was old enough to know the truth about the house at the end of Maple Street. He wasn't going to let his older sister Cara talk him out of it any longer. Every kid at his school had a different story about the place. Some were plausible, like an elderly recluse living there alone. Others were wildly improbable, like the ghost of someone's great-aunt who had ",
+   "correct": "vanished",
+   "distractors": [
+    "afternoon",
+    "question",
+    "stopped"
+   ],
+   "slot_offset": 406
+  },
+  {
+   "prefix_bytes": "Twelve was the age when Eli finally decided he was old enough to know the truth about the house at the end of Maple Street. He wasn't going to let his older sister Cara talk him out of it any longer. Every kid at his school had a different story about the place. Some were plausible, like an elderly recluse living there alone. Others were wildly improbable, like the ghost of someone's great-aunt who had vanished in 1962. Eli considered himself a careful thinker. He had decided the only way to settle the question was to walk up to the front door and knock.\n\nHe waited until a Saturday afternoon. His ",
+   "correct": "parents",
+   "distractors": [
+    "thought",
+    "sometimes",
+    "moment"
+   ],
+   "slot_offset": 604
+  },
+  {
+   "prefix_bytes": "Twelve was the age when Eli finally decided he was old enough to know the truth about the house at the end of Maple Street. He wasn't going to let his older sister Cara talk him out of it any longer. Every kid at his school had a different story about the place. Some were plausible, like an elderly recluse living there alone. Others were wildly improbable, like the ghost of someone's great-aunt who had vanished in 1962. Eli considered himself a careful thinker. He had decided the only way to settle the question was to walk up to the front door and knock.\n\nHe waited until a Saturday afternoon. His parents were at the farmer's market, and Cara was at her best friend's house pretending to study. The October air was crisp and slightly damp. The sidewalk was already covered with a thin layer of yellow leaves that crunched under his sneakers as he walked. Maple Street had only twelve houses on it, six on each ",
+   "correct": "side",
+   "distractors": [
+    "will",
+    "sure",
+    "wall"
+   ],
+   "slot_offset": 917
+  },
+  {
+   "prefix_bytes": "luse living there alone. Others were wildly improbable, like the ghost of someone's great-aunt who had vanished in 1962. Eli considered himself a careful thinker. He had decided the only way to settle the question was to walk up to the front door and knock.\n\nHe waited until a Saturday afternoon. His parents were at the farmer's market, and Cara was at her best friend's house pretending to study. The October air was crisp and slightly damp. The sidewalk was already covered with a thin layer of yellow leaves that crunched under his sneakers as he walked. Maple Street had only twelve houses on it, six on each side. The one at the end was set back from the road behind a low stone wall and a row of overgrown hedges.\n\nAs he got closer, he started to feel a strange kind of nervousness. It pretended to be excitement until you stopped and noticed what it really was. His heart was beating faster than it should have been for a simple walk down the block. He tried to remind himself that there was nothing dangerous about ",
+   "correct": "knocking",
+   "distractors": [
+    "anytime",
+    "friend's",
+    "compared"
+   ],
+   "slot_offset": 1327
+  },
+  {
+   "prefix_bytes": "i considered himself a careful thinker. He had decided the only way to settle the question was to walk up to the front door and knock.\n\nHe waited until a Saturday afternoon. His parents were at the farmer's market, and Cara was at her best friend's house pretending to study. The October air was crisp and slightly damp. The sidewalk was already covered with a thin layer of yellow leaves that crunched under his sneakers as he walked. Maple Street had only twelve houses on it, six on each side. The one at the end was set back from the road behind a low stone wall and a row of overgrown hedges.\n\nAs he got closer, he started to feel a strange kind of nervousness. It pretended to be excitement until you stopped and noticed what it really was. His heart was beating faster than it should have been for a simple walk down the block. He tried to remind himself that there was nothing dangerous about knocking on a door. The worst thing that could happen was that no one would answer. The reminder did not really help.\n\nThe ",
+   "correct": "gate",
+   "distractors": [
+    "street",
+    "path",
+    "kids"
+   ],
+   "slot_offset": 1450
+  },
+  {
+   "prefix_bytes": "ts were at the farmer's market, and Cara was at her best friend's house pretending to study. The October air was crisp and slightly damp. The sidewalk was already covered with a thin layer of yellow leaves that crunched under his sneakers as he walked. Maple Street had only twelve houses on it, six on each side. The one at the end was set back from the road behind a low stone wall and a row of overgrown hedges.\n\nAs he got closer, he started to feel a strange kind of nervousness. It pretended to be excitement until you stopped and noticed what it really was. His heart was beating faster than it should have been for a simple walk down the block. He tried to remind himself that there was nothing dangerous about knocking on a door. The worst thing that could happen was that no one would answer. The reminder did not really help.\n\nThe gate at the front of the property was made of black iron, and when he pushed it open, it let out a long, complaining squeak that he was sure could be heard halfway down the street. A ",
+   "correct": "flagstone",
+   "distractors": [
+    "planned",
+    "sounded",
+    "unexamined"
+   ],
+   "slot_offset": 1633
+  },
+  {
+   "prefix_bytes": "edges.\n\nAs he got closer, he started to feel a strange kind of nervousness. It pretended to be excitement until you stopped and noticed what it really was. His heart was beating faster than it should have been for a simple walk down the block. He tried to remind himself that there was nothing dangerous about knocking on a door. The worst thing that could happen was that no one would answer. The reminder did not really help.\n\nThe gate at the front of the property was made of black iron, and when he pushed it open, it let out a long, complaining squeak that he was sure could be heard halfway down the street. A flagstone path led to the front porch, with weeds growing up between the stones in irregular tufts. The porch itself was wide and shaded, with two empty rocking chairs that faced each other as if waiting for a conversation that had not happened in a long time.\n\nEli took a deep breath and knocked. Three quick knocks, the way his father always did when they visited his grandmother. He listened. There was a ",
+   "correct": "long",
+   "distractors": [
+    "gate",
+    "story",
+    "house"
+   ],
+   "slot_offset": 2041
+  },
+  {
+   "prefix_bytes": "ple walk down the block. He tried to remind himself that there was nothing dangerous about knocking on a door. The worst thing that could happen was that no one would answer. The reminder did not really help.\n\nThe gate at the front of the property was made of black iron, and when he pushed it open, it let out a long, complaining squeak that he was sure could be heard halfway down the street. A flagstone path led to the front porch, with weeds growing up between the stones in irregular tufts. The porch itself was wide and shaded, with two empty rocking chairs that faced each other as if waiting for a conversation that had not happened in a long time.\n\nEli took a deep breath and knocked. Three quick knocks, the way his father always did when they visited his grandmother. He listened. There was a long silence, long enough that he began to relax, thinking he could now go back home and tell himself he had at least tried. But then he heard footsteps coming closer, and the door opened just a crack, and a single eye ",
+   "correct": "peered",
+   "distractors": [
+    "original",
+    "rumors",
+    "fair"
+   ],
+   "slot_offset": 2260
+  },
+  {
+   "prefix_bytes": "d happen was that no one would answer. The reminder did not really help.\n\nThe gate at the front of the property was made of black iron, and when he pushed it open, it let out a long, complaining squeak that he was sure could be heard halfway down the street. A flagstone path led to the front porch, with weeds growing up between the stones in irregular tufts. The porch itself was wide and shaded, with two empty rocking chairs that faced each other as if waiting for a conversation that had not happened in a long time.\n\nEli took a deep breath and knocked. Three quick knocks, the way his father always did when they visited his grandmother. He listened. There was a long silence, long enough that he began to relax, thinking he could now go back home and tell himself he had at least tried. But then he heard footsteps coming closer, and the door opened just a crack, and a single eye peered out at him from the dim hallway beyond.\n\n\"Yes?\" said a voice that was older than Eli had expected, but also less frightening. It ",
+   "correct": "sounded",
+   "distractors": [
+    "unhappy",
+    "remind",
+    "golden"
+   ],
+   "slot_offset": 2396
+  },
+  {
+   "prefix_bytes": "porch, with weeds growing up between the stones in irregular tufts. The porch itself was wide and shaded, with two empty rocking chairs that faced each other as if waiting for a conversation that had not happened in a long time.\n\nEli took a deep breath and knocked. Three quick knocks, the way his father always did when they visited his grandmother. He listened. There was a long silence, long enough that he began to relax, thinking he could now go back home and tell himself he had at least tried. But then he heard footsteps coming closer, and the door opened just a crack, and a single eye peered out at him from the dim hallway beyond.\n\n\"Yes?\" said a voice that was older than Eli had expected, but also less frightening. It sounded tired more than anything else.\n\n\"Hi,\" Eli said, suddenly aware that he had not actually planned what he was going to say. \"I'm Eli. I live a few houses down. I, um, just wanted to introduce myself. People at school say a lot of things about this house, and I thought it wasn't fair to ",
+   "correct": "keep",
+   "distractors": [
+    "class",
+    "stack",
+    "hair"
+   ],
+   "slot_offset": 2689
+  },
+  {
+   "prefix_bytes": "ocked. Three quick knocks, the way his father always did when they visited his grandmother. He listened. There was a long silence, long enough that he began to relax, thinking he could now go back home and tell himself he had at least tried. But then he heard footsteps coming closer, and the door opened just a crack, and a single eye peered out at him from the dim hallway beyond.\n\n\"Yes?\" said a voice that was older than Eli had expected, but also less frightening. It sounded tired more than anything else.\n\n\"Hi,\" Eli said, suddenly aware that he had not actually planned what he was going to say. \"I'm Eli. I live a few houses down. I, um, just wanted to introduce myself. People at school say a lot of things about this house, and I thought it wasn't fair to keep believing them without ever meeting you.\"\n\nThere was a pause. Then the door opened wider, and Eli saw a man who must have been in his seventies, with white hair and a soft, slightly rumpled cardigan. The man's face was lined with years that did not look ",
+   "correct": "unhappy",
+   "distractors": [
+    "black",
+    "cardigan",
+    "lesson"
+   ],
+   "slot_offset": 2948
+  },
+  {
+   "prefix_bytes": "that was older than Eli had expected, but also less frightening. It sounded tired more than anything else.\n\n\"Hi,\" Eli said, suddenly aware that he had not actually planned what he was going to say. \"I'm Eli. I live a few houses down. I, um, just wanted to introduce myself. People at school say a lot of things about this house, and I thought it wasn't fair to keep believing them without ever meeting you.\"\n\nThere was a pause. Then the door opened wider, and Eli saw a man who must have been in his seventies, with white hair and a soft, slightly rumpled cardigan. The man's face was lined with years that did not look unhappy, only quiet, the way the faces of people who have spent a long time alone can sometimes look.\n\n\"Well,\" the man said, with what might have been the beginning of a smile. \"That is one of the more honest reasons anyone has ever given me for ringing my bell. I am Mr. Hadlow. Would you like to come in and have some tea, or would you prefer to do this on the porch?\"\n\nEli had not actually planned to ",
+   "correct": "come",
+   "distractors": [
+    "young",
+    "things",
+    "side"
+   ],
+   "slot_offset": 3352
+  },
+  {
+   "prefix_bytes": "say a lot of things about this house, and I thought it wasn't fair to keep believing them without ever meeting you.\"\n\nThere was a pause. Then the door opened wider, and Eli saw a man who must have been in his seventies, with white hair and a soft, slightly rumpled cardigan. The man's face was lined with years that did not look unhappy, only quiet, the way the faces of people who have spent a long time alone can sometimes look.\n\n\"Well,\" the man said, with what might have been the beginning of a smile. \"That is one of the more honest reasons anyone has ever given me for ringing my bell. I am Mr. Hadlow. Would you like to come in and have some tea, or would you prefer to do this on the porch?\"\n\nEli had not actually planned to come inside any stranger's house. He hesitated for a moment and chose the porch. They sat in the two rocking chairs that had earlier looked so empty. Mr. Hadlow brought out a kettle, two mismatched mugs, and a small plate of cookies. The cookies were slightly stale but not unpleasant. They ",
+   "correct": "sipped",
+   "distractors": [
+    "answer",
+    "forty",
+    "back"
+   ],
+   "slot_offset": 3643
+  },
+  {
+   "prefix_bytes": "ly rumpled cardigan. The man's face was lined with years that did not look unhappy, only quiet, the way the faces of people who have spent a long time alone can sometimes look.\n\n\"Well,\" the man said, with what might have been the beginning of a smile. \"That is one of the more honest reasons anyone has ever given me for ringing my bell. I am Mr. Hadlow. Would you like to come in and have some tea, or would you prefer to do this on the porch?\"\n\nEli had not actually planned to come inside any stranger's house. He hesitated for a moment and chose the porch. They sat in the two rocking chairs that had earlier looked so empty. Mr. Hadlow brought out a kettle, two mismatched mugs, and a small plate of cookies. The cookies were slightly stale but not unpleasant. They sipped their tea as the autumn afternoon stretched golden across the lawn. Mr. Hadlow began, slowly and without any drama, to tell Eli about himself.\n\nHe had taught history at the local high school for almost forty years. A small stroke a decade ago had ",
+   "correct": "made",
+   "distractors": [
+    "polite",
+    "crisp",
+    "trips"
+   ],
+   "slot_offset": 3897
+  },
+  {
+   "prefix_bytes": " what might have been the beginning of a smile. \"That is one of the more honest reasons anyone has ever given me for ringing my bell. I am Mr. Hadlow. Would you like to come in and have some tea, or would you prefer to do this on the porch?\"\n\nEli had not actually planned to come inside any stranger's house. He hesitated for a moment and chose the porch. They sat in the two rocking chairs that had earlier looked so empty. Mr. Hadlow brought out a kettle, two mismatched mugs, and a small plate of cookies. The cookies were slightly stale but not unpleasant. They sipped their tea as the autumn afternoon stretched golden across the lawn. Mr. Hadlow began, slowly and without any drama, to tell Eli about himself.\n\nHe had taught history at the local high school for almost forty years. A small stroke a decade ago had made standing in front of a class no longer practical. His wife had died three years before that. They had never had children, so when he retired, he simply stopped seeing most people. It was not that he ",
+   "correct": "wanted",
+   "distractors": [
+    "spring",
+    "quietly",
+    "reasons"
+   ],
+   "slot_offset": 4101
+  },
+  {
+   "prefix_bytes": "for a moment and chose the porch. They sat in the two rocking chairs that had earlier looked so empty. Mr. Hadlow brought out a kettle, two mismatched mugs, and a small plate of cookies. The cookies were slightly stale but not unpleasant. They sipped their tea as the autumn afternoon stretched golden across the lawn. Mr. Hadlow began, slowly and without any drama, to tell Eli about himself.\n\nHe had taught history at the local high school for almost forty years. A small stroke a decade ago had made standing in front of a class no longer practical. His wife had died three years before that. They had never had children, so when he retired, he simply stopped seeing most people. It was not that he wanted to be alone, he explained. The habits of being among others had quietly atrophied. After a while it had begun to feel like too much effort to start them up again.\n\n\"You should know,\" he added, \"that I am not haunted. I am not even particularly mysterious. I am only a man who got into the habit of being quiet, and ",
+   "correct": "stayed",
+   "distractors": [
+    "time",
+    "houses",
+    "required"
+   ],
+   "slot_offset": 4423
+  },
+  {
+   "prefix_bytes": "y stale but not unpleasant. They sipped their tea as the autumn afternoon stretched golden across the lawn. Mr. Hadlow began, slowly and without any drama, to tell Eli about himself.\n\nHe had taught history at the local high school for almost forty years. A small stroke a decade ago had made standing in front of a class no longer practical. His wife had died three years before that. They had never had children, so when he retired, he simply stopped seeing most people. It was not that he wanted to be alone, he explained. The habits of being among others had quietly atrophied. After a while it had begun to feel like too much effort to start them up again.\n\n\"You should know,\" he added, \"that I am not haunted. I am not even particularly mysterious. I am only a man who got into the habit of being quiet, and stayed there longer than he probably should have.\"\n\nEli nodded. He tried to imagine living in a house for that many years without anyone really knowing what was inside. It struck him, sitting there with his now-",
+   "correct": "warm",
+   "distractors": [
+    "school",
+    "come",
+    "heart"
+   ],
+   "slot_offset": 4634
+  },
+  {
+   "prefix_bytes": " made standing in front of a class no longer practical. His wife had died three years before that. They had never had children, so when he retired, he simply stopped seeing most people. It was not that he wanted to be alone, he explained. The habits of being among others had quietly atrophied. After a while it had begun to feel like too much effort to start them up again.\n\n\"You should know,\" he added, \"that I am not haunted. I am not even particularly mysterious. I am only a man who got into the habit of being quiet, and stayed there longer than he probably should have.\"\n\nEli nodded. He tried to imagine living in a house for that many years without anyone really knowing what was inside. It struck him, sitting there with his now-warm mug, that all the wild stories had been the neighborhood's way of filling in a silence. They had invented something more interesting than the actual truth. The actual truth was just that one tired old man had grown invisible to people who never bothered to look.\n\nWhen Eli finally ",
+   "correct": "stood",
+   "distractors": [
+    "polite",
+    "weeds",
+    "damp"
+   ],
+   "slot_offset": 4920
+  },
+  {
+   "prefix_bytes": "e habits of being among others had quietly atrophied. After a while it had begun to feel like too much effort to start them up again.\n\n\"You should know,\" he added, \"that I am not haunted. I am not even particularly mysterious. I am only a man who got into the habit of being quiet, and stayed there longer than he probably should have.\"\n\nEli nodded. He tried to imagine living in a house for that many years without anyone really knowing what was inside. It struck him, sitting there with his now-warm mug, that all the wild stories had been the neighborhood's way of filling in a silence. They had invented something more interesting than the actual truth. The actual truth was just that one tired old man had grown invisible to people who never bothered to look.\n\nWhen Eli finally stood to leave, Mr. Hadlow walked him to the gate and shook his hand. \"Come back anytime,\" he said. \"I will not promise that I will be exciting, but I will promise that I will be polite.\"\n\nWalking home in the lengthening shadows of the late ",
+   "correct": "afternoon",
+   "distractors": [
+    "nervousness",
+    "earlier",
+    "finally"
+   ],
+   "slot_offset": 5161
+  },
+  {
+   "prefix_bytes": "ded. He tried to imagine living in a house for that many years without anyone really knowing what was inside. It struck him, sitting there with his now-warm mug, that all the wild stories had been the neighborhood's way of filling in a silence. They had invented something more interesting than the actual truth. The actual truth was just that one tired old man had grown invisible to people who never bothered to look.\n\nWhen Eli finally stood to leave, Mr. Hadlow walked him to the gate and shook his hand. \"Come back anytime,\" he said. \"I will not promise that I will be exciting, but I will promise that I will be polite.\"\n\nWalking home in the lengthening shadows of the late afternoon, Eli thought about what he had learned. He had probably not learned anything that any of the kids at school would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came ",
+   "correct": "back",
+   "distractors": [
+    "word",
+    "habit",
+    "share"
+   ],
+   "slot_offset": 5506
+  },
+  {
+   "prefix_bytes": "d something more interesting than the actual truth. The actual truth was just that one tired old man had grown invisible to people who never bothered to look.\n\nWhen Eli finally stood to leave, Mr. Hadlow walked him to the gate and shook his hand. \"Come back anytime,\" he said. \"I will not promise that I will be exciting, but I will promise that I will be polite.\"\n\nWalking home in the lengthening shadows of the late afternoon, Eli thought about what he had learned. He had probably not learned anything that any of the kids at school would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came back to Mr. Hadlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow opened the door more easily this time. He even smiled when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow ",
+   "correct": "asked",
+   "distractors": [
+    "bell",
+    "stayed",
+    "stack"
+   ],
+   "slot_offset": 5767
+  },
+  {
+   "prefix_bytes": "xciting, but I will promise that I will be polite.\"\n\nWalking home in the lengthening shadows of the late afternoon, Eli thought about what he had learned. He had probably not learned anything that any of the kids at school would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came back to Mr. Hadlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow opened the door more easily this time. He even smiled when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the question. He talked about his history teacher, Mr. Peters. Mr. Hadlow knew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had ",
+   "correct": "stories",
+   "distractors": [
+    "curiosity",
+    "himself",
+    "porch"
+   ],
+   "slot_offset": 6080
+  },
+  {
+   "prefix_bytes": "on, Eli thought about what he had learned. He had probably not learned anything that any of the kids at school would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came back to Mr. Hadlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow opened the door more easily this time. He even smiled when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the question. He talked about his history teacher, Mr. Peters. Mr. Hadlow knew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He ",
+   "correct": "remembered",
+   "distractors": [
+    "sneakers",
+    "invisible",
+    "neighbors"
+   ],
+   "slot_offset": 6192
+  },
+  {
+   "prefix_bytes": "adlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow opened the door more easily this time. He even smiled when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the question. He talked about his history teacher, Mr. Peters. Mr. Hadlow knew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors ",
+   "correct": "started",
+   "distractors": [
+    "slowly",
+    "going",
+    "market"
+   ],
+   "slot_offset": 6543
+  },
+  {
+   "prefix_bytes": "with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the question. He talked about his history teacher, Mr. Peters. Mr. Hadlow knew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time ",
+   "correct": "spring",
+   "distractors": [
+    "young",
+    "leaves",
+    "slightly"
+   ],
+   "slot_offset": 6743
+  },
+  {
+   "prefix_bytes": "ew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time spring came, Mr. Hadlow's garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The ",
+   "correct": "whole",
+   "distractors": [
+    "kettle",
+    "wanted",
+    "covered"
+   ],
+   "slot_offset": 6912
+  },
+  {
+   "prefix_bytes": "e Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time spring came, Mr. Hadlow's garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The whole change had started with one twelve-year-old who decided that knocking on a door was less scary than ",
+   "correct": "letting",
+   "distractors": [
+    "ringing",
+    "wildly",
+    "different"
+   ],
+   "slot_offset": 7018
+  },
+  {
+   "prefix_bytes": "n.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time spring came, Mr. Hadlow's garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The whole change had started with one twelve-year-old who decided that knocking on a door was less scary than letting a story stand in for a person.\n\nEli learned something else that year. Curiosity, when paired with kindness, was a kind of small superpower. It could undo a decade of silence. It cost nothing. It only required the willingness to ask.\n\nLooking back on that strange autumn afternoon when he had ",
+   "correct": "first",
+   "distractors": [
+    "faced",
+    "began",
+    "wave"
+   ],
+   "slot_offset": 7318
+  },
+  {
+   "prefix_bytes": " garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The whole change had started with one twelve-year-old who decided that knocking on a door was less scary than letting a story stand in for a person.\n\nEli learned something else that year. Curiosity, when paired with kindness, was a kind of small superpower. It could undo a decade of silence. It cost nothing. It only required the willingness to ask.\n\nLooking back on that strange autumn afternoon when he had first walked up to Mr. Hadlow's door, Eli realized that nothing about the encounter had unfolded the way the rumors had led him to expect, which was perhaps the most important lesson of all. The neighborhood's stories had been built on absence rather than evidence, on the convenience of an explanation that required no investigation, and once a single person had bothered to investigate, the whole elaborate structure of speculation had collapsed under its own weight. Eli ",
+   "correct": "wondered",
+   "distractors": [
+    "slowly",
+    "smiled",
+    "street"
+   ],
+   "slot_offset": 7792
+  }
+ ]
+}

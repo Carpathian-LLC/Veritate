@@ -6,7 +6,7 @@
 # Notes:
 # - discover corpus stems from two roots:
 #     1. shared:   training/corpus/<stem>_train.bin
-#     2. bundled:  plugins/<sub>/<plugin_dir>/corpus/<stem>_train.bin
+#     2. bundled:  trainers/<sub>/<plugin_dir>/corpus/<stem>_train.bin
 #   bundled stems are namespaced as "<plugin_id>:<stem>" to avoid collisions and
 #   so the dashboard can show which plugin shipped them.
 # - resolve_paths(stem) returns the (train, val) on-disk paths for any stem,
@@ -20,7 +20,7 @@
 import hashlib
 import os
 
-from . import paths, models, config as cfg_reader, plugins as plugins_reader
+from . import paths, models, config as cfg_reader, trainers as plugins_reader
 
 # ------------------------------------------------------------------------------------
 # Constants

@@ -6,7 +6,7 @@
       "exe":     "veritate.exe",
       "label":   "current",
       "perf_ms_per_byte": 4.0,
-      "notes":   "live build. AVX2 + AVX-512 + VNNI kernels. TFRM v7 trace protocol (confidence math fields). veritate.exe is whatever build.bat last produced."
+      "notes":   "live build. AVX2 + AVX-512 + VNNI kernels. TFRM v7 trace protocol (confidence math fields). Loads .bin format versions 3, 5, 6, 8, 9, 11, 12 (v12 adds MTP byte-0 head + untied lm_head). veritate.exe is whatever build.bat last produced."
     },
     {
       "version": "v1.0.0",

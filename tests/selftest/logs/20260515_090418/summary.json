@@ -1,0 +1,32 @@
+{
+  "run_id": "20260515_090418",
+  "elapsed": 1.636,
+  "counts": {
+    "ok": 2,
+    "skip": 0,
+    "fail": 0
+  },
+  "results": [
+    {
+      "name": "export",
+      "status": "ok",
+      "summary": "bin written (25316 bytes)",
+      "details": {
+        "path": "C:\\GitHub\\Veritate\\models\\selftestexport_1m_fp32_v1\\veritate.bin"
+      },
+      "log_path": "C:\\GitHub\\Veritate\\tests\\selftest\\logs\\20260515_090418\\check_export.log",
+      "elapsed": 1.619
+    },
+    {
+      "name": "save_roundtrip",
+      "status": "ok",
+      "summary": "4 params matched",
+      "details": {
+        "checkpoint": "C:\\GitHub\\Veritate\\models\\selftestsave_1m_fp32_v1\\checkpoints\\step_1.pt",
+        "step": 1
+      },
+      "log_path": "C:\\GitHub\\Veritate\\tests\\selftest\\logs\\20260515_090418\\check_save_roundtrip.log",
+      "elapsed": 0.015
+    }
+  ]
+}

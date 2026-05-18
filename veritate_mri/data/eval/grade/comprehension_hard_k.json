@@ -1,0 +1,318 @@
+{
+ "level": "k",
+ "source": "grade_k_source.txt",
+ "n_items": 25,
+ "seed": 17,
+ "mode": "hard_long_range_pos_matched",
+ "config": {
+  "items_per_band": 25,
+  "prefix_max_bytes": 1024,
+  "min_callback_distance": 100,
+  "recent_block_bytes": 60,
+  "slot_start_fraction": 0.3,
+  "length_tolerance": 2,
+  "distractor_filter": "same_preceding_word_in_passage"
+ },
+ "items": [
+  {
+   "prefix_bytes": "Time to head home, buddy.\" Pip got up quickly too. He stretched his long back. They walked toward the front gate. The girl with Spot waved goodbye. Sam waved back at her.\n\nOn the way home, they tried a different path. They saw a small garden pond. Two white ducks swam on it. The ducks were really pretty. Pip wanted to chase them. Sam said, \"No, buddy. Let the ducks be.\"\n\nThey kept on walking together. The afternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright blue door. Mom was waiting at the door. She waved happily. \"Hi, Sam! Hi, Pip!\" she called out. Sam ran up the wooden steps. Pip ran up too. He gave Mom a happy lick.\n\n\"Did you have fun today?\" Mom asked. \"Yes, Mom,\" Sam ",
+   "correct": "said",
+   "distractors": [
+    "called",
+    "patted",
+    "knew"
+   ],
+   "slot_offset": 3637,
+   "callback_distance": 3401,
+   "preceding_word": "sam"
+  },
+  {
+   "prefix_bytes": " Pip got really sleepy. He put his head down. He closed his tired eyes. He took a long puppy nap.\n\nAfter lunch, Sam read a picture book. The book had cats and dogs. It had bright, colorful pages. Sam read three pages out loud. Then he showed it to Pip. Pip just gave a big yawn.\n\nSam felt really sleepy too. He went over to the rug. He lay down next to Pip. He petted Pip's soft, fuzzy fur. Soon he closed his eyes.\n\nIn his dream, Sam ran in a big sunny field. Pip ran along beside him. The sky was full of bright kites. They flew on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and slowly sat up.\n\n\"Hi, buddy,\" he said softly. Pip wagged his fluffy tail. He gave Sam a wet lick. Sam smiled happily. He felt cozy and warm.\n\nMom came in the living room. She had a brand new little ball. It was orange and bouncy. It was just for Pip the puppy. \"Look what I picked up today,\" she said. Pip got up really fast. He saw the new ball. He spun in a ",
+   "correct": "happy",
+   "distractors": [
+    "little",
+    "father",
+    "small"
+   ],
+   "slot_offset": 5177,
+   "callback_distance": 5167,
+   "preceding_word": "a"
+  },
+  {
+   "prefix_bytes": " wet lick. Sam smiled happily. He felt cozy and warm.\n\nMom came in the living room. She had a brand new little ball. It was orange and bouncy. It was just for Pip the puppy. \"Look what I picked up today,\" she said. Pip got up really fast. He saw the new ball. He spun in a happy little circle.\n\nMom rolled the ball across the floor. Pip ran after it quickly. He brought it back. They all started laughing. Sam threw the ball again. Pip chased it really fast. He was so quick.\n\nSoon the night came. Bright stars came out. Sam ate a yummy dinner. He had warm bread. He had a big plate of beans. He drank some warm milk too.\n\nHe brushed his little teeth. He put on his soft pajamas. They had bright stars on them. He climbed into his cozy bed. Pip jumped up too. Pip lay down at his feet.\n\nMom came in to read. She read a short story. It was the one with the moon and the cow. Sam knew it really well. He said the words along with her.\n\nMom gave Sam a goodnight kiss. She turned out the bedroom light. She left the door open a ",
+   "correct": "little",
+   "distractors": [
+    "bench",
+    "fluffy",
+    "girl"
+   ],
+   "slot_offset": 5928,
+   "callback_distance": 5187,
+   "preceding_word": "a"
+  },
+  {
+   "prefix_bytes": "he sun started to go down, everyone said goodbye. \"See you tomorrow!\" Lucy called. \"See you tomorrow!\" Sam called back. He held Pip's leash and walked home with his mom. Pip walked next to him, very tired but very happy.\n\nSam thought about the day for a long time after dinner. He wanted to remember every part. He wanted to remember the slide and the bench. He wanted to remember the cold ice cream. He wanted to remember Lucy laughing.\n\nThat night, Sam took out his crayons. He drew a picture for Lucy. He drew the slide. He drew the maple tree. He drew Pip and Max playing. He drew Lucy and himself with smiles on their faces.\n\nSam wrote a small note on the picture. The note said, \"You are my best friend.\" He folded the picture in half. He put it in his school bag. He would give it to Lucy at the park tomorrow.\n\nPip watched Sam. Pip wagged his tail. Sam patted his soft head. Sam said, \"Good night, my buddy.\" He turned off the light. He climbed into his cozy bed. The moon was out again. The stars were bright.\n\nSam ",
+   "correct": "thought",
+   "distractors": [
+    "yawned",
+    "called",
+    "grabbed"
+   ],
+   "slot_offset": 8458,
+   "callback_distance": 2271,
+   "preceding_word": "sam"
+  },
+  {
+   "prefix_bytes": "you tomorrow!\" Sam called back. He held Pip's leash and walked home with his mom. Pip walked next to him, very tired but very happy.\n\nSam thought about the day for a long time after dinner. He wanted to remember every part. He wanted to remember the slide and the bench. He wanted to remember the cold ice cream. He wanted to remember Lucy laughing.\n\nThat night, Sam took out his crayons. He drew a picture for Lucy. He drew the slide. He drew the maple tree. He drew Pip and Max playing. He drew Lucy and himself with smiles on their faces.\n\nSam wrote a small note on the picture. The note said, \"You are my best friend.\" He folded the picture in half. He put it in his school bag. He would give it to Lucy at the park tomorrow.\n\nPip watched Sam. Pip wagged his tail. Sam patted his soft head. Sam said, \"Good night, my buddy.\" He turned off the light. He climbed into his cozy bed. The moon was out again. The stars were bright.\n\nSam thought about all the things tomorrow could bring. Maybe more friends would come to the ",
+   "correct": "park",
+   "distractors": [
+    "book",
+    "things",
+    "bright"
+   ],
+   "slot_offset": 8546,
+   "callback_distance": 2081,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "he end of a really good day.\n\nThe next day, Sam and Pip went to the park again. They saw their friends. Lucy and Max were there. Max was a brown puppy too. The dogs played hard. They ran in big circles. They jumped over a small log. They had so much fun.\n\nSam played on the slide. Lucy played there too. They went down the slide together. Sam laughed and laughed. Lucy laughed too. The slide was fast. They walked back up the steps. They went down again.\n\nPip got tired and sat in the grass. Max sat next to him. The two puppies licked each other's ears. Sam smiled at the funny sight. Lucy smiled too.\n\nA man came by selling ice cream. Sam asked his mom for a treat. Mom said yes. Sam picked strawberry. Lucy picked chocolate. They sat on a bench together. The ice cream was cold and sweet. It dripped on Sam's hand a little. He laughed.\n\nAfter the treat, Sam and Lucy ran around the big maple tree. They counted to ten and tried to find each other. The tree was wide. The tree was old. The leaves made a soft sound in the ",
+   "correct": "wind",
+   "distractors": [
+    "grass",
+    "door",
+    "girl"
+   ],
+   "slot_offset": 7421,
+   "callback_distance": 4389,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "The girl with Spot waved goodbye. Sam waved back at her.\n\nOn the way home, they tried a different path. They saw a small garden pond. Two white ducks swam on it. The ducks were really pretty. Pip wanted to chase them. Sam said, \"No, buddy. Let the ducks be.\"\n\nThey kept on walking together. The afternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright blue door. Mom was waiting at the door. She waved happily. \"Hi, Sam! Hi, Pip!\" she called out. Sam ran up the wooden steps. Pip ran up too. He gave Mom a happy lick.\n\n\"Did you have fun today?\" Mom asked. \"Yes, Mom,\" Sam said happily. \"Pip played a whole lot. He made a brand new friend. Her name was Spot, the puppy.\"\n\nMom gave Sam a ",
+   "correct": "warm",
+   "distractors": [
+    "little",
+    "whole",
+    "treat"
+   ],
+   "slot_offset": 3751,
+   "callback_distance": 2045,
+   "preceding_word": "a"
+  },
+  {
+   "prefix_bytes": " kept on walking together. The afternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright blue door. Mom was waiting at the door. She waved happily. \"Hi, Sam! Hi, Pip!\" she called out. Sam ran up the wooden steps. Pip ran up too. He gave Mom a happy lick.\n\n\"Did you have fun today?\" Mom asked. \"Yes, Mom,\" Sam said happily. \"Pip played a whole lot. He made a brand new friend. Her name was Spot, the puppy.\"\n\nMom gave Sam a warm hug. She gave Pip a gentle pat. They went inside the house. The kitchen smelled really good. Mom had made tomato soup.\n\nSam took off Pip's collar leash. Pip lapped up some water. He drank really fast. Sam sat down at the table. Mom set out a yellow bowl. The ",
+   "correct": "soup",
+   "distractors": [
+    "whole",
+    "puppy",
+    "living"
+   ],
+   "slot_offset": 4015,
+   "callback_distance": 146,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "oudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright blue door. Mom was waiting at the door. She waved happily. \"Hi, Sam! Hi, Pip!\" she called out. Sam ran up the wooden steps. Pip ran up too. He gave Mom a happy lick.\n\n\"Did you have fun today?\" Mom asked. \"Yes, Mom,\" Sam said happily. \"Pip played a whole lot. He made a brand new friend. Her name was Spot, the puppy.\"\n\nMom gave Sam a warm hug. She gave Pip a gentle pat. They went inside the house. The kitchen smelled really good. Mom had made tomato soup.\n\nSam took off Pip's collar leash. Pip lapped up some water. He drank really fast. Sam sat down at the table. Mom set out a yellow bowl. The soup was warm and salty. It had little bits of corn and beans.\n\nSam ate the yummy soup slowly. It tasted really good. Pip sat by his feet. Pip got really sleepy. He put his head down. He closed his tired eyes. He ",
+   "correct": "took",
+   "distractors": [
+    "picked",
+    "made",
+    "gave"
+   ],
+   "slot_offset": 4228,
+   "callback_distance": 348,
+   "preceding_word": "he"
+  },
+  {
+   "prefix_bytes": "et him. Pip licked one girl's open hand. She gave a happy little giggle.\n\nThe kids ran off to the swings. Sam watched them happily play. He felt really good inside. The playground was a fun place.\n\nSam slowly stood up. \"Time to head home, buddy.\" Pip got up quickly too. He stretched his long back. They walked toward the front gate. The girl with Spot waved goodbye. Sam waved back at her.\n\nOn the way home, they tried a different path. They saw a small garden pond. Two white ducks swam on it. The ducks were really pretty. Pip wanted to chase them. Sam said, \"No, buddy. Let the ducks be.\"\n\nThey kept on walking together. The afternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright ",
+   "correct": "blue",
+   "distractors": [
+    "star",
+    "moon",
+    "stars"
+   ],
+   "slot_offset": 3417,
+   "callback_distance": 2989,
+   "preceding_word": "bright"
+  },
+  {
+   "prefix_bytes": "t very happy.\n\nSam thought about the day for a long time after dinner. He wanted to remember every part. He wanted to remember the slide and the bench. He wanted to remember the cold ice cream. He wanted to remember Lucy laughing.\n\nThat night, Sam took out his crayons. He drew a picture for Lucy. He drew the slide. He drew the maple tree. He drew Pip and Max playing. He drew Lucy and himself with smiles on their faces.\n\nSam wrote a small note on the picture. The note said, \"You are my best friend.\" He folded the picture in half. He put it in his school bag. He would give it to Lucy at the park tomorrow.\n\nPip watched Sam. Pip wagged his tail. Sam patted his soft head. Sam said, \"Good night, my buddy.\" He turned off the light. He climbed into his cozy bed. The moon was out again. The stars were bright.\n\nSam thought about all the things tomorrow could bring. Maybe more friends would come to the park. Maybe they would find a new game to play. Maybe they would all eat ice cream again. Sam smiled to himself in the ",
+   "correct": "dark",
+   "distractors": [
+    "house",
+    "wooden",
+    "dogs"
+   ],
+   "slot_offset": 8665,
+   "callback_distance": 6732,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "ight stars on them. He climbed into his cozy bed. Pip jumped up too. Pip lay down at his feet.\n\nMom came in to read. She read a short story. It was the one with the moon and the cow. Sam knew it really well. He said the words along with her.\n\nMom gave Sam a goodnight kiss. She turned out the bedroom light. She left the door open a little. The hallway light was on.\n\nSam looked up at the window. He could see one bright star. It twinkled in the sky. Pip gave a sleepy little sigh. He was already half asleep.\n\n\"Good night, buddy,\" Sam said. \"I love you a lot.\" He closed his sleepy eyes. He thought about the playground. He thought of his new friend Spot. He thought about the bright kite.\n\nSoon he was fast asleep. Pip was sleeping too. The whole house was quiet. The bright moon shone down. It was the end of a really good day.\n\nThe next day, Sam and Pip went to the park again. They saw their friends. Lucy and Max were there. Max was a brown puppy too. The dogs played hard. They ran in big circles. They jumped over a ",
+   "correct": "small",
+   "distractors": [
+    "little",
+    "fluffy",
+    "treat"
+   ],
+   "slot_offset": 6619,
+   "callback_distance": 6567,
+   "preceding_word": "a"
+  },
+  {
+   "prefix_bytes": "erent path. They saw a small garden pond. Two white ducks swam on it. The ducks were really pretty. Pip wanted to chase them. Sam said, \"No, buddy. Let the ducks be.\"\n\nThey kept on walking together. The afternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright blue door. Mom was waiting at the door. She waved happily. \"Hi, Sam! Hi, Pip!\" she called out. Sam ran up the wooden steps. Pip ran up too. He gave Mom a happy lick.\n\n\"Did you have fun today?\" Mom asked. \"Yes, Mom,\" Sam said happily. \"Pip played a whole lot. He made a brand new friend. Her name was Spot, the puppy.\"\n\nMom gave Sam a warm hug. She gave Pip a gentle pat. They went inside the house. The kitchen smelled really ",
+   "correct": "good",
+   "distractors": [
+    "liked",
+    "loud",
+    "pretty"
+   ],
+   "slot_offset": 3843,
+   "callback_distance": 1298,
+   "preceding_word": "really"
+  },
+  {
+   "prefix_bytes": "The book had cats and dogs. It had bright, colorful pages. Sam read three pages out loud. Then he showed it to Pip. Pip just gave a big yawn.\n\nSam felt really sleepy too. He went over to the rug. He lay down next to Pip. He petted Pip's soft, fuzzy fur. Soon he closed his eyes.\n\nIn his dream, Sam ran in a big sunny field. Pip ran along beside him. The sky was full of bright kites. They flew on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and slowly sat up.\n\n\"Hi, buddy,\" he said softly. Pip wagged his fluffy tail. He gave Sam a wet lick. Sam smiled happily. He felt cozy and warm.\n\nMom came in the living room. She had a brand new little ball. It was orange and bouncy. It was just for Pip the puppy. \"Look what I picked up today,\" she said. Pip got up really fast. He saw the new ball. He spun in a happy little circle.\n\nMom rolled the ball across the floor. Pip ran after it quickly. He brought it back. They all started laughing. Sam ",
+   "correct": "threw",
+   "distractors": [
+    "laughed",
+    "patted",
+    "loved"
+   ],
+   "slot_offset": 5314,
+   "callback_distance": 4296,
+   "preceding_word": "sam"
+  },
+  {
+   "prefix_bytes": "d and sat in the grass. Max sat next to him. The two puppies licked each other's ears. Sam smiled at the funny sight. Lucy smiled too.\n\nA man came by selling ice cream. Sam asked his mom for a treat. Mom said yes. Sam picked strawberry. Lucy picked chocolate. They sat on a bench together. The ice cream was cold and sweet. It dripped on Sam's hand a little. He laughed.\n\nAfter the treat, Sam and Lucy ran around the big maple tree. They counted to ten and tried to find each other. The tree was wide. The tree was old. The leaves made a soft sound in the wind.\n\nWhen the sun started to go down, everyone said goodbye. \"See you tomorrow!\" Lucy called. \"See you tomorrow!\" Sam called back. He held Pip's leash and walked home with his mom. Pip walked next to him, very tired but very happy.\n\nSam thought about the day for a long time after dinner. He wanted to remember every part. He wanted to remember the slide and the bench. He wanted to remember the cold ice cream. He wanted to remember Lucy laughing.\n\nThat night, Sam ",
+   "correct": "took",
+   "distractors": [
+    "yawned",
+    "knew",
+    "wrote"
+   ],
+   "slot_offset": 7889,
+   "callback_distance": 4009,
+   "preceding_word": "sam"
+  },
+  {
+   "prefix_bytes": "fternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was green for them.\n\nTheir house had a bright blue door. Mom was waiting at the door. She waved happily. \"Hi, Sam! Hi, Pip!\" she called out. Sam ran up the wooden steps. Pip ran up too. He gave Mom a happy lick.\n\n\"Did you have fun today?\" Mom asked. \"Yes, Mom,\" Sam said happily. \"Pip played a whole lot. He made a brand new friend. Her name was Spot, the puppy.\"\n\nMom gave Sam a warm hug. She gave Pip a gentle pat. They went inside the house. The kitchen smelled really good. Mom had made tomato soup.\n\nSam took off Pip's collar leash. Pip lapped up some water. He drank really fast. Sam sat down at the table. Mom set out a yellow bowl. The soup was warm and salty. It had ",
+   "correct": "little",
+   "distractors": [
+    "wide",
+    "played",
+    "bright"
+   ],
+   "slot_offset": 4047,
+   "callback_distance": 3306,
+   "preceding_word": "had"
+  },
+  {
+   "prefix_bytes": "collar leash. Pip lapped up some water. He drank really fast. Sam sat down at the table. Mom set out a yellow bowl. The soup was warm and salty. It had little bits of corn and beans.\n\nSam ate the yummy soup slowly. It tasted really good. Pip sat by his feet. Pip got really sleepy. He put his head down. He closed his tired eyes. He took a long puppy nap.\n\nAfter lunch, Sam read a picture book. The book had cats and dogs. It had bright, colorful pages. Sam read three pages out loud. Then he showed it to Pip. Pip just gave a big yawn.\n\nSam felt really sleepy too. He went over to the rug. He lay down next to Pip. He petted Pip's soft, fuzzy fur. Soon he closed his eyes.\n\nIn his dream, Sam ran in a big sunny field. Pip ran along beside him. The sky was full of bright kites. They flew on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and slowly sat up.\n\n\"Hi, buddy,\" he said softly. Pip wagged his fluffy tail. He gave Sam a wet lick. Sam ",
+   "correct": "smiled",
+   "distractors": [
+    "felt",
+    "thought",
+    "knew"
+   ],
+   "slot_offset": 4919,
+   "callback_distance": 3348,
+   "preceding_word": "sam"
+  },
+  {
+   "prefix_bytes": "on he closed his eyes.\n\nIn his dream, Sam ran in a big sunny field. Pip ran along beside him. The sky was full of bright kites. They flew on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and slowly sat up.\n\n\"Hi, buddy,\" he said softly. Pip wagged his fluffy tail. He gave Sam a wet lick. Sam smiled happily. He felt cozy and warm.\n\nMom came in the living room. She had a brand new little ball. It was orange and bouncy. It was just for Pip the puppy. \"Look what I picked up today,\" she said. Pip got up really fast. He saw the new ball. He spun in a happy little circle.\n\nMom rolled the ball across the floor. Pip ran after it quickly. He brought it back. They all started laughing. Sam threw the ball again. Pip chased it really fast. He was so quick.\n\nSoon the night came. Bright stars came out. Sam ate a yummy dinner. He had warm bread. He had a big plate of beans. He drank some warm milk too.\n\nHe brushed his little teeth. He put on his ",
+   "correct": "soft",
+   "distractors": [
+    "dream",
+    "fluffy",
+    "eyes"
+   ],
+   "slot_offset": 5570,
+   "callback_distance": 5493,
+   "preceding_word": "his"
+  },
+  {
+   "prefix_bytes": "is tail at them. The children stopped to pet him. Pip licked one girl's open hand. She gave a happy little giggle.\n\nThe kids ran off to the swings. Sam watched them happily play. He felt really good inside. The playground was a fun place.\n\nSam slowly stood up. \"Time to head home, buddy.\" Pip got up quickly too. He stretched his long back. They walked toward the front gate. The girl with Spot waved goodbye. Sam waved back at her.\n\nOn the way home, they tried a different path. They saw a small garden pond. Two white ducks swam on it. The ducks were really pretty. Pip wanted to chase them. Sam said, \"No, buddy. Let the ducks be.\"\n\nThey kept on walking together. The afternoon wind blew softly. The big trees swayed gently. A yellow leaf fell down. Pip jumped to catch it. He missed it. He tried again, jumping higher. He missed again. Sam laughed loudly.\n\nThey reached their quiet street. A school bus rumbled by. A small car drove past too. Sam held the leash tightly. They crossed at the traffic light. The light was ",
+   "correct": "green",
+   "distractors": [
+    "sleepy",
+    "lower",
+    "clear"
+   ],
+   "slot_offset": 3375,
+   "callback_distance": 1634,
+   "preceding_word": "was"
+  },
+  {
+   "prefix_bytes": "ent inside the house. The kitchen smelled really good. Mom had made tomato soup.\n\nSam took off Pip's collar leash. Pip lapped up some water. He drank really fast. Sam sat down at the table. Mom set out a yellow bowl. The soup was warm and salty. It had little bits of corn and beans.\n\nSam ate the yummy soup slowly. It tasted really good. Pip sat by his feet. Pip got really sleepy. He put his head down. He closed his tired eyes. He took a long puppy nap.\n\nAfter lunch, Sam read a picture book. The book had cats and dogs. It had bright, colorful pages. Sam read three pages out loud. Then he showed it to Pip. Pip just gave a big yawn.\n\nSam felt really sleepy too. He went over to the rug. He lay down next to Pip. He petted Pip's soft, fuzzy fur. Soon he closed his eyes.\n\nIn his dream, Sam ran in a big sunny field. Pip ran along beside him. The sky was full of bright kites. They flew on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and ",
+   "correct": "slowly",
+   "distractors": [
+    "beans",
+    "forth",
+    "salty"
+   ],
+   "slot_offset": 4818,
+   "callback_distance": 2223,
+   "preceding_word": "and"
+  },
+  {
+   "prefix_bytes": "ad made tomato soup.\n\nSam took off Pip's collar leash. Pip lapped up some water. He drank really fast. Sam sat down at the table. Mom set out a yellow bowl. The soup was warm and salty. It had little bits of corn and beans.\n\nSam ate the yummy soup slowly. It tasted really good. Pip sat by his feet. Pip got really sleepy. He put his head down. He closed his tired eyes. He took a long puppy nap.\n\nAfter lunch, Sam read a picture book. The book had cats and dogs. It had bright, colorful pages. Sam read three pages out loud. Then he showed it to Pip. Pip just gave a big yawn.\n\nSam felt really sleepy too. He went over to the rug. He lay down next to Pip. He petted Pip's soft, fuzzy fur. Soon he closed his eyes.\n\nIn his dream, Sam ran in a big sunny field. Pip ran along beside him. The sky was full of bright kites. They flew on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and slowly sat up.\n\n\"Hi, buddy,\" he said softly. Pip wagged his ",
+   "correct": "fluffy",
+   "distractors": [
+    "eyes",
+    "sleepy",
+    "long"
+   ],
+   "slot_offset": 4878,
+   "callback_distance": 4212,
+   "preceding_word": "his"
+  },
+  {
+   "prefix_bytes": " the rug. He lay down next to Pip. He petted Pip's soft, fuzzy fur. Soon he closed his eyes.\n\nIn his dream, Sam ran in a big sunny field. Pip ran along beside him. The sky was full of bright kites. They flew on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and slowly sat up.\n\n\"Hi, buddy,\" he said softly. Pip wagged his fluffy tail. He gave Sam a wet lick. Sam smiled happily. He felt cozy and warm.\n\nMom came in the living room. She had a brand new little ball. It was orange and bouncy. It was just for Pip the puppy. \"Look what I picked up today,\" she said. Pip got up really fast. He saw the new ball. He spun in a happy little circle.\n\nMom rolled the ball across the floor. Pip ran after it quickly. He brought it back. They all started laughing. Sam threw the ball again. Pip chased it really fast. He was so quick.\n\nSoon the night came. Bright stars came out. Sam ate a yummy dinner. He had warm bread. He had a big plate of beans. He ",
+   "correct": "drank",
+   "distractors": [
+    "tried",
+    "thought",
+    "caught"
+   ],
+   "slot_offset": 5500,
+   "callback_distance": 1562,
+   "preceding_word": "he"
+  },
+  {
+   "prefix_bytes": "w on and on. Sam felt so happy.\n\nWhen he woke up, the sun was lower. Pip was still on the rug. Mom was in the next room. Sam yawned and slowly sat up.\n\n\"Hi, buddy,\" he said softly. Pip wagged his fluffy tail. He gave Sam a wet lick. Sam smiled happily. He felt cozy and warm.\n\nMom came in the living room. She had a brand new little ball. It was orange and bouncy. It was just for Pip the puppy. \"Look what I picked up today,\" she said. Pip got up really fast. He saw the new ball. He spun in a happy little circle.\n\nMom rolled the ball across the floor. Pip ran after it quickly. He brought it back. They all started laughing. Sam threw the ball again. Pip chased it really fast. He was so quick.\n\nSoon the night came. Bright stars came out. Sam ate a yummy dinner. He had warm bread. He had a big plate of beans. He drank some warm milk too.\n\nHe brushed his little teeth. He put on his soft pajamas. They had bright stars on them. He climbed into his cozy bed. Pip jumped up too. Pip lay down at his feet.\n\nMom came in to ",
+   "correct": "read",
+   "distractors": [
+    "head",
+    "play",
+    "chase"
+   ],
+   "slot_offset": 5706,
+   "callback_distance": 1437,
+   "preceding_word": "to"
+  },
+  {
+   "prefix_bytes": "aw the new ball. He spun in a happy little circle.\n\nMom rolled the ball across the floor. Pip ran after it quickly. He brought it back. They all started laughing. Sam threw the ball again. Pip chased it really fast. He was so quick.\n\nSoon the night came. Bright stars came out. Sam ate a yummy dinner. He had warm bread. He had a big plate of beans. He drank some warm milk too.\n\nHe brushed his little teeth. He put on his soft pajamas. They had bright stars on them. He climbed into his cozy bed. Pip jumped up too. Pip lay down at his feet.\n\nMom came in to read. She read a short story. It was the one with the moon and the cow. Sam knew it really well. He said the words along with her.\n\nMom gave Sam a goodnight kiss. She turned out the bedroom light. She left the door open a little. The hallway light was on.\n\nSam looked up at the window. He could see one bright star. It twinkled in the sky. Pip gave a sleepy little sigh. He was already half asleep.\n\n\"Good night, buddy,\" Sam said. \"I love you a lot.\" He closed his ",
+   "correct": "sleepy",
+   "distractors": [
+    "soft",
+    "feet",
+    "head"
+   ],
+   "slot_offset": 6171,
+   "callback_distance": 4354,
+   "preceding_word": "his"
+  },
+  {
+   "prefix_bytes": "p's leash and walked home with his mom. Pip walked next to him, very tired but very happy.\n\nSam thought about the day for a long time after dinner. He wanted to remember every part. He wanted to remember the slide and the bench. He wanted to remember the cold ice cream. He wanted to remember Lucy laughing.\n\nThat night, Sam took out his crayons. He drew a picture for Lucy. He drew the slide. He drew the maple tree. He drew Pip and Max playing. He drew Lucy and himself with smiles on their faces.\n\nSam wrote a small note on the picture. The note said, \"You are my best friend.\" He folded the picture in half. He put it in his school bag. He would give it to Lucy at the park tomorrow.\n\nPip watched Sam. Pip wagged his tail. Sam patted his soft head. Sam said, \"Good night, my buddy.\" He turned off the light. He climbed into his cozy bed. The moon was out again. The stars were bright.\n\nSam thought about all the things tomorrow could bring. Maybe more friends would come to the park. Maybe they would find a new game to ",
+   "correct": "play",
+   "distractors": [
+    "chase",
+    "read",
+    "catch"
+   ],
+   "slot_offset": 8588,
+   "callback_distance": 6064,
+   "preceding_word": "to"
+  }
+ ]
+}

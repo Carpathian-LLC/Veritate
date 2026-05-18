@@ -301,6 +301,15 @@ typedef struct {
     float*   byte_direction_scale; // [layers]
     int8_t*  n_out_w;          // [hidden] final RMSNorm weight, NULL when absent
     prepped_b_t lm_head;
+    // v12 MTP byte-0 head. mtp_present == 0 on v11 and earlier; lm_head is then
+    // tied-from-embed in lm_head_build. mtp_present == 1 means lm_head was loaded
+    // untied from the file and project_byte0 must be applied before the lm_head
+    // matmul to recover logits faithfully.
+    int32_t      mtp_present;
+    prepped_b_t  mtp_transform0;   // [hidden x hidden] linear, byte-0 MTP head
+    int8_t*      mtp_norm0_w;      // [hidden] RMSNorm scale-64, byte-0 MTP head
+    int32_t*     mtp_scratch_i32;  // [hidden] reusable int32 buffer for project_byte0
+    int16_t*     mtp_scratch_i16;  // [hidden] reusable int16 buffer for project_byte0
     void*    scratch;          // shape-sized acts pool, opaque to callers
     // calibrated confidence head. loaded from confidence_weights.json next to the
     // model bin or via VERITATE_CONFIDENCE_WEIGHTS env var. cw_loaded == 0 falls
@@ -340,6 +349,8 @@ typedef struct {
 // and was retired during the merge. v11 is the unified successor. v9 BOOST and earlier
 // load unchanged.
 #define VERITATE_MODEL_VERSION_QAT 11
+// v12: v11 body + MTP byte-0 head (mtp.transforms[0], mtp.norms[0]) + untied lm_head.
+#define VERITATE_MODEL_VERSION_MTP 12
 
 // quant_mode values stored in the v11 header.
 #define VERITATE_QUANT_INT8    0
@@ -500,6 +511,13 @@ int32_t sample_token(const model_t* m, const int8_t* hidden, float temp, int32_t
 int32_t sample_token_ext(const model_t* m, const int8_t* hidden, float temp, int32_t top_k,
                          uint32_t* rng, int32_t* out_logits, int32_t* out_argmax);
 void    lm_head_build(model_t* m);
+
+// v12: byte-0 MTP head projector. When mtp_present == 0, copies h_in to h_out.
+// When mtp_present == 1, applies mtp.transforms[0] (hidden->hidden linear) then
+// mtp.norms[0] (RMSNorm scale-64), producing the int8 hidden the lm_head matmul
+// consumes. Must be called before any matmul against m->lm_head when emitting
+// real byte-0 logits (sample_token_ext does this internally).
+void    model_project_byte0(const model_t* m, const int8_t* h_in, int8_t* h_out);
 
 // byte-level tokenizer — one token per byte, vocab maps directly to 0..255
 int32_t tokenize_bytes(const char* text, int32_t* tokens, int32_t max_tokens);

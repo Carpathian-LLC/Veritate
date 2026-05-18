@@ -1,0 +1,315 @@
+{
+ "level": "elem",
+ "source": "grade_elem_source.txt",
+ "n_items": 30,
+ "seed": 17,
+ "config": {
+  "items_per_band": 30,
+  "prefix_max_bytes": 1024,
+  "min_prefix_bytes": 64,
+  "min_word_len": 4,
+  "length_tolerance": 2
+ },
+ "items": [
+  {
+   "prefix_bytes": "The summer Sara turned ten, her grandma taught her how to grow tomatoes in the back garden. The garden behind Grandma Bea's small white house had sat empty for years, ever since Grandpa Jack had passed away. Grandpa had been the one who loved the garden, and after he was gone, Grandma ",
+   "correct": "stopped",
+   "distractors": [
+    "worms",
+    "feeling",
+    "sitting"
+   ],
+   "slot_offset": 286
+  },
+  {
+   "prefix_bytes": "The summer Sara turned ten, her grandma taught her how to grow tomatoes in the back garden. The garden behind Grandma Bea's small white house had sat empty for years, ever since Grandpa Jack had passed away. Grandpa had been the one who loved the garden, and after he was gone, Grandma stopped using it. The ",
+   "correct": "whole",
+   "distractors": [
+    "life",
+    "start",
+    "outside"
+   ],
+   "slot_offset": 308
+  },
+  {
+   "prefix_bytes": "The summer Sara turned ten, her grandma taught her how to grow tomatoes in the back garden. The garden behind Grandma Bea's small white house had sat empty for years, ever since Grandpa Jack had passed away. Grandpa had been the one who loved the garden, and after he was gone, Grandma stopped using it. The whole space filled up with weeds and dry brown dirt that nobody ever turned over.\n\nThis year, Sara was staying with Grandma for the whole month of July, since her parents both had to work. Grandma told Sara it was finally time to bring the garden back to life. Sara was happy to help, even though she had never tried to grow anything before.\n\n\"You're old enough now,\" Grandma said one morning. She handed ",
+   "correct": "Sara",
+   "distractors": [
+    "white",
+    "rusty",
+    "asked"
+   ],
+   "slot_offset": 713
+  },
+  {
+   "prefix_bytes": "The summer Sara turned ten, her grandma taught her how to grow tomatoes in the back garden. The garden behind Grandma Bea's small white house had sat empty for years, ever since Grandpa Jack had passed away. Grandpa had been the one who loved the garden, and after he was gone, Grandma stopped using it. The whole space filled up with weeds and dry brown dirt that nobody ever turned over.\n\nThis year, Sara was staying with Grandma for the whole month of July, since her parents both had to work. Grandma told Sara it was finally time to bring the garden back to life. Sara was happy to help, even though she had never tried to grow anything before.\n\n\"You're old enough now,\" Grandma said one morning. She handed Sara a pair of work gloves. They were a little too big for her hands. \"We'll start small. Just ",
+   "correct": "tomatoes",
+   "distractors": [
+    "clinging",
+    "lightning",
+    "single"
+   ],
+   "slot_offset": 808
+  },
+  {
+   "prefix_bytes": "ars, ever since Grandpa Jack had passed away. Grandpa had been the one who loved the garden, and after he was gone, Grandma stopped using it. The whole space filled up with weeds and dry brown dirt that nobody ever turned over.\n\nThis year, Sara was staying with Grandma for the whole month of July, since her parents both had to work. Grandma told Sara it was finally time to bring the garden back to life. Sara was happy to help, even though she had never tried to grow anything before.\n\n\"You're old enough now,\" Grandma said one morning. She handed Sara a pair of work gloves. They were a little too big for her hands. \"We'll start small. Just tomatoes, peppers, and maybe some basil.\"\n\nSara wiggled her fingers in the gloves. She tried to look serious. She wanted to look like a real gardener. Grandma was already kneeling by the garden. She was pulling weeds with a rusty trowel.\n\nThe first job was clearing the whole garden bed, and Sara did not know it would be so much work. The weeds had grown long, deep roots that ",
+   "correct": "gripped",
+   "distractors": [
+    "better",
+    "bunches",
+    "scissors"
+   ],
+   "slot_offset": 1186
+  },
+  {
+   "prefix_bytes": "ole space filled up with weeds and dry brown dirt that nobody ever turned over.\n\nThis year, Sara was staying with Grandma for the whole month of July, since her parents both had to work. Grandma told Sara it was finally time to bring the garden back to life. Sara was happy to help, even though she had never tried to grow anything before.\n\n\"You're old enough now,\" Grandma said one morning. She handed Sara a pair of work gloves. They were a little too big for her hands. \"We'll start small. Just tomatoes, peppers, and maybe some basil.\"\n\nSara wiggled her fingers in the gloves. She tried to look serious. She wanted to look like a real gardener. Grandma was already kneeling by the garden. She was pulling weeds with a rusty trowel.\n\nThe first job was clearing the whole garden bed, and Sara did not know it would be so much work. The weeds had grown long, deep roots that gripped the dry soil tightly. Some of them came out only after she pulled really hard with both hands. She fell backward a few times when the roots ",
+   "correct": "finally",
+   "distractors": [
+    "moment",
+    "fingers",
+    "brought"
+   ],
+   "slot_offset": 1334
+  },
+  {
+   "prefix_bytes": "u're old enough now,\" Grandma said one morning. She handed Sara a pair of work gloves. They were a little too big for her hands. \"We'll start small. Just tomatoes, peppers, and maybe some basil.\"\n\nSara wiggled her fingers in the gloves. She tried to look serious. She wanted to look like a real gardener. Grandma was already kneeling by the garden. She was pulling weeds with a rusty trowel.\n\nThe first job was clearing the whole garden bed, and Sara did not know it would be so much work. The weeds had grown long, deep roots that gripped the dry soil tightly. Some of them came out only after she pulled really hard with both hands. She fell backward a few times when the roots finally let go. After about an hour of digging and pulling, both of them were sweaty and their hands were streaked with dark dirt. But the bed was finally empty and ready for planting.\n\n\"Now we add the good stuff,\" Grandma said. She pointed at a bag of compost. The bag was almost as tall as Sara. \"Soil that sits unused gets tired. We have to ",
+   "correct": "feed",
+   "distractors": [
+    "bush",
+    "fruit",
+    "first"
+   ],
+   "slot_offset": 1678
+  },
+  {
+   "prefix_bytes": " wanted to look like a real gardener. Grandma was already kneeling by the garden. She was pulling weeds with a rusty trowel.\n\nThe first job was clearing the whole garden bed, and Sara did not know it would be so much work. The weeds had grown long, deep roots that gripped the dry soil tightly. Some of them came out only after she pulled really hard with both hands. She fell backward a few times when the roots finally let go. After about an hour of digging and pulling, both of them were sweaty and their hands were streaked with dark dirt. But the bed was finally empty and ready for planting.\n\n\"Now we add the good stuff,\" Grandma said. She pointed at a bag of compost. The bag was almost as tall as Sara. \"Soil that sits unused gets tired. We have to feed it, just like people.\"\n\nThey dumped the compost into the bed. Then they mixed it with the old soil. Sara liked the smell. It was earthy and rich. It reminded her of the woods after a rain. She told Grandma so. Grandma laughed and said that was just right. \"Good ",
+   "correct": "soil",
+   "distractors": [
+    "school",
+    "corner",
+    "means"
+   ],
+   "slot_offset": 1945
+  },
+  {
+   "prefix_bytes": "s finally let go. After about an hour of digging and pulling, both of them were sweaty and their hands were streaked with dark dirt. But the bed was finally empty and ready for planting.\n\n\"Now we add the good stuff,\" Grandma said. She pointed at a bag of compost. The bag was almost as tall as Sara. \"Soil that sits unused gets tired. We have to feed it, just like people.\"\n\nThey dumped the compost into the bed. Then they mixed it with the old soil. Sara liked the smell. It was earthy and rich. It reminded her of the woods after a rain. She told Grandma so. Grandma laughed and said that was just right. \"Good soil should smell like that,\" she said.\n\nAfter lunch, which was tomato sandwiches even though they did not have any tomatoes from the garden yet, they started the planting work. Grandma showed Sara how to dig a hole that was just deep enough for the roots, but not any deeper. Then she showed her how to set the small plant gently into the hole. You hold the plant by its leaves, never by the stem, because the ",
+   "correct": "stem",
+   "distractors": [
+    "good",
+    "dark",
+    "street"
+   ],
+   "slot_offset": 2356
+  },
+  {
+   "prefix_bytes": "nting.\n\n\"Now we add the good stuff,\" Grandma said. She pointed at a bag of compost. The bag was almost as tall as Sara. \"Soil that sits unused gets tired. We have to feed it, just like people.\"\n\nThey dumped the compost into the bed. Then they mixed it with the old soil. Sara liked the smell. It was earthy and rich. It reminded her of the woods after a rain. She told Grandma so. Grandma laughed and said that was just right. \"Good soil should smell like that,\" she said.\n\nAfter lunch, which was tomato sandwiches even though they did not have any tomatoes from the garden yet, they started the planting work. Grandma showed Sara how to dig a hole that was just deep enough for the roots, but not any deeper. Then she showed her how to set the small plant gently into the hole. You hold the plant by its leaves, never by the stem, because the stem is very fragile. A plant can always grow new leaves, but a broken stem usually means the end of the whole thing.\n\nBy the time they finished, six tomato plants stood in a row. ",
+   "correct": "Four",
+   "distractors": [
+    "rusty",
+    "voice",
+    "taught"
+   ],
+   "slot_offset": 2536
+  },
+  {
+   "prefix_bytes": " of the woods after a rain. She told Grandma so. Grandma laughed and said that was just right. \"Good soil should smell like that,\" she said.\n\nAfter lunch, which was tomato sandwiches even though they did not have any tomatoes from the garden yet, they started the planting work. Grandma showed Sara how to dig a hole that was just deep enough for the roots, but not any deeper. Then she showed her how to set the small plant gently into the hole. You hold the plant by its leaves, never by the stem, because the stem is very fragile. A plant can always grow new leaves, but a broken stem usually means the end of the whole thing.\n\nBy the time they finished, six tomato plants stood in a row. Four pepper plants stood next to them. Sara stepped back to look. She felt proud of the work. It was a stronger pride than any she felt in school. It ran from her arms into her hands. The feeling surprised her.\n\n\"Tomorrow we water them early,\" Grandma said. \"That's a rule. You water before the sun gets high. The roots can burn if ",
+   "correct": "water",
+   "distractors": [
+    "yellow",
+    "light",
+    "blew"
+   ],
+   "slot_offset": 2868
+  },
+  {
+   "prefix_bytes": "d soil should smell like that,\" she said.\n\nAfter lunch, which was tomato sandwiches even though they did not have any tomatoes from the garden yet, they started the planting work. Grandma showed Sara how to dig a hole that was just deep enough for the roots, but not any deeper. Then she showed her how to set the small plant gently into the hole. You hold the plant by its leaves, never by the stem, because the stem is very fragile. A plant can always grow new leaves, but a broken stem usually means the end of the whole thing.\n\nBy the time they finished, six tomato plants stood in a row. Four pepper plants stood next to them. Sara stepped back to look. She felt proud of the work. It was a stronger pride than any she felt in school. It ran from her arms into her hands. The feeling surprised her.\n\n\"Tomorrow we water them early,\" Grandma said. \"That's a rule. You water before the sun gets high. The roots can burn if water sits on them in heat.\"\n\nOver the next weeks, Sara learned many rules. There were rules about ",
+   "correct": "pinching",
+   "distractors": [
+    "tightly",
+    "sunlight",
+    "camera"
+   ],
+   "slot_offset": 2967
+  },
+  {
+   "prefix_bytes": "stem is very fragile. A plant can always grow new leaves, but a broken stem usually means the end of the whole thing.\n\nBy the time they finished, six tomato plants stood in a row. Four pepper plants stood next to them. Sara stepped back to look. She felt proud of the work. It was a stronger pride than any she felt in school. It ran from her arms into her hands. The feeling surprised her.\n\n\"Tomorrow we water them early,\" Grandma said. \"That's a rule. You water before the sun gets high. The roots can burn if water sits on them in heat.\"\n\nOver the next weeks, Sara learned many rules. There were rules about pinching off small shoots. The plants needed to put their energy into fruit, not extra leaves. There were rules about checking under leaves. Tiny green worms could eat a whole plant in one day. There were rules about water, ripe peppers, and storms. Sara wrote some of the rules down in a small notebook.\n\nThe first ripe tomato came in mid-August. Sara spotted it during her morning watering. It was a single red ",
+   "correct": "fruit",
+   "distractors": [
+    "brought",
+    "thorn",
+    "days"
+   ],
+   "slot_offset": 3380
+  },
+  {
+   "prefix_bytes": "me they finished, six tomato plants stood in a row. Four pepper plants stood next to them. Sara stepped back to look. She felt proud of the work. It was a stronger pride than any she felt in school. It ran from her arms into her hands. The feeling surprised her.\n\n\"Tomorrow we water them early,\" Grandma said. \"That's a rule. You water before the sun gets high. The roots can burn if water sits on them in heat.\"\n\nOver the next weeks, Sara learned many rules. There were rules about pinching off small shoots. The plants needed to put their energy into fruit, not extra leaves. There were rules about checking under leaves. Tiny green worms could eat a whole plant in one day. There were rules about water, ripe peppers, and storms. Sara wrote some of the rules down in a small notebook.\n\nThe first ripe tomato came in mid-August. Sara spotted it during her morning watering. It was a single red fruit hidden behind green leaves. She shouted for Grandma to come see. Grandma came out of the kitchen. She was still holding a ",
+   "correct": "spatula",
+   "distractors": [
+    "rules",
+    "organized",
+    "slice"
+   ],
+   "slot_offset": 3508
+  },
+  {
+   "prefix_bytes": "l. It ran from her arms into her hands. The feeling surprised her.\n\n\"Tomorrow we water them early,\" Grandma said. \"That's a rule. You water before the sun gets high. The roots can burn if water sits on them in heat.\"\n\nOver the next weeks, Sara learned many rules. There were rules about pinching off small shoots. The plants needed to put their energy into fruit, not extra leaves. There were rules about checking under leaves. Tiny green worms could eat a whole plant in one day. There were rules about water, ripe peppers, and storms. Sara wrote some of the rules down in a small notebook.\n\nThe first ripe tomato came in mid-August. Sara spotted it during her morning watering. It was a single red fruit hidden behind green leaves. She shouted for Grandma to come see. Grandma came out of the kitchen. She was still holding a spatula. They cut the tomato off the vine with scissors. Sara carried it back inside very gently.\n\n\"We earned this one,\" Grandma said. She sliced it on a wooden board. The juice ran out in a slow ",
+   "correct": "trickle",
+   "distractors": [
+    "sitting",
+    "kneeling",
+    "cleaned"
+   ],
+   "slot_offset": 3704
+  },
+  {
+   "prefix_bytes": "s. There were rules about checking under leaves. Tiny green worms could eat a whole plant in one day. There were rules about water, ripe peppers, and storms. Sara wrote some of the rules down in a small notebook.\n\nThe first ripe tomato came in mid-August. Sara spotted it during her morning watering. It was a single red fruit hidden behind green leaves. She shouted for Grandma to come see. Grandma came out of the kitchen. She was still holding a spatula. They cut the tomato off the vine with scissors. Sara carried it back inside very gently.\n\n\"We earned this one,\" Grandma said. She sliced it on a wooden board. The juice ran out in a slow trickle. They each took a slice. They sprinkled a tiny bit of salt on top. They ate it standing up in the kitchen.\n\nIt was the best thing Sara had ever tasted. She could not have said exactly why. Maybe it was because she pulled out the weeds. Maybe it was because she watched it grow from a sprout. The plant had become something that could feed two people. Maybe, she thought, ",
+   "correct": "food",
+   "distractors": [
+    "sara",
+    "worms",
+    "we'll"
+   ],
+   "slot_offset": 4083
+  },
+  {
+   "prefix_bytes": "green leaves. She shouted for Grandma to come see. Grandma came out of the kitchen. She was still holding a spatula. They cut the tomato off the vine with scissors. Sara carried it back inside very gently.\n\n\"We earned this one,\" Grandma said. She sliced it on a wooden board. The juice ran out in a slow trickle. They each took a slice. They sprinkled a tiny bit of salt on top. They ate it standing up in the kitchen.\n\nIt was the best thing Sara had ever tasted. She could not have said exactly why. Maybe it was because she pulled out the weeds. Maybe it was because she watched it grow from a sprout. The plant had become something that could feed two people. Maybe, she thought, food just tasted better when you worked for it. Things that came easy did not taste the same.\n\nThere were hard days too, when something went wrong. One morning, Sara found a bug she had never seen before, a bright green fat one clinging to a leaf. She did not know if it was good or bad, so she ran inside to ask Grandma right away. Grandma ",
+   "correct": "came",
+   "distractors": [
+    "ever",
+    "ways",
+    "others"
+   ],
+   "slot_offset": 4424
+  },
+  {
+   "prefix_bytes": "e earned this one,\" Grandma said. She sliced it on a wooden board. The juice ran out in a slow trickle. They each took a slice. They sprinkled a tiny bit of salt on top. They ate it standing up in the kitchen.\n\nIt was the best thing Sara had ever tasted. She could not have said exactly why. Maybe it was because she pulled out the weeds. Maybe it was because she watched it grow from a sprout. The plant had become something that could feed two people. Maybe, she thought, food just tasted better when you worked for it. Things that came easy did not taste the same.\n\nThere were hard days too, when something went wrong. One morning, Sara found a bug she had never seen before, a bright green fat one clinging to a leaf. She did not know if it was good or bad, so she ran inside to ask Grandma right away. Grandma came out, took one look, and frowned. \"Hornworm,\" she said. \"These guys can eat a whole tomato plant in a single afternoon.\" She showed Sara how to pick them off and drop them in a bucket of soapy water. They ",
+   "correct": "found",
+   "distractors": [
+    "orange",
+    "wiggled",
+    "feeling"
+   ],
+   "slot_offset": 4633
+  },
+  {
+   "prefix_bytes": "e said exactly why. Maybe it was because she pulled out the weeds. Maybe it was because she watched it grow from a sprout. The plant had become something that could feed two people. Maybe, she thought, food just tasted better when you worked for it. Things that came easy did not taste the same.\n\nThere were hard days too, when something went wrong. One morning, Sara found a bug she had never seen before, a bright green fat one clinging to a leaf. She did not know if it was good or bad, so she ran inside to ask Grandma right away. Grandma came out, took one look, and frowned. \"Hornworm,\" she said. \"These guys can eat a whole tomato plant in a single afternoon.\" She showed Sara how to pick them off and drop them in a bucket of soapy water. They found six of them altogether that day. After that, Sara made sure to check every morning before breakfast.\n\nThere was also a thunderstorm one night. The rain came hard and fast. Sara woke up worried about the plants. She got out of bed and ran to the window. The wind was ",
+   "correct": "bending",
+   "distractors": [
+    "trade",
+    "gloves",
+    "notebook"
+   ],
+   "slot_offset": 4905
+  },
+  {
+   "prefix_bytes": "asted better when you worked for it. Things that came easy did not taste the same.\n\nThere were hard days too, when something went wrong. One morning, Sara found a bug she had never seen before, a bright green fat one clinging to a leaf. She did not know if it was good or bad, so she ran inside to ask Grandma right away. Grandma came out, took one look, and frowned. \"Hornworm,\" she said. \"These guys can eat a whole tomato plant in a single afternoon.\" She showed Sara how to pick them off and drop them in a bucket of soapy water. They found six of them altogether that day. After that, Sara made sure to check every morning before breakfast.\n\nThere was also a thunderstorm one night. The rain came hard and fast. Sara woke up worried about the plants. She got out of bed and ran to the window. The wind was bending the tomato stakes. Lightning flashed across the sky. In the morning, she ran outside before her shoes were tied. Two plants had fallen over. Grandma helped her tie them back up with soft strips of cloth. \"",
+   "correct": "Plants",
+   "distractors": [
+    "water",
+    "wind",
+    "taste"
+   ],
+   "slot_offset": 5118
+  },
+  {
+   "prefix_bytes": " came out, took one look, and frowned. \"Hornworm,\" she said. \"These guys can eat a whole tomato plant in a single afternoon.\" She showed Sara how to pick them off and drop them in a bucket of soapy water. They found six of them altogether that day. After that, Sara made sure to check every morning before breakfast.\n\nThere was also a thunderstorm one night. The rain came hard and fast. Sara woke up worried about the plants. She got out of bed and ran to the window. The wind was bending the tomato stakes. Lightning flashed across the sky. In the morning, she ran outside before her shoes were tied. Two plants had fallen over. Grandma helped her tie them back up with soft strips of cloth. \"Plants are tougher than they look,\" Grandma said. \"But sometimes they need a hand.\"\n\nSara took pictures of the garden every week. She used Grandma's old camera. She wanted to remember each step. She lined the photos up in her notebook. She could see the plants growing taller in each one. The tomatoes started green, then turned ",
+   "correct": "orange",
+   "distractors": [
+    "weeks",
+    "sweaty",
+    "soft"
+   ],
+   "slot_offset": 5447
+  },
+  {
+   "prefix_bytes": " altogether that day. After that, Sara made sure to check every morning before breakfast.\n\nThere was also a thunderstorm one night. The rain came hard and fast. Sara woke up worried about the plants. She got out of bed and ran to the window. The wind was bending the tomato stakes. Lightning flashed across the sky. In the morning, she ran outside before her shoes were tied. Two plants had fallen over. Grandma helped her tie them back up with soft strips of cloth. \"Plants are tougher than they look,\" Grandma said. \"But sometimes they need a hand.\"\n\nSara took pictures of the garden every week. She used Grandma's old camera. She wanted to remember each step. She lined the photos up in her notebook. She could see the plants growing taller in each one. The tomatoes started green, then turned orange, then bright red. Some peppers turned yellow. Others went from green to deep purple.\n\nSara even made a little map of the garden. She drew which plants were where. She noted which ones grew the fastest. The plants in the ",
+   "correct": "south",
+   "distractors": [
+    "week",
+    "august",
+    "hidden"
+   ],
+   "slot_offset": 5674
+  },
+  {
+   "prefix_bytes": " worried about the plants. She got out of bed and ran to the window. The wind was bending the tomato stakes. Lightning flashed across the sky. In the morning, she ran outside before her shoes were tied. Two plants had fallen over. Grandma helped her tie them back up with soft strips of cloth. \"Plants are tougher than they look,\" Grandma said. \"But sometimes they need a hand.\"\n\nSara took pictures of the garden every week. She used Grandma's old camera. She wanted to remember each step. She lined the photos up in her notebook. She could see the plants growing taller in each one. The tomatoes started green, then turned orange, then bright red. Some peppers turned yellow. Others went from green to deep purple.\n\nSara even made a little map of the garden. She drew which plants were where. She noted which ones grew the fastest. The plants in the south corner did the best. They got the most sunlight. The plants in the corner near the fence did the worst. Grandma said the fence blocked some of their light. They would ",
+   "correct": "move",
+   "distractors": [
+    "filled",
+    "you're",
+    "proud"
+   ],
+   "slot_offset": 5847
+  },
+  {
+   "prefix_bytes": "uld see the plants growing taller in each one. The tomatoes started green, then turned orange, then bright red. Some peppers turned yellow. Others went from green to deep purple.\n\nSara even made a little map of the garden. She drew which plants were where. She noted which ones grew the fastest. The plants in the south corner did the best. They got the most sunlight. The plants in the corner near the fence did the worst. Grandma said the fence blocked some of their light. They would move them next year.\n\nWhen her parents came to pick her up at the end of August, Sara's hands were tan. They were a little rough from the work. She had a small scar on her thumb. A thorn from the rose bush had caught her one morning. She brought home a paper bag full of tomatoes and peppers. It was more than her family could eat in a week.\n\n\"You did all of this?\" her mother asked. She held up a bright red tomato. It was almost as big as her fist.\n\n\"Grandma and I did it together,\" Sara said. \"But she said next summer I can plan the ",
+   "correct": "garden",
+   "distractors": [
+    "extra",
+    "hornworm",
+    "hands"
+   ],
+   "slot_offset": 6384
+  },
+  {
+   "prefix_bytes": "s were where. She noted which ones grew the fastest. The plants in the south corner did the best. They got the most sunlight. The plants in the corner near the fence did the worst. Grandma said the fence blocked some of their light. They would move them next year.\n\nWhen her parents came to pick her up at the end of August, Sara's hands were tan. They were a little rough from the work. She had a small scar on her thumb. A thorn from the rose bush had caught her one morning. She brought home a paper bag full of tomatoes and peppers. It was more than her family could eat in a week.\n\n\"You did all of this?\" her mother asked. She held up a bright red tomato. It was almost as big as her fist.\n\n\"Grandma and I did it together,\" Sara said. \"But she said next summer I can plan the garden myself. She said I'm a real gardener now.\"\n\nSara thought about that on the long drive home. She watched the green fields slide past the window. A real gardener. It was a small thing, maybe. But it felt very large to her. She closed her ",
+   "correct": "eyes",
+   "distractors": [
+    "voice",
+    "bring",
+    "shed"
+   ],
+   "slot_offset": 6627
+  },
+  {
+   "prefix_bytes": "ight. The plants in the corner near the fence did the worst. Grandma said the fence blocked some of their light. They would move them next year.\n\nWhen her parents came to pick her up at the end of August, Sara's hands were tan. They were a little rough from the work. She had a small scar on her thumb. A thorn from the rose bush had caught her one morning. She brought home a paper bag full of tomatoes and peppers. It was more than her family could eat in a week.\n\n\"You did all of this?\" her mother asked. She held up a bright red tomato. It was almost as big as her fist.\n\n\"Grandma and I did it together,\" Sara said. \"But she said next summer I can plan the garden myself. She said I'm a real gardener now.\"\n\nSara thought about that on the long drive home. She watched the green fields slide past the window. A real gardener. It was a small thing, maybe. But it felt very large to her. She closed her eyes for a moment. She could still smell the soil on her hands. She could smell the tomato vines too. They had a slight ",
+   "correct": "tang",
+   "distractors": [
+    "older",
+    "later",
+    "small"
+   ],
+   "slot_offset": 6747
+  },
+  {
+   "prefix_bytes": "gust, Sara's hands were tan. They were a little rough from the work. She had a small scar on her thumb. A thorn from the rose bush had caught her one morning. She brought home a paper bag full of tomatoes and peppers. It was more than her family could eat in a week.\n\n\"You did all of this?\" her mother asked. She held up a bright red tomato. It was almost as big as her fist.\n\n\"Grandma and I did it together,\" Sara said. \"But she said next summer I can plan the garden myself. She said I'm a real gardener now.\"\n\nSara thought about that on the long drive home. She watched the green fields slide past the window. A real gardener. It was a small thing, maybe. But it felt very large to her. She closed her eyes for a moment. She could still smell the soil on her hands. She could smell the tomato vines too. They had a slight tang when you brushed past them. She wanted to remember that smell forever.\n\nYears later, Sara would still remember that summer as the one when she first felt useful in a real way. Sitting in a high ",
+   "correct": "school",
+   "distractors": [
+    "streaked",
+    "night",
+    "warm"
+   ],
+   "slot_offset": 6946
+  },
+  {
+   "prefix_bytes": "this?\" her mother asked. She held up a bright red tomato. It was almost as big as her fist.\n\n\"Grandma and I did it together,\" Sara said. \"But she said next summer I can plan the garden myself. She said I'm a real gardener now.\"\n\nSara thought about that on the long drive home. She watched the green fields slide past the window. A real gardener. It was a small thing, maybe. But it felt very large to her. She closed her eyes for a moment. She could still smell the soil on her hands. She could smell the tomato vines too. They had a slight tang when you brushed past them. She wanted to remember that smell forever.\n\nYears later, Sara would still remember that summer as the one when she first felt useful in a real way. Sitting in a high school classroom, she would think back to the smell of the soil and the slight tang of the tomato vines. She would remember Grandma Bea's quiet voice teaching her each rule.\n\nSara also helped her grandma in other ways. They cleaned the small storage shed together. They organized the ",
+   "correct": "gardening",
+   "distractors": [
+    "surprised",
+    "wiggled",
+    "fingers"
+   ],
+   "slot_offset": 7230
+  },
+  {
+   "prefix_bytes": " I'm a real gardener now.\"\n\nSara thought about that on the long drive home. She watched the green fields slide past the window. A real gardener. It was a small thing, maybe. But it felt very large to her. She closed her eyes for a moment. She could still smell the soil on her hands. She could smell the tomato vines too. They had a slight tang when you brushed past them. She wanted to remember that smell forever.\n\nYears later, Sara would still remember that summer as the one when she first felt useful in a real way. Sitting in a high school classroom, she would think back to the smell of the soil and the slight tang of the tomato vines. She would remember Grandma Bea's quiet voice teaching her each rule.\n\nSara also helped her grandma in other ways. They cleaned the small storage shed together. They organized the gardening tools by size. They labeled small jars of seeds for next year. Grandma showed Sara how to dry herbs in bunches by the window.\n\nOne afternoon, a neighbor came over with a basket of bread. The ",
+   "correct": "neighbor",
+   "distractors": [
+    "backward",
+    "earthy",
+    "window"
+   ],
+   "slot_offset": 7431
+  },
+  {
+   "prefix_bytes": "t smell forever.\n\nYears later, Sara would still remember that summer as the one when she first felt useful in a real way. Sitting in a high school classroom, she would think back to the smell of the soil and the slight tang of the tomato vines. She would remember Grandma Bea's quiet voice teaching her each rule.\n\nSara also helped her grandma in other ways. They cleaned the small storage shed together. They organized the gardening tools by size. They labeled small jars of seeds for next year. Grandma showed Sara how to dry herbs in bunches by the window.\n\nOne afternoon, a neighbor came over with a basket of bread. The neighbor wanted to trade for some tomatoes. Sara felt proud to make her first real swap. The neighbor was kind. She told Sara that her tomatoes were the best on the street.\n\nThere was also a thunderstorm one night that Sara would never forget. The wind blew hard against the house. The windows shook a little. Grandma sat with Sara in the kitchen. They drank warm tea while the storm passed. In the ",
+   "correct": "morning",
+   "distractors": [
+    "earthy",
+    "teaching",
+    "notebook"
+   ],
+   "slot_offset": 7830
+  }
+ ]
+}

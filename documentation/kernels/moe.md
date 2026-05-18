@@ -9,7 +9,7 @@ This is a versioned contract. Adding, removing, or changing the signature of any
 
 Total parameters scale linearly with `n_experts` while active parameters per byte stay near a single expert's footprint. Combined with ternary weights ([documentation/kernels/ternary.md](ternary.md)), an 8-expert 1B-class model has a per-byte active footprint that fits the 96 MB L3 of the 9800X3D. Without MoE, the same accuracy band requires a dense 1B model that misses cache catastrophically.
 
-MEGA is the canonical MoE trainer (`plugins/veritate_mega/`). It produces top-1 8-expert checkpoints. The engine reads those.
+MEGA is the canonical MoE trainer (`trainers/veritate_mega/`). It produces top-1 8-expert checkpoints. The engine reads those.
 
 # ------------------------------------------------------------------------------------
 # block layout
@@ -78,7 +78,7 @@ Per claude_preflight rule 23: every kernel produces bitwise-identical output to 
 2. Per-expert FFN output (post-`ffn_down` int32) must match the corresponding PyTorch expert's output bit-for-bit, since the kernel is the same INT8 VNNI matmul.
 3. Block residual after the MoE FFN must match the PyTorch MEGA forward at every layer, on a representative checkpoint, with cosine distance < 0.01.
 
-Validation is gated on phase E in [docs/c_engine_ternary_moe_tracking.md] and on the export pipeline writing a v11 binary from a QAT'd MEGA checkpoint.
+Validation is gated on the export pipeline writing a v11 binary from a QAT'd MEGA checkpoint.
 
 # ------------------------------------------------------------------------------------
 # what this contract does NOT cover

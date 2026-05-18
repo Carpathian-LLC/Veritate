@@ -2,11 +2,11 @@
 
 Inference-time addons biases the model's next-byte logits without touching the model. Every addon ships as a self-contained directory under `veritate_mri/addons/<id>/` with a `manifest.json` and an `addon.py`. The platform discovers them at runtime, the dashboard lists them on the Generation tab, and the PyTorch backend pipes the chosen ones through the sampler before each byte is drawn.
 
-This is a versioned contract. Adding, removing, or changing the signature of any function or field below requires updating this file in the same commit. Same rule as [plugins/contract.md](../plugins/contract.md) and [hooks/contract.md](../hooks/contract.md).
+This is a versioned contract. Adding, removing, or changing the signature of any function or field below requires updating this file in the same commit. Same rule as [trainers/contract.md](../trainers/contract.md) and [hooks/contract.md](../hooks/contract.md).
 
 ## scope
 
-A plugin trains a model. An addon runs alongside an already-trained model at decode time. Addons read raw logits, apply a bias, and pass logits forward. They never load weights, never train, never write to the checkpoint, never touch the engine. The base model and its `.pt` are immutable from the addon's point of view.
+A trainer trains a model. An addon runs alongside an already-trained model at decode time. Addons read raw logits, apply a bias, and pass logits forward. They never load weights, never train, never write to the checkpoint, never touch the engine. The base model and its `.pt` are immutable from the addon's point of view.
 
 The slot table addon is the canonical example. It tracks recent named entities, gendered anchors, and the rolling byte window. It biases logits to suppress doc-boundary collapse, repetition loops, n-gram echoes, and wrong-gender pronoun completions; it boosts already-seen named entities at word-start.
 

@@ -7,7 +7,7 @@
 // - reference ternary matmul. portable C. oracle for SIMD kernels.
 // - BitNet b1.58: trits in {-1, 0, +1}, per-tensor mean-abs scale (gamma).
 //   trits packed 5-per-byte in base-3. spec: documentation/kernels/ternary.md.
-// - matches PyTorch fake_quant_weight_ternary in veritate/qat.py.
+// - matches PyTorch fake_quant_weight_ternary in veritate_core/qat.py.
 // veritate_engine/kernels/scalar/matmul_ternary_scalar.c
 // ------------------------------------------------------------------------------------
 // Imports

@@ -1,0 +1,28 @@
+{
+  "_source": "Hand-written sample items in the spirit of HellaSwag (Zellers et al., 2019). For the full benchmark, download from https://huggingface.co/datasets/Rowan/hellaswag and reformat into this schema. Each item has a context, 4 candidate endings, and a 0..3 label for the correct continuation.",
+  "_license_note": "These hand-written sample items are public-domain placeholders for the smoke test. They are NOT from the official HellaSwag dataset.",
+  "items": [
+    {
+      "activity": "cooking",
+      "ctx": "She placed the pot on the stove and turned on the burner. After a few minutes,",
+      "endings": [
+        "the water began to boil rapidly, so she added the pasta.",
+        "the refrigerator started playing loud music for the neighbors.",
+        "she rode a bicycle through the kitchen to the next room.",
+        "the chair turned into a horse and galloped out the window."
+      ],
+      "label": 0
+    },
+    {
+      "activity": "driving",
+      "ctx": "The traffic light turned red, so the driver",
+      "endings": [
+        "accelerated through the intersection and sang to the moon.",
+        "stepped on the brake and brought the car to a stop.",
+        "opened the door and began swimming down the street.",
+        "decided that traffic signals are made of cheese."
+      ],
+      "label": 1
+    }
+  ]
+}

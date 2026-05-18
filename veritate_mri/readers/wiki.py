@@ -4,7 +4,7 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - reader for the wiki content tree under veritate_mri/wiki/<category>/<slug>.md.
+# - reader for the wiki content tree under veritate_mri/data/wiki/<category>/<slug>.md.
 # - parses yaml-ish frontmatter and renders a safe markdown subset to html.
 # - frontmatter keys: title, date, tags, summary. all optional.
 # veritate_mri/readers/wiki.py

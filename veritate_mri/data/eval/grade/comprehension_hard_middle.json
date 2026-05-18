@@ -1,0 +1,318 @@
+{
+ "level": "middle",
+ "source": "grade_middle_source.txt",
+ "n_items": 25,
+ "seed": 17,
+ "mode": "hard_long_range_pos_matched",
+ "config": {
+  "items_per_band": 25,
+  "prefix_max_bytes": 1024,
+  "min_callback_distance": 100,
+  "recent_block_bytes": 60,
+  "slot_start_fraction": 0.3,
+  "length_tolerance": 2,
+  "distractor_filter": "same_preceding_word_in_passage"
+ },
+ "items": [
+  {
+   "prefix_bytes": " will promise that I will be polite.\"\n\nWalking home in the lengthening shadows of the late afternoon, Eli thought about what he had learned. He had probably not learned anything that any of the kids at school would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came back to Mr. Hadlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow opened the door more easily this time. He even smiled when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the question. He talked about his history teacher, Mr. Peters. Mr. Hadlow knew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about ",
+   "correct": "almost",
+   "distractors": [
+    "himself",
+    "school",
+    "knocking"
+   ],
+   "slot_offset": 6094,
+   "callback_distance": 2249,
+   "preceding_word": "about"
+  },
+  {
+   "prefix_bytes": "t a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time spring came, Mr. Hadlow's garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The whole change had started with one twelve-year-old who decided that knocking on a door was ",
+   "correct": "less",
+   "distractors": [
+    "crisp",
+    "wide",
+    "inside"
+   ],
+   "slot_offset": 7002,
+   "callback_distance": 4627,
+   "preceding_word": "was"
+  },
+  {
+   "prefix_bytes": "re longer than he probably should have.\"\n\nEli nodded. He tried to imagine living in a house for that many years without anyone really knowing what was inside. It struck him, sitting there with his now-warm mug, that all the wild stories had been the neighborhood's way of filling in a silence. They had invented something more interesting than the actual truth. The actual truth was just that one tired old man had grown invisible to people who never bothered to look.\n\nWhen Eli finally stood to leave, Mr. Hadlow walked him to the gate and shook his hand. \"Come back anytime,\" he said. \"I will not promise that I will be exciting, but I will promise that I will be polite.\"\n\nWalking home in the lengthening shadows of the late afternoon, Eli thought about what he had learned. He had probably not learned anything that any of the kids at school would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it ",
+   "correct": "took",
+   "distractors": [
+    "struck",
+    "wasn't",
+    "open"
+   ],
+   "slot_offset": 5457,
+   "callback_distance": 3558,
+   "preceding_word": "it"
+  },
+  {
+   "prefix_bytes": "d when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the question. He talked about his history teacher, Mr. Peters. Mr. Hadlow knew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the ",
+   "correct": "haunted",
+   "distractors": [
+    "question",
+    "sidewalk",
+    "empty"
+   ],
+   "slot_offset": 6696,
+   "callback_distance": 2380,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": " stroke a decade ago had made standing in front of a class no longer practical. His wife had died three years before that. They had never had children, so when he retired, he simply stopped seeing most people. It was not that he wanted to be alone, he explained. The habits of being among others had quietly atrophied. After a while it had begun to feel like too much effort to start them up again.\n\n\"You should know,\" he added, \"that I am not haunted. I am not even particularly mysterious. I am only a man who got into the habit of being quiet, and stayed there longer than he probably should have.\"\n\nEli nodded. He tried to imagine living in a house for that many years without anyone really knowing what was inside. It struck him, sitting there with his now-warm mug, that all the wild stories had been the neighborhood's way of filling in a silence. They had invented something more interesting than the actual truth. The actual truth was just that one tired old man had grown invisible to people who never bothered to ",
+   "correct": "look",
+   "distractors": [
+    "feel",
+    "bother",
+    "bring"
+   ],
+   "slot_offset": 4896,
+   "callback_distance": 1953,
+   "preceding_word": "to"
+  },
+  {
+   "prefix_bytes": "d to the front porch, with weeds growing up between the stones in irregular tufts. The porch itself was wide and shaded, with two empty rocking chairs that faced each other as if waiting for a conversation that had not happened in a long time.\n\nEli took a deep breath and knocked. Three quick knocks, the way his father always did when they visited his grandmother. He listened. There was a long silence, long enough that he began to relax, thinking he could now go back home and tell himself he had at least tried. But then he heard footsteps coming closer, and the door opened just a crack, and a single eye peered out at him from the dim hallway beyond.\n\n\"Yes?\" said a voice that was older than Eli had expected, but also less frightening. It sounded tired more than anything else.\n\n\"Hi,\" Eli said, suddenly aware that he had not actually planned what he was going to say. \"I'm Eli. I live a few houses down. I, um, just wanted to introduce myself. People at school say a lot of things about this house, and I thought it ",
+   "correct": "wasn't",
+   "distractors": [
+    "took",
+    "struck",
+    "open"
+   ],
+   "slot_offset": 2674,
+   "callback_distance": 2547,
+   "preceding_word": "it"
+  },
+  {
+   "prefix_bytes": "gain with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the question. He talked about his history teacher, Mr. Peters. Mr. Hadlow knew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the ",
+   "correct": "time",
+   "distractors": [
+    "man's",
+    "rumors",
+    "lawn"
+   ],
+   "slot_offset": 6738,
+   "callback_distance": 4850,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "h itself was wide and shaded, with two empty rocking chairs that faced each other as if waiting for a conversation that had not happened in a long time.\n\nEli took a deep breath and knocked. Three quick knocks, the way his father always did when they visited his grandmother. He listened. There was a long silence, long enough that he began to relax, thinking he could now go back home and tell himself he had at least tried. But then he heard footsteps coming closer, and the door opened just a crack, and a single eye peered out at him from the dim hallway beyond.\n\n\"Yes?\" said a voice that was older than Eli had expected, but also less frightening. It sounded tired more than anything else.\n\n\"Hi,\" Eli said, suddenly aware that he had not actually planned what he was going to say. \"I'm Eli. I live a few houses down. I, um, just wanted to introduce myself. People at school say a lot of things about this house, and I thought it wasn't fair to keep believing them without ever meeting you.\"\n\nThere was a pause. Then the ",
+   "correct": "door",
+   "distractors": [
+    "habits",
+    "autumn",
+    "local"
+   ],
+   "slot_offset": 2765,
+   "callback_distance": 2220,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "hem without ever meeting you.\"\n\nThere was a pause. Then the door opened wider, and Eli saw a man who must have been in his seventies, with white hair and a soft, slightly rumpled cardigan. The man's face was lined with years that did not look unhappy, only quiet, the way the faces of people who have spent a long time alone can sometimes look.\n\n\"Well,\" the man said, with what might have been the beginning of a smile. \"That is one of the more honest reasons anyone has ever given me for ringing my bell. I am Mr. Hadlow. Would you like to come in and have some tea, or would you prefer to do this on the porch?\"\n\nEli had not actually planned to come inside any stranger's house. He hesitated for a moment and chose the porch. They sat in the two rocking chairs that had earlier looked so empty. Mr. Hadlow brought out a kettle, two mismatched mugs, and a small plate of cookies. The cookies were slightly stale but not unpleasant. They sipped their tea as the autumn afternoon stretched golden across the lawn. Mr. Hadlow ",
+   "correct": "began",
+   "distractors": [
+    "walked",
+    "asked",
+    "opened"
+   ],
+   "slot_offset": 3729,
+   "callback_distance": 1654,
+   "preceding_word": "hadlow"
+  },
+  {
+   "prefix_bytes": " new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time spring came, Mr. Hadlow's garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The whole change had started with one twelve-year-old who decided that knocking on a door was less scary than letting a story stand in for a person.\n\nEli learned something else that year. Curiosity, when paired with kindness, was a kind of small superpower. It could undo a decade of silence. It cost nothing. It only required the willingness to ask.\n\nLooking back on that strange autumn afternoon when he had first walked up to Mr. Hadlow's door, Eli realized that nothing about the encounter had unfolded the way the rumors had led him to expect, which was perhaps the most important lesson of all. The neighborhood's stories had been built on absence rather than evidence, on the convenience of an explanation that required no investigation, and once a single person had ",
+   "correct": "bothered",
+   "distractors": [
+    "stories",
+    "unfolded",
+    "children"
+   ],
+   "slot_offset": 7682,
+   "callback_distance": 2798,
+   "preceding_word": "had"
+  },
+  {
+   "prefix_bytes": " hand. \"Come back anytime,\" he said. \"I will not promise that I will be exciting, but I will promise that I will be polite.\"\n\nWalking home in the lengthening shadows of the late afternoon, Eli thought about what he had learned. He had probably not learned anything that any of the kids at school would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came back to Mr. Hadlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow opened the door more easily this time. He even smiled when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the question. He talked about his history teacher, Mr. Peters. Mr. Hadlow knew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow ",
+   "correct": "retired",
+   "distractors": [
+    "opened",
+    "seemed",
+    "asked"
+   ],
+   "slot_offset": 6007,
+   "callback_distance": 1972,
+   "preceding_word": "hadlow"
+  },
+  {
+   "prefix_bytes": "d which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time spring came, Mr. Hadlow's garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The whole change had started with one twelve-year-old who decided that knocking on a door was less scary than letting a story stand in for a person.\n\nEli learned something else that year. Curiosity, when paired with kindness, was a kind of small superpower. It could undo a decade of silence. It cost nothing. It only required the willingness to ask.\n\nLooking back on that ",
+   "correct": "strange",
+   "distractors": [
+    "knocking",
+    "faced",
+    "crunched"
+   ],
+   "slot_offset": 7281,
+   "callback_distance": 6217,
+   "preceding_word": "that"
+  },
+  {
+   "prefix_bytes": "h. The actual truth was just that one tired old man had grown invisible to people who never bothered to look.\n\nWhen Eli finally stood to leave, Mr. Hadlow walked him to the gate and shook his hand. \"Come back anytime,\" he said. \"I will not promise that I will be exciting, but I will promise that I will be polite.\"\n\nWalking home in the lengthening shadows of the late afternoon, Eli thought about what he had learned. He had probably not learned anything that any of the kids at school would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came back to Mr. Hadlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow opened the door more easily this time. He even smiled when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the ",
+   "correct": "question",
+   "distractors": [
+    "original",
+    "following",
+    "farmer's"
+   ],
+   "slot_offset": 5816,
+   "callback_distance": 5308,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "her always did when they visited his grandmother. He listened. There was a long silence, long enough that he began to relax, thinking he could now go back home and tell himself he had at least tried. But then he heard footsteps coming closer, and the door opened just a crack, and a single eye peered out at him from the dim hallway beyond.\n\n\"Yes?\" said a voice that was older than Eli had expected, but also less frightening. It sounded tired more than anything else.\n\n\"Hi,\" Eli said, suddenly aware that he had not actually planned what he was going to say. \"I'm Eli. I live a few houses down. I, um, just wanted to introduce myself. People at school say a lot of things about this house, and I thought it wasn't fair to keep believing them without ever meeting you.\"\n\nThere was a pause. Then the door opened wider, and Eli saw a man who must have been in his seventies, with white hair and a soft, slightly rumpled cardigan. The man's face was lined with years that did not look unhappy, only quiet, the way the faces of ",
+   "correct": "people",
+   "distractors": [
+    "filling",
+    "small",
+    "college"
+   ],
+   "slot_offset": 2990,
+   "callback_distance": 388,
+   "preceding_word": "of"
+  },
+  {
+   "prefix_bytes": " interesting than the actual truth. The actual truth was just that one tired old man had grown invisible to people who never bothered to look.\n\nWhen Eli finally stood to leave, Mr. Hadlow walked him to the gate and shook his hand. \"Come back anytime,\" he said. \"I will not promise that I will be exciting, but I will promise that I will be polite.\"\n\nWalking home in the lengthening shadows of the late afternoon, Eli thought about what he had learned. He had probably not learned anything that any of the kids at school would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came back to Mr. Hadlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow opened the door more easily this time. He even smiled when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about ",
+   "correct": "school",
+   "distractors": [
+    "knocking",
+    "himself",
+    "almost"
+   ],
+   "slot_offset": 5783,
+   "callback_distance": 5566,
+   "preceding_word": "about"
+  },
+  {
+   "prefix_bytes": "a small plate of cookies. The cookies were slightly stale but not unpleasant. They sipped their tea as the autumn afternoon stretched golden across the lawn. Mr. Hadlow began, slowly and without any drama, to tell Eli about himself.\n\nHe had taught history at the local high school for almost forty years. A small stroke a decade ago had made standing in front of a class no longer practical. His wife had died three years before that. They had never had children, so when he retired, he simply stopped seeing most people. It was not that he wanted to be alone, he explained. The habits of being among others had quietly atrophied. After a while it had begun to feel like too much effort to start them up again.\n\n\"You should know,\" he added, \"that I am not haunted. I am not even particularly mysterious. I am only a man who got into the habit of being quiet, and stayed there longer than he probably should have.\"\n\nEli nodded. He tried to imagine living in a house for that many years without anyone really knowing what was ",
+   "correct": "inside",
+   "distractors": [
+    "already",
+    "less",
+    "crisp"
+   ],
+   "slot_offset": 4584,
+   "callback_distance": 1227,
+   "preceding_word": "was"
+  },
+  {
+   "prefix_bytes": " started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time spring came, Mr. Hadlow's garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The whole change had started with one twelve-year-old who decided that knocking on a door was less scary than letting a story stand in for a person.\n\nEli learned something else that year. Curiosity, when paired with kindness, was a kind of small superpower. It could undo a ",
+   "correct": "decade",
+   "distractors": [
+    "saturday",
+    "door",
+    "stranger"
+   ],
+   "slot_offset": 7182,
+   "callback_distance": 3300,
+   "preceding_word": "a"
+  },
+  {
+   "prefix_bytes": "ersation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time spring came, Mr. Hadlow's garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The whole change had started with one twelve-year-old who decided that knocking on a door was less scary than letting a story stand in for a ",
+   "correct": "person",
+   "distractors": [
+    "kind",
+    "decade",
+    "kettle"
+   ],
+   "slot_offset": 7049,
+   "callback_distance": 1689,
+   "preceding_word": "a"
+  },
+  {
+   "prefix_bytes": "d to introduce myself. People at school say a lot of things about this house, and I thought it wasn't fair to keep believing them without ever meeting you.\"\n\nThere was a pause. Then the door opened wider, and Eli saw a man who must have been in his seventies, with white hair and a soft, slightly rumpled cardigan. The man's face was lined with years that did not look unhappy, only quiet, the way the faces of people who have spent a long time alone can sometimes look.\n\n\"Well,\" the man said, with what might have been the beginning of a smile. \"That is one of the more honest reasons anyone has ever given me for ringing my bell. I am Mr. Hadlow. Would you like to come in and have some tea, or would you prefer to do this on the porch?\"\n\nEli had not actually planned to come inside any stranger's house. He hesitated for a moment and chose the porch. They sat in the two rocking chairs that had earlier looked so empty. Mr. Hadlow brought out a kettle, two mismatched mugs, and a small plate of cookies. The cookies were ",
+   "correct": "slightly",
+   "distractors": [
+    "willing",
+    "wildly",
+    "plausible"
+   ],
+   "slot_offset": 3603,
+   "callback_distance": 2871,
+   "preceding_word": "were"
+  },
+  {
+   "prefix_bytes": "ly rumpled cardigan. The man's face was lined with years that did not look unhappy, only quiet, the way the faces of people who have spent a long time alone can sometimes look.\n\n\"Well,\" the man said, with what might have been the beginning of a smile. \"That is one of the more honest reasons anyone has ever given me for ringing my bell. I am Mr. Hadlow. Would you like to come in and have some tea, or would you prefer to do this on the porch?\"\n\nEli had not actually planned to come inside any stranger's house. He hesitated for a moment and chose the porch. They sat in the two rocking chairs that had earlier looked so empty. Mr. Hadlow brought out a kettle, two mismatched mugs, and a small plate of cookies. The cookies were slightly stale but not unpleasant. They sipped their tea as the autumn afternoon stretched golden across the lawn. Mr. Hadlow began, slowly and without any drama, to tell Eli about himself.\n\nHe had taught history at the local high school for almost forty years. A small stroke a decade ago had ",
+   "correct": "made",
+   "distractors": [
+    "begun",
+    "been",
+    "taken"
+   ],
+   "slot_offset": 3897,
+   "callback_distance": 2409,
+   "preceding_word": "had"
+  },
+  {
+   "prefix_bytes": " would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came back to Mr. Hadlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow opened the door more easily this time. He even smiled when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the question. He talked about his history teacher, Mr. Peters. Mr. Hadlow knew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli ",
+   "correct": "began",
+   "distractors": [
+    "nodded",
+    "took",
+    "came"
+   ],
+   "slot_offset": 6302,
+   "callback_distance": 4227,
+   "preceding_word": "eli"
+  },
+  {
+   "prefix_bytes": "d learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came back to Mr. Hadlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow opened the door more easily this time. He even smiled when he saw Eli. They sat on the porch again with two new mugs of tea.\n\nThis time Mr. Hadlow asked Eli about school. Eli was surprised by the question. He talked about his history teacher, Mr. Peters. Mr. Hadlow knew Mr. Peters from years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he ",
+   "correct": "brought",
+   "distractors": [
+    "wanted",
+    "heard",
+    "pushed"
+   ],
+   "slot_offset": 6349,
+   "callback_distance": 2836,
+   "preceding_word": "he"
+  },
+  {
+   "prefix_bytes": "truck him, sitting there with his now-warm mug, that all the wild stories had been the neighborhood's way of filling in a silence. They had invented something more interesting than the actual truth. The actual truth was just that one tired old man had grown invisible to people who never bothered to look.\n\nWhen Eli finally stood to leave, Mr. Hadlow walked him to the gate and shook his hand. \"Come back anytime,\" he said. \"I will not promise that I will be exciting, but I will promise that I will be polite.\"\n\nWalking home in the lengthening shadows of the late afternoon, Eli thought about what he had learned. He had probably not learned anything that any of the kids at school would consider especially thrilling. But he had learned something more useful. A person could be a stranger for a very long time, and then suddenly not be one. The only thing it took was for someone to bother to ask.\n\nEli came back to Mr. Hadlow's house the following Saturday. He brought a stack of cookies his mother had baked. Mr. Hadlow ",
+   "correct": "opened",
+   "distractors": [
+    "walked",
+    "seemed",
+    "retired"
+   ],
+   "slot_offset": 5620,
+   "callback_distance": 3398,
+   "preceding_word": "hadlow"
+  },
+  {
+   "prefix_bytes": "oned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time spring came, Mr. Hadlow's garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The whole change had started with one twelve-year-old who decided that knocking on a door was less scary than letting a story stand in for a person.\n\nEli learned something else that year. Curiosity, when paired with kindness, was a kind of ",
+   "correct": "small",
+   "distractors": [
+    "filling",
+    "yellow",
+    "college"
+   ],
+   "slot_offset": 7148,
+   "callback_distance": 3586,
+   "preceding_word": "of"
+  },
+  {
+   "prefix_bytes": "m years ago. He had hired him in fact. They had taught together for almost a decade before Mr. Hadlow retired.\n\nThe conversation flowed more easily after that. Mr. Hadlow had stories about almost every teacher Eli mentioned. He remembered which ones had started right out of college. He remembered which ones had taken summer trips abroad. He remembered which ones had children of their own.\n\nEli began to visit on most Saturdays. Sometimes he brought a book to share. Sometimes he just brought himself. Mr. Hadlow seemed glad each time. The empty rocking chairs were no longer empty.\n\nWord slowly spread on Maple Street. Other neighbors started to wave at Mr. Hadlow when they passed. One woman came by with a casserole. A young couple introduced their new baby. The wild stories about the haunted house quietly faded away.\n\nBy the time spring came, Mr. Hadlow's garden had been weeded. His porch had been swept. His house no longer looked abandoned. But more importantly, he no longer felt invisible. The whole change had ",
+   "correct": "started",
+   "distractors": [
+    "begun",
+    "grown",
+    "invented"
+   ],
+   "slot_offset": 6929,
+   "callback_distance": 5883,
+   "preceding_word": "had"
+  }
+ ]
+}
