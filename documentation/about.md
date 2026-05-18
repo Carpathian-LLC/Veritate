@@ -1,34 +1,21 @@
-# About Veritate
+# about
 
-Veritate is Carpathian's Open Source AI inference and training engine. It's hand-written in C and assembly, tuned to work on a normal desktop CPU instead of a high-end graphics card.
+Veritate is an open-source AI inference and training engine. The runtime is hand-written in C and assembly, tuned to run on a consumer-grade CPU instead of a high-end GPU.
 
-Most modern AI tools assume you own, or rent, expensive specialized hardware. Veritate does not. It is built so the chip already sitting inside a regular consumer PC is enough.
+## what it is
 
-## What We Are Doing
+A pipeline with three parts:
 
-We are building a complete pipeline around that idea:
+- **Training** runs in PyTorch, producing a byte-level model.
+- **Veritate** runs the trained model efficiently on consumer hardware.
+- **MRI dashboard** surfaces per-token activations, attention, and decode state in the browser.
 
-**Training** uses standard tools (PyTorch) to teach a model.
-**Veritate** takes that trained model and runs it efficiently on consumer hardware.
-**The MRI dashboard** lets a human watch, in plain view, what the model is doing inside, token by token.
+## three rules
 
-Three rules shape every decision:
+1. **Byte-level only.** vocab=256. No subword tokenizer. Models read raw bytes.
+2. **Per-byte budget.** Every new mechanism gets a wall-clock budget on the target hardware. If it busts, it gets cut or redesigned.
+3. **Bitwise-identical kernels.** Every fast-path kernel matches a scalar reference before shipping (preflight rule 24).
 
-1. **Byte-level only.** The model reads raw bytes (the same units a computer already stores text in), so there is no extra translation layer and no oversized vocabulary table.
-2. **A strict speed budget.** Every part of the engine has to stay under a fixed time-per-byte cost. If a feature cannot meet the budget, it is cut or redesigned.
-3. **Measurement.** Every kernel (the small math routines at the core) is checked against a simple reference version, so we know the fast path produces the same answer as the slow one.
+## design intent
 
-## Why We Are Doing It
-
-AI today has a hardware problem. Bigger models keep pushing toward bigger GPUs, bigger data centers, and shorter useful lifespans for the machines underneath. The result is rising energy use and a steady stream of discarded equipment.
-
-Carpathian's mission is to push back on that pattern. We research and build AI that is efficient enough to run on the hardware people already own. That has two direct effects:
-
-**Less new hardware needed.** A capable CPU from the last few years is enough to run a real model. No new GPU purchase, no cloud bill, no rack of accelerators.
-**Less e-waste.** When older machines stay useful, they stay out of landfills longer. Sustainability in AI is not only about the power bill while a model runs; it is also about the equipment that gets thrown away to chase the next one.
-
-Veritate is the working proof of that direction. It shows that careful engineering, byte-level design, and a tight performance budget can put modern AI inside reach of ordinary users, on ordinary machines, with a much smaller environmental footprint.
-
-## The Bigger Picture
-
-Veritate is the inference half of Carpathian's research effort. Together, the training side and Veritate form an end-to-end system: train a small, well-shaped model, then run it locally on hardware that already exists. The goal is simple. Make AI that is faster to run, cheaper to own, and kinder to the planet, without giving up the quality people expect.
+Reduce the hardware floor for running modern models. A capable consumer CPU is enough; no new GPU or cloud account required. Older machines remain useful for longer. Inference and training share the same byte-level shape, so model behavior in the dashboard matches the engine's behavior at decode time.

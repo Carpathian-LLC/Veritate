@@ -1,0 +1,190 @@
+# ------------------------------------------------------------------------------------
+# Developed by Carpathian, LLC.
+# ------------------------------------------------------------------------------------
+# Legal Notice: Distribution Not Authorized.
+# ------------------------------------------------------------------------------------
+# Notes:
+# - sync HTTP client over urllib.request. uniform .complete() across all
+#   providers; differences encoded as data in the registry (auth header,
+#   system style, response path). retries on transient status with exponential
+#   backoff + jitter; respects Retry-After int seconds.
+# veritate_mri/teacher/client.py
+# ------------------------------------------------------------------------------------
+# Imports:
+
+import json
+import random
+import time
+import urllib.error
+import urllib.request
+
+from .providers import (
+    DEFAULT_BACKOFF_BASE_S,
+    DEFAULT_BACKOFF_MAX_S,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_TIMEOUT_S,
+    RETRY_STATUS,
+    default_model_for,
+    get_provider,
+)
+
+# ------------------------------------------------------------------------------------
+# Constants
+
+_JSON_CONTENT_TYPE = "application/json"
+_AUTH_STATUS = (401, 403)
+
+# ------------------------------------------------------------------------------------
+# Functions
+
+class TeacherError(Exception):
+    pass
+
+
+class TeacherAuthError(TeacherError):
+    pass
+
+
+class TeacherRateLimitError(TeacherError):
+    pass
+
+
+class TeacherUnavailableError(TeacherError):
+    pass
+
+
+def _extract(data, path):
+    cur = data
+    for key in path:
+        if isinstance(key, int):
+            if not isinstance(cur, list) or key >= len(cur):
+                raise TeacherError(f"response path missing at index {key}")
+            cur = cur[key]
+        else:
+            if not isinstance(cur, dict) or key not in cur:
+                raise TeacherError(f"response path missing key {key}")
+            cur = cur[key]
+    if not isinstance(cur, str):
+        raise TeacherError("response text not a string")
+    return cur
+
+
+def _split_system(messages, style):
+    if style != "field":
+        return None, list(messages)
+    sys_text = None
+    rest = []
+    for m in messages:
+        if m.get("role") == "system" and sys_text is None:
+            sys_text = m.get("content", "")
+        else:
+            rest.append(m)
+    return sys_text, rest
+
+
+def _build_payload(provider, model, messages, temperature, max_tokens, system):
+    msgs = list(messages)
+    if system is not None:
+        msgs = [{"role": "system", "content": system}] + msgs
+    sys_field, msgs = _split_system(msgs, provider["system_message_style"])
+    body = {
+        "model": model,
+        provider["messages_key"]: msgs,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if sys_field is not None:
+        body["system"] = sys_field
+    return body
+
+
+def _build_headers(provider, api_key):
+    headers = {"Content-Type": _JSON_CONTENT_TYPE}
+    for k, v in provider["extra_headers"].items():
+        headers[k] = v
+    if provider["auth_header"] and api_key:
+        headers[provider["auth_header"]] = provider["auth_prefix"] + api_key
+    return headers
+
+
+def _parse_retry_after(value):
+    if not value:
+        return None
+    try:
+        return float(int(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _backoff(attempt):
+    delay = min(DEFAULT_BACKOFF_BASE_S * (2 ** attempt), DEFAULT_BACKOFF_MAX_S)
+    return delay + random.uniform(0, delay * 0.25)
+
+
+class Client:
+    def __init__(self, provider_id, model=None, base_url=None, api_key=None,
+                 timeout_s=DEFAULT_TIMEOUT_S, max_retries=DEFAULT_MAX_RETRIES):
+        self.provider = get_provider(provider_id)
+        self.model = model or default_model_for(provider_id)
+        self.base_url = (base_url or self.provider["base_url"]).rstrip("/")
+        self.api_key = api_key
+        self.timeout_s = timeout_s
+        self.max_retries = max_retries
+
+    def complete(self, messages, temperature=DEFAULT_TEMPERATURE,
+                 max_tokens=DEFAULT_MAX_TOKENS, system=None):
+        if not self.model:
+            raise TeacherError("no model set")
+        url = self.base_url + self.provider["chat_path"]
+        payload = _build_payload(self.provider, self.model, messages,
+                                 temperature, max_tokens, system)
+        headers = _build_headers(self.provider, self.api_key)
+        data = json.dumps(payload).encode("utf-8")
+        last_status = None
+        last_err = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                    status = getattr(resp, "status", 200)
+                    body = resp.read()
+                    if status < 300:
+                        parsed = json.loads(body.decode("utf-8"))
+                        return _extract(parsed, self.provider["response_text_path"])
+                    last_status = status
+            except urllib.error.HTTPError as e:
+                last_status = e.code
+                if e.code in _AUTH_STATUS:
+                    raise TeacherAuthError(f"auth failed: {e.code}")
+                if e.code not in RETRY_STATUS:
+                    raise TeacherError(f"http error: {e.code}")
+                last_err = e
+            except urllib.error.URLError as e:
+                last_err = e
+            except (TimeoutError, ConnectionError) as e:
+                last_err = e
+            if attempt >= self.max_retries:
+                break
+            wait = None
+            if last_err is not None and isinstance(last_err, urllib.error.HTTPError):
+                wait = _parse_retry_after(last_err.headers.get("Retry-After") if last_err.headers else None)
+            if wait is None:
+                wait = _backoff(attempt)
+            time.sleep(wait)
+        if last_status == 429:
+            raise TeacherRateLimitError("rate limit exhausted")
+        if last_status is not None and 500 <= last_status < 600:
+            raise TeacherUnavailableError(f"upstream unavailable: {last_status}")
+        raise TeacherError(f"request failed: status={last_status} err={last_err}")
+
+
+def complete(provider_id, model, messages, **opts):
+    timeout_s = opts.pop("timeout_s", DEFAULT_TIMEOUT_S)
+    max_retries = opts.pop("max_retries", DEFAULT_MAX_RETRIES)
+    base_url = opts.pop("base_url", None)
+    api_key = opts.pop("api_key", None)
+    c = Client(provider_id, model=model, base_url=base_url, api_key=api_key,
+               timeout_s=timeout_s, max_retries=max_retries)
+    return c.complete(messages, **opts)

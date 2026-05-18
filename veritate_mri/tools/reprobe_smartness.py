@@ -1,26 +1,25 @@
-"""Re-run the smartness-meter axes (reading + math + grammar + reasoning)
-across all checkpoints of a model.
-
-Use this after rebuilding the eval bins or adding new probes so historical
-hook directories carry the new artifacts and the dashboard trajectory plots
-can render uniformly across the run.
-
-What it does, per checkpoint <models/<name>/checkpoints/step_<N>.pt>:
-    1. Load the model.
-    2. Run dump_grades, dump_math, dump_grammar, dump_reasoning into the
-       matching <models/<name>/hooks/step_<N>/> directory.
-    3. Rename the per-step output files to canonical names
-       (grades.json, math.json, grammar.json, reasoning.json).
-
-Skips a checkpoint when its hook step dir is missing — that means the
-checkpoint was never finalized through save.py and there is nowhere
-canonical to put the artifacts.
-
-Usage:
-    python veritate_mri/tools/reprobe_smartness.py <model_name>
-    python veritate_mri/tools/reprobe_smartness.py <model_name> --only math grammar
-    python veritate_mri/tools/reprobe_smartness.py <model_name> --steps 1400 1600
-"""
+# ------------------------------------------------------------------------------------
+# Developed by Carpathian, LLC.
+# ------------------------------------------------------------------------------------
+# Legal Notice: Distribution Not Authorized.
+# ------------------------------------------------------------------------------------
+# Notes:
+# - Re-run the smartness-meter axes (reading + math + grammar + reasoning)
+#   across all checkpoints of a model. Use after rebuilding eval bins or
+#   adding new probes so historical hook dirs carry the new artifacts.
+# - Per checkpoint <models/<name>/checkpoints/step_<N>.pt>:
+#     1. load model
+#     2. run dump_grades, dump_math, dump_grammar, dump_reasoning into
+#        <models/<name>/hooks/step_<N>/>
+#     3. rename to canonical names (grades.json, math.json, ...)
+# - Skips checkpoints whose hook step dir is missing (never finalized via save.py).
+# - Usage:
+#     python veritate_mri/tools/reprobe_smartness.py <model_name>
+#     python veritate_mri/tools/reprobe_smartness.py <model_name> --only math grammar
+#     python veritate_mri/tools/reprobe_smartness.py <model_name> --steps 1400 1600
+# veritate_mri/tools/reprobe_smartness.py
+# ------------------------------------------------------------------------------------
+# Imports:
 
 import argparse
 import os
@@ -36,6 +35,10 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from readers import paths  # noqa: E402
 
+
+# ------------------------------------------------------------------------------------
+# Constants
+
 CKPT_RE = re.compile(r"^step_(\d+)\.pt$")
 
 AXIS_TO_FN = {
@@ -45,6 +48,9 @@ AXIS_TO_FN = {
     "reasoning": ("dump_reasoning", "reasoning_step_{step}.json", "reasoning.json"),
 }
 
+
+# ------------------------------------------------------------------------------------
+# Functions
 
 def discover_checkpoints(name):
     ckpt_dir = paths.checkpoints_dir(name)
@@ -75,7 +81,7 @@ def main() -> int:
 
     axes = args.only or list(AXIS_TO_FN.keys())
 
-    import checkpoint_probe as cp
+    from training import checkpoint_probe as cp
 
     cps = discover_checkpoints(args.name)
     if not cps:

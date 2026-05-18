@@ -1,0 +1,315 @@
+{
+ "level": "phd",
+ "source": "grade_phd_source.txt",
+ "n_items": 30,
+ "seed": 17,
+ "config": {
+  "items_per_band": 30,
+  "prefix_max_bytes": 1024,
+  "min_prefix_bytes": 64,
+  "min_word_len": 4,
+  "length_tolerance": 2
+ },
+ "items": [
+  {
+   "prefix_bytes": "Let X = (X_t)_{t \\geq 0} be a continuous-time stochastic process adapted to a filtration F_t satisfying the usual conditions. Suppose the coefficient functions in the stochastic ",
+   "correct": "differential",
+   "distractors": [
+    "literature",
+    "inequality",
+    "separation"
+   ],
+   "slot_offset": 178
+  },
+  {
+   "prefix_bytes": "Let X = (X_t)_{t \\geq 0} be a continuous-time stochastic process adapted to a filtration F_t satisfying the usual conditions. Suppose the coefficient functions in the stochastic differential equation dX_t = b(X_t) dt + σ(X_t) dW_t are jointly measurable, locally Lipschitz in the spatial variable, and at most linear at infinity in the sense formalized by Krylov (1980, §2.5). Under these regularity ",
+   "correct": "hypotheses",
+   "distractors": [
+    "condition",
+    "recovering",
+    "principle"
+   ],
+   "slot_offset": 402
+  },
+  {
+   "prefix_bytes": "Let X = (X_t)_{t \\geq 0} be a continuous-time stochastic process adapted to a filtration F_t satisfying the usual conditions. Suppose the coefficient functions in the stochastic differential equation dX_t = b(X_t) dt + σ(X_t) dW_t are jointly measurable, locally Lipschitz in the spatial variable, and at most linear at infinity in the sense formalized by Krylov (1980, §2.5). Under these regularity hypotheses, classical existence and uniqueness theorems for strong solutions guarantee a pathwise unique adapted process X realizing the formal SDE on [0, ∞). The resulting Markov semigroup P_t f(x) := E[f(X_t) | X_0 = x] inherits Feller ",
+   "correct": "continuity",
+   "distractors": [
+    "particularly",
+    "subsequent",
+    "restored"
+   ],
+   "slot_offset": 642
+  },
+  {
+   "prefix_bytes": "t = b(X_t) dt + σ(X_t) dW_t are jointly measurable, locally Lipschitz in the spatial variable, and at most linear at infinity in the sense formalized by Krylov (1980, §2.5). Under these regularity hypotheses, classical existence and uniqueness theorems for strong solutions guarantee a pathwise unique adapted process X realizing the formal SDE on [0, ∞). The resulting Markov semigroup P_t f(x) := E[f(X_t) | X_0 = x] inherits Feller continuity from the joint measurability of (b, σ). The infinitesimal generator A is given by the second-order operator A f = (1/2) tr(σσ^⊤ ∇^2 f) + ⟨b, ∇f⟩ on the dense subdomain of compactly supported smooth functions.\n\nThe principal theoretical question we address is the asymptotic behavior of the empirical occupation measure ν_T(B) := (1/T) ∫_0^T 1_{X_s ∈ B} ds in the regime T → ∞, conditional on the existence of an invariant probability measure π absolutely continuous with respect to Lebesgue measure. When the drift b satisfies a uniform dissipativity ",
+   "correct": "condition",
+   "distractors": [
+    "degrade",
+    "pressing",
+    "exploiting"
+   ],
+   "slot_offset": 1227
+  },
+  {
+   "prefix_bytes": "cal existence and uniqueness theorems for strong solutions guarantee a pathwise unique adapted process X realizing the formal SDE on [0, ∞). The resulting Markov semigroup P_t f(x) := E[f(X_t) | X_0 = x] inherits Feller continuity from the joint measurability of (b, σ). The infinitesimal generator A is given by the second-order operator A f = (1/2) tr(σσ^⊤ ∇^2 f) + ⟨b, ∇f⟩ on the dense subdomain of compactly supported smooth functions.\n\nThe principal theoretical question we address is the asymptotic behavior of the empirical occupation measure ν_T(B) := (1/T) ∫_0^T 1_{X_s ∈ B} ds in the regime T → ∞, conditional on the existence of an invariant probability measure π absolutely continuous with respect to Lebesgue measure. When the drift b satisfies a uniform dissipativity condition of the form ⟨x - y, b(x) - b(y)⟩ ≤ -κ |x - y|^2 for some κ > 0 and all x, y in a sufficiently regular set, the semigroup P_t exhibits exponential ergodicity in total-variation norm, with convergence ",
+   "correct": "rate",
+   "distractors": [
+    "system",
+    "yield",
+    "show"
+   ],
+   "slot_offset": 1444
+  },
+  {
+   "prefix_bytes": "1/2) tr(σσ^⊤ ∇^2 f) + ⟨b, ∇f⟩ on the dense subdomain of compactly supported smooth functions.\n\nThe principal theoretical question we address is the asymptotic behavior of the empirical occupation measure ν_T(B) := (1/T) ∫_0^T 1_{X_s ∈ B} ds in the regime T → ∞, conditional on the existence of an invariant probability measure π absolutely continuous with respect to Lebesgue measure. When the drift b satisfies a uniform dissipativity condition of the form ⟨x - y, b(x) - b(y)⟩ ≤ -κ |x - y|^2 for some κ > 0 and all x, y in a sufficiently regular set, the semigroup P_t exhibits exponential ergodicity in total-variation norm, with convergence rate governed by the spectral gap λ_1 of -A acting on L^2(π). The deviations of ν_T from π satisfy a large-deviation principle on the Polish space M_1(R^d) of probability measures, with rate function I_π(μ) given by a variational expression involving the relative entropy H(μ ‖ π) and a quadratic correction in the carré du champ Γ.\n\nWe ",
+   "correct": "extend",
+   "distractors": [
+    "feller",
+    "explicit",
+    "formula"
+   ],
+   "slot_offset": 1793
+  },
+  {
+   "prefix_bytes": "he regime T → ∞, conditional on the existence of an invariant probability measure π absolutely continuous with respect to Lebesgue measure. When the drift b satisfies a uniform dissipativity condition of the form ⟨x - y, b(x) - b(y)⟩ ≤ -κ |x - y|^2 for some κ > 0 and all x, y in a sufficiently regular set, the semigroup P_t exhibits exponential ergodicity in total-variation norm, with convergence rate governed by the spectral gap λ_1 of -A acting on L^2(π). The deviations of ν_T from π satisfy a large-deviation principle on the Polish space M_1(R^d) of probability measures, with rate function I_π(μ) given by a variational expression involving the relative entropy H(μ ‖ π) and a quadratic correction in the carré du champ Γ.\n\nWe extend these classical results in three directions. First, we relax the dissipativity assumption to a local condition of the form ⟨x, b(x)⟩ ≤ -κ |x|^2 + C, valid only outside a compact set, and demonstrate that the resulting \"weakly confining\" generators ",
+   "correct": "continue",
+   "distractors": [
+    "defined",
+    "directly",
+    "gaussian"
+   ],
+   "slot_offset": 2055
+  },
+  {
+   "prefix_bytes": "igroup P_t exhibits exponential ergodicity in total-variation norm, with convergence rate governed by the spectral gap λ_1 of -A acting on L^2(π). The deviations of ν_T from π satisfy a large-deviation principle on the Polish space M_1(R^d) of probability measures, with rate function I_π(μ) given by a variational expression involving the relative entropy H(μ ‖ π) and a quadratic correction in the carré du champ Γ.\n\nWe extend these classical results in three directions. First, we relax the dissipativity assumption to a local condition of the form ⟨x, b(x)⟩ ≤ -κ |x|^2 + C, valid only outside a compact set, and demonstrate that the resulting \"weakly confining\" generators continue to admit a discrete spectrum on a weighted L^2 space defined via a Lyapunov function V satisfying A V ≤ -c V + C 1_K. The principal technical obstacle is that the corresponding semigroup is not necessarily contractive in the unweighted norm, requiring the use of Birkhoff-type contraction estimates in the projective ",
+   "correct": "metric",
+   "distractors": [
+    "bound",
+    "chain",
+    "problem"
+   ],
+   "slot_offset": 2383
+  },
+  {
+   "prefix_bytes": "sh space M_1(R^d) of probability measures, with rate function I_π(μ) given by a variational expression involving the relative entropy H(μ ‖ π) and a quadratic correction in the carré du champ Γ.\n\nWe extend these classical results in three directions. First, we relax the dissipativity assumption to a local condition of the form ⟨x, b(x)⟩ ≤ -κ |x|^2 + C, valid only outside a compact set, and demonstrate that the resulting \"weakly confining\" generators continue to admit a discrete spectrum on a weighted L^2 space defined via a Lyapunov function V satisfying A V ≤ -c V + C 1_K. The principal technical obstacle is that the corresponding semigroup is not necessarily contractive in the unweighted norm, requiring the use of Birkhoff-type contraction estimates in the projective metric introduced by Hilbert (1895) and further developed by Birkhoff (1957). Second, we treat the case in which σ is degenerate but the diffusion satisfies the parabolic Hörmander condition; in this hypoelliptic regime, the ",
+   "correct": "smoothing",
+   "distractors": [
+    "confining",
+    "necessarily",
+    "technical"
+   ],
+   "slot_offset": 2610
+  },
+  {
+   "prefix_bytes": " in the carré du champ Γ.\n\nWe extend these classical results in three directions. First, we relax the dissipativity assumption to a local condition of the form ⟨x, b(x)⟩ ≤ -κ |x|^2 + C, valid only outside a compact set, and demonstrate that the resulting \"weakly confining\" generators continue to admit a discrete spectrum on a weighted L^2 space defined via a Lyapunov function V satisfying A V ≤ -c V + C 1_K. The principal technical obstacle is that the corresponding semigroup is not necessarily contractive in the unweighted norm, requiring the use of Birkhoff-type contraction estimates in the projective metric introduced by Hilbert (1895) and further developed by Birkhoff (1957). Second, we treat the case in which σ is degenerate but the diffusion satisfies the parabolic Hörmander condition; in this hypoelliptic regime, the smoothing properties of P_t are restored by Malliavin calculus, and we obtain quantitative integration-by-parts formulas that yield the requisite ultracontractivity estimates ",
+   "correct": "uniformly",
+   "distractors": [
+    "integro",
+    "negative",
+    "sketched"
+   ],
+   "slot_offset": 2785
+  },
+  {
+   "prefix_bytes": "continue to admit a discrete spectrum on a weighted L^2 space defined via a Lyapunov function V satisfying A V ≤ -c V + C 1_K. The principal technical obstacle is that the corresponding semigroup is not necessarily contractive in the unweighted norm, requiring the use of Birkhoff-type contraction estimates in the projective metric introduced by Hilbert (1895) and further developed by Birkhoff (1957). Second, we treat the case in which σ is degenerate but the diffusion satisfies the parabolic Hörmander condition; in this hypoelliptic regime, the smoothing properties of P_t are restored by Malliavin calculus, and we obtain quantitative integration-by-parts formulas that yield the requisite ultracontractivity estimates uniformly in the spatial variable. Third, we address the question of model selection when the drift b is misspecified, establishing a non-asymptotic robustness inequality that bounds the Wasserstein distance between the true and approximate invariant measures by a quantity involving the L^∞ ",
+   "correct": "norm",
+   "distractors": [
+    "carr",
+    "show",
+    "dense"
+   ],
+   "slot_offset": 3079
+  },
+  {
+   "prefix_bytes": "ction estimates in the projective metric introduced by Hilbert (1895) and further developed by Birkhoff (1957). Second, we treat the case in which σ is degenerate but the diffusion satisfies the parabolic Hörmander condition; in this hypoelliptic regime, the smoothing properties of P_t are restored by Malliavin calculus, and we obtain quantitative integration-by-parts formulas that yield the requisite ultracontractivity estimates uniformly in the spatial variable. Third, we address the question of model selection when the drift b is misspecified, establishing a non-asymptotic robustness inequality that bounds the Wasserstein distance between the true and approximate invariant measures by a quantity involving the L^∞ norm of the misspecification error and the inverse of the spectral gap of the auxiliary process.\n\nThe proofs combine functional-analytic arguments with martingale techniques. The exponential ergodicity result is obtained by a coupling of two copies of the diffusion driven by the same Brownian ",
+   "correct": "motion",
+   "distractors": [
+    "feller",
+    "order",
+    "picard"
+   ],
+   "slot_offset": 3373
+  },
+  {
+   "prefix_bytes": " and we obtain quantitative integration-by-parts formulas that yield the requisite ultracontractivity estimates uniformly in the spatial variable. Third, we address the question of model selection when the drift b is misspecified, establishing a non-asymptotic robustness inequality that bounds the Wasserstein distance between the true and approximate invariant measures by a quantity involving the L^∞ norm of the misspecification error and the inverse of the spectral gap of the auxiliary process.\n\nThe proofs combine functional-analytic arguments with martingale techniques. The exponential ergodicity result is obtained by a coupling of two copies of the diffusion driven by the same Brownian motion, restricted to the complement of the recurrent compact K, with the coupling then optimized using a parallel-transport construction in the curvature framework of Bakry, Gentil, and Ledoux. The hypoelliptic case proceeds by a Picard iteration in the Malliavin Sobolev spaces D^{k, p}, exploiting the chain rule for the ",
+   "correct": "Malliavin",
+   "distractors": [
+    "regularity",
+    "degrade",
+    "framework"
+   ],
+   "slot_offset": 3697
+  },
+  {
+   "prefix_bytes": "s uniformly in the spatial variable. Third, we address the question of model selection when the drift b is misspecified, establishing a non-asymptotic robustness inequality that bounds the Wasserstein distance between the true and approximate invariant measures by a quantity involving the L^∞ norm of the misspecification error and the inverse of the spectral gap of the auxiliary process.\n\nThe proofs combine functional-analytic arguments with martingale techniques. The exponential ergodicity result is obtained by a coupling of two copies of the diffusion driven by the same Brownian motion, restricted to the complement of the recurrent compact K, with the coupling then optimized using a parallel-transport construction in the curvature framework of Bakry, Gentil, and Ledoux. The hypoelliptic case proceeds by a Picard iteration in the Malliavin Sobolev spaces D^{k, p}, exploiting the chain rule for the Malliavin derivative D and the duality between D and the Skorokhod integral δ; the resulting bounds are then ",
+   "correct": "transferred",
+   "distractors": [
+    "foundational",
+    "hypoelliptic",
+    "partially"
+   ],
+   "slot_offset": 3807
+  },
+  {
+   "prefix_bytes": "ombine functional-analytic arguments with martingale techniques. The exponential ergodicity result is obtained by a coupling of two copies of the diffusion driven by the same Brownian motion, restricted to the complement of the recurrent compact K, with the coupling then optimized using a parallel-transport construction in the curvature framework of Bakry, Gentil, and Ledoux. The hypoelliptic case proceeds by a Picard iteration in the Malliavin Sobolev spaces D^{k, p}, exploiting the chain rule for the Malliavin derivative D and the duality between D and the Skorokhod integral δ; the resulting bounds are then transferred to the semigroup level via the integration-by-parts identity E[f'(X_t) Z] = E[f(X_t) δ(σ^{-⊤} Z)] valid for any predictable square-integrable Z. The robustness inequality follows from a perturbation expansion of the semigroup around the auxiliary infinitesimal generator, controlled by the Duhamel formula and a Gronwall iteration.\n\nA subsidiary contribution is a careful comparison of our ",
+   "correct": "framework",
+   "distractors": [
+    "reduces",
+    "condition",
+    "extension"
+   ],
+   "slot_offset": 4213
+  },
+  {
+   "prefix_bytes": "roceeds by a Picard iteration in the Malliavin Sobolev spaces D^{k, p}, exploiting the chain rule for the Malliavin derivative D and the duality between D and the Skorokhod integral δ; the resulting bounds are then transferred to the semigroup level via the integration-by-parts identity E[f'(X_t) Z] = E[f(X_t) δ(σ^{-⊤} Z)] valid for any predictable square-integrable Z. The robustness inequality follows from a perturbation expansion of the semigroup around the auxiliary infinitesimal generator, controlled by the Duhamel formula and a Gronwall iteration.\n\nA subsidiary contribution is a careful comparison of our framework with the parallel theory of stochastic gradient descent in the high-dimensional regime, in which the drift is the negative gradient of a non-convex potential and the noise is anisotropic and state-dependent. The two settings are linked by the Fokker-Planck equation, which in the gradient case reduces to a generalized Smoluchowski equation; the corresponding invariant measure is given by a ",
+   "correct": "tilted",
+   "distractors": [
+    "sketched",
+    "birkhoff",
+    "gibbs"
+   ],
+   "slot_offset": 4615
+  },
+  {
+   "prefix_bytes": "ing bounds are then transferred to the semigroup level via the integration-by-parts identity E[f'(X_t) Z] = E[f(X_t) δ(σ^{-⊤} Z)] valid for any predictable square-integrable Z. The robustness inequality follows from a perturbation expansion of the semigroup around the auxiliary infinitesimal generator, controlled by the Duhamel formula and a Gronwall iteration.\n\nA subsidiary contribution is a careful comparison of our framework with the parallel theory of stochastic gradient descent in the high-dimensional regime, in which the drift is the negative gradient of a non-convex potential and the noise is anisotropic and state-dependent. The two settings are linked by the Fokker-Planck equation, which in the gradient case reduces to a generalized Smoluchowski equation; the corresponding invariant measure is given by a tilted Gibbs distribution whose log-density differs from the negative potential by a correction term determined by the noise covariance. We show that, under the same dissipativity hypotheses, the ",
+   "correct": "spectral",
+   "distractors": [
+    "exploiting",
+    "treatment",
+    "extensions"
+   ],
+   "slot_offset": 4811
+  },
+  {
+   "prefix_bytes": "s identity E[f'(X_t) Z] = E[f(X_t) δ(σ^{-⊤} Z)] valid for any predictable square-integrable Z. The robustness inequality follows from a perturbation expansion of the semigroup around the auxiliary infinitesimal generator, controlled by the Duhamel formula and a Gronwall iteration.\n\nA subsidiary contribution is a careful comparison of our framework with the parallel theory of stochastic gradient descent in the high-dimensional regime, in which the drift is the negative gradient of a non-convex potential and the noise is anisotropic and state-dependent. The two settings are linked by the Fokker-Planck equation, which in the gradient case reduces to a generalized Smoluchowski equation; the corresponding invariant measure is given by a tilted Gibbs distribution whose log-density differs from the negative potential by a correction term determined by the noise covariance. We show that, under the same dissipativity hypotheses, the spectral-gap estimates of Section 3 transfer mutatis mutandis to the SGD setting, ",
+   "correct": "recovering",
+   "distractors": [
+    "deviations",
+    "directions",
+    "empirical"
+   ],
+   "slot_offset": 4893
+  },
+  {
+   "prefix_bytes": " of our framework with the parallel theory of stochastic gradient descent in the high-dimensional regime, in which the drift is the negative gradient of a non-convex potential and the noise is anisotropic and state-dependent. The two settings are linked by the Fokker-Planck equation, which in the gradient case reduces to a generalized Smoluchowski equation; the corresponding invariant measure is given by a tilted Gibbs distribution whose log-density differs from the negative potential by a correction term determined by the noise covariance. We show that, under the same dissipativity hypotheses, the spectral-gap estimates of Section 3 transfer mutatis mutandis to the SGD setting, recovering and refining several recent bounds in the optimization literature, including those of Shi et al. (2021) and Wang et al. (2023).\n\nWe close with a discussion of open problems. The most pressing concerns the extension of the framework to McKean-Vlasov equations, in which the drift depends on the law of the process itself; the ",
+   "correct": "resulting",
+   "distractors": [
+    "regular",
+    "spectral",
+    "unperturbed"
+   ],
+   "slot_offset": 5229
+  },
+  {
+   "prefix_bytes": "ependent. The two settings are linked by the Fokker-Planck equation, which in the gradient case reduces to a generalized Smoluchowski equation; the corresponding invariant measure is given by a tilted Gibbs distribution whose log-density differs from the negative potential by a correction term determined by the noise covariance. We show that, under the same dissipativity hypotheses, the spectral-gap estimates of Section 3 transfer mutatis mutandis to the SGD setting, recovering and refining several recent bounds in the optimization literature, including those of Shi et al. (2021) and Wang et al. (2023).\n\nWe close with a discussion of open problems. The most pressing concerns the extension of the framework to McKean-Vlasov equations, in which the drift depends on the law of the process itself; the resulting nonlinear semigroup falls outside the classical theory and requires propagation-of-chaos arguments to relate the asymptotic behavior of the interacting particle system to the limiting nonlinear dynamics. A ",
+   "correct": "second",
+   "distractors": [
+    "local",
+    "formulas",
+    "gibbs"
+   ],
+   "slot_offset": 5445
+  },
+  {
+   "prefix_bytes": "al-gap estimates of Section 3 transfer mutatis mutandis to the SGD setting, recovering and refining several recent bounds in the optimization literature, including those of Shi et al. (2021) and Wang et al. (2023).\n\nWe close with a discussion of open problems. The most pressing concerns the extension of the framework to McKean-Vlasov equations, in which the drift depends on the law of the process itself; the resulting nonlinear semigroup falls outside the classical theory and requires propagation-of-chaos arguments to relate the asymptotic behavior of the interacting particle system to the limiting nonlinear dynamics. A second open problem, of more applied interest, is the quantitative analysis of two-time-scale stochastic approximation schemes in the slow-fast regime, where the slow component evolves on the same time scale as the relaxation of the fast component to its conditional invariant distribution. Preliminary calculations suggest that the techniques developed here yield non-asymptotic bounds with the ",
+   "correct": "correct",
+   "distractors": [
+    "entropy",
+    "drift",
+    "vlasov"
+   ],
+   "slot_offset": 5841
+  },
+  {
+   "prefix_bytes": "ssion of open problems. The most pressing concerns the extension of the framework to McKean-Vlasov equations, in which the drift depends on the law of the process itself; the resulting nonlinear semigroup falls outside the classical theory and requires propagation-of-chaos arguments to relate the asymptotic behavior of the interacting particle system to the limiting nonlinear dynamics. A second open problem, of more applied interest, is the quantitative analysis of two-time-scale stochastic approximation schemes in the slow-fast regime, where the slow component evolves on the same time scale as the relaxation of the fast component to its conditional invariant distribution. Preliminary calculations suggest that the techniques developed here yield non-asymptotic bounds with the correct dependence on the time-scale separation parameter ε, but a complete treatment is deferred to a subsequent paper.\n\nA subsequent line of investigation concerns the regularity of the invariant measure π under perturbations of the ",
+   "correct": "underlying",
+   "distractors": [
+    "probability",
+    "martingale",
+    "connection"
+   ],
+   "slot_offset": 6078
+  },
+  {
+   "prefix_bytes": "ons, in which the drift depends on the law of the process itself; the resulting nonlinear semigroup falls outside the classical theory and requires propagation-of-chaos arguments to relate the asymptotic behavior of the interacting particle system to the limiting nonlinear dynamics. A second open problem, of more applied interest, is the quantitative analysis of two-time-scale stochastic approximation schemes in the slow-fast regime, where the slow component evolves on the same time scale as the relaxation of the fast component to its conditional invariant distribution. Preliminary calculations suggest that the techniques developed here yield non-asymptotic bounds with the correct dependence on the time-scale separation parameter ε, but a complete treatment is deferred to a subsequent paper.\n\nA subsequent line of investigation concerns the regularity of the invariant measure π under perturbations of the underlying drift coefficient, with particular attention to settings in which the perturbation respects a ",
+   "correct": "Lipschitz",
+   "distractors": [
+    "formalized",
+    "resulting",
+    "parameter"
+   ],
+   "slot_offset": 6183
+  },
+  {
+   "prefix_bytes": "le as the relaxation of the fast component to its conditional invariant distribution. Preliminary calculations suggest that the techniques developed here yield non-asymptotic bounds with the correct dependence on the time-scale separation parameter ε, but a complete treatment is deferred to a subsequent paper.\n\nA subsequent line of investigation concerns the regularity of the invariant measure π under perturbations of the underlying drift coefficient, with particular attention to settings in which the perturbation respects a Lipschitz condition only outside a bounded set. The relevant literature, beginning with the foundational work of Pardoux and Veretennikov, has established that such perturbations propagate continuously to the invariant measure under suitable Lyapunov conditions, but the quantitative dependence on the Lipschitz constant has remained partially elusive in the hypoelliptic regime, where the standard log-Sobolev framework does not directly apply.\n\nWe address this gap by combining the Bismut-",
+   "correct": "Elworthy",
+   "distractors": [
+    "literature",
+    "measurable",
+    "results"
+   ],
+   "slot_offset": 6674
+  },
+  {
+   "prefix_bytes": "uent paper.\n\nA subsequent line of investigation concerns the regularity of the invariant measure π under perturbations of the underlying drift coefficient, with particular attention to settings in which the perturbation respects a Lipschitz condition only outside a bounded set. The relevant literature, beginning with the foundational work of Pardoux and Veretennikov, has established that such perturbations propagate continuously to the invariant measure under suitable Lyapunov conditions, but the quantitative dependence on the Lipschitz constant has remained partially elusive in the hypoelliptic regime, where the standard log-Sobolev framework does not directly apply.\n\nWe address this gap by combining the Bismut-Elworthy-Li formula with a localized integration-by-parts identity adapted to the geometry of the noise distribution. The resulting bound, stated in Theorem 4.2 of the present paper, is sharp up to logarithmic factors in the Lipschitz constant and the sub-elliptic constant of the noise. Sharpness is ",
+   "correct": "verified",
+   "distractors": [
+    "malliavin",
+    "conditions",
+    "properties"
+   ],
+   "slot_offset": 6975
+  },
+  {
+   "prefix_bytes": "ention to settings in which the perturbation respects a Lipschitz condition only outside a bounded set. The relevant literature, beginning with the foundational work of Pardoux and Veretennikov, has established that such perturbations propagate continuously to the invariant measure under suitable Lyapunov conditions, but the quantitative dependence on the Lipschitz constant has remained partially elusive in the hypoelliptic regime, where the standard log-Sobolev framework does not directly apply.\n\nWe address this gap by combining the Bismut-Elworthy-Li formula with a localized integration-by-parts identity adapted to the geometry of the noise distribution. The resulting bound, stated in Theorem 4.2 of the present paper, is sharp up to logarithmic factors in the Lipschitz constant and the sub-elliptic constant of the noise. Sharpness is verified through an explicit family of two-dimensional examples in which the leading-order asymptotic of the Wasserstein distance can be computed in closed form, and the upper ",
+   "correct": "bound",
+   "distractors": [
+    "markov",
+    "bismut",
+    "mckean"
+   ],
+   "slot_offset": 7151
+  },
+  {
+   "prefix_bytes": " to the invariant measure under suitable Lyapunov conditions, but the quantitative dependence on the Lipschitz constant has remained partially elusive in the hypoelliptic regime, where the standard log-Sobolev framework does not directly apply.\n\nWe address this gap by combining the Bismut-Elworthy-Li formula with a localized integration-by-parts identity adapted to the geometry of the noise distribution. The resulting bound, stated in Theorem 4.2 of the present paper, is sharp up to logarithmic factors in the Lipschitz constant and the sub-elliptic constant of the noise. Sharpness is verified through an explicit family of two-dimensional examples in which the leading-order asymptotic of the Wasserstein distance can be computed in closed form, and the upper bound from Theorem 4.2 is shown to be matched by the corresponding lower bound up to a constant of order unity.\n\nA related question concerns the behavior of the spectral gap under the same class of perturbations, with the key technical issue being that the ",
+   "correct": "unperturbed",
+   "distractors": [
+    "infinitesimal",
+    "functional",
+    "conditions"
+   ],
+   "slot_offset": 7408
+  },
+  {
+   "prefix_bytes": " in the hypoelliptic regime, where the standard log-Sobolev framework does not directly apply.\n\nWe address this gap by combining the Bismut-Elworthy-Li formula with a localized integration-by-parts identity adapted to the geometry of the noise distribution. The resulting bound, stated in Theorem 4.2 of the present paper, is sharp up to logarithmic factors in the Lipschitz constant and the sub-elliptic constant of the noise. Sharpness is verified through an explicit family of two-dimensional examples in which the leading-order asymptotic of the Wasserstein distance can be computed in closed form, and the upper bound from Theorem 4.2 is shown to be matched by the corresponding lower bound up to a constant of order unity.\n\nA related question concerns the behavior of the spectral gap under the same class of perturbations, with the key technical issue being that the unperturbed and perturbed semigroups may act on slightly different weighted L^2 spaces. We resolve this by introducing an interpolation argument that ",
+   "correct": "compares",
+   "distractors": [
+    "transfer",
+    "standard",
+    "obstacle"
+   ],
+   "slot_offset": 7558
+  },
+  {
+   "prefix_bytes": "present paper, is sharp up to logarithmic factors in the Lipschitz constant and the sub-elliptic constant of the noise. Sharpness is verified through an explicit family of two-dimensional examples in which the leading-order asymptotic of the Wasserstein distance can be computed in closed form, and the upper bound from Theorem 4.2 is shown to be matched by the corresponding lower bound up to a constant of order unity.\n\nA related question concerns the behavior of the spectral gap under the same class of perturbations, with the key technical issue being that the unperturbed and perturbed semigroups may act on slightly different weighted L^2 spaces. We resolve this by introducing an interpolation argument that compares the gaps via a one-parameter family of intermediate operators, exploiting the analyticity of the resolvent in a complex neighborhood of the real axis.\n\nTwo further extensions are sketched in the appendix. The first concerns the case of jump-diffusion processes, where the noise term includes a Levy ",
+   "correct": "component",
+   "distractors": [
+    "formalized",
+    "principal",
+    "restricted"
+   ],
+   "slot_offset": 7866
+  },
+  {
+   "prefix_bytes": " which the leading-order asymptotic of the Wasserstein distance can be computed in closed form, and the upper bound from Theorem 4.2 is shown to be matched by the corresponding lower bound up to a constant of order unity.\n\nA related question concerns the behavior of the spectral gap under the same class of perturbations, with the key technical issue being that the unperturbed and perturbed semigroups may act on slightly different weighted L^2 spaces. We resolve this by introducing an interpolation argument that compares the gaps via a one-parameter family of intermediate operators, exploiting the analyticity of the resolvent in a complex neighborhood of the real axis.\n\nTwo further extensions are sketched in the appendix. The first concerns the case of jump-diffusion processes, where the noise term includes a Levy component in addition to the Brownian increment. The corresponding generator acquires an integro-differential structure, and the techniques of this paper extend to that setting under suitable moment ",
+   "correct": "conditions",
+   "distractors": [
+    "restricted",
+    "controlled",
+    "variation"
+   ],
+   "slot_offset": 8065
+  }
+ ]
+}

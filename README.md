@@ -24,7 +24,7 @@ Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 t
 
 ## Get started
 
-**Setup happens in the dashboard.** Two short CLI commands to install Python and start the server. Everything else (building the C engine, pulling updates, switching release channels, training your first model) is done from the GUI.
+**One launcher per OS, double-click to run.** The launcher creates its own Python virtual environment, installs every dependency on first launch, and starts the dashboard. Subsequent launches are instant. Everything else (building the C engine, pulling updates, switching release channels, training your first model) is done from the GUI.
 
 <br/>
 
@@ -33,11 +33,11 @@ Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 t
 | | Requirement | Notes |
 |---|---|---|
 | **1** | **Git** | Already on macOS (via Xcode CLT) and most Linux distros. On Windows install [Git for Windows](https://git-scm.com/download/win) or run `winget install Git.Git`. |
-| **2** | **Python 3.10+** | For the dashboard, training plugins, and PyTorch fallback. On Windows: `winget install Python.Python.3.12`. |
-| **3** | **A C compiler** | The dashboard builds the C engine for you. You just need `clang` (macOS / Linux) or MSVC / `clang` (Windows) installed. See the per-OS install steps below. |
+| **2** | **Python 3.10+** | The launcher handles everything else (venv, pip install, dashboard launch). On Windows: `winget install Python.Python.3.12`. |
+| **3** | **A C compiler** *(optional)* | Only needed for the hand-tuned C engine. The PyTorch backend works without it. See [Compiling the C engine](#compiling-the-c-engine-optional) below. |
 | **4** | **CUDA toolkit** *(optional)* | Only for GPU training on NVIDIA. CPU and Apple Silicon work without it. |
 
-[`models/`](./) is gitignored. A fresh clone ships **no weights**. You'll train your first model from the dashboard's [**Training**](#tabs) tab in step 4.
+[`models/`](./) is gitignored. A fresh clone ships **no weights**. You'll train your first model from the dashboard's [**Training**](#tabs) tab in step 3.
 
 <br/>
 
@@ -45,17 +45,14 @@ Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 t
 
 <br/>
 
-## Step 1 &nbsp;·&nbsp; Clone and install Python deps
-
-Same commands work in bash, zsh, and PowerShell.
+## Step 1 &nbsp;·&nbsp; Clone
 
 ```sh
 git clone https://github.com/Carpathian-LLC/Veritate.git
 cd Veritate
-pip install -r requirements.txt
 ```
 
-On Windows use `py -m pip install -r requirements.txt` if `pip` isn't on PATH.
+That's the only manual install step. The launcher in step 2 handles the rest.
 
 <br/>
 
@@ -63,9 +60,51 @@ On Windows use `py -m pip install -r requirements.txt` if `pip` isn't on PATH.
 
 <br/>
 
-## Steps 2 &amp; 3 &nbsp;·&nbsp; Install and run &nbsp;<sub>*(per platform)*</sub>
+## Step 2 &nbsp;·&nbsp; Launch the dashboard
 
-**Click your platform below to expand its install steps.** Each block contains the C compiler install plus the dashboard launch command for that OS.
+Double-click the launcher for your OS, or run it from a terminal. First launch creates the venv and installs all Python dependencies (this can take a few minutes — `torch` is ~2 GB). Re-launches are instant.
+
+| OS | Double-click | From terminal |
+|---|---|---|
+| **Windows** | [`start.bat`](start.bat) | `start.bat` |
+| **macOS**   | [`start.command`](start.command) | `./start.command` |
+| **Linux**   | *(no GUI launcher)* | `python veritate.py` |
+
+The dashboard opens automatically at **[http://localhost:8001/](http://localhost:8001/)**.
+
+<br/>
+
+To pass flags (custom port, preload a model, skip the engine build) invoke the central entry point directly:
+
+```sh
+python veritate.py --port 9000 --threads 8
+```
+
+<br/>
+
+[`veritate.py`](veritate.py) is the single entry point. It auto-builds the C engine in the background for your OS and arch, then serves the MRI dashboard. PyTorch is available immediately; the C backend lights up when the build finishes. Watch the [**Logs**](#tabs) tab to see build progress.
+
+<br/>
+
+**Available flags**
+
+| Flag | Description |
+|---|---|
+| `--model <name>` | Preload a model on startup. Defaults to `auto` (latest in [`models/`](./)). |
+| `--port <n>` | HTTP port. Default `8001`. |
+| `--threads <n>` | PyTorch CPU threads. `0` auto-picks physical cores capped at 16. |
+| `--skip-build` | Skip auto-building the engine. PyTorch only. |
+| `--no-browser` | Don't auto-open the dashboard URL in a web browser. |
+
+<br/>
+
+---
+
+<br/>
+
+## Compiling the C engine (optional)
+
+The dashboard auto-builds the C engine in the background once a compiler is installed. PyTorch is available immediately; the C backend lights up when the build finishes. Skip this section if you only want the PyTorch backend.
 
 <br/>
 
@@ -73,8 +112,6 @@ On Windows use `py -m pip install -r requirements.txt` if `pip` isn't on PATH.
 <summary><h3 style="display:inline">&nbsp;&nbsp; macOS &nbsp;<sub><em>(click to expand)</em></sub></h3></summary>
 
 <br/>
-
-#### Step 2 &nbsp;·&nbsp; Install a C compiler &nbsp;<sub>*(one-time)*</sub>
 
 Apple ships clang as part of the Xcode Command Line Tools.
 
@@ -90,16 +127,6 @@ bash veritate_engine/v1/build/setup.sh
 
 See [`veritate_engine/v1/build/setup.sh`](veritate_engine/v1/build/setup.sh).
 
-<br/>
-
-#### Step 3 &nbsp;·&nbsp; Start the dashboard
-
-```sh
-python run.py --port 8001 --threads 8
-```
-
-Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
-
 </details>
 
 <br/>
@@ -108,8 +135,6 @@ Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
 <summary><h3 style="display:inline">&nbsp;&nbsp; Windows &nbsp;<sub><em>(click to expand)</em></sub></h3></summary>
 
 <br/>
-
-#### Step 2 &nbsp;·&nbsp; Install a C compiler &nbsp;<sub>*(one-time)*</sub>
 
 The bundled installer uses `winget` to install LLVM (clang) and NASM if they're missing. Run it from the repo root in Windows PowerShell:
 
@@ -123,17 +148,7 @@ If you have PowerShell 7+ installed, this also works:
 pwsh -ExecutionPolicy Bypass -File veritate_engine\v1\build\setup.ps1
 ```
 
-After it finishes, **open a new terminal** so the updated `PATH` takes effect, then `cd` back into the repo. See [`veritate_engine/v1/build/setup.ps1`](veritate_engine/v1/build/setup.ps1).
-
-<br/>
-
-#### Step 3 &nbsp;·&nbsp; Start the dashboard
-
-```powershell
-py run.py --port 8001 --threads 8
-```
-
-Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
+After it finishes, **open a new terminal** so the updated `PATH` takes effect, then re-launch the dashboard. See [`veritate_engine/v1/build/setup.ps1`](veritate_engine/v1/build/setup.ps1).
 
 </details>
 
@@ -144,8 +159,6 @@ Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
 
 <br/>
 
-#### Step 2 &nbsp;·&nbsp; Install a C compiler &nbsp;<sub>*(one-time)*</sub>
-
 The bundled script auto-detects your package manager (`apt`, `dnf`, `pacman`) and installs clang.
 
 ```sh
@@ -154,36 +167,7 @@ bash veritate_engine/v1/build/setup.sh
 
 See [`veritate_engine/v1/build/setup.sh`](veritate_engine/v1/build/setup.sh).
 
-<br/>
-
-#### Step 3 &nbsp;·&nbsp; Start the dashboard
-
-```sh
-python run.py --port 8001 --threads 8
-```
-
-Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
-
 </details>
-
-<br/>
-
-**Skip the C compiler** if you only want the PyTorch backend. The dashboard still works; the C engine just won't be available.
-
-<br/>
-
-[`run.py`](run.py) auto-builds the C engine in the background for your OS and arch, then serves the MRI dashboard. PyTorch is available immediately; the C backend lights up when the build finishes. Watch the [**Logs**](#tabs) tab to see the build progress.
-
-<br/>
-
-**Available flags**
-
-| Flag | Description |
-|---|---|
-| `--model <name>` | Preload a model on startup. Defaults to `auto` (latest in [`models/`](./)). |
-| `--port <n>` | HTTP port. Default `8001`. |
-| `--threads <n>` | PyTorch CPU threads. `0` auto-picks physical cores capped at 16. |
-| `--skip-build` | Skip auto-building the engine. PyTorch only. |
 
 <br/>
 
@@ -191,7 +175,7 @@ Then open **[http://localhost:8001/](http://localhost:8001/)** in your browser.
 
 <br/>
 
-## Step 4 &nbsp;·&nbsp; The rest is in the dashboard
+## Step 3 &nbsp;·&nbsp; The rest is in the dashboard
 
 From the [**Settings**](#tabs) tab you can:
 
@@ -205,7 +189,7 @@ From the [**Training**](#tabs) tab you can:
 - Pick a plugin (e.g. `example_plugin`), configure the run, and click **Start**.
 - Training writes checkpoints + a per-step CSV to [`models/<name>/`](./).
 
-See [`plugins/readme.md`](plugins/readme.md) for the plugin contract and how to author your own.
+See [`trainers/readme.md`](trainers/readme.md) for the plugin contract and how to author your own.
 
 <br/>
 
@@ -252,9 +236,9 @@ Plugins and models are tracked as **separate git remotes** with their own sync b
 
 ## Running the C engine directly
 
-Skip this section if you're using the dashboard. [`run.py`](run.py) already drives the engine. These commands are for benchmarking or scripted inference.
+Skip this section if you're using the dashboard. [`veritate.py`](veritate.py) already drives the engine. These commands are for benchmarking or scripted inference.
 
-If you didn't let `run.py` auto-build, build manually.
+If you didn't let `veritate.py` auto-build, build manually.
 
 <br/>
 
@@ -334,7 +318,7 @@ Three independent pieces.
 
 | Piece | What it is | Language | Runs on | Output |
 |---|---|---|---|---|
-| **[Plugins](plugins/readme.md)** | Training scripts + manifests. Each plugin trains, fine-tunes, or distills a model. | PyTorch | GPU | `models/<name>/checkpoints/` |
+| **[Plugins](trainers/readme.md)** | Training scripts + manifests. Each plugin trains, fine-tunes, or distills a model. | PyTorch | GPU | `models/<name>/checkpoints/` |
 | **[Inference engine](veritate_engine/)** | Loads converted INT8 or ternary weights, generates text. Hand-written C + architecture-specific assembly. | C + asm | CPU | tokens via stdin/stdout, sub-ms |
 | **[Project MRI](veritate_mri/)** | Web app to watch the model think while it generates. Visualization + debugging tool. | Flask + JS | CPU | live UI on [http://localhost:8001](http://localhost:8001) |
 
@@ -364,7 +348,7 @@ Tools take `--model <name>` and resolve paths from `config.json`.
 
 Each subsystem is standalone. None of them launches another. They communicate through files on disk only:
 
-- **[Plugins](plugins/)** write checkpoints + the per-step CSV to `models/<name>/`.
+- **[Plugins](trainers/)** write checkpoints + the per-step CSV to `models/<name>/`.
 - **[`veritate_mri/`](veritate_mri/)** reads checkpoints + the per-step CSV from `models/<name>/`.
 - **[`veritate_engine/`](veritate_engine/)** reads exported `.bin` files from `models/<name>/`.
 
@@ -390,13 +374,21 @@ You can run any combination concurrently. The web server does not start training
 
 ## Supported hardware
 
-| Hardware | Training (PyTorch) | Inference (C engine) |
-|---|---|---|
-| **NVIDIA GPU** (CUDA) | yes (CUDA + bfloat16 AMP) | N/A (CPU engine) |
-| **Apple M-series** (MPS) | yes (fp32 only, MPS backend, no AMP) | ARM64 NEON SDOT (M1+); AMX empty |
-| **x86_64 CPU** (AVX-512 + VNNI) | yes (CPU fallback) | primary target (Zen 4+, Sapphire Rapids+) |
-| **x86_64 CPU** (AVX2) | yes (CPU fallback) | matmul done; transformer hot-path in progress |
-| **ARM64 CPU** (NEON only) | yes (CPU fallback) | matmul only |
+The launcher detects the host (OS + arch + CPU features) and dispatches per-tier dependency pins, Python version checks, and engine build flags. The C engine compiles every kernel into one binary and selects at runtime via CPUID, so a binary built on an AVX-512 host still runs on an Ivy Bridge CPU — shared TUs are pinned to SSE4.2 baseline so non-kernel code never emits an instruction the host can't run.
+
+| Tier | Hardware | Python | Torch | Training | C engine |
+|---|---|---|---|---|---|
+| **mac_arm** | Apple Silicon (M1–M4) | 3.10–3.13 | `~=2.11` | MPS + CPU | ARM64 NEON SDOT |
+| **mac_intel** | Intel Mac, AVX2+ (Haswell+) | 3.10–3.11 | `~=2.2` (last x86 macOS wheels) | CPU only | AVX2 / VNNI / AVX-512 kernels dispatched at runtime |
+| **mac_intel** | Intel Mac, AVX1 only (Ivy Bridge, Mac Pro 2013) | 3.10–3.11 | `~=2.2` | CPU only | scalar kernels + AVX1 (dispatched) |
+| **linux_x86** | x86_64 Linux, AVX-512+VNNI | 3.10–3.13 | `~=2.11` | CUDA + CPU | full kernel set |
+| **linux_x86** | x86_64 Linux, AVX2 | 3.10–3.13 | `~=2.11` | CUDA + CPU | AVX2 kernels dispatched |
+| **linux_arm** | ARM64 Linux (Jetson, Graviton, Pi 4) | 3.10–3.13 | `~=2.11` | CPU (CUDA on Jetson) | NEON SDOT kernels |
+| **windows_x86** | x86_64 Windows | 3.10–3.13 | `~=2.11` | CUDA + CPU | full kernel set |
+| **GPU (NVIDIA)** | CUDA on any tier above | — | `torch.cuda` | bfloat16 AMP | N/A (CPU engine) |
+| **GPU (AMD on macOS)** | Discrete AMD on Intel Mac | — | not supported by torch on macOS | CPU only | planned Metal compute path |
+
+Capability flags (`has_avx2`, `has_avx512vnni`, `can_use_mps`, `can_use_cuda`, etc.) are exposed in the hardware dump for any code that needs to gate features at runtime. See [`dev_documentation/platform/tiers.md`](dev_documentation/platform/tiers.md) for how the tier dispatch works.
 
 <br/>
 
@@ -406,18 +398,18 @@ You can run any combination concurrently. The web server does not start training
 
 ## Cross-platform plan
 
-Windows is the primary platform today. The structure is set up to add macOS and Linux as ports land. See [`documentation/kernels/platforms.md`](documentation/kernels/platforms.md) for the tier matrix, per-platform bench targets, and the function-pointer contract.
+[`build.bat`](veritate_engine/v1/build/build.bat) (Windows) and [`build.sh`](veritate_engine/v1/build/build.sh) (POSIX) compile shared translation units at the architecture's safe baseline (SSE4.2 on x86_64, ARMv8 on arm64) and apply per-kernel ISA flags only to the kernels that need them. `src/dispatch.c` picks at runtime via CPUID so a binary works on every CPU that meets the baseline, no matter how high the compile-time kernel ISA was. All kernels live under [`veritate_engine/v1/kernels/<arch>/`](veritate_engine/v1/kernels/) and [`veritate_engine/v1/kernels/scalar/`](veritate_engine/v1/kernels/scalar/). One binary per OS+arch. No fat universal binary.
 
-| Tier | Hardware | Status |
+| Kernel tier | Hardware | Status |
 |---|---|---|
-| **x86_64 + AVX-512 + VNNI** | Ryzen 9800X3D, Zen 4+, Sapphire Rapids+ | ![done](https://img.shields.io/badge/done-brightgreen) Primary target |
-| **x86_64 + AVX2** | Intel Haswell through Ice Lake, 2013+ consumer x86 | ![partial](https://img.shields.io/badge/partial-yellow) Matmul done; transformer hot-path not yet |
-| **ARM64 + NEON SDOT** | Apple M1+, Cortex-A76+ | ![done](https://img.shields.io/badge/done-brightgreen) Initial port landed; bench TBD |
+| **scalar C** | Anything | ![done](https://img.shields.io/badge/done-brightgreen) Always built; correctness oracle |
+| **x86_64 + AVX2** | Haswell+ (2013+ consumer), every x86 Mac with AVX2 | ![done](https://img.shields.io/badge/done-brightgreen) Matmul, INT4, ternary |
+| **x86_64 + AVX-512 + VNNI** | Zen 4+, Sapphire Rapids+, Mac Pro 2019 Xeon W | ![done](https://img.shields.io/badge/done-brightgreen) Full set |
+| **x86_64 + AVX1 only** | Ivy Bridge / Sandy Bridge / Mac Pro 2013 | ![partial](https://img.shields.io/badge/partial-yellow) Scalar fallback (AVX1-specific kernels not yet) |
+| **ARM64 + NEON SDOT** | Apple M1+, Cortex-A76+, ARMv8.2+dotprod | ![done](https://img.shields.io/badge/done-brightgreen) |
 | **ARM64 + NEON only** | Pi 4, older Android | ![partial](https://img.shields.io/badge/partial-yellow) Matmul only |
 | **ARM64 + AMX** | M-series Mac | ![planned](https://img.shields.io/badge/planned-lightgrey) Stretch goal |
-| **scalar C** | Anything | ![done](https://img.shields.io/badge/done-brightgreen) Correctness oracle for all other tiers |
-
-[`build.bat`](veritate_engine/v1/build/build.bat) (Windows) and [`build.sh`](veritate_engine/v1/build/build.sh) (POSIX) drive identical compile commands per OS. `build.sh` detects host via `uname -s/-m` and picks the matching kernel translation units. All kernels live under [`veritate_engine/v1/kernels/<arch>/`](veritate_engine/v1/kernels/) and [`veritate_engine/v1/kernels/scalar/`](veritate_engine/v1/kernels/scalar/). One binary per OS+arch. No fat universal binary.
+| **Metal compute (AMD GPU on macOS)** | Mac Pro 2013/2019 FirePro, AMD eGPU | ![planned](https://img.shields.io/badge/planned-lightgrey) Investigating |
 
 <br/>
 
@@ -441,7 +433,7 @@ A project by **[Carpathian, LLC](https://carpathian.ai/veritate)**. **Distributi
 |---|---|
 | [`veritate_engine/`](veritate_engine/) | C inference engine. Versioned subtrees (currently [`v1/`](veritate_engine/v1/)) hold `src/`, `kernels/<arch>/`, `build/`, `bin/<os>/<arch>/`, and `engine_versions.json`. |
 | [`veritate_mri/`](veritate_mri/) | MRI server, dashboard, [`save.py`](veritate_mri/save.py) (checkpoint + dump suite), [`readers/`](veritate_mri/readers/), [`atlas.py`](veritate_mri/atlas.py). |
-| [`veritate/`](veritate/) | Python package. `veritate.plugin` is the only surface plugins may import. |
-| [`plugins/`](plugins/) | Plugin implementations. [`common/`](plugins/common/) for shared helpers, [`corpus/`](plugins/corpus/) for `.bin` training data. See [`plugins/readme.md`](plugins/readme.md). |
+| [`veritate_core/`](veritate_core/) | Python package. `veritate_core.plugin` is the only surface plugins may import. |
+| [`trainers/`](trainers/) | Plugin implementations. [`common/`](trainers/common/) for shared helpers, [`corpus/`](trainers/corpus/) for `.bin` training data. See [`trainers/readme.md`](trainers/readme.md). |
 | `models/` | One self-contained subdir per model (gitignored). |
 | [`documentation/`](documentation/) | Current platform contracts (committed). Subfolders: [`hooks/`](documentation/hooks/), [`kernels/`](documentation/kernels/). |

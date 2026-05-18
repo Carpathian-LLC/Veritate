@@ -11,6 +11,7 @@
 #include "veritate.h"
 #include "portability.h"
 #include "addons.h"
+#include "metal_dispatch.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -222,12 +223,17 @@ static void trace_free(trace_record_t* t) {
     free(t->attention_scores); free(t->lens_logits); free(t);
 }
 
-// fill trace->top_predictions from a hidden state via tied-embedding LM head.
+// fill trace->top_predictions from a hidden state via the LM head. On v11 and
+// earlier this is the tied embedding; on v12 with an MTP head the byte-0
+// projector runs first.
 static void trace_top_predictions(const model_t* m, const int8_t* hidden, trace_prediction_t* out) {
     const int32_t V = m->shape.vocab;
+    const int32_t H = m->shape.hidden;
     int32_t* logits = (int32_t*)malloc((size_t)V * sizeof(int32_t));
     int8_t*  taken  = (int8_t*) calloc((size_t)V, 1);
-    matmul_int8_vnni_prep(hidden, &m->lm_head, logits, 1);
+    int8_t*  h_b0   = (int8_t*) malloc((size_t)H);
+    model_project_byte0(m, hidden, h_b0);
+    matmul_int8_vnni_prep(h_b0, &m->lm_head, logits, 1);
     for (int32_t k = 0; k < VERITATE_TRACE_TOPK; k++) {
         int32_t best = -2147483647 - 1, idx = 0;
         for (int32_t v = 0; v < V; v++) {
@@ -237,7 +243,7 @@ static void trace_top_predictions(const model_t* m, const int8_t* hidden, trace_
         out[k].token = (uint8_t)idx;
         out[k].logit = best;
     }
-    free(logits); free(taken);
+    free(logits); free(taken); free(h_b0);
 }
 
 static int chat_loop(void) {
@@ -1045,6 +1051,7 @@ static int ppl_mode(int argc, char** argv) {
     static kv_cache_t cache;
     kv_cache_init(&cache, sh);
     int8_t*  hidden = (int8_t*) malloc((size_t)H);
+    int8_t*  h_b0   = (int8_t*) malloc((size_t)H);
     int32_t* logits = (int32_t*)malloc((size_t)V * sizeof(int32_t));
     int32_t* tokens = (int32_t*)malloc((size_t)S * sizeof(int32_t));
     uint8_t* buf    = (uint8_t*)malloc((size_t)S);
@@ -1071,12 +1078,18 @@ static int ppl_mode(int argc, char** argv) {
         cache.len = 0;
         forward(&model, &cache, tokens, 1, hidden, NULL, NULL);
 
+        // v11 tied path: hidden and embed share activation scale 32, so
+        // int_logit = fp_logit * 32 * 32 -> inv_scale = 1/1024. v12 untied
+        // lm_head has its own learned scale_q24; fp_logit = int_logit *
+        // scale_q24 / 2^24 / 32.
+        const double inv_scale = model.mtp_present
+            ? ((double)model.lm_head.scale_q24 / 16777216.0 / 32.0)
+            : (1.0 / 1024.0);
         for (int i = 0; i < chunk_len - 1; i++) {
-            matmul_int8_vnni_prep(hidden, &model.lm_head, logits, 1);
+            model_project_byte0(&model, hidden, h_b0);
+            matmul_int8_vnni_prep(h_b0, &model.lm_head, logits, 1);
             int32_t max_logit = logits[0];
             for (int32_t v = 1; v < V; v++) if (logits[v] > max_logit) max_logit = logits[v];
-            // hidden and embed share activation scale 32; int_logit = fp_logit * 32 * 32.
-            const double inv_scale = 1.0 / 1024.0;
             double sum = 0.0;
             for (int32_t v = 0; v < V; v++) {
                 sum += exp((double)(logits[v] - max_logit) * inv_scale);
@@ -1120,7 +1133,7 @@ static int ppl_mode(int argc, char** argv) {
                100.0 * g_ffn_down_sparse_calls / g_ffn_down_calls);
     }
 
-    free(dec_samples); free(hidden); free(logits); free(tokens); free(buf);
+    free(dec_samples); free(hidden); free(h_b0); free(logits); free(tokens); free(buf);
     kv_cache_free(&cache);
     model_free(&model);
     return 0;
@@ -1153,6 +1166,15 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && strcmp(argv[1], "bench") == 0) return bench_mode(argc, argv);
     if (argc > 1 && strcmp(argv[1], "ppl") == 0) return ppl_mode(argc, argv);
+#if METAL_DISPATCH_AVAILABLE
+    if (argc > 1 && strcmp(argv[1], "metal-info") == 0) {
+        metal_caps_t caps; metal_detect(&caps); metal_print(&caps);
+        return caps.available ? 0 : 1;
+    }
+    if (argc > 1 && strcmp(argv[1], "verify-metal") == 0) {
+        return metal_verify();
+    }
+#endif
 
     printf("veritate v%s\n", VERITATE_VERSION);
 

@@ -23,7 +23,7 @@ pytest tests/ -m slow              # run only slow tests
 | [`engine/`](engine/) | engine builds, loads each `.bin` in `models/`, rejects malformed binaries with a clean error. |
 | [`export/`](export/) | export round-trip: synthetic checkpoint -> `.bin` -> header bytes match expected v9 / v11 layout. |
 | [`mri/`](mri/) | dashboard endpoints respond 200 + correct JSON shape via the Flask test client (no live server). |
-| [`plugin_contract/`](plugin_contract/) | `veritate.plugin` public surface (save / paths / model) hasn't drifted. The plugins repo depends on this. |
+| [`plugin_contract/`](plugin_contract/) | `veritate_core.plugin` public surface (save / paths / model) hasn't drifted. The plugins repo depends on this. |
 
 ## rules for adding a test
 

@@ -1,0 +1,318 @@
+{
+ "level": "hs",
+ "source": "grade_hs_source.txt",
+ "n_items": 25,
+ "seed": 17,
+ "mode": "hard_long_range_pos_matched",
+ "config": {
+  "items_per_band": 25,
+  "prefix_max_bytes": 1024,
+  "min_callback_distance": 100,
+  "recent_block_bytes": 60,
+  "slot_start_fraction": 0.3,
+  "length_tolerance": 2,
+  "distractor_filter": "same_preceding_word_in_passage"
+ },
+ "items": [
+  {
+   "prefix_bytes": "s a function of the new surroundings rather than any real change within her, and she expected it to vanish the moment she went back to anything resembling a real life.\n\nIt was during one of these walks, sometime in the third week, that she met Aldous. He was sitting on the low stone wall near the lighthouse, sketching the harbor in a small leather-bound book, and when she stopped to look out at the water, he looked up at her with the open, untroubled gaze of someone who has not been startled by another human being in a very long time. He was perhaps in his late sixties, weather-beaten in the way that men who have worked outdoors for most of their lives become, and his hands, holding the pencil, were spotted with paint as well as graphite.\n\n\"You're the new one in the white cottage,\" he said, less as a question than as a friendly statement of fact. He had a slight accent that she could not immediately place, somewhere between local and not. \"Your aunt's place, I think. I knew her a little, years ago. She was a ",
+   "correct": "kind",
+   "distractors": [
+    "moment",
+    "small",
+    "family"
+   ],
+   "slot_offset": 4230,
+   "callback_distance": 3261,
+   "preceding_word": "a"
+  },
+  {
+   "prefix_bytes": "ould not be unsaid.\n\nHe raised his hand again, and this time, before he could lose his nerve, he knocked twice. The silhouette lifted its head. A muffled voice told him to come in. Marcus opened the door and stepped through, into the small lamplit office, into a future he had not quite chosen but no longer felt able to refuse.\n\nThe conversation with the foreman lasted less than fifteen minutes. Marcus emerged with the same uncertainty he had carried in, but with the weight of decision now on someone else's shoulders, and that small redistribution of responsibility was enough to unkink something in his chest. He walked out into the morning, which had brightened into something almost mild, and he understood that whatever happened next would happen because he had finally moved, however awkwardly, instead of waiting to be moved.\n\nHe stopped at the cafe by the river before going home. The waitress, who had served him coffee for years and had never once asked for his order, set a cup down in front of him without a ",
+   "correct": "word",
+   "distractors": [
+    "small",
+    "long",
+    "future"
+   ],
+   "slot_offset": 8406,
+   "callback_distance": 2671,
+   "preceding_word": "a"
+  },
+  {
+   "prefix_bytes": "other quiet milestone. But each time, something held him in place. Habit, mostly. The accumulated weight of what he had built, however slight that structure might have looked from the outside.\n\nThe foreman's office, when he finally reached it, was already lit. Through the wavy glass of the door, Marcus could see the silhouette of a man hunched over a desk, his head bent at the angle of long concentration. He raised his hand to knock, hesitated, and lowered it. There was no script for this conversation. He had spent the walk rehearsing one and discarding each version in turn. What he had to say was simple enough; what made it difficult was that, once said, it could not be unsaid.\n\nHe raised his hand again, and this time, before he could lose his nerve, he knocked twice. The silhouette lifted its head. A muffled voice told him to come in. Marcus opened the door and stepped through, into the small lamplit office, into a future he had not quite chosen but no longer felt able to refuse.\n\nThe conversation with the ",
+   "correct": "foreman",
+   "distractors": [
+    "lunch",
+    "pantry",
+    "first"
+   ],
+   "slot_offset": 7738,
+   "callback_distance": 1567,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "e she could descend the worn stone steps to the small crescent of beach below and walk all the way out to the rocks that marked the entrance of the bay. She found that the walking emptied her mind of the things she had carried with her from the city, the small recurring grievances and the larger settled regrets, and that on her return she felt a kind of quiet that had been almost foreign to her for years. She did not yet trust this quiet. She suspected, with the practiced suspicion of someone who has been disappointed often, that it was a function of the new surroundings rather than any real change within her, and she expected it to vanish the moment she went back to anything resembling a real life.\n\nIt was during one of these walks, sometime in the third week, that she met Aldous. He was sitting on the low stone wall near the lighthouse, sketching the harbor in a small leather-bound book, and when she stopped to look out at the water, he looked up at her with the open, untroubled gaze of someone who has not ",
+   "correct": "been",
+   "distractors": [
+    "quite",
+    "insist",
+    "answer"
+   ],
+   "slot_offset": 3689,
+   "callback_distance": 3431,
+   "preceding_word": "not"
+  },
+  {
+   "prefix_bytes": "with the weight of decision now on someone else's shoulders, and that small redistribution of responsibility was enough to unkink something in his chest. He walked out into the morning, which had brightened into something almost mild, and he understood that whatever happened next would happen because he had finally moved, however awkwardly, instead of waiting to be moved.\n\nHe stopped at the cafe by the river before going home. The waitress, who had served him coffee for years and had never once asked for his order, set a cup down in front of him without a word. The river outside the window was slow and dark, and a few late leaves drifted down from the bare trees on the opposite bank. Marcus drank the coffee slowly, letting it go cold halfway down, and watched the leaves until the cafe began to fill with the lunch crowd.\n\nWalking home, he passed the school he had attended as a boy. Children were spilling out into the yard for recess, their voices high and unfocused in the cold air. He stood at the fence for a ",
+   "correct": "moment",
+   "distractors": [
+    "pale",
+    "quiet",
+    "slight"
+   ],
+   "slot_offset": 8868,
+   "callback_distance": 5551,
+   "preceding_word": "a"
+  },
+  {
+   "prefix_bytes": "ttle, years ago. She was a kind woman, in her own quiet way.\"\n\nMarina, who had not been expecting to talk to anyone, found herself sitting on the wall beside him and answering. He asked her a few simple questions about the cottage, what condition it was in, whether the chimney still worked, and these questions, because they were practical and required no excavation of the past, were ones she could answer without the weariness that had attached itself to so many recent conversations.\n\nAfter a while, he closed the sketchbook and placed it carefully in the canvas bag at his feet. \"The trick to coming back somewhere,\" he said, with the air of a man not offering advice so much as a passing observation, \"is to allow yourself to be the person you have become while you were gone. Most of the people who fail at it try to be the person they were the last time they were here. The village will let you do either, but only one of them is honest.\"\n\nMarina did not answer for a long time. She watched a fishing boat enter the ",
+   "correct": "harbor",
+   "distractors": [
+    "cold",
+    "things",
+    "second"
+   ],
+   "slot_offset": 5227,
+   "callback_distance": 4517,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": " were practical and required no excavation of the past, were ones she could answer without the weariness that had attached itself to so many recent conversations.\n\nAfter a while, he closed the sketchbook and placed it carefully in the canvas bag at his feet. \"The trick to coming back somewhere,\" he said, with the air of a man not offering advice so much as a passing observation, \"is to allow yourself to be the person you have become while you were gone. Most of the people who fail at it try to be the person they were the last time they were here. The village will let you do either, but only one of them is honest.\"\n\nMarina did not answer for a long time. She watched a fishing boat enter the harbor, slowly, low in the water with its catch. When she finally spoke, she said only, \"I'll have to think about that.\"\n\n\"Take your time,\" Aldous said. \"There is plenty of it here, if you let there be.\"\n\nHe stood and walked off along the bluff, leaving her sitting on the wall with the wind moving against her face. For the ",
+   "correct": "first",
+   "distractors": [
+    "weight",
+    "kind",
+    "harbor"
+   ],
+   "slot_offset": 5552,
+   "callback_distance": 5375,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "ced it carefully in the canvas bag at his feet. \"The trick to coming back somewhere,\" he said, with the air of a man not offering advice so much as a passing observation, \"is to allow yourself to be the person you have become while you were gone. Most of the people who fail at it try to be the person they were the last time they were here. The village will let you do either, but only one of them is honest.\"\n\nMarina did not answer for a long time. She watched a fishing boat enter the harbor, slowly, low in the water with its catch. When she finally spoke, she said only, \"I'll have to think about that.\"\n\n\"Take your time,\" Aldous said. \"There is plenty of it here, if you let there be.\"\n\nHe stood and walked off along the bluff, leaving her sitting on the wall with the wind moving against her face. For the first time since she had arrived, Marina felt something very small and very tentative begin to relax inside her chest. She did not call it hope, because she had stopped trusting that word years ago. But it was, ",
+   "correct": "perhaps",
+   "distractors": [
+    "certainly",
+    "sitting",
+    "simple"
+   ],
+   "slot_offset": 5763,
+   "callback_distance": 2009,
+   "preceding_word": "was"
+  },
+  {
+   "prefix_bytes": "riting Monday, a stranger's well-meaning question about his future, the realization that the calendar had advanced past another quiet milestone. But each time, something held him in place. Habit, mostly. The accumulated weight of what he had built, however slight that structure might have looked from the outside.\n\nThe foreman's office, when he finally reached it, was already lit. Through the wavy glass of the door, Marcus could see the silhouette of a man hunched over a desk, his head bent at the angle of long concentration. He raised his hand to knock, hesitated, and lowered it. There was no script for this conversation. He had spent the walk rehearsing one and discarding each version in turn. What he had to say was simple enough; what made it difficult was that, once said, it could not be unsaid.\n\nHe raised his hand again, and this time, before he could lose his nerve, he knocked twice. The silhouette lifted its head. A muffled voice told him to come in. Marcus opened the door and stepped through, into the ",
+   "correct": "small",
+   "distractors": [
+    "city",
+    "village",
+    "rocks"
+   ],
+   "slot_offset": 7616,
+   "callback_distance": 7290,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": " had built, however slight that structure might have looked from the outside.\n\nThe foreman's office, when he finally reached it, was already lit. Through the wavy glass of the door, Marcus could see the silhouette of a man hunched over a desk, his head bent at the angle of long concentration. He raised his hand to knock, hesitated, and lowered it. There was no script for this conversation. He had spent the walk rehearsing one and discarding each version in turn. What he had to say was simple enough; what made it difficult was that, once said, it could not be unsaid.\n\nHe raised his hand again, and this time, before he could lose his nerve, he knocked twice. The silhouette lifted its head. A muffled voice told him to come in. Marcus opened the door and stepped through, into the small lamplit office, into a future he had not quite chosen but no longer felt able to refuse.\n\nThe conversation with the foreman lasted less than fifteen minutes. Marcus emerged with the same uncertainty he had carried in, but with the ",
+   "correct": "weight",
+   "distractors": [
+    "cafe",
+    "things",
+    "walking"
+   ],
+   "slot_offset": 7853,
+   "callback_distance": 1041,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "er settled regrets, and that on her return she felt a kind of quiet that had been almost foreign to her for years. She did not yet trust this quiet. She suspected, with the practiced suspicion of someone who has been disappointed often, that it was a function of the new surroundings rather than any real change within her, and she expected it to vanish the moment she went back to anything resembling a real life.\n\nIt was during one of these walks, sometime in the third week, that she met Aldous. He was sitting on the low stone wall near the lighthouse, sketching the harbor in a small leather-bound book, and when she stopped to look out at the water, he looked up at her with the open, untroubled gaze of someone who has not been startled by another human being in a very long time. He was perhaps in his late sixties, weather-beaten in the way that men who have worked outdoors for most of their lives become, and his hands, holding the pencil, were spotted with paint as well as graphite.\n\n\"You're the new one in the ",
+   "correct": "white",
+   "distractors": [
+    "city",
+    "past",
+    "pantry"
+   ],
+   "slot_offset": 3983,
+   "callback_distance": 3354,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "ped through, into the small lamplit office, into a future he had not quite chosen but no longer felt able to refuse.\n\nThe conversation with the foreman lasted less than fifteen minutes. Marcus emerged with the same uncertainty he had carried in, but with the weight of decision now on someone else's shoulders, and that small redistribution of responsibility was enough to unkink something in his chest. He walked out into the morning, which had brightened into something almost mild, and he understood that whatever happened next would happen because he had finally moved, however awkwardly, instead of waiting to be moved.\n\nHe stopped at the cafe by the river before going home. The waitress, who had served him coffee for years and had never once asked for his order, set a cup down in front of him without a word. The river outside the window was slow and dark, and a few late leaves drifted down from the bare trees on the opposite bank. Marcus drank the coffee slowly, letting it go cold halfway down, and watched the ",
+   "correct": "leaves",
+   "distractors": [
+    "colors",
+    "dust",
+    "morning"
+   ],
+   "slot_offset": 8618,
+   "callback_distance": 143,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "ther. He had thought about it the way people think about distant possibilities they cannot quite imagine themselves doing. The thought returned every few weeks, summoned by something small: a particularly dispiriting Monday, a stranger's well-meaning question about his future, the realization that the calendar had advanced past another quiet milestone. But each time, something held him in place. Habit, mostly. The accumulated weight of what he had built, however slight that structure might have looked from the outside.\n\nThe foreman's office, when he finally reached it, was already lit. Through the wavy glass of the door, Marcus could see the silhouette of a man hunched over a desk, his head bent at the angle of long concentration. He raised his hand to knock, hesitated, and lowered it. There was no script for this conversation. He had spent the walk rehearsing one and discarding each version in turn. What he had to say was simple enough; what made it difficult was that, once said, it could not be unsaid.\n\nHe ",
+   "correct": "raised",
+   "distractors": [
+    "closed",
+    "stood",
+    "walked"
+   ],
+   "slot_offset": 7406,
+   "callback_distance": 280,
+   "preceding_word": "he"
+  },
+  {
+   "prefix_bytes": "d walk all the way out to the rocks that marked the entrance of the bay. She found that the walking emptied her mind of the things she had carried with her from the city, the small recurring grievances and the larger settled regrets, and that on her return she felt a kind of quiet that had been almost foreign to her for years. She did not yet trust this quiet. She suspected, with the practiced suspicion of someone who has been disappointed often, that it was a function of the new surroundings rather than any real change within her, and she expected it to vanish the moment she went back to anything resembling a real life.\n\nIt was during one of these walks, sometime in the third week, that she met Aldous. He was sitting on the low stone wall near the lighthouse, sketching the harbor in a small leather-bound book, and when she stopped to look out at the water, he looked up at her with the open, untroubled gaze of someone who has not been startled by another human being in a very long time. He was perhaps in his ",
+   "correct": "late",
+   "distractors": [
+    "hand",
+    "head",
+    "future"
+   ],
+   "slot_offset": 3769,
+   "callback_distance": 1976,
+   "preceding_word": "his"
+  },
+  {
+   "prefix_bytes": "walks, sometime in the third week, that she met Aldous. He was sitting on the low stone wall near the lighthouse, sketching the harbor in a small leather-bound book, and when she stopped to look out at the water, he looked up at her with the open, untroubled gaze of someone who has not been startled by another human being in a very long time. He was perhaps in his late sixties, weather-beaten in the way that men who have worked outdoors for most of their lives become, and his hands, holding the pencil, were spotted with paint as well as graphite.\n\n\"You're the new one in the white cottage,\" he said, less as a question than as a friendly statement of fact. He had a slight accent that she could not immediately place, somewhere between local and not. \"Your aunt's place, I think. I knew her a little, years ago. She was a kind woman, in her own quiet way.\"\n\nMarina, who had not been expecting to talk to anyone, found herself sitting on the wall beside him and answering. He asked her a few simple questions about the ",
+   "correct": "cottage",
+   "distractors": [
+    "rumors",
+    "white",
+    "opposite"
+   ],
+   "slot_offset": 4426,
+   "callback_distance": 3791,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "rough the wavy glass of the door, Marcus could see the silhouette of a man hunched over a desk, his head bent at the angle of long concentration. He raised his hand to knock, hesitated, and lowered it. There was no script for this conversation. He had spent the walk rehearsing one and discarding each version in turn. What he had to say was simple enough; what made it difficult was that, once said, it could not be unsaid.\n\nHe raised his hand again, and this time, before he could lose his nerve, he knocked twice. The silhouette lifted its head. A muffled voice told him to come in. Marcus opened the door and stepped through, into the small lamplit office, into a future he had not quite chosen but no longer felt able to refuse.\n\nThe conversation with the foreman lasted less than fifteen minutes. Marcus emerged with the same uncertainty he had carried in, but with the weight of decision now on someone else's shoulders, and that small redistribution of responsibility was enough to unkink something in his chest. He ",
+   "correct": "walked",
+   "distractors": [
+    "finally",
+    "passed",
+    "stood"
+   ],
+   "slot_offset": 8001,
+   "callback_distance": 2556,
+   "preceding_word": "he"
+  },
+  {
+   "prefix_bytes": "first week, she did very little. She slept long hours, often into the late morning, and found herself standing for entire afternoons at the bay window, watching the squalls move across the water in slow processions. The villagers, when she encountered them at the small grocery or the post office, recognized her with the slightly wary politeness of people who have known a family for too long to ask intrusive questions. They asked about her aunt, and about the city, and about whether she planned to stay, and she answered each question with a vagueness that was not exactly a lie but was certainly less than the truth. The village seemed to accept this. It had always been a place where pasts were tolerated as long as they did not insist too loudly on being explained.\n\nBy the end of the second week, she had begun, almost without noticing, to walk in the mornings. The harbor path ran for nearly two miles along the bluff, and at low tide she could descend the worn stone steps to the small crescent of beach below and ",
+   "correct": "walk",
+   "distractors": [
+    "dark",
+    "slate",
+    "marcus"
+   ],
+   "slot_offset": 2747,
+   "callback_distance": 176,
+   "preceding_word": "and"
+  },
+  {
+   "prefix_bytes": "Your aunt's place, I think. I knew her a little, years ago. She was a kind woman, in her own quiet way.\"\n\nMarina, who had not been expecting to talk to anyone, found herself sitting on the wall beside him and answering. He asked her a few simple questions about the cottage, what condition it was in, whether the chimney still worked, and these questions, because they were practical and required no excavation of the past, were ones she could answer without the weariness that had attached itself to so many recent conversations.\n\nAfter a while, he closed the sketchbook and placed it carefully in the canvas bag at his feet. \"The trick to coming back somewhere,\" he said, with the air of a man not offering advice so much as a passing observation, \"is to allow yourself to be the person you have become while you were gone. Most of the people who fail at it try to be the person they were the last time they were here. The village will let you do either, but only one of them is honest.\"\n\nMarina did not answer for a long ",
+   "correct": "time",
+   "distractors": [
+    "string",
+    "hours",
+    "cold"
+   ],
+   "slot_offset": 5184,
+   "callback_distance": 1443,
+   "preceding_word": "long"
+  },
+  {
+   "prefix_bytes": " What he had to say was simple enough; what made it difficult was that, once said, it could not be unsaid.\n\nHe raised his hand again, and this time, before he could lose his nerve, he knocked twice. The silhouette lifted its head. A muffled voice told him to come in. Marcus opened the door and stepped through, into the small lamplit office, into a future he had not quite chosen but no longer felt able to refuse.\n\nThe conversation with the foreman lasted less than fifteen minutes. Marcus emerged with the same uncertainty he had carried in, but with the weight of decision now on someone else's shoulders, and that small redistribution of responsibility was enough to unkink something in his chest. He walked out into the morning, which had brightened into something almost mild, and he understood that whatever happened next would happen because he had finally moved, however awkwardly, instead of waiting to be moved.\n\nHe stopped at the cafe by the river before going home. The waitress, who had served him coffee for ",
+   "correct": "years",
+   "distractors": [
+    "entire",
+    "recess",
+    "nearly"
+   ],
+   "slot_offset": 8319,
+   "callback_distance": 8176,
+   "preceding_word": "for"
+  },
+  {
+   "prefix_bytes": " harden into something he could no longer reshape.\n\nHe had thought about leaving altogether. He had thought about it the way people think about distant possibilities they cannot quite imagine themselves doing. The thought returned every few weeks, summoned by something small: a particularly dispiriting Monday, a stranger's well-meaning question about his future, the realization that the calendar had advanced past another quiet milestone. But each time, something held him in place. Habit, mostly. The accumulated weight of what he had built, however slight that structure might have looked from the outside.\n\nThe foreman's office, when he finally reached it, was already lit. Through the wavy glass of the door, Marcus could see the silhouette of a man hunched over a desk, his head bent at the angle of long concentration. He raised his hand to knock, hesitated, and lowered it. There was no script for this conversation. He had spent the walk rehearsing one and discarding each version in turn. What he had to say was ",
+   "correct": "simple",
+   "distractors": [
+    "sitting",
+    "running",
+    "peeling"
+   ],
+   "slot_offset": 7319,
+   "callback_distance": 2920,
+   "preceding_word": "was"
+  },
+  {
+   "prefix_bytes": "l change within her, and she expected it to vanish the moment she went back to anything resembling a real life.\n\nIt was during one of these walks, sometime in the third week, that she met Aldous. He was sitting on the low stone wall near the lighthouse, sketching the harbor in a small leather-bound book, and when she stopped to look out at the water, he looked up at her with the open, untroubled gaze of someone who has not been startled by another human being in a very long time. He was perhaps in his late sixties, weather-beaten in the way that men who have worked outdoors for most of their lives become, and his hands, holding the pencil, were spotted with paint as well as graphite.\n\n\"You're the new one in the white cottage,\" he said, less as a question than as a friendly statement of fact. He had a slight accent that she could not immediately place, somewhere between local and not. \"Your aunt's place, I think. I knew her a little, years ago. She was a kind woman, in her own quiet way.\"\n\nMarina, who had not ",
+   "correct": "been",
+   "distractors": [
+    "call",
+    "insist",
+    "quite"
+   ],
+   "slot_offset": 4286,
+   "callback_distance": 4028,
+   "preceding_word": "not"
+  },
+  {
+   "prefix_bytes": "rom the outside.\n\nThe foreman's office, when he finally reached it, was already lit. Through the wavy glass of the door, Marcus could see the silhouette of a man hunched over a desk, his head bent at the angle of long concentration. He raised his hand to knock, hesitated, and lowered it. There was no script for this conversation. He had spent the walk rehearsing one and discarding each version in turn. What he had to say was simple enough; what made it difficult was that, once said, it could not be unsaid.\n\nHe raised his hand again, and this time, before he could lose his nerve, he knocked twice. The silhouette lifted its head. A muffled voice told him to come in. Marcus opened the door and stepped through, into the small lamplit office, into a future he had not quite chosen but no longer felt able to refuse.\n\nThe conversation with the foreman lasted less than fifteen minutes. Marcus emerged with the same uncertainty he had carried in, but with the weight of decision now on someone else's shoulders, and that ",
+   "correct": "small",
+   "distractors": [
+    "marked",
+    "marina",
+    "take"
+   ],
+   "slot_offset": 7914,
+   "callback_distance": 7588,
+   "preceding_word": "that"
+  },
+  {
+   "prefix_bytes": "to be the person they were the last time they were here. The village will let you do either, but only one of them is honest.\"\n\nMarina did not answer for a long time. She watched a fishing boat enter the harbor, slowly, low in the water with its catch. When she finally spoke, she said only, \"I'll have to think about that.\"\n\n\"Take your time,\" Aldous said. \"There is plenty of it here, if you let there be.\"\n\nHe stood and walked off along the bluff, leaving her sitting on the wall with the wind moving against her face. For the first time since she had arrived, Marina felt something very small and very tentative begin to relax inside her chest. She did not call it hope, because she had stopped trusting that word years ago. But it was, perhaps, a willingness to be surprised by the days as they came, which was, she thought, almost the same thing.\n\nThe next morning brought a different kind of clarity. The fog that had settled in the valley overnight had given way to a pale, almost reluctant sun, and Marcus walked the ",
+   "correct": "path",
+   "distractors": [
+    "aunt",
+    "first",
+    "coffee"
+   ],
+   "slot_offset": 6048,
+   "callback_distance": 3444,
+   "preceding_word": "the"
+  },
+  {
+   "prefix_bytes": "d not been expecting to talk to anyone, found herself sitting on the wall beside him and answering. He asked her a few simple questions about the cottage, what condition it was in, whether the chimney still worked, and these questions, because they were practical and required no excavation of the past, were ones she could answer without the weariness that had attached itself to so many recent conversations.\n\nAfter a while, he closed the sketchbook and placed it carefully in the canvas bag at his feet. \"The trick to coming back somewhere,\" he said, with the air of a man not offering advice so much as a passing observation, \"is to allow yourself to be the person you have become while you were gone. Most of the people who fail at it try to be the person they were the last time they were here. The village will let you do either, but only one of them is honest.\"\n\nMarina did not answer for a long time. She watched a fishing boat enter the harbor, slowly, low in the water with its catch. When she finally spoke, she ",
+   "correct": "said",
+   "distractors": [
+    "pulled",
+    "slept",
+    "found"
+   ],
+   "slot_offset": 5304,
+   "callback_distance": 1302,
+   "preceding_word": "she"
+  },
+  {
+   "prefix_bytes": "mething small: a particularly dispiriting Monday, a stranger's well-meaning question about his future, the realization that the calendar had advanced past another quiet milestone. But each time, something held him in place. Habit, mostly. The accumulated weight of what he had built, however slight that structure might have looked from the outside.\n\nThe foreman's office, when he finally reached it, was already lit. Through the wavy glass of the door, Marcus could see the silhouette of a man hunched over a desk, his head bent at the angle of long concentration. He raised his hand to knock, hesitated, and lowered it. There was no script for this conversation. He had spent the walk rehearsing one and discarding each version in turn. What he had to say was simple enough; what made it difficult was that, once said, it could not be unsaid.\n\nHe raised his hand again, and this time, before he could lose his nerve, he knocked twice. The silhouette lifted its head. A muffled voice told him to come in. Marcus opened the ",
+   "correct": "door",
+   "distractors": [
+    "days",
+    "yard",
+    "trick"
+   ],
+   "slot_offset": 7581,
+   "callback_distance": 576,
+   "preceding_word": "the"
+  }
+ ]
+}
