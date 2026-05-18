@@ -145,8 +145,17 @@ function fitCanvas(c) {
   if (c.offsetParent === null) return { w: 0, h: 0 };
   const dpr = window.devicePixelRatio || 1;
   const cssW = c.clientWidth, cssH = c.clientHeight || parseInt(c.getAttribute("height"), 10);
-  c.width = Math.floor(cssW * dpr); c.height = Math.floor(cssH * dpr);
-  c.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+  const targetW = Math.floor(cssW * dpr);
+  const targetH = Math.floor(cssH * dpr);
+  // Writing to canvas.width/height reallocates the backing buffer AND clears the
+  // canvas, even when the value is unchanged. Skip when nothing's changed so
+  // hot-path redraws (slider scrub) don't thrash the GPU upload.
+  if (c.width !== targetW || c.height !== targetH || c.__fitDpr !== dpr) {
+    c.width = targetW; c.height = targetH;
+    c.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.__fitDpr = dpr;
+    c.__telBgFrames = null;
+  }
   return { w: cssW, h: cssH };
 }
 
@@ -593,30 +602,54 @@ function updateLetterStats(frames, idx, generatedBs) {
 
 function drawTelemetry(c, ctx, allFrames, currentIdx) {
   const { w, h } = fitCanvas(c);
-  ctx.fillStyle = "#06070a"; ctx.fillRect(0, 0, w, h);
-  if (allFrames.length < 1) return;
+  if (allFrames.length < 1) {
+    ctx.fillStyle = "#06070a"; ctx.fillRect(0, 0, w, h);
+    return;
+  }
   const N = allFrames.length;
-  const series = ["surprise_bits", "entropy_bits", "fwd_ms"];
-  const stroke = { surprise_bits: "#ff5d5d", entropy_bits: "#5dc8ff", fwd_ms: "#9aa4b5" };
   const padL = 36, padT = 8, padB = 18;
   const plotW = w - padL - 8, plotH = h - padT - padB;
-  ctx.strokeStyle = "#171b24"; ctx.lineWidth = 1;
-  for (let g = 0; g <= 4; g++) {
-    const y = padT + (plotH * g) / 4;
-    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
-  }
-  for (const s of series) {
-    let maxV = 0.001;
-    for (const f of allFrames) if (f[s] > maxV) maxV = f[s];
-    ctx.strokeStyle = stroke[s]; ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    for (let i = 0; i < N; i++) {
-      const x = padL + (N === 1 ? plotW / 2 : (plotW * i) / (N - 1));
-      const y = padT + plotH * (1 - allFrames[i][s] / maxV);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  // The background — gridlines, three series sweeps, axis labels — depends only
+  // on allFrames and the canvas size, not on currentIdx. Cache it in an
+  // offscreen canvas keyed by (frames identity, W, H). On scrub only the cursor
+  // moves, so we blit the cache and redraw the cursor.
+  // Key on array identity (each checkpoint loads a fresh frames array) plus
+  // canvas size. Stringifying allFrames would collapse different per-frame
+  // objects into the same "[object Object],..." string.
+  if (c.__telBgFrames !== allFrames || c.__telBgW !== w || c.__telBgH !== h) {
+    const off = c.__telBg || (c.__telBg = document.createElement("canvas"));
+    off.width = c.width; off.height = c.height;
+    const octx = off.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    octx.fillStyle = "#06070a"; octx.fillRect(0, 0, w, h);
+    const series = ["surprise_bits", "entropy_bits", "fwd_ms"];
+    const stroke = { surprise_bits: "#ff5d5d", entropy_bits: "#5dc8ff", fwd_ms: "#9aa4b5" };
+    octx.strokeStyle = "#171b24"; octx.lineWidth = 1;
+    for (let g = 0; g <= 4; g++) {
+      const y = padT + (plotH * g) / 4;
+      octx.beginPath(); octx.moveTo(padL, y); octx.lineTo(padL + plotW, y); octx.stroke();
     }
-    ctx.stroke();
+    for (const s of series) {
+      let maxV = 0.001;
+      for (const f of allFrames) if (f[s] > maxV) maxV = f[s];
+      octx.strokeStyle = stroke[s]; octx.lineWidth = 1.4;
+      octx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const x = padL + (N === 1 ? plotW / 2 : (plotW * i) / (N - 1));
+        const y = padT + plotH * (1 - allFrames[i][s] / maxV);
+        if (i === 0) octx.moveTo(x, y); else octx.lineTo(x, y);
+      }
+      octx.stroke();
+    }
+    octx.fillStyle = "#6f7480"; octx.font = "10px ui-monospace,monospace";
+    octx.fillText("token →", padL, h - 4);
+    octx.fillStyle = "#ff5d5d"; octx.fillText("● surprise",     w - 270, 12);
+    octx.fillStyle = "#5dc8ff"; octx.fillText("● uncertainty",  w - 180, 12);
+    octx.fillStyle = "#9aa4b5"; octx.fillText("● latency",      w - 80,  12);
+    c.__telBgFrames = allFrames; c.__telBgW = w; c.__telBgH = h;
   }
+  ctx.drawImage(c.__telBg, 0, 0, w, h);
   if (currentIdx >= 0) {
     const x = padL + (N === 1 ? plotW / 2 : (plotW * currentIdx) / (N - 1));
     ctx.shadowColor = PALETTE.highlight; ctx.shadowBlur = 8;
@@ -624,11 +657,6 @@ function drawTelemetry(c, ctx, allFrames, currentIdx) {
     ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
     ctx.shadowBlur = 0;
   }
-  ctx.fillStyle = "#6f7480"; ctx.font = "10px ui-monospace,monospace";
-  ctx.fillText("token →", padL, h - 4);
-  ctx.fillStyle = "#ff5d5d"; ctx.fillText("● surprise",     w - 270, 12);
-  ctx.fillStyle = "#5dc8ff"; ctx.fillText("● uncertainty",  w - 180, 12);
-  ctx.fillStyle = "#9aa4b5"; ctx.fillText("● latency",      w - 80,  12);
 }
 
 function drawFlow(c, ctx, infoFlow, T, allBytes) {
