@@ -12,7 +12,10 @@
 
 import os
 
-from inference.backends.pytorch import Brain, load_memory
+# NOTE: `inference.backends.pytorch` imports torch (~1.5 GB on Apple Silicon).
+# Deferred to `load_pytorch_brain` so dashboard startup, settings, and other
+# routes that only touch resolve_*/list helpers do not pay the torch tax. In
+# minimal mode the brain never loads, so torch never imports.
 from readers import bin as binr, checkpoints, engine, models, paths, train_csv
 from runtime import logs as logmod
 
@@ -44,6 +47,10 @@ def load_pytorch_brain(name, step, threads):
     """Load Brain for name at step. On non-vanilla failure, scan other models
     by recency and load the first vanilla one. Returns (brain, name, step)
     or raises the original RuntimeError if nothing vanilla can be loaded."""
+    # Lazy torch import: paying the ~1.5 GB tax only when a backend actually
+    # spins up, not at every dashboard import.
+    from inference.backends.pytorch import Brain, load_memory
+
     def _try(n, s):
         ck = checkpoints.path_for(n, s)
         mp = os.path.join(paths.model_dir(n), "neuron_memory.json")

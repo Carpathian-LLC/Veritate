@@ -38,6 +38,13 @@ from training.sync import app_sync as app_sync_mod
 
 STATIC_DIR = os.path.join(HERE, "web")
 
+# Power-save mode. Set by `python veritate.py --minimal` (propagated via env so
+# it survives the venv re-exec and any lifecycle restart). Disables brain
+# eager-load, idle watcher, heartbeat/analytics, platform sync, and sys-metrics
+# warm. Read-only training/log/sys-state routes still work — the user sees
+# train.csv, log ring, and CPU/mem just fine.
+MINIMAL = os.environ.get("VERITATE_MINIMAL") == "1"
+
 from routes._common import auto_thread_count
 
 
@@ -164,8 +171,11 @@ def main():
         logmod.warn("build", "closed C engine subprocess to release binary lock")
     build_runner.set_pre_build_hook(_close_c_for_rebuild)
 
-    threading.Thread(target=_pytorch_idle_watcher, name="pytorch-idle-watcher", daemon=True).start()
-    sys_metrics.warm()
+    if MINIMAL:
+        logmod.info("run", "MINIMAL mode: skipping idle watcher, sys-warm, app-sync, brain eager-load (heartbeat still active)")
+    else:
+        threading.Thread(target=_pytorch_idle_watcher, name="pytorch-idle-watcher", daemon=True).start()
+        sys_metrics.warm()
 
     def _heartbeat_training():
         # Enriched training payload: plugin id + started_at, plus model name
@@ -201,13 +211,15 @@ def main():
     def _app_sync_reload():
         lifecycle.restart(app.config)
     app_sync_mod.set_reload_hook(_app_sync_reload)
-    app_sync_mod.start()
+    if not MINIMAL:
+        app_sync_mod.start()
 
     # Eager-load the pytorch backend OFF the main thread so app.run() starts
     # serving immediately. Only fires when settings say `always`; in the
     # default `on_demand` mode the brain loads when the user actually clicks
     # Generate, and idle-watcher unloads it after inactivity.
-    if (settings_mod.get().get("pytorch_load_mode") == "always"
+    if (not MINIMAL
+            and settings_mod.get().get("pytorch_load_mode") == "always"
             and app.config.get("DEFAULT_MODEL") is not None
             and app.config.get("DEFAULT_STEP")  is not None):
         def _eager_load():

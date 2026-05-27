@@ -27,6 +27,13 @@ from ._common import user_error
 MRI_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERSIONS_PATH = os.path.normpath(os.path.join(MRI_ROOT, "..", "versions.json"))
 
+# Power-save mode contract with veritate.py launcher. The launcher sets the
+# env var when invoked with --minimal; app.py reads it; this route exposes
+# both pieces so the frontend can gate UI and toggle without hardcoding either
+# string in the JS.
+MINIMAL_ENV  = "VERITATE_MINIMAL"
+MINIMAL_FLAG = "--minimal"
+
 # ------------------------------------------------------------------------------------
 # Functions
 
@@ -34,6 +41,23 @@ def register(app):
     @app.route("/sys_metrics")
     def sys_metrics_route():
         return sys_metrics.snapshot()
+
+    @app.route("/sys/mode")
+    def sys_mode_get():
+        """Runtime mode. Frontend uses this to gate brain-dependent UI."""
+        return {"minimal": os.environ.get(MINIMAL_ENV) == "1"}
+
+    @app.route("/sys/mode/relaunch", methods=["POST"])
+    def sys_mode_relaunch():
+        """Restart the dashboard with the minimal flag toggled. Body:
+        {minimal: bool}. Training plugin is preserved across the restart
+        (lifecycle._cleanup keeps it alive)."""
+        body = request.get_json(silent=True) or {}
+        target = bool(body.get("minimal"))
+        add = (MINIMAL_FLAG,) if target else ()
+        rm  = () if target else (MINIMAL_FLAG,)
+        return lifecycle.restart_with_flag_toggle(current_app.config,
+                                                  add_flags=add, remove_flags=rm)
 
     @app.route("/sys/specs")
     def sys_specs_get():

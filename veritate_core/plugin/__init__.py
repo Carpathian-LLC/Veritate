@@ -25,6 +25,8 @@ from training import save         # noqa: E402  veritate_mri/training/save.py
 from readers import paths         # noqa: E402  veritate_mri/readers/paths.py
 from veritate_core import model   # noqa: E402  veritate_core/model.py
 from veritate_core import qat     # noqa: E402  veritate_core/qat.py
+from veritate_core.plugin import oom_recovery  # noqa: E402  shared OOM helper
+from veritate_core.plugin import multicorpus   # noqa: E402  shared mixed-corpus loader
 
 
 def get_teacher_client(provider_override=None, model_override=None):
@@ -41,4 +43,4 @@ def get_teacher_client(provider_override=None, model_override=None):
     return Client(provider_id, model=model, base_url=base_url, api_key=api_key)
 
 
-__all__ = ["save", "paths", "model", "qat", "get_teacher_client"]
+__all__ = ["save", "paths", "model", "qat", "oom_recovery", "get_teacher_client"]
