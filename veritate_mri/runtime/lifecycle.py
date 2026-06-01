@@ -131,6 +131,27 @@ def restart(app_config):
     return {"ok": True, "action": "restart", "delay_secs": DELAY_SECS}
 
 
+def restart_with_flag_toggle(app_config, add_flags=(), remove_flags=()):
+    """Same as restart() but mutates the launch_cmd first: ensures each name in
+    `add_flags` is present, strips each name in `remove_flags`. Use for runtime
+    mode toggles (e.g. --minimal on/off) that need to survive the relaunch."""
+    if app_config is None:
+        return {"ok": False, "error": "app config unavailable"}
+    launch_cmd = app_config.get("LAUNCH_CMD")
+    if not launch_cmd:
+        return {"ok": False, "error": "LAUNCH_CMD not captured at startup. "
+                                       "use kill + relaunch instead."}
+    cmd = [a for a in launch_cmd if a not in remove_flags]
+    for f in add_flags:
+        if f not in cmd:
+            cmd.append(f)
+    threading.Thread(target=_do_restart, args=(app_config, cmd),
+                     name="lifecycle-restart-toggle", daemon=True).start()
+    return {"ok": True, "action": "restart_with_flag_toggle",
+            "added": list(add_flags), "removed": list(remove_flags),
+            "delay_secs": DELAY_SECS}
+
+
 def kill(app_config):
     threading.Thread(target=_do_kill, args=(app_config,),
                      name="lifecycle-kill", daemon=True).start()

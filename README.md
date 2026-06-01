@@ -180,16 +180,16 @@ See [`veritate_engine/v1/build/setup.sh`](veritate_engine/v1/build/setup.sh).
 From the [**Settings**](#tabs) tab you can:
 
 - **Switch release channel.** Choose Stable (`main`), Experimental, or Development (`dev`). Pull updates with one click. See [Release channels](#release-channels) below.
-- **Sync plugins and models.** Independent git remotes for trainers and barebones model definitions.
+- **Sync trainers and models.** Independent git remotes for trainers and barebones model definitions.
 - **Toggle PyTorch backend mode.** On-demand (default) or always loaded.
 - **Re-trigger the engine build** if it failed.
 
 From the [**Training**](#tabs) tab you can:
 
-- Pick a plugin (e.g. `example_plugin`), configure the run, and click **Start**.
+- Pick a trainer, configure the run, and click **Start**.
 - Training writes checkpoints + a per-step CSV to [`models/<name>/`](./).
 
-See [`trainers/readme.md`](trainers/readme.md) for the plugin contract and how to author your own.
+See [`trainers/readme.md`](trainers/readme.md) for the trainer contract and how to author your own.
 
 <br/>
 
@@ -207,7 +207,7 @@ Six tabs at **[http://localhost:8001/](http://localhost:8001/)**.
 |---|---|
 | **Generation** | Chat with the model. Watch every byte's activations live across all layers. |
 | **Models** | Scrub across saved training checkpoints. Watch the model organise itself over training. Confidence evolution, lens-consistency, grade evaluations. |
-| **Training** | Pick a plugin, configure a run, click start. Loss curve, plateau detection, throughput, gradient norm. All live from the trainer's CSV. |
+| **Training** | Pick a trainer, configure a run, click start. Loss curve, plateau detection, throughput, gradient norm. All live from the trainer's CSV. |
 | **Wiki** | Built-in concept docs and build notes. See [`veritate_mri/wiki/`](veritate_mri/wiki/). |
 | **Logs** | Engine build output, route errors, runtime status. In-memory ring buffer (latest 1000 entries). |
 | **Settings** | Release channels, repo sync, PyTorch backend mode, engine rebuild. |
@@ -226,7 +226,7 @@ The Settings tab lets you switch the platform between three release channels. Pi
 | **Experimental** | [`experimental`](https://github.com/Carpathian-LLC/Veritate/tree/experimental) | Divergent fork with in-flight features. Versions show `(E)` next to them. |
 | **Development** | [`dev`](https://github.com/Carpathian-LLC/Veritate/tree/dev) | Active development line. Newest changes; expect rough edges. |
 
-Plugins and models are tracked as **separate git remotes** with their own sync buttons in the same Settings panel. Pulling the platform doesn't touch your trainers or trained weights.
+Trainers and models are tracked as **separate git remotes** with their own sync buttons in the same Settings panel. Pulling the platform doesn't touch your trainers or trained weights.
 
 <br/>
 
@@ -318,7 +318,7 @@ Three independent pieces.
 
 | Piece | What it is | Language | Runs on | Output |
 |---|---|---|---|---|
-| **[Plugins](trainers/readme.md)** | Training scripts + manifests. Each plugin trains, fine-tunes, or distills a model. | PyTorch | GPU | `models/<name>/checkpoints/` |
+| **[Trainers](trainers/readme.md)** | Training scripts + manifests. Each trainer trains, fine-tunes, or distills a model. | PyTorch | GPU | `models/<name>/checkpoints/` |
 | **[Inference engine](veritate_engine/)** | Loads converted INT8 or ternary weights, generates text. Hand-written C + architecture-specific assembly. | C + asm | CPU | tokens via stdin/stdout, sub-ms |
 | **[Project MRI](veritate_mri/)** | Web app to watch the model think while it generates. Visualization + debugging tool. | Flask + JS | CPU | live UI on [http://localhost:8001](http://localhost:8001) |
 
@@ -348,7 +348,7 @@ Tools take `--model <name>` and resolve paths from `config.json`.
 
 Each subsystem is standalone. None of them launches another. They communicate through files on disk only:
 
-- **[Plugins](trainers/)** write checkpoints + the per-step CSV to `models/<name>/`.
+- **[Trainers](trainers/)** write checkpoints + the per-step CSV to `models/<name>/`.
 - **[`veritate_mri/`](veritate_mri/)** reads checkpoints + the per-step CSV from `models/<name>/`.
 - **[`veritate_engine/`](veritate_engine/)** reads exported `.bin` files from `models/<name>/`.
 
@@ -433,7 +433,7 @@ A project by **[Carpathian, LLC](https://carpathian.ai/veritate)**. **Distributi
 |---|---|
 | [`veritate_engine/`](veritate_engine/) | C inference engine. Versioned subtrees (currently [`v1/`](veritate_engine/v1/)) hold `src/`, `kernels/<arch>/`, `build/`, `bin/<os>/<arch>/`, and `engine_versions.json`. |
 | [`veritate_mri/`](veritate_mri/) | MRI server, dashboard, [`save.py`](veritate_mri/save.py) (checkpoint + dump suite), [`readers/`](veritate_mri/readers/), [`atlas.py`](veritate_mri/atlas.py). |
-| [`veritate_core/`](veritate_core/) | Python package. `veritate_core.plugin` is the only surface plugins may import. |
-| [`trainers/`](trainers/) | Plugin implementations. [`common/`](trainers/common/) for shared helpers, [`corpus/`](trainers/corpus/) for `.bin` training data. See [`trainers/readme.md`](trainers/readme.md). |
+| [`veritate_core/`](veritate_core/) | Python package. `veritate_core.plugin` is the only surface trainers may import. |
+| [`trainers/`](trainers/) | Trainer implementations. [`common/`](trainers/common/) for shared helpers, [`corpus/`](trainers/corpus/) for `.bin` training data. See [`trainers/readme.md`](trainers/readme.md). |
 | `models/` | One self-contained subdir per model (gitignored). |
 | [`documentation/`](documentation/) | Current platform contracts (committed). Subfolders: [`hooks/`](documentation/hooks/), [`kernels/`](documentation/kernels/). |
