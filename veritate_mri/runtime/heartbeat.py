@@ -4,9 +4,12 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - phones home to carpathian.ai every HEARTBEAT_INTERVAL_SECS with a tiny json
-#   payload: machine_id, version, uptime, total_runtime, restarts, errors,
-#   models hash, optional active_training. opt-out via settings.heartbeat_enabled.
+# - phones home to carpathian.ai every HEARTBEAT_INTERVAL_SECS while idle (5min)
+#   and every HEARTBEAT_INTERVAL_TRAINING_SECS (60s) while a training run is
+#   active, so the dashboard keeps the device flagged active through long runs.
+#   tiny json payload: machine_id, version, uptime, total_runtime, restarts,
+#   errors, models hash, optional active_training. opt-out via
+#   settings.heartbeat_enabled.
 # - state persisted at data/heartbeat_state.json. one daemon thread, one socket
 #   connection per ping, no deps beyond stdlib + readers.
 # veritate_mri/runtime/heartbeat.py
@@ -42,13 +45,19 @@ from . import sys_metrics
 # Constants
 
 HEARTBEAT_URL          = "https://api.carpathian.ai/webhook/veritate-heartbeat"
-HEARTBEAT_INTERVAL_SECS = 6 * 60 * 60
+# Cadence: idle gets a tight 5-minute pulse, training drops to a 60-second
+# pulse so the dashboard server can keep the device flagged "active" through
+# multi-hour runs. The previous 6h interval let the server's online window
+# expire mid-run, which is why training devices were showing as idle.
+HEARTBEAT_INTERVAL_SECS          = 5 * 60
+HEARTBEAT_INTERVAL_TRAINING_SECS = 60
 # +/- jitter applied to every scheduled send. Spreads thundering herds when
 # many clients restart at once (release rollout, regional power blip, etc).
 HEARTBEAT_JITTER_FRAC   = 0.10
-HEARTBEAT_FIRST_DELAY   = 5 * 60
+HEARTBEAT_FIRST_DELAY   = 5
 HEARTBEAT_TIMEOUT_SECS  = 8.0
-HEARTBEAT_USER_AGENT    = "veritate-heartbeat/2"
+HEARTBEAT_USER_AGENT    = "veritate-heartbeat/3"
+HEARTBEAT_LOOP_TICK_SECS = 5
 
 STATE_PATH    = os.path.join(paths.REPO_ROOT, "data", "heartbeat_state.json")
 MACHINE_ID_LEN = 16
@@ -510,9 +519,14 @@ def _enabled():
     return bool(s.get("heartbeat_enabled"))
 
 
-def _jittered_interval():
-    spread = HEARTBEAT_INTERVAL_SECS * HEARTBEAT_JITTER_FRAC
-    return HEARTBEAT_INTERVAL_SECS + random.uniform(-spread, spread)
+def _steady_interval(training_active):
+    return HEARTBEAT_INTERVAL_TRAINING_SECS if training_active else HEARTBEAT_INTERVAL_SECS
+
+
+def _jittered_interval(training_active=False):
+    base = _steady_interval(training_active)
+    spread = base * HEARTBEAT_JITTER_FRAC
+    return base + random.uniform(-spread, spread)
 
 
 def _training_signature():
@@ -533,29 +547,29 @@ def _loop():
     next_send    = time.monotonic() + HEARTBEAT_FIRST_DELAY
     last_train   = _training_signature()
     while True:
-        time.sleep(60)
+        time.sleep(HEARTBEAT_LOOP_TICK_SECS)
         now = time.monotonic()
         if now - last_persist >= 600:
             _accumulate_runtime(now - last_persist)
             last_persist = now
             _update_state({"last_start_ts": time.time()})
         if not _enabled():
-            next_send = now + _jittered_interval()
+            next_send = now + _jittered_interval(False)
             last_train = _training_signature()
             continue
-        # Edge-triggered ping on training start/stop. Lets the server flip a
-        # client between "online" and "active" within a minute instead of
-        # waiting up to 6h for the next steady ping. Coalesced with the
-        # steady cadence: one transition = one extra ping, not a flood.
         cur_train = _training_signature()
+        training_active = cur_train is not None
+        # Edge-triggered ping on training start/stop. Lets the server flip the
+        # client between "online" and "active" within seconds rather than
+        # waiting on the steady cadence.
         if cur_train != last_train:
             last_train = cur_train
             _send_once()
-            next_send = now + _jittered_interval()
+            next_send = now + _jittered_interval(training_active)
             continue
         if now >= next_send:
             _send_once()
-            next_send = now + _jittered_interval()
+            next_send = now + _jittered_interval(training_active)
 
 
 def start():
@@ -581,6 +595,7 @@ def status():
         "device_name_max":    getattr(settings_mod, "DEVICE_NAME_MAX_LEN", 15),
         "enabled":            _enabled(),
         "interval_secs":      HEARTBEAT_INTERVAL_SECS,
+        "interval_training_secs": HEARTBEAT_INTERVAL_TRAINING_SECS,
         "url":                HEARTBEAT_URL,
         "restarts":           int(s.get("restarts") or 0),
         "total_runtime_secs": int(float(s.get("total_runtime_secs") or 0.0)),

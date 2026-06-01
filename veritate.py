@@ -42,6 +42,7 @@ PY_MIN           = (3, 10)
 PY_MAX_TESTED    = (3, 13)
 LAUNCH_PHASE_ENV = "VERITATE_LAUNCH_PHASE"   # set on re-exec; tells phase-2 to skip bootstrap
 TIER_ENV         = "VERITATE_TIER"           # propagated to runtime so feature gates can read it
+MINIMAL_ENV      = "VERITATE_MINIMAL"        # "1" => power-save dashboard (no brain, no analytics)
 
 # Hardware tier labels. The Veritate mission requires runnability on older
 # consumer hardware, so the launcher detects the host and dispatches per-tier
@@ -226,11 +227,21 @@ def _parse_launch_args():
                     help="do not auto-build the engine. dashboard still serves PyTorch.")
     ap.add_argument("--no-browser", action="store_true",
                     help="do not auto-open the dashboard URL in a web browser.")
+    ap.add_argument("--minimal", action="store_true",
+                    help="power-save mode: dashboard reads/serves training state only. "
+                         "Skips pytorch brain eager-load, idle watcher, heartbeat/analytics, "
+                         "platform sync, and sys-metrics warm. ~10 GB lighter; "
+                         "inference/atlas/teacher routes are inert until a full restart.")
     return ap.parse_known_args()
 
 
 def _launch_dashboard() -> int:
     args, rest = _parse_launch_args()
+
+    if args.minimal:
+        os.environ[MINIMAL_ENV] = "1"
+    else:
+        os.environ.pop(MINIMAL_ENV, None)
 
     sys.path.insert(0, str(HERE / "veritate_mri"))
     from readers   import paths       as paths_mod      # noqa: E402
@@ -244,6 +255,10 @@ def _launch_dashboard() -> int:
         logmod.info("veritate", "build skipped (--skip-build)")
     else:
         build_runner.start()
+
+    if args.minimal:
+        logmod.info("veritate", "MINIMAL mode: brain/sync/sys-warm disabled; "
+                                "heartbeat stays active; training read-only views remain available.")
 
     if not args.no_browser:
         _open_browser_after_delay(f"http://localhost:{args.port}", BROWSER_DELAY_S)

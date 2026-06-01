@@ -6986,10 +6986,19 @@ function _trBuildInput(a) {
         : (source === "shared" ? "the shared corpus folder (trainers/corpus/)" : "any corpus folder");
       return `<p class="train-no-corpus-error">No training data file found in ${what}. Drop a <code>&lt;name&gt;_train.bin</code> file at ${where}, then click <i>refresh</i>.</p><input type="hidden" data-arg="${_trEsc(name)}" value="">`;
     }
-    const opts = ['<option value="">- pick a training data file -</option>']
-      .concat(filtered.map(c => `<option value="${_trEsc(c.stem)}" ${c.stem === def ? "selected" : ""}>${_trEsc(c.label)}</option>`))
-      .join("");
-    return `<select data-arg="${_trEsc(name)}" data-arg-kind="corpus" style="${inputBase}">${opts}</select>`;
+    // Multi-select: cmd/ctrl-click to pick more than one corpus. Submit joins
+    // selections with "+" -> the trainer's multicorpus helper handles weighting.
+    // Pre-fill: parse existing def, supports "a", "a+b+c", or "a:0.5,b:0.3"
+    // by extracting bare stems so the dropdown can reflect them.
+    const selectedSet = new Set(
+      String(def || "").split(/[+,]/).map(s => s.split(":")[0].trim()).filter(Boolean)
+    );
+    const visible = Math.max(2, Math.min(6, filtered.length));
+    const opts = filtered.map(c =>
+      `<option value="${_trEsc(c.stem)}" ${selectedSet.has(c.stem) ? "selected" : ""}>${_trEsc(c.label)}</option>`
+    ).join("");
+    return `<select multiple data-arg="${_trEsc(name)}" data-arg-kind="corpus" size="${visible}" style="${inputBase};height:auto">${opts}</select>` +
+           `<div style="font-size:10.5px;color:var(--dim);margin-top:3px">cmd/ctrl-click to mix multiple corpora &mdash; sampling is size-weighted. blank = reuse original on resume.</div>`;
   }
   if (t === "model_name") {
     const opts = ['<option value="">- pick a model -</option>']
@@ -7013,6 +7022,9 @@ function _trArgVal(name) {
   const el = _trArgEl(name);
   if (!el) return "";
   if (el.type === "checkbox") return !!el.checked;
+  // Multi-select (corpus mix): join selections with "+" so the trainer's
+  // multicorpus.parse_spec sees an additive spec.
+  if (el.multiple) return Array.from(el.selectedOptions).map(o => o.value).join("+");
   return el.value;
 }
 
@@ -7186,6 +7198,8 @@ const TRAINER_SCHEMA = {
     { name: "min_lr",       type: "float",                      label: "learning rate floor (min_lr)",   help: "min_lr: the lowest LR the schedule decays to. typical 1e-5 to 1e-6. must be <= base_lr." },
     { name: "warmup_steps", type: "int",                        label: "warmup steps",          help: "usually irrelevant on resume." },
     { name: "lr_schedule",  type: "str",                        label: "lr schedule",           help: "cosine smooth, linear straight, constant flat, wsd warmup-stable-decay.", choices: ["cosine","linear","constant","wsd"] },
+    { name: "wsd_decay_frac", type: "float",                    label: "WSD decay fraction",    help: "active when lr_schedule=wsd. fraction of total steps spent in the final decay tail. typical 0.1." },
+    { name: "wsd_decay_kind", type: "str",                      label: "WSD decay shape",       help: "active when lr_schedule=wsd. shape of the LR decay tail.", choices: ["sqrt","linear","cosine"] },
     { name: "weight_decay", type: "float",                      label: "weight decay",          help: "stronger = more regularization." },
     { name: "beta1",        type: "float",                      label: "adamw beta1",           help: "1st-moment decay. 0.9 default." },
     { name: "beta2",        type: "float",                      label: "adamw beta2",           help: "2nd-moment decay. 0.95 for LMs." },
@@ -9407,9 +9421,85 @@ function _lifecycleSetButtonsDisabled(disabled) {
   const rsb = $("restartServerBtn");
   const ksb = $("killServerBtn");
   const srb = $("softReloadBtn");
+  const mmb = $("minimalModeBtn");
   if (rsb) rsb.disabled = disabled;
   if (ksb) ksb.disabled = disabled;
   if (srb) srb.disabled = disabled;
+  if (mmb) mmb.disabled = disabled;
+}
+
+// Tabs that depend on the pytorch brain or analytics/sync threads being
+// alive. In minimal mode the server's eager-load + sync threads are skipped,
+// so these tabs render but their backend calls return empty/inert — hide
+// them so the UI doesn't pretend they work.
+const MINIMAL_HIDE_TABS = ["generation", "wiki", "learning"];
+
+function _applyMinimalMode(minimal) {
+  document.body.classList.toggle("minimal", !!minimal);
+  const banner = $("minimalModeBanner");
+  if (banner) banner.style.display = minimal ? "block" : "none";
+  document.querySelectorAll(".tab").forEach(t => {
+    const id = t.getAttribute("data-tab");
+    if (MINIMAL_HIDE_TABS.includes(id)) {
+      t.style.display = minimal ? "none" : "";
+    }
+  });
+  if (minimal) {
+    const active = document.querySelector(".tab.active");
+    if (active && MINIMAL_HIDE_TABS.includes(active.getAttribute("data-tab"))) {
+      const fallback = document.querySelector('.tab[data-tab="training"]');
+      if (fallback) fallback.click();
+    }
+  }
+  const btn  = $("minimalModeBtn");
+  const sub  = $("minimalModeSub");
+  const chip = $("minimalModeStateChip");
+  if (btn)  btn.textContent  = minimal ? "restore full mode" : "enable";
+  if (chip) {
+    chip.textContent = minimal ? "power-save" : "full";
+    chip.style.color = minimal ? "var(--highlight)" : "var(--dim)";
+    chip.style.borderColor = minimal ? "var(--highlight)" : "var(--dim)";
+  }
+  if (sub) {
+    sub.textContent = minimal
+      ? "power-save mode is active. clicking restore brings back brain eager-load, heartbeat, platform sync, and sys-warm. training plugin keeps running across the relaunch."
+      : "re-execs the dashboard without brain / heartbeat / sync / sys-warm. frees ~10 GB. training keeps running. inference / generation / wiki / models tabs go inert; training tab shows only train.csv metrics.";
+  }
+}
+
+function _refreshMinimalMode() {
+  fetch("/sys/mode", { cache: "no-store" })
+    .then(r => r.json())
+    .then(j => _applyMinimalMode(!!j.minimal))
+    .catch(() => {});
+}
+
+function _lifecycleMinimalToggle() {
+  const label = $("minimalModeStatus") || $("lifecycleStatus");
+  const btn   = $("minimalModeBtn");
+  const target = btn && /restore/i.test(btn.textContent) ? false : true;
+  _lifecycleSetButtonsDisabled(true);
+  if (label) {
+    label.textContent = target ? "switching to power-save mode..." : "restoring full mode...";
+    label.style.color = "var(--highlight)";
+  }
+  fetch("/sys/mode/relaunch", { method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ minimal: target }) })
+    .then(r => r.json())
+    .then(res => {
+      if (!res.ok) {
+        if (label) { label.textContent = `failed: ${res.error || "unknown"}`; label.style.color = "var(--hot)"; }
+        _lifecycleSetButtonsDisabled(false);
+        return;
+      }
+      if (label) { label.textContent = "waiting for server to come back..."; label.style.color = "var(--data-pos)"; }
+      _lifecycleWaitForServer(label);
+    })
+    .catch(e => {
+      if (label) { label.textContent = `request failed: ${e.message || e}`; label.style.color = "var(--hot)"; }
+      _lifecycleSetButtonsDisabled(false);
+    });
 }
 
 function _lifecycleWaitForServer(label) {
@@ -9660,15 +9750,21 @@ function _renderDownloadRow(s, prefix) {
     if (local) local.textContent = `${n} file${n === 1 ? "" : "s"}`;
   }
   const last = s.last || {};
+  const counts = _syncParseMessageCounts(last.message || "");
   if (behind) {
     if (last.action === "check" && last.ok) {
-      // "; 0 missing" => up to date (green), otherwise new files available (warm)
       const upToDate = /;\s*0\s+missing/.test(last.message || "");
       behind.textContent = upToDate ? "up to date" : (last.message || "checked");
-      behind.style.color = upToDate ? "var(--data-pos)" : "var(--warm)";
+      behind.style.color = upToDate ? "var(--data-pos)" : "var(--highlight)";
     } else if (last.action === "update" && last.ok) {
-      behind.textContent = "up to date";
-      behind.style.color = "var(--data-pos)";
+      const pending = (counts.skipped || 0) + (counts.errors || 0);
+      if (pending > 0) {
+        behind.textContent = `${pending} need${pending === 1 ? "s" : ""} attention`;
+        behind.style.color = "var(--highlight)";
+      } else {
+        behind.textContent = "up to date";
+        behind.style.color = "var(--data-pos)";
+      }
     } else {
       behind.textContent = "unknown (run check)";
       behind.style.color = "var(--dim)";
@@ -9677,8 +9773,8 @@ function _renderDownloadRow(s, prefix) {
   if (lab) {
     if (last.action) {
       if (last.ok) {
-        lab.textContent = `last ${last.action}: ${last.message || "ok"}`;
-        lab.style.color = "var(--data-pos)";
+        lab.innerHTML = `last ${_syncEsc(last.action)}: ${_syncColorizeMessage(last.message || "ok")}`;
+        lab.style.color = "";
       } else if (last.ok === false) {
         lab.textContent = `last ${last.action} failed: ${last.message || "see logs"}`;
         lab.style.color = "var(--hot)";
@@ -9691,6 +9787,78 @@ function _renderDownloadRow(s, prefix) {
 
 function _trainersApplyStatus(s) {
   _renderDownloadRow(s, "trainers");
+  const last = (s && s.last) || {};
+  const counts = _syncParseMessageCounts(last.message || "");
+  let issues = 0;
+  if (last.action === "check" && last.ok) {
+    const upToDate = /;\s*0\s+missing/.test(last.message || "");
+    issues = upToDate ? 0
+      : ((counts.missing || 0) + (counts.modified || 0) + (counts.conflict || 0)
+         + (counts.update_available || 0) || (last.message ? 1 : 0));
+  } else if (last.action === "update" && last.ok) {
+    issues = (counts.skipped || 0) + (counts.errors || 0);
+  }
+  _trainersUpdateDetailsButtonColor(issues);
+}
+
+function _trainersUpdateDetailsButtonColor(issues) {
+  const btn = $("trainersDetailsBtn");
+  if (!btn) return;
+  if (issues > 0) {
+    btn.style.color = "#000";
+    btn.style.background = "var(--highlight)";
+    btn.style.borderColor = "var(--highlight)";
+  } else {
+    btn.style.color = "";
+    btn.style.background = "";
+    btn.style.borderColor = "";
+  }
+}
+
+// Per-category color for the "installed N, updated N, ..." message line.
+// Green for successful work, yellow for skipped / missing / modified /
+// update_available, red for errors / conflicts, dim for zero counts.
+const _SYNC_TOKEN_COLOR = {
+  installed:        "var(--data-pos)",
+  updated:          "var(--data-pos)",
+  forced:           "var(--data-pos)",
+  adopted:          "var(--data-pos)",
+  current:          "var(--data-pos)",
+  skipped:          "var(--highlight)",
+  missing:          "var(--highlight)",
+  modified:         "var(--highlight)",
+  update_available: "var(--highlight)",
+  conflict:         "var(--data-pos)",
+  errors:           "var(--hot)",
+};
+
+function _syncParseMessageCounts(msg) {
+  const out = {};
+  const re = /([a-z_]+)\s+(\d+)/gi;
+  let m;
+  while ((m = re.exec(msg || "")) !== null) {
+    out[m[1].toLowerCase()] = parseInt(m[2], 10);
+  }
+  return out;
+}
+
+function _syncColorizeMessage(msg) {
+  if (!msg) return "";
+  const verbs = Object.keys(_SYNC_TOKEN_COLOR).join("|");
+  let html = _syncEsc(msg);
+  // "<verb> <N>"  e.g. "installed 0", "skipped 31"
+  html = html.replace(new RegExp(`\\b(${verbs})\\s+(\\d+)\\b`, "gi"), (_, name, num) => {
+    const n = parseInt(num, 10);
+    const color = (n === 0) ? "var(--dim)" : (_SYNC_TOKEN_COLOR[name.toLowerCase()] || "var(--text)");
+    return `<span style="color:${color}">${name} ${num}</span>`;
+  });
+  // "<N> <verb>"  e.g. "5 updated"
+  html = html.replace(new RegExp(`\\b(\\d+)\\s+(${verbs})\\b`, "gi"), (_, num, name) => {
+    const n = parseInt(num, 10);
+    const color = (n === 0) ? "var(--dim)" : (_SYNC_TOKEN_COLOR[name.toLowerCase()] || "var(--text)");
+    return `<span style="color:${color}">${num} ${name}</span>`;
+  });
+  return html;
 }
 
 function _trainersRefreshStatus() {
@@ -9720,8 +9888,8 @@ function _trainersCheckTrigger() {
             parts.push(`(${total} on remote)`);
           }
           lab.textContent = parts.join(" · ");
-          lab.style.color = (n === 0 && m === 0) ? "var(--data-pos)"
-                          : (m > 0 ? "var(--accent)" : "var(--warm)");
+          lab.style.color = (n === 0 && m === 0) ? "var(--data-pos)" : "var(--highlight)";
+          _trainersUpdateDetailsButtonColor(n + m);
         } else {
           lab.textContent = `check failed: ${res.error || "unknown error"}`;
           lab.style.color = "var(--hot)";
@@ -9773,8 +9941,8 @@ function _trainersUpdateTrigger() {
       if (res.ok || res.results) {
         const r = res.results || {};
         if (lab) {
-          lab.textContent = _syncResultSummary(r);
-          lab.style.color = (r.errors && r.errors.length) ? "var(--hot)" : "var(--data-pos)";
+          lab.innerHTML = _syncColorizeMessage(_syncResultSummary(r));
+          lab.style.color = "";
         }
         _trainersRefreshStatus();
         // If the details panel is open, refresh it so the user sees the new state.
@@ -9789,101 +9957,8 @@ function _trainersUpdateTrigger() {
     .finally(() => { if (btn) btn.disabled = false; });
 }
 
-function _modelsApplyStatus(s) {
-  _renderDownloadRow(s, "models");
-}
-
-function _modelsRefreshStatus() {
-  fetch("/models/git/status").then(r => r.json()).then(_modelsApplyStatus).catch(() => {});
-}
-
-function _modelsCheckTrigger() {
-  const btn = $("modelsCheckBtn");
-  const lab = $("modelsSyncStatus");
-  if (btn) btn.disabled = true;
-  if (lab) { lab.textContent = "checking…"; lab.style.color = "var(--warm)"; }
-  fetch("/models/git/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
-    .then(r => r.json())
-    .then(res => {
-      if (res.status) _modelsApplyStatus(res.status);
-      else _modelsRefreshStatus();
-      const panel = $("modelsFilesPanel");
-      if (panel && panel.style.display !== "none" && res.files) {
-        _syncRenderPanel("models", res);
-      }
-      if (lab) {
-        if (res.ok) {
-          const n = res.new_files ?? 0;
-          const m = res.modified  ?? 0;
-          const total = res.remote_files ?? 0;
-          const localTrained = res.provenance
-            ? Object.values(res.provenance).filter(v => v === "local-trained").length
-            : 0;
-          const parts = [];
-          if (n === 0 && m === 0) parts.push(`up to date (${total} on remote)`);
-          else {
-            if (n) parts.push(`${n} update${n === 1 ? "" : "s"} available`);
-            if (m) parts.push(`${m} locally modified`);
-            parts.push(`(${total} on remote)`);
-          }
-          if (localTrained > 0) parts.push(`+ ${localTrained} local-trained`);
-          lab.textContent = parts.join(" · ");
-          lab.style.color = (n === 0 && m === 0) ? "var(--data-pos)"
-                          : (m > 0 ? "var(--accent)" : "var(--warm)");
-        } else {
-          lab.textContent = `check failed: ${res.error || "unknown error"}`;
-          lab.style.color = "var(--hot)";
-        }
-      }
-    })
-    .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
-    .finally(() => { if (btn) btn.disabled = false; });
-}
-
-function _modelsUpdateTrigger() {
-  const active = _activeTrainingName();
-  if (active) {
-    const ok = confirm(
-      `Training is active: ${active}.\n\n` +
-      `Locally-trained models are excluded from sync entirely (provenance: ` +
-      `local-trained), so your run's own files won't be touched. But if any ` +
-      `remote-pulled model overlaps with the running one, the download could ` +
-      `still corrupt an active checkpoint.\n\n` +
-      `Stop training first (recommended), or click OK to sync anyway.`
-    );
-    if (!ok) return;
-  }
-  const btn = $("modelsUpdateBtn");
-  const lab = $("modelsSyncStatus");
-  if (btn) btn.disabled = true;
-  if (lab) { lab.textContent = "syncing…"; lab.style.color = "var(--warm)"; }
-  _syncStartProgressPoll();   // live byte counter for large model downloads
-  fetch("/models/git/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
-    .then(r => r.json())
-    .then(res => {
-      if (res.ok || res.results) {
-        const r = res.results || {};
-        if (lab) {
-          lab.textContent = _syncResultSummary(r);
-          lab.style.color = (r.errors && r.errors.length) ? "var(--hot)" : "var(--data-pos)";
-        }
-        _modelsRefreshStatus();
-        const panel = $("modelsFilesPanel");
-        if (panel && panel.style.display !== "none") _syncFilesFetch("models");
-      } else {
-        if (lab) { lab.textContent = `failed: ${res.error || "unknown error"}`; lab.style.color = "var(--hot)"; }
-        _modelsRefreshStatus();
-      }
-    })
-    .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
-    .finally(() => {
-      if (btn) btn.disabled = false;
-      _syncStopProgressPoll();
-    });
-}
-
 // ===========================================================================
-// PER-FILE SYNC PANEL (plugins + models)
+// PER-FILE SYNC PANEL (trainers)
 // ---------------------------------------------------------------------------
 // Three-state classification (see veritate_mri/sync_common.py):
 //   current          - local matches remote (nothing to do)
@@ -9899,16 +9974,15 @@ function _modelsUpdateTrigger() {
 // ===========================================================================
 const SYNC_STATE_META = {
   current:          { color: "var(--data-pos)", badge: "✓ current",      title: "local matches remote" },
-  missing:          { color: "var(--warm)",     badge: "↓ missing",      title: "in remote but not on disk" },
-  update_available: { color: "var(--warm)",     badge: "↑ update",       title: "local matches last sync; remote has changed" },
-  modified:         { color: "var(--accent)",   badge: "✏ modified",     title: "you edited this file; remote unchanged" },
-  conflict:         { color: "var(--hot)",      badge: "⚠ conflict",     title: "you edited AND remote moved — review before forcing" },
+  missing:          { color: "var(--highlight)", badge: "↓ missing",     title: "in remote but not on disk" },
+  update_available: { color: "var(--highlight)", badge: "↑ update",      title: "local matches last sync; remote has changed" },
+  modified:         { color: "var(--highlight)", badge: "✏ modified",    title: "you edited this file; remote unchanged" },
+  conflict:         { color: "var(--data-pos)", badge: "⚠ conflict",     title: "you edited AND remote moved — review before forcing" },
   orphan:           { color: "var(--dim)",      badge: "○ orphan",       title: "tracked locally but no longer in remote" },
 };
 
 const _syncState = {
   trainers: { last: null, inflight: false },
-  models:   { last: null, inflight: false, progressTimer: null },
 };
 
 function _syncFmtBytes(n) {
@@ -9948,8 +10022,7 @@ function _syncSplitPath(p) {
 function _syncFileRowHtml(scope, row) {
   const meta = SYNC_STATE_META[row.state] || { color: "var(--dim)", badge: row.state, title: row.state };
   const sp = _syncSplitPath(row.path);
-  const isLarge = scope === "models" && row.large;
-  const sizeBadge = isLarge ? ` <span style="color:var(--warm);font-size:10px">LARGE</span>` : "";
+  const sizeBadge = "";
   const sizeText = row.size ? `${_syncFmtBytes(row.size)}` : "";
   // SHAs are debug info — hide inline, expose via tooltip on the state badge.
   const shaTip = [
@@ -10002,24 +10075,6 @@ function _syncFileRowHtml(scope, row) {
   </div>`;
 }
 
-function _syncProvenanceBadge(prov) {
-  if (prov === "remote-pulled") {
-    return `<span style="color:var(--accent);font-size:10px" title="published in the remote repo; participates in sync">remote-pulled</span>`;
-  }
-  return `<span style="color:var(--data-pos);font-size:10px" title="trained locally; never touched by sync">local-trained</span>`;
-}
-
-// Group rows by top-level dir for the Models panel (where each dir is a model
-// with its own provenance). Plugins are rendered as a flat list.
-function _syncGroupByDir(rows) {
-  const groups = {};
-  for (const r of rows) {
-    const top = r.path.includes("/") ? r.path.split("/", 1)[0] : "(root)";
-    (groups[top] ||= []).push(r);
-  }
-  return groups;
-}
-
 function _syncRenderPanel(scope, data) {
   const panel = $(scope + "FilesPanel");
   if (!panel) return;
@@ -10042,33 +10097,10 @@ function _syncRenderPanel(scope, data) {
   if (totalActionable === 0 && totalRisky === 0) {
     header += `<div style="color:var(--data-pos);font-size:10.5px;margin-bottom:6px">All files are in sync — nothing to do.</div>`;
   } else if (totalRisky > 0) {
-    header += `<div style="color:var(--accent);font-size:10.5px;margin-bottom:6px">⚠ ${totalRisky} file${totalRisky === 1 ? "" : "s"} require an explicit decision (force overwrite or adopt local).</div>`;
+    header += `<div style="color:var(--highlight);font-size:10.5px;margin-bottom:6px">⚠ ${totalRisky} file${totalRisky === 1 ? "" : "s"} require an explicit decision (force overwrite or adopt local).</div>`;
   }
 
-  let body = "";
-  if (scope === "models" && data.provenance) {
-    const groups = _syncGroupByDir(rows);
-    const groupNames = Object.keys(groups).sort();
-    for (const name of groupNames) {
-      const prov = data.provenance[name] || "local-trained";
-      body += `<details ${prov === "remote-pulled" ? "open" : ""} style="margin-top:6px;border:1px solid var(--line);border-radius:3px;padding:6px 8px">
-        <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px">
-          <span style="font-weight:600;color:var(--text);font-size:11px">${_syncEsc(name)}</span>
-          ${_syncProvenanceBadge(prov)}
-        </summary>
-        <div style="margin-top:4px">${groups[name].map(r => _syncFileRowHtml(scope, r)).join("")}</div>
-      </details>`;
-    }
-    // local-trained dirs not in the file table — list them so the user can see them
-    const localOnly = Object.keys(data.provenance).filter(d => data.provenance[d] === "local-trained" && !groups[d]).sort();
-    if (localOnly.length) {
-      body += `<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--line);font-size:10.5px;color:var(--dim)">
-        local-trained (invisible to sync): ${localOnly.map(d => `<code style="color:var(--text)">${_syncEsc(d)}</code>`).join(", ")}
-      </div>`;
-    }
-  } else {
-    body = rows.map(r => _syncFileRowHtml(scope, r)).join("");
-  }
+  const body = rows.map(r => _syncFileRowHtml(scope, r)).join("");
 
   panel.innerHTML = header + body;
   // Build a path -> row lookup so the click handler can show parent dir +
@@ -10092,10 +10124,9 @@ function _syncRenderPanel(scope, data) {
 function _syncConfirmDestructive(scope, action, path, row) {
   const sp = _syncSplitPath(path);
   const lines = [];
-  const scopeLabel = scope === "trainers" ? "plugin" : "model";
   if (sp.parent) {
     lines.push(`File:    ${sp.file}`);
-    lines.push(`Inside:  ${sp.parent}   (${scopeLabel})`);
+    lines.push(`Inside:  ${sp.parent}   (trainer)`);
   } else {
     lines.push(`File:    ${path}`);
   }
@@ -10175,11 +10206,8 @@ function _syncFilesAction(scope, path, action, row) {
   // Up-front status names the file being changed and what's happening.
   const sp = _syncSplitPath(path);
   const ctx = sp.parent ? `${sp.parent}/${sp.file}` : sp.file;
-  if (lab) { lab.textContent = `${action} ${ctx}…`; lab.style.color = "var(--warm)"; }
+  if (lab) { lab.textContent = `${action} ${ctx}…`; lab.style.color = "var(--highlight)"; }
   const body = JSON.stringify({ actions: { [path]: action } });
-  // Models with large downloads: kick off the progress poller so the user
-  // sees byte counters as the file streams.
-  if (scope === "models") _syncStartProgressPoll();
   fetch(`/${scope}/git/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body })
     .then(r => r.json())
     .then(res => {
@@ -10193,9 +10221,7 @@ function _syncFilesAction(scope, path, action, row) {
           lab.style.color = "var(--hot)";
         }
       }
-      if (scope === "trainers") _trainersRefreshStatus();
-      else                     _modelsRefreshStatus();
-      // refresh the detail panel so the row's state advances
+      _trainersRefreshStatus();
       return _syncFilesFetch(scope);
     })
     .catch(e => {
@@ -10203,66 +10229,7 @@ function _syncFilesAction(scope, path, action, row) {
     })
     .finally(() => {
       _syncState[scope].inflight = false;
-      if (scope === "models") _syncStopProgressPoll();
     });
-}
-
-// ---- Live progress overlay for large model downloads ------------------------
-function _syncStartProgressPoll() {
-  if (_syncState.models.progressTimer) return;
-  const tick = () => {
-    fetch("/models/git/progress").then(r => r.json()).then(p => {
-      const items = (p && p.items) || {};
-      _syncRenderProgress(items);
-    }).catch(() => {});
-  };
-  tick();
-  _syncState.models.progressTimer = setInterval(tick, 700);
-}
-
-function _syncStopProgressPoll() {
-  if (_syncState.models.progressTimer) {
-    clearInterval(_syncState.models.progressTimer);
-    _syncState.models.progressTimer = null;
-  }
-  // one last tick so the final 100% bars render before we stop
-  setTimeout(() => fetch("/models/git/progress").then(r => r.json()).then(p => {
-    _syncRenderProgress((p && p.items) || {});
-  }).catch(() => {}), 500);
-}
-
-function _syncRenderProgress(items) {
-  const panel = $("modelsFilesPanel");
-  if (!panel) return;
-  const keys = Object.keys(items);
-  if (!keys.length) return;
-  // Inject (or refresh) a fixed-position banner inside the panel that lists
-  // every in-flight file with a percentage bar.
-  let banner = panel.querySelector("[data-sync-progress]");
-  if (!banner) {
-    banner = document.createElement("div");
-    banner.setAttribute("data-sync-progress", "1");
-    banner.style.cssText = "margin:6px 0 8px;padding:6px 8px;border:1px solid var(--accent);border-radius:3px;background:rgba(38,123,255,0.05);font-size:10.5px";
-    panel.insertBefore(banner, panel.firstChild);
-  }
-  banner.innerHTML = `<div style="font-weight:600;color:var(--text);margin-bottom:4px">downloading</div>` +
-    keys.map(k => {
-      const it = items[k];
-      const total = it.bytes_total || 0;
-      const done  = it.bytes_done  || 0;
-      const pct = total > 0 ? Math.min(100, Math.round(done * 100 / total)) : 0;
-      const lab = `${_syncFmtBytes(done)}${total ? " / " + _syncFmtBytes(total) : ""}`;
-      const stateColor = it.state === "error" ? "var(--hot)" : it.state === "done" ? "var(--data-pos)" : "var(--accent)";
-      return `<div style="display:flex;flex-direction:column;gap:2px;margin-top:4px">
-        <div style="display:flex;justify-content:space-between;gap:8px;font-size:10px">
-          <code style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${_syncEsc(k)}</code>
-          <span style="color:var(--dim)">${lab} (${pct}%) <span style="color:${stateColor}">${_syncEsc(it.state || "")}</span></span>
-        </div>
-        <div style="height:3px;background:var(--line);border-radius:2px;overflow:hidden">
-          <div style="height:100%;width:${pct}%;background:${stateColor};transition:width .2s"></div>
-        </div>
-      </div>`;
-    }).join("");
 }
 
 function _syncTogglePanel(scope) {
@@ -10319,10 +10286,13 @@ function _corpusRenderCatalog(data) {
   const urlInput = $("corpusCatalogUrl");
   const statusEl = $("corpusCatalogStatus");
   const countBadge = $("corpusLibraryCountBadge");
-  if (countBadge && data && Array.isArray(data.corpora)) {
+  const modalCount = $("corpusLibraryModalCount");
+  if (data && Array.isArray(data.corpora)) {
     const total = data.corpora.length;
     const installed = data.corpora.filter(c => c.installed || c.local).length;
-    countBadge.textContent = installed ? `(${installed} / ${total} installed)` : `(${total} available)`;
+    const text = installed ? `(${installed} / ${total} installed)` : `(${total} available)`;
+    if (countBadge) countBadge.textContent = text;
+    if (modalCount) modalCount.textContent = text;
   }
   if (!list) return;
 
@@ -10661,6 +10631,20 @@ function _corpusSaveCatalogUrl() {
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } });
 }
 
+function _corpusOpenLibraryModal() {
+  const m = $("corpusLibraryModal");
+  if (!m) return;
+  m.classList.remove("hidden");
+  document.body.classList.add("no-scroll");
+  _corpusRefreshCatalog();
+}
+
+function _corpusCloseLibraryModal() {
+  const m = $("corpusLibraryModal");
+  if (m) m.classList.add("hidden");
+  document.body.classList.remove("no-scroll");
+}
+
 function _corpusOpenAddSourceModal() {
   const m = $("corpusAddSourceModal");
   if (!m) return;
@@ -10855,23 +10839,30 @@ function _applyDevicePrefCapabilities() {
   const hint = $("devicePreferenceHint");
   if (!sel) return;
   const caps = (_sysSpecsCache && _sysSpecsCache.capabilities) || null;
-  let any_disabled = false;
+  const disabled_labels = [];
+  const enabled_labels = [];
   Array.from(sel.options).forEach(opt => {
     const need = opt.dataset && opt.dataset.cap;
     if (!need) return;
     const ok = !!(caps && caps[need]);
     opt.disabled = !ok;
+    const label = (opt.textContent || "").split(" — ")[0].split(" (")[0].trim();
     if (!ok) {
-      any_disabled = true;
+      disabled_labels.push(label);
       if (!/—/.test(opt.textContent)) opt.textContent = opt.textContent + " — unsupported on this host";
+    } else {
+      enabled_labels.push(label);
     }
   });
   if (hint) {
     if (!caps) {
       hint.textContent = "click “Detect now” above to populate option availability.";
       hint.style.color = "var(--dim)";
-    } else if (any_disabled) {
-      hint.textContent = "Options requiring CUDA or MPS are disabled on this host.";
+    } else if (disabled_labels.length && enabled_labels.length) {
+      hint.textContent = `${disabled_labels.join(" / ")} unavailable on this host; ${enabled_labels.join(" / ")} ready.`;
+      hint.style.color = "var(--dim)";
+    } else if (disabled_labels.length) {
+      hint.textContent = `${disabled_labels.join(" / ")} unavailable on this host.`;
       hint.style.color = "var(--warm)";
     } else {
       hint.textContent = "All options available on this host.";
@@ -11317,26 +11308,13 @@ document.addEventListener("DOMContentLoaded", () => {
   _trainersRefreshStatus();
   setInterval(_trainersRefreshStatus, 15000);
 
-  const mcb = $("modelsCheckBtn");
-  if (mcb) mcb.addEventListener("click", _modelsCheckTrigger);
-  const mub = $("modelsUpdateBtn");
-  if (mub) mub.addEventListener("click", _modelsUpdateTrigger);
-  const mdb = $("modelsDetailsBtn");
-  if (mdb) mdb.addEventListener("click", () => _syncTogglePanel("models"));
-  _modelsRefreshStatus();
-  setInterval(_modelsRefreshStatus, 15000);
-
   // ---- Corpus library wiring ----
-  const corpusTitle = $("corpusLibraryTitle");
-  const corpusBody  = $("corpusLibraryBody");
-  const corpusChev  = $("corpusLibraryChevron");
-  if (corpusTitle && corpusBody) {
-    corpusTitle.addEventListener("click", () => {
-      const open = corpusBody.style.display !== "none";
-      corpusBody.style.display = open ? "none" : "flex";
-      if (corpusChev) corpusChev.style.transform = open ? "rotate(0deg)" : "rotate(90deg)";
-    });
-  }
+  const cbb = $("corpusBrowseBtn");
+  if (cbb) cbb.addEventListener("click", _corpusOpenLibraryModal);
+  const clmc = $("corpusLibraryModalClose");
+  if (clmc) clmc.addEventListener("click", _corpusCloseLibraryModal);
+  const clm = $("corpusLibraryModal");
+  if (clm) clm.addEventListener("click", (e) => { if (e.target === clm) _corpusCloseLibraryModal(); });
   const crb = $("corpusRefreshBtn");
   if (crb) crb.addEventListener("click", _corpusRefreshCatalog);
   const cof = $("corpusOpenFolderBtn");
@@ -11347,12 +11325,6 @@ document.addEventListener("DOMContentLoaded", () => {
   if (cas) cas.addEventListener("click", _corpusOpenAddSourceModal);
   const ctc = $("corpusToggleConfigBtn");
   if (ctc) ctc.addEventListener("click", () => {
-    const body = $("corpusLibraryBody");
-    const chev = $("corpusLibraryChevron");
-    if (body && body.style.display === "none") {
-      body.style.display = "flex";
-      if (chev) chev.style.transform = "rotate(90deg)";
-    }
     const row = $("corpusConfigRow");
     if (row) row.style.display = (row.style.display === "none" || !row.style.display) ? "flex" : "none";
   });
@@ -11378,6 +11350,11 @@ document.addEventListener("DOMContentLoaded", () => {
   if (rsb) rsb.addEventListener("click", _lifecycleRestart);
   const ksb = $("killServerBtn");
   if (ksb) ksb.addEventListener("click", _lifecycleKill);
+  const mmb = $("minimalModeBtn");
+  if (mmb) mmb.addEventListener("click", _lifecycleMinimalToggle);
+  const mmr = $("minimalModeRestoreLink");
+  if (mmr) mmr.addEventListener("click", _lifecycleMinimalToggle);
+  _refreshMinimalMode();
 
   document.querySelectorAll(".tab").forEach(t => {
     t.addEventListener("click", () => setTimeout(_sysPollEnsure, 50));
