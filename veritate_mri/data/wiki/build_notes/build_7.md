@@ -117,4 +117,15 @@ New Settings panel **Teacher Model** plugs an external LLM into Veritate for syn
 - Open **Settings → Teacher Model**, pick a provider, paste an API key (or point at a local server URL), click **Test**, then **Save**. Set `VERITATE_TEACHER_API_KEY` in the environment to keep the key out of `data/mri_settings.json` (env wins on every call).
 - Synth job output lands at `synth_jobs/<job_id>/samples.jsonl` (repo root, gitignored). Re-running the same job id resumes from the last sample.
 
+The built-in **AI Assist** panel talks to the Carpathian endpoint directly. To verify connectivity from a shell before wiring it into the dashboard:
+
+```bash
+curl -sS https://api.carpathian.ai/ai/v1/chat/completions \
+  -H "Authorization: Bearer cai_Laz79g9M9VtJDUI1TFzg0_2S6BERaD8zeiF2yrP79TU" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "carpathian-default", "messages": [{"role": "user", "content": "ping"}]}'
+```
+
+A `200` with a chat completion body means the key and endpoint are good; paste the same key into **Settings → AI Assist**.
+
 No version bumps.

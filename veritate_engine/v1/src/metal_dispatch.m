@@ -59,9 +59,18 @@ int metal_verify(void) {
 
 #define METALLIB_BASENAME      "default.metallib"
 #define MATMUL_FUNCTION_NAME   "matmul_int8"
-#define VERIFY_M               8
-#define VERIFY_N               8
-#define VERIFY_K               16
+
+// Verify suite covers tiny / threadgroup-boundary / production-ish shapes.
+// The 768x768x768 case is the matmul that dominates a Veritate forward pass
+// at the default hidden=768; if it bit-matches, the shader is real.
+static const struct { int M, N, K; const char* tag; } VERIFY_SUITE[] = {
+    {  8,   8,  16, "tiny" },
+    { 32,  32,  32, "tile-boundary" },
+    { 64,  64,  64, "threadgroup-aligned" },
+    {128, 128, 128, "medium" },
+    {256, 256, 256, "large" },
+    {768, 768, 768, "production-hidden" },
+};
 
 // ------------------------------------------------------------------------------------
 // Cached state. Lazily initialized on first metal_matmul_int8 call.
@@ -292,6 +301,61 @@ int metal_matmul_int8(const int8_t* a, const int8_t* b, int32_t* c,
 extern void matmul_int8_scalar(const int8_t* a, const int8_t* b, int32_t* c,
                                int32_t M, int32_t N, int32_t K);
 
+static int verify_one(int M, int N, int K, const char* tag) {
+    size_t a_sz = (size_t)M * (size_t)K;
+    size_t b_sz = (size_t)K * (size_t)N;
+    size_t c_sz = (size_t)M * (size_t)N;
+    int8_t*  a       = (int8_t*) malloc(a_sz);
+    int8_t*  b       = (int8_t*) malloc(b_sz);
+    int32_t* c_metal = (int32_t*)malloc(c_sz * sizeof(int32_t));
+    int32_t* c_ref   = (int32_t*)malloc(c_sz * sizeof(int32_t));
+    if (!a || !b || !c_metal || !c_ref) {
+        fprintf(stderr, "[%s] malloc failed (M=%d N=%d K=%d)\n", tag, M, N, K);
+        free(a); free(b); free(c_metal); free(c_ref);
+        return -1;
+    }
+    srand((unsigned)(M * 31 + N * 17 + K));
+    for (size_t i = 0; i < a_sz; i++) a[i] = (int8_t)((rand() & 0xff) - 128);
+    for (size_t i = 0; i < b_sz; i++) b[i] = (int8_t)((rand() & 0xff) - 128);
+
+    matmul_int8_scalar(a, b, c_ref, M, N, K);
+
+    char err[160] = {0};
+    double t0 = (double)clock() / CLOCKS_PER_SEC;
+    int rc = metal_matmul_int8(a, b, c_metal, M, N, K, err, sizeof(err));
+    double t1 = (double)clock() / CLOCKS_PER_SEC;
+    if (rc != 0) {
+        fprintf(stderr, "[%s] metal_matmul_int8 failed rc=%d: %s\n",
+                tag, rc, err[0] ? err : "(no message)");
+        free(a); free(b); free(c_metal); free(c_ref);
+        return rc;
+    }
+    int mismatches = 0;
+    int first_idx[8]; int32_t first_m[8]; int32_t first_r[8];
+    for (size_t i = 0; i < c_sz; i++) {
+        if (c_metal[i] != c_ref[i]) {
+            if (mismatches < 8) {
+                first_idx[mismatches] = (int)i;
+                first_m[mismatches]   = c_metal[i];
+                first_r[mismatches]   = c_ref[i];
+            }
+            mismatches++;
+        }
+    }
+    if (mismatches == 0) {
+        printf("[%s] PASS  M=%d N=%d K=%d  %.1f ms\n", tag, M, N, K, (t1 - t0) * 1000.0);
+        free(a); free(b); free(c_metal); free(c_ref);
+        return 0;
+    }
+    printf("[%s] FAIL  M=%d N=%d K=%d  %d/%zu mismatched\n",
+           tag, M, N, K, mismatches, c_sz);
+    for (int i = 0; i < mismatches && i < 8; i++) {
+        fprintf(stderr, "    c[%d] metal=%d ref=%d\n", first_idx[i], first_m[i], first_r[i]);
+    }
+    free(a); free(b); free(c_metal); free(c_ref);
+    return 1;
+}
+
 int metal_verify(void) {
     metal_caps_t caps;
     metal_detect(&caps);
@@ -300,38 +364,18 @@ int metal_verify(void) {
         fprintf(stderr, "metal_verify: no Metal device. abort.\n");
         return -1;
     }
-    int8_t  a[VERIFY_M * VERIFY_K];
-    int8_t  b[VERIFY_K * VERIFY_N];
-    int32_t c_metal[VERIFY_M * VERIFY_N];
-    int32_t c_ref  [VERIFY_M * VERIFY_N];
-    srand(1);
-    for (size_t i = 0; i < sizeof(a); i++) a[i] = (int8_t)((rand() & 0xff) - 128);
-    for (size_t i = 0; i < sizeof(b); i++) b[i] = (int8_t)((rand() & 0xff) - 128);
-
-    matmul_int8_scalar(a, b, c_ref, VERIFY_M, VERIFY_N, VERIFY_K);
-
-    char err[160] = {0};
-    int rc = metal_matmul_int8(a, b, c_metal, VERIFY_M, VERIFY_N, VERIFY_K, err, sizeof(err));
-    if (rc != 0) {
-        fprintf(stderr, "metal_matmul_int8 failed rc=%d: %s\n", rc, err[0] ? err : "(no message)");
-        return rc;
+    int failed = 0;
+    size_t n = sizeof(VERIFY_SUITE) / sizeof(VERIFY_SUITE[0]);
+    for (size_t i = 0; i < n; i++) {
+        int rc = verify_one(VERIFY_SUITE[i].M, VERIFY_SUITE[i].N, VERIFY_SUITE[i].K,
+                            VERIFY_SUITE[i].tag);
+        if (rc != 0) failed++;
     }
-    int mismatches = 0;
-    for (int i = 0; i < VERIFY_M * VERIFY_N; i++) {
-        if (c_metal[i] != c_ref[i]) {
-            if (mismatches < 8) {
-                fprintf(stderr, "  c[%d] metal=%d ref=%d\n", i, c_metal[i], c_ref[i]);
-            }
-            mismatches++;
-        }
-    }
-    if (mismatches == 0) {
-        printf("metal_verify: PASS (M=%d N=%d K=%d, %d outputs bit-match)\n",
-               VERIFY_M, VERIFY_N, VERIFY_K, VERIFY_M * VERIFY_N);
+    if (failed == 0) {
+        printf("metal_verify: ALL %zu shapes PASS\n", n);
         return 0;
     }
-    printf("metal_verify: FAIL (%d/%d outputs mismatched)\n",
-           mismatches, VERIFY_M * VERIFY_N);
+    printf("metal_verify: %d/%zu shapes FAILED\n", failed, n);
     return 1;
 }
 
