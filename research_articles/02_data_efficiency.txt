@@ -1,0 +1,100 @@
+The GPU Is Not the Lever: Why Data Quality, Not Framework Speed, Decides Small-Model Quality
+
+THESIS
+
+A recurring temptation in small-model research is to chase throughput: a faster
+training framework, a better kernel, a different backend, on the theory that more
+tokens per second buys more quality per dollar. Our measurements on Veritate, a
+byte-level model trained on a single Apple M3 Ultra, point the other way. On the
+hardware we actually have, the training accelerator is compute-bound and
+memory-bandwidth-bound, not framework-bound. Swapping the software stack moves
+throughput by single-digit percentages. The genuine levers for quality at fixed
+compute are the data and the training objective, not the framework. This article
+makes that case with numbers from our own throughput sweeps and our own
+data-mix and distillation findings.
+
+THE FRAMEWORK IS NOT THE BOTTLENECK
+
+We ran a controlled throughput sweep on our 800M-parameter byte model (hidden
+size 1536, 28 layers, feed-forward width 6144, 24 attention heads, vocabulary
+256, with a four-byte multi-token-prediction head), training in bf16 on the M3
+Ultra under PyTorch with the Metal Performance Shaders backend. The baseline ran
+at 1829 tokens per second at batch size 64. Raising the batch size to 80 gave the
+single best configuration at 1879 tokens per second, a 2.7 percent improvement,
+at which point the GPU was utilization-saturated and larger batches gave nothing.
+Turning on torch.compile gave 1.6 percent on its own and did not stack on top of
+the larger batch, because both target kernel-launch overhead rather than
+orthogonal costs. Fusing the multi-token-prediction head was inside the noise
+band. Sustained utilization sat around 43 to 45 percent of the bf16 peak, and we
+estimated a realistic ceiling near 48 percent. The system is bandwidth-bound on
+unified memory; anything claiming more than a two-times speedup on this hardware
+is wrong.
+
+We then did the harder test: a full port to MLX, Apple's native array framework,
+on the hypothesis that lazy graph evaluation and MPS-native fusions would beat
+PyTorch by the 1.3-to-1.8-times margin public benchmarks suggested. We built a
+numerically parity-verified MLX trainer (maximum absolute logit difference of
+0.0046, within the bf16 noise floor). At the small batch size of 16, MLX was
+about 77 percent faster per sample. But at the production batch size of 64 it
+collapsed to roughly 770 tokens per second, a 58 percent regression versus
+PyTorch, and three rounds of optimization did not fix the scaling behavior. The
+honest conclusion: MLX is not a default speedup for production-batch 800M
+transformer training on this chip. The framework is not where the quality budget
+is hiding. (We had earlier seen the same shape at 80M, where MLX was only
+1.18-times faster, below our justification threshold for adopting it.)
+
+WHERE THE QUALITY ACTUALLY COMES FROM
+
+If the accelerator is saturated, the only ways to get more quality per unit of
+compute are to spend the compute on better-chosen data and on a better objective.
+Three of our findings support this directly.
+
+First, cross-domain data is the win in our auxiliary-expert experiments. Adding a
+three-megabyte auxiliary expert trained on out-of-domain data (the PG-19 book
+corpus) to a frozen 85M TinyStories trunk improved held-out book perplexity
+substantially, from a validation cross-entropy of 2.20 down to 1.82, about a 31
+percent perplexity reduction, and improved a code prompt from 3.93 to 3.10. An
+auxiliary expert trained on the same domain as the trunk was nearly useless, with
+a 1.4 percent firing rate. The lesson was unambiguous: the value was in the
+diversity of the data, not in the extra parameters.
+
+Second, the training objective matters at fixed parameter count. Our four-byte
+multi-token-prediction head improved same-step validation cross-entropy slightly
+(0.446 versus a 0.452 baseline) while adding only 2.76 percent to parameters, and
+it doubles as a speculative-decoding draft signal at inference time. A small,
+well-chosen auxiliary objective bought both quality and speed.
+
+Third, distillation from a stronger teacher is the planned path to capability we
+cannot reach with raw data alone, and the public evidence is strong: on-policy
+and trace distillation are the 2026 frontier recipe for small reasoners. We have
+the scaffold built and the recipe specified (generate teacher traces, encode them
+as bytes, supervise the student), and we treat the data pipeline, not the
+trainer, as the first-class reusable artifact.
+
+LIMITATIONS
+
+The throughput numbers are specific to the M3 Ultra, to bf16, and to our 800M and
+80M shapes; on an H100 or a 4090 the calculus shifts, and we estimate roughly
+five-to-seven-times and thirty-times more raw throughput respectively on that
+hardware. The MLX collapse at large batch is a finding about one framework
+version on one chip and one shape, not a universal claim. The auxiliary-expert
+and multi-token-prediction numbers are single-scale 85M-and-800M results. And our
+distillation claim is, at the time of writing, a specified-and-scaffolded recipe
+grounded in the public literature rather than a completed Veritate result with
+its own benchmark numbers; we are careful to label it as such. The defensible
+core stands: on saturated consumer hardware, you do not buy quality with a faster
+framework. You buy it with better data and a better objective.
+
+References
+
+Hoffmann et al., Training Compute-Optimal Large Language Models (Chinchilla),
+2022.
+
+Rae et al., Scaling Language Models: Methods, Analysis and Insights from Training
+Gopher (PG-19 corpus), 2021.
+
+Gloeckle et al., Better and Faster Large Language Models via Multi-token
+Prediction, 2024.
+
+DeepSeek-AI, DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via
+Reinforcement Learning (R1-Distill), 2025.

@@ -1,0 +1,107 @@
+Thinking Time, Not Parameter Count: Spending Compute at Inference to Close the Gap on a Small Box
+
+THESIS
+
+The instinct in language modeling is to buy quality with parameters. Veritate's
+working hypothesis is different: for a model that must fit on a consumer or
+embedded device, the parameter budget is fixed and small, so the place left to
+spend is inference-time compute. Generate several candidate answers and pick the
+best; run a short chain of reasoning; verify before committing. The theoretical
+and empirical literature says this axis is real, and our own small-scale
+measurements say it shows up even at 85M. This article lays out the argument and
+the evidence that, for a small model, thinking time is a more honest lever than
+parameter count.
+
+THE THEORETICAL FRAME
+
+There is a clean complexity-theory result behind this. Merrill and Sabharwal
+(ICLR 2024), together with subsequent lower-bound work, show that a transformer
+allowed a polynomial number of chain-of-thought steps can decide every
+polynomial-time-solvable problem; with a linear number of steps it can recognize
+regular languages and simulate counter machines. The consequence is blunt: in the
+asymptotic sense, parameter count is not the bottleneck for what a model can
+compute. Thinking time is. A small model with enough serial reasoning steps and a
+verifier occupies the same complexity class as a large one with the same step
+budget. That does not make a small model equal to a large one in practice, but it
+removes the theoretical objection to the entire small-model-plus-inference-compute
+program.
+
+THE EMPIRICAL FRAME, PUBLIC
+
+The empirical literature backs the frame at practical scale. DeepSeek-R1-Distill
+at 1.5 billion parameters reaches AIME-2024 pass-at-one of 28.9 and MATH-500 of
+83.9, and with 64-sample consensus voting its AIME pass rate roughly doubles to
+52.7, beating much larger general-purpose models on math specifically. That is
+test-time compute, majority voting over many samples, converting a small model's
+single-shot weakness into competitive accuracy. The same paper's distilled family
+establishes that below roughly 1.5 billion parameters multi-step symbolic ability
+degrades sharply, which is exactly why our program targets the one-to-two-billion
+band for the base model and pushes the rest of the capability into the
+inference-time stack.
+
+THE EMPIRICAL FRAME, OURS
+
+We wanted to know whether the test-time-compute effect is merely a large-model
+phenomenon or whether it already appears at our scale. It appears. On the
+byte-level 85M, generating sixteen candidates per prompt and selecting the best by
+the model's own per-byte scoring yielded a 45.3 percent mean relative reduction in
+cross-entropy versus a single sample, across ten diverse prompts. That is
+self-grading only, the model judging its own outputs, which is the floor; a
+trained verifier would do better. The point is that test-time scaling is real even
+at 85M and even on bytes.
+
+A second, related finding concerns spending compute adaptively rather than
+uniformly. A logit-lens early-exit study on the 85M found that about 61 percent of
+byte positions could commit their prediction by layer seven of twelve, with
+high-confidence bytes committing by layer six on average and low-confidence ones
+needing the full depth, projecting roughly 32 percent mean compute savings from a
+per-position adaptive-depth policy. Confidence is a usable gating signal. This
+dovetails with the entropy structure reported elsewhere in this series, where the
+top third of byte positions hold most of the uncertainty: if most bytes are easy,
+most bytes should get less compute, and the hard minority should get more.
+
+An honest caution from the same line of work: the adaptive-depth saving comes from
+a trained or calibrated exit signal, not from a naive runtime gate. We tried a
+pure runtime entropy gate that committed early when the mid-layer prediction looked
+confident; it fired on under one percent of bytes within our quality budget,
+roughly thirty times short of target, because mid-layer byte distributions are too
+diffuse for a low-bar gate. The savings are available, but only through a small
+trained exit head, not a free runtime trick. This is the same recurring Veritate
+lesson that appears in our quantization and sparsity work: the win is a
+training-time investment, not a deployment-time shortcut.
+
+WHY THIS MATTERS FOR THE MISSION
+
+If quality can be bought with serial thinking time and parallel sampling rather
+than with parameters, then a model that fits in a few hundred megabytes on a
+five-watt device is not disqualified from competitive behavior on bounded tasks.
+It is given a knob: spend more wall-clock when the task is hard, spend almost none
+when it is easy. For an energy-constrained, consumer-hardware target, that knob is
+worth more than another billion parameters that will not fit.
+
+LIMITATIONS
+
+Our best-of-N and adaptive-depth numbers are at 85M, on a pretrain-only byte
+model, and the best-of-N result uses self-grading, which is a floor rather than a
+ceiling; a real process-reward verifier remains specified but unbuilt in our work,
+and we cite the public verifier results as the target rather than as our own. The
+complexity-theory result is asymptotic and says nothing about constants or about
+finite-precision practice. The R1 numbers are public results on a subword model,
+imported as evidence for the frame, not as Veritate measurements. The defensible
+claim is narrow but real: test-time compute scaling is measurable at our smallest
+scale, adaptive per-position compute is available through a small trained signal,
+and the theory removes the asymptotic objection to trading parameters for thinking
+time.
+
+References
+
+Merrill and Sabharwal, The Expressive Power of Transformers with Chain of
+Thought, ICLR 2024.
+
+DeepSeek-AI, DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via
+Reinforcement Learning, 2025.
+
+Snell et al., Scaling LLM Test-Time Compute Optimally can be More Effective than
+Scaling Model Parameters, 2024.
+
+Elbayad et al., Depth-Adaptive Transformer, 2020.

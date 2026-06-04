@@ -1,0 +1,101 @@
+Decode Faster Without Changing a Single Output Byte: Multi-Token Prediction and Speculative Decoding at Byte Level
+
+THESIS
+
+Autoregressive generation is serial by construction: each byte waits for the one
+before it. That serialization is the dominant latency cost of running a language
+model interactively, and it is especially punishing for a byte-level model, which
+emits four times as many steps per character as a subword model. The good news is
+that a family of techniques, speculative decoding and multi-token prediction,
+attacks this latency without touching output quality. Done correctly, the bytes
+that come out are identical to what the slow path would have produced. This
+article reports what we measured when we ported that family to Veritate's
+byte-level models, and why byte-level decoding turns out to have enough internal
+agreement for the techniques to work.
+
+THE PUBLIC FRAME
+
+Speculative decoding (Leviathan et al., 2023; Chen et al., 2023) uses a small fast
+drafter to propose several tokens at once and the full model to verify them in a
+single parallel pass, accepting the run of correct guesses and falling back to
+normal decoding at the first mismatch. Because the full model does the verifying,
+the output is provably the same as standard decoding. Medusa (Cai et al., 2024)
+attaches extra prediction heads to the model itself so it can draft several tokens
+ahead with no separate drafter, and EAGLE (Li et al., 2024) drafts at the feature
+level with a small extra decoder layer. These methods are now standard in
+production inference stacks. The open question for us was whether byte-level
+prediction is internally consistent enough for any of them to pay off, since the
+whole approach lives or dies on the acceptance rate.
+
+IS THERE ENOUGH AGREEMENT AT BYTE LEVEL?
+
+We measured this directly before building anything. Sampling eight continuations
+per position on real text from our byte-level 85M, 56.2 percent of positions
+showed unanimous agreement on the most likely byte and 74 percent showed a
+majority of at least six of eight. On genuinely low-entropy positions (under half
+a bit), mean agreement was 7.95 out of 8. This matches the published acceptance
+ceilings for speculative methods, which sit in the 60-to-80 percent range, and it
+tells us the byte stream is locally predictable enough for draft-and-verify to
+have real headroom. The heavy-tailed entropy structure described elsewhere in this
+series is the reason: most bytes are nearly determined, so a cheap drafter is
+right most of the time.
+
+WHAT WE BUILT AND MEASURED
+
+The cheapest lever, the key-value cache, gives a 19-times speedup at a 512-byte
+context, byte-exact, simply by not recomputing past positions. On top of that we
+trained a four-byte multi-token-prediction head; it improved training-time
+cross-entropy slightly while adding 2.76 percent to parameters, and at decode time
+it doubles as a drafter.
+
+The more interesting results are the self-speculative ones, where the model drafts
+against itself with no separate model. Running only the first six of twelve layers
+to produce a draft and the full stack to verify, the trained 85M accepted its own
+mid-layer draft 42 percent of the time with no retraining at all, for a 1.27-times
+theoretical speedup, with byte-for-byte identical output across every test prompt.
+A tiny distilled exit head (197 thousand parameters, a layer-norm plus one linear
+projection) trained for a few minutes pushed that acceptance from 0.48 to 0.85,
+a 1.74-times theoretical speedup. A separately distilled two-byte-ahead head (1.18
+million parameters) reached 75 percent acceptance reading the final hidden state,
+and a variant reading the mid-stack hidden state reached 58 percent. Because the
+vertical lever (early exit) and the horizontal lever (multi-byte drafting) act on
+different axes, they compose: the combined recipe projects a 2.25-times
+theoretical decode speedup on the unmodified trunk. A supporting engine kernel,
+forward-verify, was shown to be sublinear in the number of drafted bytes
+(4.69-times at sixteen), which is what makes the verification step cheap enough to
+be worth doing.
+
+The recurring pattern across all of these: the byte stream that comes out is
+always the full model's, so quality is unchanged. The drafter is only ever a
+guess; the full model is always the final authority. That is what makes the speed
+free rather than a quality trade.
+
+LIMITATIONS
+
+All of the self-speculative acceptance numbers are at 85M, and the speedups are
+theoretical projections from acceptance rates rather than measured end-to-end
+wall-clock; the explicit next step is to re-measure at the 800M hidden size and to
+wire an engine path that actually skips the unused layers on accept. The headline
+key-value-cache speedup is byte-exact and real, but the multi-token and
+speculative speedups assume verification kernels that are partly still in the
+experiment tree rather than the production engine. We also have not yet trained a
+full EAGLE-style draft head at byte level; we have specified the recipe and noted
+its falsifier (if the accepted draft length falls below six bytes, the byte-level
+case breaks the EAGLE intuition and we fall back to the self-speculative path).
+The robust conclusion is that byte-level decoding has measured internal agreement
+in the same band as the published acceptance ceilings, and that lossless decode
+acceleration is therefore on the table for byte-level models, not just subword
+ones.
+
+References
+
+Leviathan et al., Fast Inference from Transformers via Speculative Decoding, 2023.
+
+Chen et al., Accelerating Large Language Model Decoding with Speculative Sampling,
+2023.
+
+Cai et al., Medusa: Simple LLM Inference Acceleration Framework with Multiple
+Decoding Heads, 2024.
+
+Li et al., EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty,
+2024.

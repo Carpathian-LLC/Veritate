@@ -1,0 +1,92 @@
+Byte-Level Language Modeling Without a Tokenizer: What We Gave Up, and What We Got Back
+
+THESIS
+
+Veritate is a research program building energy-efficient language models that
+train and run on consumer hardware, specifically a single Apple M3 Ultra
+workstation. The most consequential architectural decision we made is also the
+most contrarian: we threw away the tokenizer. Veritate models read and write raw
+bytes. The vocabulary is exactly 256 symbols, one per possible byte value. There
+is no byte-pair-encoding table, no subword merge rules, and no out-of-vocabulary
+problem to manage. This article lays out why we made that choice, what it costs,
+and what the measured behavior of our 85M and 800M models tells us about whether
+the trade is worth it.
+
+BACKGROUND: WHY TOKENIZERS EXIST, AND WHY THEY ARE A LIABILITY
+
+A tokenizer compresses text into a smaller number of subword units before the
+model ever sees it. A byte-pair-encoding vocabulary of, say, fifty thousand
+tokens lets a model cover an average English word in roughly one to two steps
+instead of five or six. That compression is the whole point: fewer steps per
+sentence means shorter sequences, and self-attention cost grows with the square
+of sequence length, so shorter sequences are cheaper.
+
+The liability is that the tokenizer is a separate, frozen, hand-tuned artifact
+that sits between the model and reality. It bakes in assumptions about which
+languages matter, fragments rare words and code in awkward ways, and is brittle
+to noise and spelling. The public literature has been circling this problem for
+years. ByT5 (Xue et al.) showed token-free byte-to-byte models are markedly more
+robust to noise and to spelling-sensitive tasks. MambaByte (Wang et al.) and the
+Byte Latent Transformer (Pagnoni et al.) are recent attempts to make byte-level
+modeling competitive at scale. The fixed 256-symbol vocabulary is genuinely
+language-agnostic: every UTF-8 stream on earth is in distribution.
+
+THE COST: THE CONTEXT TAX
+
+The honest downside is sequence length. Bytes are roughly four times as many
+positions per character of meaning as a typical subword token. A byte model pays
+that factor everywhere context is consumed: prefill compute, attention cost, and
+key-value cache size all scale with it. We call this the context tax, and we do
+not pretend it away. It is the single biggest known cost of the byte-level bet,
+and several of our active research directions exist specifically to claw it back
+(prompt compression and prefix-injection retrieval among them).
+
+WHAT WE MEASURED
+
+Two findings from our own models are worth reporting because they bear directly
+on the viability of byte-level modeling at small scale.
+
+First, the per-byte uncertainty distribution is heavy-tailed and very low on
+average. On our trained 85M model, median next-byte entropy is 0.67 bits. About
+58.5 percent of bytes carry less than one bit of uncertainty, 78.3 percent carry
+less than two bits, and 98.8 percent carry less than four bits. The top 36
+percent of byte positions hold roughly 80 percent of the total uncertainty mass.
+The practical reading: most bytes are nearly free to predict, and the expensive
+work concentrates in a minority of positions. That structure is exactly what you
+want if you intend to spend compute proportionally to difficulty, which is a
+separate line of our work.
+
+Second, byte-level models at small scale have real failure modes we had to find
+the hard way. A streaming-attention-sink scheme (sliding window plus a sink
+token) collapsed into repetitive byte loops at sequence lengths of 256 to 512
+bytes on our 85M, under both rotary and absolute position encodings. The
+published intuition that attention sinks emerge cleanly only appears to hold at
+much larger scale; at 85M it did not, and we logged it as a refuted approach
+pending a retrained billion-parameter model. We also found that a naive
+retrieval scheme that mixed an n-gram corpus prior into the model logits at decode
+time degraded quality (a roughly 36 percent perplexity regression on the 85M)
+and induced looping, because a static corpus prior overrides the model's own
+plan. Retrieval has to be fused as input context, not as a logit bias.
+
+LIMITATIONS
+
+These results are at small scale. The 85M model is a research vehicle, not a
+product, and single-scale findings can flip with width and depth. The
+attention-sink failure in particular has an explicit retry condition (a trained
+model at one billion parameters or more) and should not be read as a permanent
+verdict against the technique. The entropy distribution is measured on one
+checkpoint and one data distribution; it is suggestive of an exploitable
+structure, not a proof that adaptive-compute schemes will pay off. And the
+context tax remains an open, quantified liability rather than a solved one. What
+we can say with confidence is that a 256-symbol byte vocabulary trains stably,
+produces coherent English, and exposes a uniquely clean substrate for the
+energy-efficiency techniques the rest of this series describes.
+
+References
+
+Xue et al., ByT5: Towards a Token-Free Future with Pre-trained Byte-to-Byte
+Models, 2021.
+
+Wang et al., MambaByte: Token-free Selective State Space Model, 2024.
+
+Pagnoni et al., Byte Latent Transformer: Patches Scale Better Than Tokens, 2024.

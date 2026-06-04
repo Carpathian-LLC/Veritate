@@ -1,0 +1,41 @@
+VERITATE RESEARCH ARTICLES: INDEX
+
+A series of academic-style articles on the Veritate project, a research program
+building byte-level, energy-efficient language models that train and run on
+consumer hardware (a single Apple M3 Ultra). Every quantitative claim traces to
+the project's internal research log; general scientific claims are cited to the
+public literature.
+
+01_byte_level_modeling.txt
+   Why Veritate uses a 256-symbol byte vocabulary with no tokenizer, the
+   sequence-length context tax it costs, and what the measured per-byte entropy
+   distribution and small-scale failure modes tell us about the trade.
+
+02_data_efficiency.txt
+   Measured throughput sweeps showing the M3 Ultra is bandwidth-bound, not
+   framework-bound (PyTorch versus an MLX port), and why data quality and the
+   training objective, not framework speed, are the real levers for small-model
+   quality.
+
+03_quantization_aware_training.txt
+   The measured cliff: below four bits per weight, post-training quantization on
+   byte models is catastrophic, while quantization-aware training recovers nearly
+   all the quality, reaching an effective 1.98 bits per weight at small quality
+   cost.
+
+04_activation_sparsity.txt
+   Why activation sparsity cannot be retrofitted onto a trained model but can be
+   installed with a few minutes of fine-tuning, reaching about 88 percent zeros,
+   and how it composes with weight pruning to cut feed-forward compute to roughly
+   six percent of dense.
+
+05_multitoken_speculative_decode.txt
+   Lossless decode acceleration at byte level: measured internal agreement in the
+   published acceptance band, a 19-times byte-exact key-value-cache speedup, and
+   self-speculative drafting that composes to a 2.25-times theoretical speedup
+   with unchanged output.
+
+06_test_time_compute.txt
+   Trading parameter count for thinking time: the complexity-theory frame, public
+   evidence from small reasoners, and Veritate's own measurement that best-of-N
+   self-grading and adaptive-depth compute savings appear even at 85M.
