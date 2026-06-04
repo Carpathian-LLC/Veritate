@@ -58,6 +58,8 @@ DEFAULTS = {
     "teacher_max_concurrency": 16,
     "teacher_max_tokens": 2048,
     "teacher_temperature": 0.7,
+    "tutorial_enabled": True,
+    "tutorial_completed": False,
 }
 
 VALID_TEMPERATURE_UNITS = ("C", "F", "K")
@@ -198,6 +200,11 @@ def _validate(patch):
         if v < 0.0 or v > 2.0:
             raise ValueError("teacher_temperature must be 0.0-2.0")
         patch["teacher_temperature"] = float(v)
+    for bkey in ("tutorial_enabled", "tutorial_completed"):
+        if bkey in patch:
+            v = patch[bkey]
+            if not isinstance(v, bool):
+                raise ValueError(f"{bkey} must be a boolean")
     return patch
 
 

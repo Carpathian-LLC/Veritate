@@ -9,6 +9,8 @@
 <meta charset="utf-8">
 <title>Veritate</title>
 <link rel="stylesheet" href="/static/index.css">
+<link rel="stylesheet" href="/static/tutorial.css">
+<link rel="stylesheet" href="/static/prune.css">
 </head>
 <body>
 
@@ -1582,6 +1584,36 @@
         <span id="minimalModeStatus" class="meta" style="font-size:10px;color:var(--dim);display:block;margin-top:3px"></span>
       </div>
 
+      <div id="tutorialRow" class="settings-row" style="margin-top: 14px; padding: 8px 10px; border: 1px solid var(--line); border-left: 2px solid var(--accent); border-radius: 3px; font-size: 11px">
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+          <span style="color: var(--accent); font-weight: 600; letter-spacing: .03em">Tutorial</span>
+          <span id="tutorialStateChip" style="font-size:9.5px;letter-spacing:.05em;padding:1px 6px;border:1px solid var(--dim);border-radius:2px;color:var(--dim);text-transform:uppercase">on</span>
+          <button id="tutorialToggleBtn" class="action" type="button" style="border-color: var(--accent); color: var(--accent); padding: 2px 8px; font-size: 10.5px; margin-left: auto">disable</button>
+          <button id="tutorialRestartBtn" class="action" type="button" style="border-color: var(--accent); color: var(--accent); padding: 2px 8px; font-size: 10.5px">restart tutorial</button>
+        </div>
+        <div class="desc" style="margin-top: 4px; font-size: 10.5px; color: var(--dim); line-height: 1.4">guided walkthrough of the dashboard. shows once for new users; restart it any time.</div>
+      </div>
+      <script>
+      (function () {
+        const chip = document.getElementById("tutorialStateChip");
+        const toggle = document.getElementById("tutorialToggleBtn");
+        const restart = document.getElementById("tutorialRestartBtn");
+        function paint(on) {
+          chip.textContent = on ? "on" : "off";
+          chip.style.color = on ? "var(--highlight)" : "var(--dim)";
+          chip.style.borderColor = on ? "var(--highlight)" : "var(--dim)";
+          toggle.textContent = on ? "disable" : "enable";
+        }
+        fetch("/settings").then(r => r.json()).then(s => paint(s.tutorial_enabled !== false)).catch(() => {});
+        toggle.addEventListener("click", () => {
+          const on = toggle.textContent === "enable";
+          if (window.Tutorial) window.Tutorial.set_enabled(on);
+          paint(on);
+        });
+        restart.addEventListener("click", () => { if (window.Tutorial) window.Tutorial.restart(); });
+      })();
+      </script>
+
       <div class="settings-row" style="border-top: 1px solid var(--hot); margin-top: 18px; padding-top: 18px">
         <div class="label" style="color: var(--hot)">Danger zone</div>
         <div class="danger-zone">
@@ -1904,5 +1936,7 @@
 </footer>
 
 <script src="/static/index.js"></script>
+<script src="/static/tutorial.js"></script>
+<script src="/static/prune.js"></script>
 </body>
 </html>

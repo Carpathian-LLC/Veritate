@@ -81,27 +81,8 @@ SIZE_PRESETS = {
 # Functions
 
 def _pick_device(requested):
-    # CLI --device wins. When --device=auto, consult VERITATE_DEVICE env var
-    # (set by dashboard's Device preference) before falling through to auto-detect.
-    if requested == "auto":
-        forced = (os.environ.get("VERITATE_DEVICE") or "auto").strip().lower()
-        if forced in ("cuda", "mps", "cpu"):
-            requested = forced
-    if requested == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA requested but torch.cuda.is_available() is False")
-        return "cuda"
-    if requested == "mps":
-        if not (getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() and paths.current_arch() == paths.ARCH_ARM64):
-            raise RuntimeError("MPS requested but unavailable")
-        return "mps"
-    if requested == "cpu":
-        return "cpu"
-    if torch.cuda.is_available():
-        return "cuda"
-    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() and paths.current_arch() == paths.ARCH_ARM64:
-        return "mps"
-    return "cpu"
+    from veritate_core.plugin import hardware
+    return hardware.pick_device(requested)
 
 
 def _lr_at(step, total, warmup, base_lr, min_lr, schedule, wsd_decay_frac, wsd_decay_kind):

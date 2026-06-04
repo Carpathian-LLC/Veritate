@@ -13,10 +13,26 @@ A trainer plugin is a folder under `trainers/<name>/` containing a `trainer.py` 
 Trainers import the surface from `veritate_core.plugin`:
 
 ```python
-from veritate_core.plugin import save, paths, model, qat, get_teacher_client
+from veritate_core.plugin import save, paths, model, qat, hardware, get_teacher_client
 ```
 
-`save`, `paths`, `model`, and `qat` are the namespaces in this contract. `get_teacher_client(provider=None, model=None)` returns a configured teacher-model `Client` for distillation, or `None` when no `teacher_provider` is set in settings. Nothing else in the parent repo is callable from a trainer.
+`save`, `paths`, `model`, `qat`, and `hardware` are the namespaces in this contract. `get_teacher_client(provider=None, model=None)` returns a configured teacher-model `Client` for distillation, or `None` when no `teacher_provider` is set in settings. Nothing else in the parent repo is callable from a trainer.
+
+## hardware
+
+Single source of truth for compute-device and core detection. Replaces per-trainer `pick_device()` copies.
+
+### `hardware.pick_device(requested="auto") -> str`
+
+Returns `"cuda"`, `"mps"`, or `"cpu"`. `requested` is a CLI value; `"auto"` consults the `VERITATE_DEVICE` env override (set by the dashboard Device-preference dropdown) before auto-detecting. MPS is arm64-guarded: Intel Macs report MPS available but crash mid-step, so they resolve to `"cpu"` regardless of request. Raises `RuntimeError` if an explicitly requested backend is unavailable.
+
+### `hardware.mps_supported() -> bool` / `hardware.cuda_supported() -> bool`
+
+True only when the backend is actually usable (MPS additionally requires arm64).
+
+### `hardware.physical_cores() -> int`
+
+Physical core count via psutil, with an `os.cpu_count()//2` fallback. Callers apply their own cap.
 
 ## save
 

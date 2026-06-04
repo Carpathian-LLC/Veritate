@@ -160,12 +160,22 @@ def sha256_file(path):
 
 
 def hash_corpus(stem):
-    train, val = resolve_corpus(stem)
-    out = {"stem": stem, "train_sha256": sha256_file(train), "train_bytes": os.path.getsize(train)}
-    if val is not None:
-        out["val_sha256"] = sha256_file(val)
-        out["val_bytes"]  = os.path.getsize(val)
-    return out
+    from veritate_core.plugin import multicorpus
+    members = [s for s, _ in multicorpus.parse_spec(stem)]
+    if len(members) == 1:
+        train, val = resolve_corpus(members[0])
+        out = {"stem": stem, "train_sha256": sha256_file(train), "train_bytes": os.path.getsize(train)}
+        if val is not None:
+            out["val_sha256"] = sha256_file(val)
+            out["val_bytes"]  = os.path.getsize(val)
+        return out
+    digests, total = [], 0
+    for s in members:
+        train, _ = resolve_corpus(s)
+        digests.append(s + "=" + sha256_file(train))
+        total += os.path.getsize(train)
+    mix = hashlib.sha256("\n".join(digests).encode("utf-8")).hexdigest()
+    return {"stem": stem, "train_sha256": mix, "train_bytes": total, "members": digests}
 
 
 def _auto_description(name, args):

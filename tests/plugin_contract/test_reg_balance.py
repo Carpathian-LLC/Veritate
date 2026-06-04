@@ -62,6 +62,27 @@ def test_invalid_reg_mode_raises():
         m.FFN(32, 64, reg_mode="bogus")
 
 
+def test_group_penalty_zero_when_all_units_silent():
+    """group_penalty is ~0 when every unit is off, large when units fire."""
+    silent = float(m.group_penalty(torch.zeros(2, 8, 16)))
+    firing = float(m.group_penalty(torch.ones(2, 8, 16)))
+    assert silent < 1e-2 and firing > 1.0 and firing > 100 * silent
+
+
+def test_group_penalty_counts_active_units():
+    """group_penalty grows with the number of active units (structured)."""
+    one = torch.zeros(2, 8, 16); one[..., 0] = 1.0
+    four = torch.zeros(2, 8, 16); four[..., :4] = 1.0
+    assert float(m.group_penalty(four)) > float(m.group_penalty(one))
+
+
+def test_ffn_group_mode_captures_penalty():
+    """FFN(reg_mode=group) stores the group penalty in _last_l1."""
+    f = m.FFN(32, 64, activation="relu", capture_l1=True, reg_mode="group")
+    f(torch.randn(2, 8, 32))
+    assert f._last_l1 is not None and float(f._last_l1) >= 0.0
+
+
 def test_neuron_balance_plugin_in_regularizer_group():
     """neuron_balance shares the regularizer group with the l1 plugins (mutually exclusive)."""
     by_id = {p["id"]: p for p in cp.REGISTRY}

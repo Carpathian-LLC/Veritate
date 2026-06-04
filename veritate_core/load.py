@@ -129,7 +129,8 @@ def load_from_state_dict(sd, cfg, strict_canonical=True):
         model.load_state_dict(sd, strict=False)
         return model
 
-    from veritate_core.model import Veritate
-    model = Veritate(**shape)
+    from veritate_core.model import Veritate, ACT_DEFAULT
+    activation = cfg.get("activation") or ACT_DEFAULT
+    model = Veritate(**shape, activation=activation)
     model.load_state_dict(sd, strict=strict_canonical)
     return model

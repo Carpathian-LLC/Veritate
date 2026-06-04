@@ -831,8 +831,8 @@ class Brain:
         from inference.decode import KVCachedDecoder
 
         m = self.model
-        ids = torch.tensor([list(prompt_bytes)], dtype=torch.long)
         dec = KVCachedDecoder(m, max_T=m.seq, B=1)
+        ids = torch.tensor([list(prompt_bytes)], dtype=torch.long, device=dec.device)
         with dec.cached():
             t0 = time.perf_counter()
             with torch.no_grad():
