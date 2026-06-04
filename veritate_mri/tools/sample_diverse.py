@@ -25,8 +25,6 @@ import torch.nn.functional as F
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, REPO)
-sys.path.insert(0, os.path.join(REPO, "trainers", "veritate_mega"))
-sys.path.insert(0, os.path.join(REPO, "trainers", "multimind_m3"))
 
 from veritate_core.plugin import qat as qat_helpers
 from veritate_mri.inference.addons import build_chain, list_addons

@@ -6,7 +6,7 @@
 # Notes:
 # - spawn a plugin script as a subprocess. one at a time globally.
 # - stdout streams into the in-memory log ring. status exposed via state().
-# veritate_mri/training/plugin_runner.py
+# veritate_mri/training/trainer_runner.py
 # ------------------------------------------------------------------------------------
 # Imports:
 

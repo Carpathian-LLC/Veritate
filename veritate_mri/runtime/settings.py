@@ -58,8 +58,9 @@ DEFAULTS = {
     "teacher_max_concurrency": 16,
     "teacher_max_tokens": 2048,
     "teacher_temperature": 0.7,
-    "tutorial_enabled": True,
-    "tutorial_completed": False,
+    "mesh_role": "off",
+    "mesh_hub_address": "",
+    "mesh_auth_token": "",
 }
 
 VALID_TEMPERATURE_UNITS = ("C", "F", "K")
@@ -68,6 +69,8 @@ KNOWN_TEACHER_PROVIDERS = (
     "openai", "anthropic", "gemini", "xai", "deepseek",
     "mistral", "groq", "openrouter", "ollama", "lm_studio", "llama_cpp",
 )
+
+VALID_MESH_ROLES = ("off", "node", "hub", "both")
 
 # Build notices surface a modal in the dashboard for breaking-build changes the
 # user needs to act on. Add an entry only when a build introduces something the
@@ -200,11 +203,30 @@ def _validate(patch):
         if v < 0.0 or v > 2.0:
             raise ValueError("teacher_temperature must be 0.0-2.0")
         patch["teacher_temperature"] = float(v)
-    for bkey in ("tutorial_enabled", "tutorial_completed"):
-        if bkey in patch:
-            v = patch[bkey]
-            if not isinstance(v, bool):
-                raise ValueError(f"{bkey} must be a boolean")
+    if "mesh_role" in patch:
+        v = patch["mesh_role"]
+        if not isinstance(v, str):
+            raise ValueError("mesh_role must be a string")
+        v = v.strip().lower()
+        if v not in VALID_MESH_ROLES:
+            raise ValueError(f"mesh_role must be one of {VALID_MESH_ROLES}")
+        patch["mesh_role"] = v
+    if "mesh_hub_address" in patch:
+        v = patch["mesh_hub_address"]
+        if v is None:
+            patch["mesh_hub_address"] = ""
+        elif not isinstance(v, str):
+            raise ValueError("mesh_hub_address must be a string")
+        else:
+            patch["mesh_hub_address"] = v.strip().rstrip("/")
+    if "mesh_auth_token" in patch:
+        v = patch["mesh_auth_token"]
+        if v is None:
+            patch["mesh_auth_token"] = ""
+        elif not isinstance(v, str):
+            raise ValueError("mesh_auth_token must be a string")
+        else:
+            patch["mesh_auth_token"] = v.strip()
     return patch
 
 

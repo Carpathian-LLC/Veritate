@@ -67,6 +67,3 @@ def subscribe():
                 pass
 
 
-def subscriber_count():
-    with SUBSCRIBER_LOCK:
-        return len(SUBSCRIBERS)

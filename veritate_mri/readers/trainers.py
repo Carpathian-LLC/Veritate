@@ -17,7 +17,7 @@
 #   source of truth for what a plugin is; folder names mean nothing to the
 #   platform. ids are path-from-plugins-root with forward slashes.
 # - skips entries starting with _ or . (dunder, hidden, __pycache__, etc.)
-# veritate_mri/readers/plugins.py
+# veritate_mri/readers/trainers.py
 # ------------------------------------------------------------------------------------
 # Imports:
 

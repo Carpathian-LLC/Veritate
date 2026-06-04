@@ -34,3 +34,6 @@ veritate_trace.bin
 *.tern
 .pytest_cache
 /synth_jobs/
+dev_documentation/multimind/*.pt
+dev_documentation/multimind/affect_probe_stats.json
+trainers/multimind_poc/corpus/

@@ -25,6 +25,12 @@ ENGINE_BINARY = os.path.join(REPO_ROOT, "veritate_engine", "v1", "bin", "macos",
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+# also put veritate_mri on sys.path so route imports like `from teacher import ...`
+# resolve (Build 7 layout uses bare imports relative to MRI dir for some routes).
+MRI_DIR = os.path.join(REPO_ROOT, "veritate_mri")
+if MRI_DIR not in sys.path:
+    sys.path.insert(0, MRI_DIR)
+
 # ------------------------------------------------------------------------------------
 # Functions
 

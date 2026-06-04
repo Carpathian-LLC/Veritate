@@ -79,8 +79,8 @@ def test_engine_status_returns_json(client):
 
 
 def test_plugins_endpoint_returns_json_list(client):
-    """GET /plugins returns the list of installed training plugins."""
-    r = client.get("/plugins")
+    """GET /trainers returns the list of installed training trainers."""
+    r = client.get("/trainers")
     assert r.status_code == 200
     assert "json" in r.content_type.lower()
 

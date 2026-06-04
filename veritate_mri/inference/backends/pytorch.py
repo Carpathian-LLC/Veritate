@@ -5,19 +5,16 @@
 # ------------------------------------------------------------------------------------
 # Notes:
 # - pytorch runtime wrapper. forward hooks capture activations for the mri viewer.
-# veritate_mri/backends/pytorch.py
+# veritate_mri/inference/backends/pytorch.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
-import heapq
 import json
 import math
 import os
 import sys
 import threading
 import time
-
-import numpy as np
 
 from runtime import logs as logmod
 from training import confidence as confidence_mod
@@ -293,35 +290,8 @@ class Brain:
             }
         return None
 
-    def compute_all_neuron_labels(self):
-        """Iterate all neurons in self.memory and build a (layer, neuron_id) -> label
-        cache. Idempotent. Costs a few seconds at startup; lookups are O(1) after."""
-        labels = {}
-        if self.memory is None:
-            self.neuron_labels = labels
-            return labels
-        for L_str, layer_mem in self.memory.items():
-            try:
-                L = int(L_str)
-            except ValueError:
-                continue
-            for n_str, stories in layer_mem.items():
-                try:
-                    n = int(n_str)
-                except ValueError:
-                    continue
-                lbl = self._derive_label(stories)
-                if lbl is not None:
-                    labels[(L, n)] = lbl
-        self.neuron_labels = labels
-        return labels
-
     def label_for(self, layer, neuron_id):
-        """Lookup. Returns label dict or None."""
-        labels = getattr(self, "neuron_labels", None)
-        if not labels:
-            return None
-        return labels.get((int(layer), int(neuron_id)))
+        return None
 
     def neuron_byte_affinity(self, layer, neuron_id, top_k=5):
         """Top + and - bytes that this neuron writes toward when it fires."""
@@ -425,86 +395,6 @@ class Brain:
     def _pre_hook(buf, L):
         def hook(_m, inp): buf[L] = inp[0]
         return hook
-
-    def build_memory_from_corpus(self, corpus_bytes, n_stories=500, top_k=8, max_story_bytes=256, seed=7):
-        # for each (layer, neuron), keep top-K training stories that activated it hardest.
-        # uses the existing ffn_up hooks already wired on this model.
-        m = self.model
-        parts = corpus_bytes.split(b"\x00")
-        parts = [p for p in parts if 32 <= len(p) <= max_story_bytes]
-        rng = np.random.default_rng(seed)
-        chosen = rng.choice(len(parts), size=min(n_stories, len(parts)), replace=False)
-        stories = [parts[int(i)] for i in chosen]
-
-        # tie-breaker counter so heapq never compares text/dicts
-        counter = 0
-        heaps = [[[] for _ in range(m.ffn)] for _ in range(m.layers)]
-        for story in stories:
-            ids = torch.tensor([b for b in story[:m.seq]], dtype=torch.long).unsqueeze(0)
-            if ids.size(1) < m.seq:
-                pad = torch.zeros(m.seq - ids.size(1), dtype=torch.long).unsqueeze(0)
-                ids = torch.cat([ids, pad], dim=1)
-            with torch.no_grad():
-                _ = m(ids)
-            real_len = min(len(story), m.seq)
-            text = story[:real_len].decode("utf-8", errors="replace")
-            for L in range(m.layers):
-                act = F.gelu(self.cap_ffn[L])[0, :real_len].abs()
-                # per-neuron max activation AND the position where it peaked
-                per_neuron_max, per_neuron_argmax = act.max(dim=0)
-                arr_v = per_neuron_max.cpu().numpy()
-                arr_p = per_neuron_argmax.cpu().numpy()
-                hl = heaps[L]
-                for n in range(m.ffn):
-                    score = float(arr_v[n])
-                    peak_pos = int(arr_p[n])
-                    h = hl[n]
-                    counter += 1
-                    entry = (score, counter, text, peak_pos)
-                    if len(h) < top_k:
-                        heapq.heappush(h, entry)
-                    elif score > h[0][0]:
-                        heapq.heapreplace(h, entry)
-
-        out = {}
-        for L in range(m.layers):
-            out[str(L)] = {}
-            for n in range(m.ffn):
-                h = heaps[L][n]
-                ranked = sorted(h, key=lambda x: -x[0])
-                if ranked and ranked[0][0] > 0:
-                    out[str(L)][str(n)] = [
-                        {"text": t, "score": round(s, 3), "peak_pos": int(p)}
-                        for s, _c, t, p in ranked
-                    ]
-        return out
-
-    def compute_quant_kl(self, prompt, n_levels=127):
-        with torch.no_grad():
-            m = self.model
-            prompt_bytes = (prompt or " ").encode("utf-8")
-            ids = torch.tensor([b for b in prompt_bytes], dtype=torch.long).unsqueeze(0)
-            if ids.size(1) >= m.seq:
-                ids = ids[:, -(m.seq - 1):]
-            logits_fp, *_ = m(ids)
-            p_fp = F.softmax(logits_fp[0, -1], dim=-1)
-            backup = {}
-            for name, p in m.named_parameters():
-                if p.dim() < 2:
-                    continue
-                backup[name] = p.data.clone()
-                max_abs = p.data.abs().max().clamp(min=1e-8)
-                scale = max_abs / n_levels
-                p.data = torch.clamp(torch.round(p.data / scale), -n_levels, n_levels) * scale
-            try:
-                logits_q, *_ = m(ids)
-                p_q = F.softmax(logits_q[0, -1], dim=-1)
-            finally:
-                for name, p in m.named_parameters():
-                    if name in backup:
-                        p.data = backup[name]
-            kl_bits = float((p_fp * ((p_fp + 1e-12).log2() - (p_q + 1e-12).log2())).sum())
-            return round(max(0.0, kl_bits), 5)
 
     def _memory_lookup(self, ffn_top):
         if self.memory is None:

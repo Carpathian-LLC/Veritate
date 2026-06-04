@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<!--
+  Developed by Carpathian, LLC.
+  Legal Notice: Distribution Not Authorized.
+  Multi-Mind dashboard: regions, affect, sleep, drift.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Veritate MtM</title>
+<link rel="stylesheet" href="/static/multimind.css">
+</head>
+<body>
+
+<header class="mtm-topbar">
+  <div class="mtm-title-wrap">
+    <h1>V&middot;E&middot;R&middot;I&middot;T&middot;A&middot;T&middot;E <sup class="mtm-badge">&#7504;&#7511;&#7504;</sup></h1>
+    <p class="mtm-subtitle">Multi-Mind: regions firing, sleeping, learning</p>
+  </div>
+  <div class="mtm-topbar-right">
+    <a class="mtm-back-link" href="/">back to main dashboard</a>
+  </div>
+</header>
+
+<main class="mtm-main">
+
+  <section class="mtm-panel" id="mtmStatusBar">
+    <h2>status <em>what is loaded and what it is doing right now</em></h2>
+    <div class="mtm-chip-row">
+      <div class="mtm-chip">
+        <span class="mtm-chip-k">model</span>
+        <span class="mtm-chip-v" id="mtmStatusModel">loading...</span>
+      </div>
+      <div class="mtm-chip">
+        <span class="mtm-chip-k">role</span>
+        <span class="mtm-chip-v" id="mtmStatusRole">--</span>
+      </div>
+      <div class="mtm-chip">
+        <span class="mtm-chip-k">uptime</span>
+        <span class="mtm-chip-v" id="mtmStatusUptime">--</span>
+      </div>
+      <div class="mtm-chip">
+        <span class="mtm-chip-k">last sleep</span>
+        <span class="mtm-chip-v" id="mtmStatusLastSleep">--</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="mtm-panel">
+    <h2>region firing <em>which brain region fired on each byte</em></h2>
+    <div class="mtm-canvas-scroll">
+      <canvas id="mtmFiringCanvas" width="1200" height="240"></canvas>
+    </div>
+    <div id="mtmFiringPlaceholder" class="mtm-placeholder">no firing data yet</div>
+    <div id="mtmFiringLegend" class="mtm-legend"></div>
+  </section>
+
+  <section class="mtm-panel">
+    <h2>affect trace <em>valence (positive vs negative tone) and arousal (energy) over time</em></h2>
+    <div class="mtm-canvas-scroll">
+      <canvas id="mtmAffectCanvas" width="1200" height="120"></canvas>
+    </div>
+    <div id="mtmAffectLegend" class="mtm-legend">
+      <span class="mtm-swatch-item"><span class="mtm-swatch" style="background:var(--accent)"></span>valence (-1..1)</span>
+      <span class="mtm-swatch-item"><span class="mtm-swatch" style="background:var(--warm)"></span>arousal (0..1)</span>
+    </div>
+  </section>
+
+  <div class="mtm-grid-half">
+
+    <section class="mtm-panel">
+      <h2>gate weights <em>how strongly each region is contributing to the current byte</em></h2>
+      <div id="mtmGateBars" class="mtm-gate-bars"></div>
+      <p class="mtm-help">striped bars are in refractory cooldown after firing.</p>
+    </section>
+
+    <section class="mtm-panel" id="mtmSleepPanel">
+      <h2>sleep / wake <em>consolidation cycle state</em></h2>
+      <div class="mtm-sleep-state">
+        <span class="mtm-sleep-k">state</span>
+        <span class="mtm-sleep-v" id="mtmSleepState">--</span>
+      </div>
+      <div class="mtm-sleep-row">
+        <div class="mtm-sleep-cell">
+          <span class="mtm-sleep-k">next sleep in</span>
+          <span class="mtm-sleep-v" id="mtmSleepCountdown">--</span>
+        </div>
+        <div class="mtm-sleep-cell">
+          <span class="mtm-sleep-k">last sleep duration</span>
+          <span class="mtm-sleep-v" id="mtmSleepLastDuration">--</span>
+        </div>
+        <div class="mtm-sleep-cell">
+          <span class="mtm-sleep-k">bytes since last sleep</span>
+          <span class="mtm-sleep-v" id="mtmSleepBytesSince">--</span>
+        </div>
+      </div>
+      <div class="mtm-sleep-actions">
+        <button id="mtmForceSleepBtn" type="button">force sleep cycle now</button>
+      </div>
+    </section>
+
+  </div>
+
+  <section class="mtm-panel">
+    <h2>per-region drift &amp; perplexity <em>how much each region changed and how well it predicts its specialty</em></h2>
+    <div class="mtm-table-scroll">
+      <table id="mtmRegionsTable" class="mtm-regions-table">
+        <thead>
+          <tr>
+            <th>region</th>
+            <th>specialty</th>
+            <th>params</th>
+            <th>drift L2</th>
+            <th>specialty perplexity</th>
+            <th>fired %</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="mtm-empty-row"><td colspan="6">no region data yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="mtm-panel">
+    <h2>conversation ledger <em>recent prompts, click one to replay its firing pattern</em></h2>
+    <ul id="mtmConvList" class="mtm-conv-list">
+      <li class="mtm-conv-empty">no conversations recorded yet</li>
+    </ul>
+  </section>
+
+  <section class="mtm-panel" id="mtmTryItPanel">
+    <h2>try it <em>send a prompt and watch the regions light up as bytes stream in</em></h2>
+    <textarea id="mtmPrompt" rows="3" placeholder="ask the model something. region firing renders above as bytes stream in."></textarea>
+    <div class="mtm-tryit-controls">
+      <label>max bytes
+        <input id="mtmMaxBytes" type="number" value="200" step="10" min="1" max="8192">
+      </label>
+      <button id="mtmSendBtn" type="button" class="mtm-go">generate</button>
+      <span id="mtmSendStat" class="mtm-stat"></span>
+    </div>
+  </section>
+
+</main>
+
+<script src="/static/multimind.js" defer></script>
+</body>
+</html>

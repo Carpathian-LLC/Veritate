@@ -1,0 +1,21 @@
+{
+  "config": {
+    "steps": 10000,
+    "bank_size": 256,
+    "n_train": 12000,
+    "n_val": 500,
+    "names": 24,
+    "colors": 16,
+    "pass_acc_with_mem": 0.25,
+    "pass_acc_baseline": 0.18
+  },
+  "baseline_no_memory": {
+    "acc": 0.112,
+    "n_params": 7479552
+  },
+  "with_memory": {
+    "acc": 0.066,
+    "n_params": 7676160
+  },
+  "verdict": "FAIL"
+}

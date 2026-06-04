@@ -1,0 +1,18 @@
+{
+  "pre_conv_ppl": 2.7168959602268616,
+  "post_conv_ppl": 2.6711629764301175,
+  "pre_holdout_ppl": 2.635942327368523,
+  "post_holdout_ppl": 2.642616240061141,
+  "convo_ppl_drop": 0.01683280643286961,
+  "holdout_ppl_rise": 0.0025318887379757985,
+  "sleep_loss_first": 1.054417371749878,
+  "sleep_loss_last": 1.0461424589157104,
+  "config": {
+    "sleep_steps": 80,
+    "sleep_lr": 0.0001,
+    "convo_batches": 4,
+    "pass_convo_drop": 0.2,
+    "pass_holdout_rise": 0.05
+  },
+  "verdict": "FAIL"
+}

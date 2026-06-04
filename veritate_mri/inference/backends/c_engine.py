@@ -13,7 +13,7 @@
 # - shape (layers, hidden, ffn, heads, seq, vocab) is read from the bin header at
 #   subprocess spawn. all per-frame buffer sizes derive from it. supports any
 #   model, not just the 80M fixed shape.
-# veritate_mri/backends/c_engine.py
+# veritate_mri/inference/backends/c_engine.py
 # ------------------------------------------------------------------------------------
 # Imports:
 

@@ -22,6 +22,8 @@ POS_EMB_KEY     = "pos_emb.weight"
 TOK_EMB_KEY     = "tok_emb.weight"
 MTP_PREFIX      = "mtp.transforms."
 BLOCK_PREFIX    = "blocks."
+MTM_ROUTER_KEY  = "blocks.0.ff.router.weight"
+MTM_GATE_G_KEY  = "gate_g"
 DEFAULT_HEADS_DIVISOR = 64
 N_PREDICT_DEFAULT_800M = 4
 N_PREDICT_DEFAULT_85M  = 2
@@ -50,7 +52,11 @@ def shape_from_state_dict(sd, cfg):
                 "RoPE-based checkpoints must record `seq` in training_args."
             )
     layers = 1 + max(int(k.split(".")[1]) for k in sd if k.startswith(BLOCK_PREFIX))
-    ffn_per_layer = [sd[f"blocks.{L}.ff.up.weight"].shape[0] for L in range(layers)]
+    is_mtm = MTM_ROUTER_KEY in sd
+    if is_mtm:
+        ffn_per_layer = [sd[f"blocks.{L}.ff.up"].shape[-1] for L in range(layers)]
+    else:
+        ffn_per_layer = [sd[f"blocks.{L}.ff.up.weight"].shape[0] for L in range(layers)]
     ffn = ffn_per_layer[0] if all(f == ffn_per_layer[0] for f in ffn_per_layer) else ffn_per_layer
     heads = int(cfg.get("heads") or 0)
     if heads <= 0 or hidden % heads != 0:
@@ -94,6 +100,18 @@ def load_from_state_dict(sd, cfg, strict_canonical=True):
     shape = shape_from_state_dict(sd, cfg)
     has_pos_emb = POS_EMB_KEY in sd
     has_mtp = any(k.startswith(MTP_PREFIX) for k in sd)
+    has_mtm = MTM_ROUTER_KEY in sd
+
+    if has_mtm:
+        from veritate_core.model_mtm import VeritateMultimind
+        bias_mode = MTM_GATE_G_KEY in sd
+        model = VeritateMultimind(
+            vocab=shape["vocab"], hidden=shape["hidden"], layers=shape["layers"],
+            ffn=shape["ffn"], heads=shape["heads"], seq=shape["seq"],
+            bias_mode=bias_mode,
+        )
+        model.load_state_dict(sd, strict=False)
+        return model
 
     if not has_pos_emb and has_mtp:
         Veritate800M = _import_trainer_model(TRAINER_800M_DIR, "Veritate800M")

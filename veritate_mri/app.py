@@ -21,7 +21,9 @@ from flask import Flask, request, send_from_directory
 from werkzeug.serving import WSGIRequestHandler
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+sys.path.insert(0, REPO_ROOT)
 
 from readers import checkpoints, config as cfg_reader, models
 from runtime import logs as logmod
@@ -68,6 +70,11 @@ app.config["BRAIN_LAST_USED"] = 0.0
 @app.route("/")
 def index():
     return send_from_directory(STATIC_DIR, "index.html")
+
+
+@app.route("/multimind")
+def multimind_page():
+    return send_from_directory(STATIC_DIR, "multimind.html")
 
 
 @app.errorhandler(Exception)
@@ -120,8 +127,8 @@ def _pytorch_idle_watcher():
 
 from routes import (
     atlas_routes, backends_routes, corpus_routes, engine_routes,
-    lifecycle_routes, logs_routes, models_routes, trainers_routes,
-    pruning_routes, runs_routes, settings_routes, sys_routes,
+    lifecycle_routes, logs_routes, mesh_routes, models_routes, multimind_routes,
+    trainers_routes, pruning_routes, runs_routes, settings_routes, sys_routes,
     teacher_routes, train_routes, wiki_routes,
 )
 atlas_routes.register(app)
@@ -130,7 +137,9 @@ corpus_routes.register(app)
 engine_routes.register(app)
 lifecycle_routes.register(app)
 logs_routes.register(app)
+mesh_routes.register(app)
 models_routes.register(app)
+multimind_routes.register(app)
 trainers_routes.register(app)
 pruning_routes.register(app)
 runs_routes.register(app)
@@ -139,6 +148,22 @@ sys_routes.register(app)
 teacher_routes.register(app)
 train_routes.register(app)
 wiki_routes.register(app)
+
+_mesh_role = (settings_mod.get().get("mesh_role") or "off").lower()
+if _mesh_role in ("hub", "both"):
+    try:
+        from veritate_mesh import hub as _mesh_hub
+        _mesh_hub.register(app)
+        _mesh_hub.start_workers()
+    except ImportError as _e:
+        logmod.error("mesh", f"hub import failed: {_e}")
+if _mesh_role in ("node", "both"):
+    try:
+        from veritate_mesh import node as _mesh_node
+        _mesh_node.register(app)
+        _mesh_node.start_workers()
+    except ImportError as _e:
+        logmod.error("mesh", f"node import failed: {_e}")
 
 
 def main():

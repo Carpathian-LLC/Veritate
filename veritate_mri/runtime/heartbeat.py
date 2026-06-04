@@ -44,7 +44,6 @@ from readers import paths, models as models_reader
 from . import logs as logmod
 from . import settings as settings_mod
 from . import sys_metrics
-from . import sys_metrics
 
 # ------------------------------------------------------------------------------------
 # Constants

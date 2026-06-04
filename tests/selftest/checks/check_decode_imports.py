@@ -16,13 +16,11 @@ from tests.selftest import _status
 
 AREA          = "inference"
 DECODE_MODS   = (
-    "kv_cache", "mtp_decode", "eagle3", "kangaroo",
-    "constrained", "constraints", "exit_head",
+    "kv_cache", "mtp_decode", "constraints",
 )
 EXPECTED_NAMES = {
-    "kv_cache":    ("KVCachedDecoder",),
-    "mtp_decode":  ("MTPDecoder",),
-    "constrained": ("ConstrainedDecoder",),
+    "kv_cache":   ("KVCachedDecoder",),
+    "mtp_decode": ("MTPDecoder",),
 }
 
 # ------------------------------------------------------------------------------------
