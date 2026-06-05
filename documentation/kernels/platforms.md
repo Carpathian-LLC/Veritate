@@ -7,7 +7,7 @@ ports land and bench numbers come in.
 # Why this exists
 # ------------------------------------------------------------------------------------
 
-Veritate's strategic moonshot: **run capable AI on hardware people already
+Veritate's strategic bet: **run capable AI on hardware people already
 own.** Every old laptop, Mac mini, Raspberry Pi, and dusty desktop becomes a
 coherent local LLM instead of e-waste. This sidesteps the "AI needs a
 $3000 GPU" constraint that's gating real local-AI adoption.
@@ -44,7 +44,7 @@ implementation we ship.
 | 2 | x86_64 + AVX2                         | Intel Mac mini 2018, Haswell→Ice Lake       | 10+ years of consumer x86     | Matmul done; rest of model.c not |
 | 3 | ARM64 + NEON SDOT                     | Apple M1+, modern Android, Cortex-A76+      | Apple Silicon, modern phones  | **Initial port landed** (matmul + transformer hot-path; bench TBD) |
 | 4 | ARM64 + NEON only (no SDOT)           | Pi 4, older Android, M1 base path           | Cheap Linux SBCs, embedded    | matmul_int8_neon raw only; prep/transformer ride NEON SDOT TU |
-| 5 | ARM64 + AMX (Apple matrix coprocessor)| M-series Macs                               | Mac-only, moonshot stretch    | Empty |
+| 5 | ARM64 + AMX (Apple matrix coprocessor)| M-series Macs                               | Mac-only, stretch goal        | Empty |
 | 6 | scalar C                              | RISC-V, old Intel, anything                 | Universal correctness baseline| Matmul done; rest of model.c not |
 
 Skipped intentionally:
@@ -262,7 +262,7 @@ x86_64). Output: `bin/<os>/<arch>/veritate`.
 6. **NEON SDOT port** — `kernels/arm64/sdot.c`. Apple Silicon mini, M4
    Studio, modern Android.
 7. **NEON-only port** — `kernels/arm64/neon.c`. Pi 4 baseline.
-8. **AMX port (stretch)** — `kernels/arm64/amx.c`. M-series moonshot.
+8. **AMX port (stretch)** — `kernels/arm64/amx.c`. M-series stretch goal.
 
 After step 4, every subsequent platform is contained work — same
 skeleton, different intrinsics. No platform port can regress another

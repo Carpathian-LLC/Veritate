@@ -98,7 +98,7 @@ A ternary linear of shape `[n=1280, k=1280]` (one MEGA expert's expert_up at hid
 - INT4: 1280 * 1280 / 2 = 819,200 bytes (~0.78 MB)
 - Ternary: 1280 * ceil(1280/5) = 1280 * 256 = 327,680 bytes (~0.31 MB)
 
-5x smaller than INT8, 2.5x smaller than INT4. For 8 experts per layer at 12 layers (~98 expert linears total), the total weight footprint goes from ~150 MB INT8 down to ~30 MB ternary. This is the entire reason the MoE moonshot is shippable on the target hardware.
+5x smaller than INT8, 2.5x smaller than INT4. For 8 experts per layer at 12 layers (~98 expert linears total), the total weight footprint goes from ~150 MB INT8 down to ~30 MB ternary. This is the entire reason the MoE configuration is shippable on the target hardware.
 
 # ------------------------------------------------------------------------------------
 # Bitwise parity contract

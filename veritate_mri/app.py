@@ -202,34 +202,83 @@ def main():
         threading.Thread(target=_pytorch_idle_watcher, name="pytorch-idle-watcher", daemon=True).start()
         sys_metrics.warm()
 
-    def _heartbeat_training():
-        # Enriched training payload: plugin id + started_at, plus model name
-        # and shape/params pulled from the model's config.json. The heartbeat
-        # tier logic decides which of these fields actually ship (analytics
-        # tier: full block; minimal: only "training_active" presence).
-        st = plugin_runner.state()
-        if not st or st.get("status") != plugin_runner.STATUS_RUNNING:
+    def _enrich_with_config(out, name):
+        """Attach model_name + n_params + shape summary to a training payload
+        when the model has a config.json. Shared by the primary and fallback
+        detectors so both ship the same envelope shape."""
+        if not name or not models.exists(name):
+            return
+        try:
+            cfg   = cfg_reader.load(name) or {}
+            shape = cfg.get("shape") or {}
+            out["model_name"] = name
+            out["n_params"]   = int(cfg.get("n_params_total") or 0) or None
+            keep = ("hidden", "layers", "ffn", "heads", "seq", "n_predict", "rope_base")
+            summary = {k: shape[k] for k in keep if k in shape}
+            if summary:
+                out["shape"] = summary
+        except Exception:
+            pass
+
+    def _detect_csv_based_training():
+        """Fallback detector: any models/<name>/train.csv touched within the
+        last CSV_ACTIVE_WINDOW seconds is treated as a live training run.
+        Catches direct-script trainers (e.g. tools/coral/run_coral.py) that
+        bypass plugin_runner. The canonical save.append_train_row() contract
+        is what we rely on — any trainer that writes train.csv per the
+        contract gets picked up automatically. Without this fallback, presence
+        pings would falsely report "idle" for the entire duration of such a
+        run and the server would flip the device offline mid-training."""
+        CSV_ACTIVE_WINDOW = 120  # seconds (log_every=25 at ~1s/step => ~25s between writes)
+        try:
+            root = os.path.join(REPO_ROOT, "models")
+            if not os.path.isdir(root):
+                return None
+        except OSError:
             return None
-        out = {
-            "plugin_id":  st.get("plugin_id"),
-            "started_at": st.get("started_at"),
-        }
-        args = st.get("args") or {}
-        if isinstance(args, dict):
-            name = args.get("name") or args.get("model")
-            if name and models.exists(name):
+        now    = time.time()
+        latest = None  # (mtime, name)
+        try:
+            for entry in os.listdir(root):
+                csv_path = os.path.join(root, entry, "train.csv")
                 try:
-                    cfg = cfg_reader.load(name) or {}
-                    shape = cfg.get("shape") or {}
-                    out["model_name"] = name
-                    out["n_params"]   = int(cfg.get("n_params_total") or 0) or None
-                    keep = ("hidden", "layers", "ffn", "heads", "seq", "n_predict", "rope_base")
-                    summary = {k: shape[k] for k in keep if k in shape}
-                    if summary:
-                        out["shape"] = summary
-                except Exception:
-                    pass
+                    mt = os.path.getmtime(csv_path)
+                except OSError:
+                    continue
+                if now - mt > CSV_ACTIVE_WINDOW:
+                    continue
+                if latest is None or mt > latest[0]:
+                    latest = (mt, entry)
+        except OSError:
+            return None
+        if latest is None:
+            return None
+        mt, name = latest
+        out = {
+            "plugin_id":  "direct-script",
+            "started_at": int(mt),
+        }
+        _enrich_with_config(out, name)
         return out
+
+    def _heartbeat_training():
+        # Primary: trainer_runner-managed subprocess (plugins launched via the
+        # dashboard's Training tab or plugin_runner.start). Enriched payload:
+        # plugin id + started_at + model name + shape/params. The heartbeat
+        # tier logic decides which fields actually ship (analytics tier: full;
+        # minimal: only "training_active" presence).
+        st = plugin_runner.state()
+        if st and st.get("status") == plugin_runner.STATUS_RUNNING:
+            out = {
+                "plugin_id":  st.get("plugin_id"),
+                "started_at": st.get("started_at"),
+            }
+            args_dict = st.get("args") or {}
+            if isinstance(args_dict, dict):
+                _enrich_with_config(out, args_dict.get("name") or args_dict.get("model"))
+            return out
+        # Fallback: direct-script training detection via recent train.csv mtime.
+        return _detect_csv_based_training()
     heartbeat_mod.set_training_provider(_heartbeat_training)
     heartbeat_mod.start()
 

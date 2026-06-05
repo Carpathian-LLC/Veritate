@@ -98,6 +98,6 @@ Every kernel implementation must satisfy:
 5. AVX2 port (`kernels/x86_64/avx2.c`). Old Mac mini Intel + old PC.
 6. NEON SDOT port (`kernels/arm64/sdot.c`). Apple Silicon, M4 Studio, modern Android.
 7. NEON-only port (`kernels/arm64/neon.c`). Pi 4 baseline.
-8. AMX stretch (`kernels/arm64/amx.c`). M-series moonshot.
+8. AMX stretch (`kernels/arm64/amx.c`). M-series stretch goal.
 
 After step 4, every subsequent platform is contained work. Separate translation units mean no platform port can regress another.

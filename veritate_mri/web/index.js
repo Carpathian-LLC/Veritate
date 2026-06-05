@@ -2095,7 +2095,7 @@ $("goLive").addEventListener("click", () => {
 
 // ---- tabs ----
 function activateTab(name) {
-  const valid = ["generation", "learning", "training", "wiki", "logs", "settings"];
+  const valid = ["generation", "learning", "training", "wiki", "logs", "settings", "coral" /* DELETABLE-CORAL */];
   if (!valid.includes(name)) name = "generation";
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
   document.querySelectorAll(".tab-body").forEach(x => x.classList.toggle("active", x.dataset.tab === name));

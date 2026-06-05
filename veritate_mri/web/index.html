@@ -11,6 +11,10 @@
 <link rel="stylesheet" href="/static/index.css">
 <link rel="stylesheet" href="/static/tutorial.css">
 <link rel="stylesheet" href="/static/prune.css">
+<!-- DELETABLE-CORAL: standalone Coral Lab dashboard -->
+<link rel="stylesheet" href="/static/coral_lab.css">
+<script src="/static/coral_lab.js" defer></script>
+<!-- END DELETABLE-CORAL -->
 </head>
 <body>
 
@@ -68,6 +72,9 @@
   <div class="tab" data-tab="wiki">Wiki</div>
   <div class="tab" data-tab="logs">Logs</div>
   <div class="tab" data-tab="settings">Settings<span class="notify-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warm);margin-left:6px;vertical-align:middle"></span></div>
+  <!-- DELETABLE-CORAL: standalone tab -->
+  <div class="tab" data-tab="coral">Coral Lab</div>
+  <!-- END DELETABLE-CORAL -->
 </div>
 
 <!-- ============================ GENERATION TAB ============================ -->
@@ -1641,6 +1648,12 @@
   </div>
 
 </div>
+
+<!-- ============================ DELETABLE-CORAL TAB BODY ============================ -->
+<div class="tab-body" data-tab="coral">
+  <div id="coralBody"><div class="coral-empty">loading…</div></div>
+</div>
+<!-- END DELETABLE-CORAL -->
 
 <!-- ============================ WIKI TAB ============================ -->
 <div class="tab-body" data-tab="wiki">

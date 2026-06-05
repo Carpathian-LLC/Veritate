@@ -61,6 +61,8 @@ DEFAULTS = {
     "mesh_role": "off",
     "mesh_hub_address": "",
     "mesh_auth_token": "",
+    "tutorial_enabled": True,
+    "tutorial_completed": False,
 }
 
 VALID_TEMPERATURE_UNITS = ("C", "F", "K")
