@@ -44,7 +44,7 @@ DEFAULTS = {
     "auto_reload_on_update": True,
     "ai_enabled": False,
     "ai_endpoint": "https://api.carpathian.ai/ai/v1/chat/completions",
-    "ai_api_key": "cai_Laz79g9M9VtJDUI1TFzg0_2S6BERaD8zeiF2yrP79TU",
+    "ai_api_key": "cai_D1swbd9sfAA6BJ8HX3yDby2J5C6ZO8zN91IKP_2iI1g",
     "ai_endpoint_user": "",
     "ai_api_key_user": "",
     "last_acknowledged_build": 0,
