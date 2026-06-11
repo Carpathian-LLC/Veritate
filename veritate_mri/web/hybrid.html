@@ -1,0 +1,302 @@
+<!-- Developed by Carpathian, LLC. Distribution Not Authorized. -->
+<!-- veritate_mri/web/hybrid.html : the front-door chat. Pick a trained model +
+     engine, optionally ground with a local knowledge base, or use the cloud. -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veritate — chat</title>
+<style>
+  :root { --bg:#06090f; --panel:#0d111a; --line:#1d2536; --text:#e6ecf5;
+          --soft:#9fb0c8; --dim:#5f6f88; --accent:#6aa6ff; --me:#15233a; --field:#11161f; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between;
+           padding:14px 20px; border-bottom:1px solid var(--line); }
+  header h1 { color:#fff; font-size:22px; margin:0; letter-spacing:.04em; font-weight:600; }
+  header .meta { color:var(--dim); font-size:12px; margin-top:2px; }
+  header .meta b { color:var(--soft); font-weight:600; }
+  header .actions { display:flex; align-items:center; gap:14px; }
+  header a, .gear { color:var(--soft); font-size:13px; text-decoration:none; cursor:pointer;
+                    background:none; border:none; font:inherit; }
+  header a:hover, .gear:hover { color:var(--text); }
+
+  #settings { display:none; border-bottom:1px solid var(--line); background:var(--panel); }
+  #settings.open { display:block; }
+  #settings .panel { max-width:760px; margin:0 auto; padding:20px 18px;
+                     display:flex; flex-direction:column; gap:20px; }
+  .sgroup { display:flex; flex-direction:column; gap:9px; }
+  .srow { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .srow > .lbl { color:var(--soft); font-size:10.5px; letter-spacing:.13em;
+                 text-transform:uppercase; font-weight:600; width:88px; flex:none; }
+  .link { color:var(--accent); font-size:12px; text-decoration:none; margin-left:102px; }
+  .link:hover { text-decoration:underline; }
+  .hint { color:var(--dim); font-size:11.5px; margin-left:102px; }
+
+  select { background:var(--field); border:1px solid var(--line); color:var(--text);
+           padding:8px 10px; font:inherit; border-radius:6px; min-width:240px; }
+  select:disabled { opacity:.5; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  .seg button { background:var(--field); color:var(--soft); border:none; padding:8px 16px;
+                font:inherit; cursor:pointer; }
+  .seg button.on { background:var(--accent); color:#06121f; font-weight:600; }
+  .seg button:disabled { opacity:.35; cursor:default; }
+  .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:13.5px; cursor:pointer; }
+  .check input { width:15px; height:15px; accent-color:var(--accent); }
+
+  .kb { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-left:102px; }
+  .filebtn { background:var(--field); border:1px solid var(--line); color:var(--text);
+             padding:8px 13px; border-radius:6px; cursor:pointer; font-size:13px; }
+  .filebtn:hover { border-color:var(--accent); }
+  .fname { color:var(--dim); font-size:12px; max-width:220px; overflow:hidden;
+           text-overflow:ellipsis; white-space:nowrap; }
+  .btn { background:var(--accent); color:#06121f; font-weight:600; border:none;
+         padding:8px 15px; border-radius:6px; cursor:pointer; font:inherit; }
+  .btn:disabled { opacity:.4; cursor:default; }
+
+  .wrap { max-width:760px; margin:0 auto; padding:18px; }
+  #log { min-height:60vh; display:flex; flex-direction:column; gap:14px; padding-bottom:20px; }
+  .msg { max-width:86%; padding:10px 13px; border-radius:10px; white-space:pre-wrap; }
+  .user { align-self:flex-end; background:var(--me); }
+  .bot { align-self:flex-start; background:var(--panel); border:1px solid var(--line); }
+  .bot .src { margin-top:9px; padding-top:8px; border-top:1px solid var(--line);
+              font-size:11.5px; color:var(--dim); }
+  .bot .src b { color:var(--accent); font-weight:600; }
+  .bar { position:sticky; bottom:0; background:var(--bg); padding:12px 0 20px;
+         display:flex; gap:8px; border-top:1px solid var(--line); }
+  #q { flex:1; background:var(--field); border:1px solid var(--line); color:var(--text);
+       padding:11px 13px; border-radius:8px; font:inherit; }
+  #send { background:var(--accent); color:#06121f; font-weight:600; border:none;
+          padding:0 18px; border-radius:8px; cursor:pointer; }
+  #send:disabled { opacity:.5; cursor:default; }
+  .hint-row { color:var(--dim); font-size:12px; text-align:center; padding:30px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>V·E·R·I·T·A·T·E</h1>
+    <div class="meta">answering with <b id="activeModel">…</b></div>
+  </div>
+  <div class="actions">
+    <button class="gear" id="gear">settings</button>
+    <a href="/app">platform</a>
+  </div>
+</header>
+
+<div id="settings">
+  <div class="panel">
+
+    <div class="sgroup">
+      <div class="srow">
+        <span class="lbl">Model</span>
+        <select id="modelSel"><option value="cloud">loading…</option></select>
+      </div>
+      <a class="link" href="/app#training">Train your own →</a>
+    </div>
+
+    <div class="sgroup" id="engineRow">
+      <div class="srow">
+        <span class="lbl">Engine</span>
+        <div class="seg" id="engineSeg">
+          <button data-engine="pytorch" class="on">PyTorch</button>
+          <button data-engine="c">Veritate (C)</button>
+        </div>
+      </div>
+      <div class="hint" id="engineHint"></div>
+    </div>
+
+    <div class="sgroup" id="ragRow">
+      <div class="srow">
+        <span class="lbl">Knowledge</span>
+        <label class="check"><input type="checkbox" id="ragChk"> Ground answers with your knowledge base</label>
+      </div>
+      <div class="kb">
+        <label class="filebtn">Choose file<input type="file" id="kbFile" accept=".txt,.md,.rst,.text" hidden></label>
+        <span class="fname" id="kbFileName">no file selected</span>
+        <button class="btn" id="kbUpload">Add to knowledge base</button>
+      </div>
+      <div class="hint" id="kbHint"></div>
+    </div>
+
+  </div>
+</div>
+
+<div class="wrap">
+  <div id="log"><div class="hint-row">Ask a question. Pick a model in settings, or let the cloud answer.</div></div>
+  <div class="bar">
+    <input id="q" placeholder="Ask anything..." autocomplete="off">
+    <button id="send">Send</button>
+  </div>
+</div>
+
+<script>
+  const SETTINGS_KEY = "veritate_chat_settings_v1";
+  const CLOUD_ID = "cloud";
+  const TEACHER_ID = "teacher";
+  const $ = id => document.getElementById(id);
+  const log = $("log"), q = $("q"), send = $("send");
+
+  const state = Object.assign(
+    { model: CLOUD_ID, backend: "pytorch", use_rag: false },
+    loadSettings());
+  let cCapable = new Set();   // models with a veritate.bin (c-engine runnable)
+  let hasCorpus = false, nFiles = 0, busy = false;
+  let teacherCfg = { configured: false, label: "" };
+
+  function loadSettings() {
+    try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") || {}; }
+    catch (_) { return {}; }
+  }
+  function saveSettings() {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(state)); } catch (_) {}
+  }
+
+  function bubble(cls, text) {
+    const hint = log.querySelector(".hint-row"); if (hint) hint.remove();
+    const d = document.createElement("div");
+    d.className = "msg " + cls; d.textContent = text;
+    log.appendChild(d); d.scrollIntoView({ block: "end" });
+    return d;
+  }
+
+  function isRemote() { return state.model === CLOUD_ID || state.model === TEACHER_ID; }
+
+  function activeLabel() {
+    if (state.model === CLOUD_ID) return "Carpathian AI (public)";
+    if (state.model === TEACHER_ID) return teacherCfg.label || "Teacher model";
+    return state.model;
+  }
+
+  function renderControls() {
+    const sel = $("modelSel");
+    if (sel.value !== state.model) sel.value = state.model;
+    $("activeModel").textContent = activeLabel();
+    $("engineRow").style.display = isRemote() ? "none" : "";
+    $("ragRow").style.display = isRemote() ? "none" : "";
+
+    const cOk = cCapable.has(state.model);
+    for (const b of $("engineSeg").children) {
+      const eng = b.dataset.engine;
+      b.disabled = (eng === "c" && !cOk);
+      b.classList.toggle("on", eng === state.backend);
+    }
+    if (state.backend === "c" && !cOk) { state.backend = "pytorch"; renderControls(); return; }
+    $("engineHint").textContent = cOk ? "" : "C engine needs a veritate.bin export for this model.";
+
+    const chk = $("ragChk");
+    chk.checked = state.use_rag && hasCorpus;
+    chk.disabled = !hasCorpus;
+    renderKb();
+    saveSettings();
+  }
+
+  function renderKb() {
+    $("kbUpload").disabled = busy;
+    $("kbHint").textContent = busy ? "adding…"
+      : (hasCorpus ? `${nFiles} file${nFiles === 1 ? "" : "s"} in your knowledge base. Add more anytime.`
+                   : "No knowledge base yet. Upload a .txt to enable retrieval.");
+  }
+
+  function refreshHealth() {
+    return fetch("/hybrid/health").then(r => r.json()).then(d => {
+      hasCorpus = !!d.has_corpus; nFiles = d.n_files || 0;
+      teacherCfg = d.teacher || { configured: false, label: "" };
+    }).catch(() => {});
+  }
+
+  function upload() {
+    const f = $("kbFile").files[0];
+    if (!f || busy) return;
+    busy = true; renderKb();
+    const fd = new FormData(); fd.append("file", f);
+    fetch("/hybrid/kb/upload", { method: "POST", body: fd }).then(r => r.json()).then(d => {
+      busy = false;
+      if (!d.ok) { renderKb(); $("kbHint").textContent = "error: " + (d.error || "failed"); return; }
+      $("kbFile").value = ""; $("kbFileName").textContent = "no file selected";
+      refreshHealth().finally(() => {
+        renderControls();
+        $("kbHint").textContent = `added ${d.filename} — ${nFiles} file${nFiles === 1 ? "" : "s"} indexed`;
+      });
+    }).catch(() => { busy = false; renderKb(); $("kbHint").textContent = "upload failed"; });
+  }
+
+  function fillModels(models) {
+    const sel = $("modelSel");
+    sel.innerHTML = "";
+    for (const m of models) {
+      const o = document.createElement("option");
+      const params = m.n_params ? ` · ${(m.n_params / 1e6).toFixed(0)}M` : "";
+      o.value = m.name;
+      o.textContent = `${m.name} (step ${m.step}${params})`;
+      sel.appendChild(o);
+    }
+    const cloud = document.createElement("option");
+    cloud.value = CLOUD_ID; cloud.textContent = "Carpathian AI (public)";
+    sel.appendChild(cloud);
+    if (teacherCfg.configured) {
+      const t = document.createElement("option");
+      t.value = TEACHER_ID; t.textContent = teacherCfg.label;
+      sel.appendChild(t);
+    }
+    const names = models.map(m => m.name);
+    const valid = state.model === CLOUD_ID
+      || (state.model === TEACHER_ID && teacherCfg.configured)
+      || names.includes(state.model);
+    if (!valid) state.model = names.length ? names[0] : CLOUD_ID;
+    renderControls();
+  }
+
+  function init() {
+    refreshHealth().finally(() => {
+      Promise.all([
+        fetch("/pytorch-models").then(r => r.json()).catch(() => ({ models: [] })),
+        fetch("/c-models").then(r => r.json()).catch(() => ({ models: [] })),
+      ]).then(([pt, c]) => {
+        cCapable = new Set((c.models || []).map(m => m.name));
+        fillModels(pt.models || []);
+      });
+    });
+  }
+
+  function ask() {
+    const text = q.value.trim(); if (!text) return;
+    bubble("user", text); q.value = ""; send.disabled = true;
+    const pending = bubble("bot", "…");
+    fetch("/hybrid/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text, model: state.model,
+                             backend: state.backend, use_rag: state.use_rag }),
+    }).then(r => r.json()).then(d => {
+      if (!d.ok) { pending.textContent = "error: " + (d.error || "failed"); return; }
+      pending.textContent = d.answer || "(no answer)";
+      if (d.sources && d.sources.length) {
+        const s = document.createElement("div"); s.className = "src";
+        s.innerHTML = "<b>retrieved</b> · " +
+          d.sources.map(x => x.text + " (" + x.score + ")").join(" · ");
+        pending.appendChild(s);
+      }
+      pending.scrollIntoView({ block: "end" });
+    }).catch(() => { pending.textContent = "request failed"; })
+      .finally(() => { send.disabled = false; q.focus(); });
+  }
+
+  $("gear").addEventListener("click", () => $("settings").classList.toggle("open"));
+  $("modelSel").addEventListener("change", e => { state.model = e.target.value; renderControls(); });
+  $("engineSeg").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b || b.disabled) return;
+    state.backend = b.dataset.engine; renderControls();
+  });
+  $("ragChk").addEventListener("change", e => { state.use_rag = e.target.checked; saveSettings(); });
+  $("kbFile").addEventListener("change", e => {
+    const f = e.target.files[0]; $("kbFileName").textContent = f ? f.name : "no file selected";
+  });
+  $("kbUpload").addEventListener("click", upload);
+  send.addEventListener("click", ask);
+  q.addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+  init(); q.focus();
+</script>
+</body>
+</html>

@@ -247,22 +247,17 @@
   .hover-info { padding: 6px 10px; margin-top: 6px; background: #0a0c12; border: 1px solid var(--line); border-radius: 3px; font-family: ui-monospace, monospace; min-height: 20px; }
 
   /* train-flow modal */
-  .train-flow-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 2px solid var(--accent); padding: 0 0 0 4px; margin-bottom: 12px; }
-  .train-flow-tab { background: #0a0c12; border: 1px solid var(--line); border-bottom: none; color: var(--dim); padding: 8px 14px; font: inherit; font-size: 11.5px; cursor: pointer; border-radius: 4px 4px 0 0; letter-spacing: .02em; }
-  .train-flow-tab:hover { color: var(--text); background: #11141d; }
-  .train-flow-tab.active { color: var(--cool); background: #11141d; border-color: var(--accent); font-weight: 600; }
-  .train-flow-panes { background: #0a0c12; border: 1px solid var(--line); border-radius: 4px; padding: 14px 16px; }
-  .train-flow-pane { display: none; font-size: 12px; line-height: 1.6; color: var(--text); }
-  .train-flow-pane.active { display: block; }
-  .train-flow-pane p { margin: 0 0 10px 0; }
-  .train-flow-pane .train-flow-lead { color: var(--cool); }
-  .train-flow-pane .train-flow-effect { background: #0a0c12; border: 1px solid var(--line); border-left: 2px solid var(--accent); padding: 9px 11px; border-radius: 3px; color: var(--dim); margin-top: 4px; }
-  .train-flow-pane .train-flow-effect b { color: var(--text); }
-  .train-flow-pane .train-flow-hi { color: var(--cool); font-weight: 600; }
-  .train-flow-pane code { color: var(--accent); font-size: 11.5px; background: #0a0c12; padding: 1px 5px; border-radius: 2px; }
-  .train-flow-pane .train-flow-effect code { background: #11141d; }
-  .train-flow-pane .train-flow-stages { margin: 4px 0 10px 18px; padding: 0; color: var(--text); }
-  .train-flow-pane .train-flow-stages li { margin-bottom: 4px; }
+  .train-flow-intro { font-size: 11.5px; line-height: 1.6; color: var(--dim); margin: 0 0 14px 0; }
+  .train-flow-hi { color: var(--cool); font-weight: 600; }
+  .train-flow-groups { display: flex; flex-direction: column; gap: 20px; }
+  .train-flow-group + .train-flow-group { padding-top: 18px; border-top: 1px solid var(--line); }
+  .train-flow-group-title { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--cool); font-weight: 600; margin-bottom: 8px; }
+  .train-flow-card { display: block; width: 100%; text-align: left; background: #11141d; border: 1px solid var(--line); border-radius: 5px; padding: 11px 13px; margin-bottom: 8px; cursor: pointer; font: inherit; transition: border-color .1s, box-shadow .1s, background .1s; }
+  .train-flow-card:last-child { margin-bottom: 0; }
+  .train-flow-card:hover { background: #161a24; border-color: var(--cool); }
+  .train-flow-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: #161a24; }
+  .train-flow-card-title { display: block; text-align: left; color: var(--text); font-size: 12.5px; font-weight: 600; margin-bottom: 2px; }
+  .train-flow-card-desc { display: block; text-align: left; color: var(--dim); font-size: 11px; line-height: 1.45; }
 
   /* learning tab */
   .ckpt-list { display: flex; flex-direction: column; gap: 4px; }
@@ -565,6 +560,17 @@
   #aiBackdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 9000;
                 display: flex; align-items: center; justify-content: center; padding: 20px; }
   #aiBackdrop.hidden { display: none; }
+  #confirmModal { position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 9500;
+                  display: flex; align-items: center; justify-content: center; padding: 20px; }
+  #confirmModal.hidden { display: none; }
+  #confirmModal .confirm-box { background: #0d1118; border: 1px solid var(--line); border-radius: 6px;
+                               padding: 18px 20px; width: min(420px, 100%); box-shadow: 0 12px 48px rgba(0,0,0,0.6); }
+  #confirmModal .confirm-msg { color: var(--text); font-size: 12.5px; line-height: 1.5; margin-bottom: 16px; }
+  #confirmModal .confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  #confirmModal .confirm-actions button { padding: 6px 14px; font: inherit; font-size: 11.5px;
+                                          border-radius: 3px; cursor: pointer; border: 1px solid var(--line); }
+  #confirmModal .confirm-cancel { background: #0a0c12; color: var(--text); }
+  #confirmModal .confirm-ok { background: var(--hot); color: #000; font-weight: 600; border-color: var(--hot); }
   body.ai-modal-open { overflow: hidden; }
   #aiModal { background: #0d1118; border: 1px solid var(--line); border-radius: 5px;
              width: min(640px, 100%); max-height: 80vh; display: flex; flex-direction: column; }

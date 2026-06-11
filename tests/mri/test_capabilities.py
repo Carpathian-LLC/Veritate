@@ -148,10 +148,6 @@ class TestHighestTrained(unittest.TestCase):
 class TestTrainerTeachesField(unittest.TestCase):
     """trainers.teaches() reads the manifest field with the autocomplete default."""
 
-    def test_tool_sft_declares_agent(self):
-        """veritate_tool_sft manifest carries teaches=agent for the pipeline to dispatch."""
-        self.assertEqual(trainers_reader.teaches("veritate_tool_sft"), "agent")
-
     def test_pretraining_trainer_defaults_to_autocomplete(self):
         """Missing teaches field falls back to autocomplete (pretraining default)."""
         self.assertEqual(trainers_reader.teaches("veritate_85m"), "autocomplete")

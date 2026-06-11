@@ -109,6 +109,22 @@ def test_post_persists_provider(client):
     assert r2.get_json()["provider"] == "ollama"
 
 
+def test_provider_switch_restores_saved_key(client, isolated_settings):
+    """switching provider away and back restores its stored key via teacher_configs."""
+    client.post("/teacher", json={"teacher_provider": "openai",
+                                  "teacher_model": "gpt-4o",
+                                  "teacher_api_key": SECRET_API_KEY})
+    r = client.post("/teacher", json={"teacher_provider": "ollama",
+                                      "teacher_model": "qwen2.5:72b"})
+    body = r.get_json()
+    assert body["has_api_key"] is False
+    assert body["configs"]["openai"] == {"model": "gpt-4o", "base_url": "", "has_key": True}
+    r2 = client.post("/teacher", json={"teacher_provider": "openai",
+                                       "teacher_model": "gpt-4o"})
+    assert r2.get_json()["has_api_key"] is True
+    assert isolated_settings.get()["teacher_api_key"] == SECRET_API_KEY
+
+
 def test_post_invalid_concurrency_returns_400(client):
     """POST /teacher with out-of-range concurrency returns 400 + error message."""
     r = client.post("/teacher", json={"teacher_max_concurrency": 9999})

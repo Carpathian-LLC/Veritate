@@ -113,3 +113,13 @@ def test_local_moved_remote_unchanged_is_modified(tmp_path):
     p = _write(tmp_path)
     st, _ = sc.classify_one(p, SHA_LAST_SYNC, {"synced_sha": SHA_LAST_SYNC}, sha_fn=_fake_sha(SHA_LOCAL))
     assert st == sc.STATE_MODIFIED
+
+
+def test_delete_is_a_valid_action():
+    """ACTION_DELETE is an accepted action."""
+    assert sc.ACTION_DELETE in sc.VALID_ACTIONS
+
+
+def test_delete_is_destructive():
+    """delete requires confirmation regardless of file state."""
+    assert sc.action_is_destructive(sc.ACTION_DELETE, sc.STATE_ORPHAN) is True

@@ -19,8 +19,6 @@
 # veritate_core/model.py
 # ------------------------------------------------------------------------------------
 
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,15 +33,13 @@ ACT_DEFAULT    = "gelu"
 
 # Regularization mode for the captured post-activation penalty.
 #   "l1"      mean(|post-activation|): pushes units toward zero (sparsity).
-#   "balance" KL(per-neuron load || uniform): pushes every unit to carry equal
-#             load (no dead neurons, full utilization). The opposite of "l1".
-# Both ride the same model.post_l1_sum() contract; the trainer scales by
-# l1_lambda and adds to the loss without knowing which mode is active.
 #   "group"   sum of per-neuron RMS activation (group-lasso over units): drives
 #             whole FFN units to zero so they become prunable (structured).
-REG_MODES     = ("l1", "balance", "group")
+# Both ride the same model.post_l1_sum() contract; the trainer scales by
+# l1_lambda and adds to the loss without knowing which mode is active.
+REG_MODES     = ("l1", "group")
 REG_DEFAULT   = "l1"
-BALANCE_EPS   = 1e-8
+REG_EPS       = 1e-8
 
 # Map name -> torch.nn.functional callable. ReLU and SiLU expose post-activation
 # sparsity for the L1 penalty; GELU does not (sparsity is undefined for a smooth
@@ -123,23 +119,13 @@ class CausalSelfAttention(nn.Module):
         return self.proj(out)
 
 
-def balance_penalty(post):
-    """KL(p || uniform) over per-neuron load p, where load is the mean absolute
-    post-activation of each FFN unit across the batch and sequence. Zero when
-    every unit carries equal load, positive otherwise. Minimizing it spreads
-    activation across all units (full utilization). post: [..., ffn]."""
-    load = post.abs().mean(dim=tuple(range(post.dim() - 1)))
-    p    = load / (load.sum() + BALANCE_EPS)
-    return (p * (p + BALANCE_EPS).log()).sum() + math.log(load.shape[0])
-
-
 def group_penalty(post):
     """Group-lasso over FFN units: sum of per-neuron RMS activation across the
     batch and sequence. Cheaper to drive a whole unit to zero than to shrink all,
     so it induces structured (whole-unit) sparsity that width-pruning can remove.
     post: [..., ffn]."""
     dims = tuple(range(post.dim() - 1))
-    return post.pow(2).mean(dim=dims).add(BALANCE_EPS).sqrt().sum()
+    return post.pow(2).mean(dim=dims).add(REG_EPS).sqrt().sum()
 
 
 class FFN(nn.Module):
@@ -161,12 +147,7 @@ class FFN(nn.Module):
     def forward(self, x):
         post = self._act_fn(self.up(x))
         if self.capture_l1:
-            if self.reg_mode == "balance":
-                self._last_l1 = balance_penalty(post)
-            elif self.reg_mode == "group":
-                self._last_l1 = group_penalty(post)
-            else:
-                self._last_l1 = post.abs().mean()
+            self._last_l1 = group_penalty(post) if self.reg_mode == "group" else post.abs().mean()
         return self.down(post)
 
 
@@ -234,7 +215,7 @@ class Veritate(nn.Module):
 
     def post_l1_sum(self):
         """Sum of per-block captured post-activation penalties from the last
-        forward. The penalty is L1 sparsity or load-balance per reg_mode; the
+        forward. The penalty is L1 sparsity or group-lasso per reg_mode; the
         trainer scales it by l1_lambda blind to the mode. Returns None when
         capture_l1 is off or no forward has run."""
         if not self.capture_l1:

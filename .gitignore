@@ -23,6 +23,7 @@ c_trace_*.bin
 .plugin_run.log
 /trainers/
 data/*
+veritate_mri/data/kb/
 /*de.md
 .DS_Store
 docs/

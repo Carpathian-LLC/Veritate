@@ -23,6 +23,7 @@
 
 import json
 import os
+import re
 
 from . import paths
 
@@ -182,6 +183,24 @@ def _native_record():
     }
 
 
+SIZE_UNITS = {"m": 1_000_000, "b": 1_000_000_000}
+
+
+def _size_key(rec):
+    # Headline scale from the canonical id token ("10m", "1b3", "50b"), so picker
+    # order matches the displayed name regardless of which default size is set.
+    tok = (rec.get("id") or "").rsplit("/", 1)[-1].rsplit("_", 1)[-1]
+    m = re.match(r"^(\d+)([mb])(\d*)$", tok)
+    if m:
+        whole, unit, frac = m.groups()
+        scaled = float(whole) + (float(frac) / 10.0 if frac else 0.0)
+        return scaled * SIZE_UNITS[unit]
+    # Non-scale trainers (SFT, etc.): fall back to declared max param count.
+    sizes = (rec.get("manifest") or {}).get("sizes") or {}
+    vals = [(v.get("params") or v.get("active_params") or 0) for v in sizes.values()]
+    return float(max(vals)) if vals else 0.0
+
+
 def scan():
     out = []
     # Native trainer first — surfaces "no plugin needed" at the top of the picker.
@@ -189,7 +208,12 @@ def scan():
         out.append(_native_record())
     if not os.path.isdir(PLUGINS_ROOT):
         return out
-    _walk("", out)
+    plugins = []
+    _walk("", plugins)
+    # Picker order = model size (default-size param count), ascending. Stable sort
+    # keeps the alphabetical _walk order for equal-size plugins.
+    plugins.sort(key=_size_key)
+    out.extend(plugins)
     return out
 
 

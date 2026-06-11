@@ -15,6 +15,7 @@
 
 import json
 import os
+import random
 import threading
 
 from readers.paths import REPO_ROOT
@@ -26,7 +27,16 @@ SETTINGS_PATH = os.path.join(REPO_ROOT, "data", "mri_settings.json")
 
 DEVICE_NAME_MAX_LEN = 15
 
+# First-run device name: adjective-noun-NN, kept short so it fits DEVICE_NAME_MAX_LEN.
+DEVICE_NAME_ADJECTIVES = ("brave", "calm", "bright", "swift", "keen", "bold", "lush",
+                          "warm", "cool", "vivid", "quiet", "sharp", "witty", "sunny", "misty")
+DEVICE_NAME_NOUNS = ("fox", "owl", "elk", "lynx", "hawk", "wolf", "otter", "crane",
+                     "bison", "heron", "ibex", "koala", "raven", "tapir", "gecko")
+
 # THE HARDCODED API KEY MUST STAY IN THIS FILE! DO NOT REMOVE IT!
+# cai_ keys are PUBLIC shared keys, intentionally committed. Only user-entered
+# keys (teacher_api_key, ai_api_key_user) are secret; those live in the
+# gitignored data/mri_settings.json or env, never in tracked source.
 DEFAULTS = {
     "pytorch_load_mode": "on_demand",
     "pytorch_idle_unload_secs": 600,
@@ -55,6 +65,7 @@ DEFAULTS = {
     "teacher_model": "",
     "teacher_base_url": "",
     "teacher_api_key": "",
+    "teacher_configs": {},
     "teacher_max_concurrency": 16,
     "teacher_max_tokens": 2048,
     "teacher_temperature": 0.7,
@@ -68,9 +79,12 @@ DEFAULTS = {
 VALID_TEMPERATURE_UNITS = ("C", "F", "K")
 
 KNOWN_TEACHER_PROVIDERS = (
-    "openai", "anthropic", "gemini", "xai", "deepseek",
+    "carpathian", "openai", "anthropic", "gemini", "xai", "deepseek",
     "mistral", "groq", "openrouter", "ollama", "lm_studio", "llama_cpp",
 )
+
+# Per-provider remembered config, keyed by provider id in teacher_configs.
+TEACHER_CONFIG_FIELDS = ("api_key", "model", "base_url")
 
 VALID_MESH_ROLES = ("off", "node", "hub", "both")
 
@@ -90,10 +104,17 @@ _CACHE = None
 # ------------------------------------------------------------------------------------
 # Functions
 
+def _random_device_name():
+    name = f"{random.choice(DEVICE_NAME_ADJECTIVES)}-{random.choice(DEVICE_NAME_NOUNS)}-{random.randint(0, 99):02d}"
+    return name[:DEVICE_NAME_MAX_LEN]
+
+
 def _ensure_settings():
     if not os.path.isfile(SETTINGS_PATH):
-        _write(dict(DEFAULTS))
-        return dict(DEFAULTS)
+        fresh = dict(DEFAULTS)
+        fresh["device_name"] = _random_device_name()
+        _write(fresh)
+        return fresh
     try:
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
             cur = json.load(f)
@@ -186,6 +207,18 @@ def _validate(patch):
         v = patch["teacher_provider"]
         if v and v not in KNOWN_TEACHER_PROVIDERS:
             raise ValueError(f"teacher_provider must be one of {KNOWN_TEACHER_PROVIDERS} or empty")
+    if "teacher_configs" in patch:
+        v = patch["teacher_configs"]
+        if v is None:
+            v = {}
+        if not isinstance(v, dict):
+            raise ValueError("teacher_configs must be a dict")
+        cleaned = {}
+        for pid, cfg in v.items():
+            if pid not in KNOWN_TEACHER_PROVIDERS or not isinstance(cfg, dict):
+                continue
+            cleaned[pid] = {f: str(cfg.get(f) or "").strip() for f in TEACHER_CONFIG_FIELDS}
+        patch["teacher_configs"] = cleaned
     if "teacher_max_concurrency" in patch:
         v = patch["teacher_max_concurrency"]
         if not isinstance(v, int) or isinstance(v, bool):

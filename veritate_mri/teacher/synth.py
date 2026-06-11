@@ -104,6 +104,10 @@ class SynthJob:
         self.client_factory = opts.get("client_factory")
         self._lock = threading.Lock()
         self._cache_lock = threading.Lock()
+        self._stop = threading.Event()
+
+    def stop(self):
+        self._stop.set()
 
     def _samples_path(self):
         return os.path.join(self.output_dir, SAMPLES_FILE_NAME)
@@ -139,10 +143,13 @@ class SynthJob:
             return self.client_factory()
         return Client(self.provider_id, model=self.model, base_url=self.base_url, api_key=self.api_key)
 
-    def _write_state(self, remaining_ids):
+    def _write_state(self, remaining_ids, counts=None):
         tmp = self._state_path() + ".tmp"
+        payload = {"job_id": self.job_id, "remaining": list(remaining_ids)}
+        if counts is not None:
+            payload.update(counts)
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"job_id": self.job_id, "remaining": list(remaining_ids)}, f)
+            json.dump(payload, f)
         os.replace(tmp, self._state_path())
 
     def _append_sample(self, fp, row):
@@ -164,7 +171,10 @@ class SynthJob:
 
         def worker(prompt):
             pid = prompt["id"]
-            messages = prompt["messages"]
+            messages = prompt.get("messages")
+            if not messages:
+                content = prompt.get("prompt") or prompt.get("text") or ""
+                messages = [{"role": "user", "content": content}]
             system = prompt.get("system")
             send_msgs = list(messages)
             if system is not None:
@@ -182,10 +192,13 @@ class SynthJob:
                 return pid, None, str(e), False
 
         with open(samples_path, "a", encoding="utf-8") as fp:
-            with ThreadPoolExecutor(max_workers=max(1, self.max_concurrency)) as ex:
+            ex = ThreadPoolExecutor(max_workers=max(1, self.max_concurrency))
+            try:
                 futures = {ex.submit(worker, p): p for p in pending}
                 processed = 0
                 for fut in as_completed(futures):
+                    if self._stop.is_set():
+                        break
                     prompt = futures[fut]
                     pid = prompt["id"]
                     try:
@@ -237,8 +250,10 @@ class SynthJob:
                     remaining.discard(pid)
                     processed += 1
                     if processed % STATE_FLUSH_EVERY == 0:
-                        self._write_state(remaining)
-        self._write_state(remaining)
+                        self._write_state(remaining, {"completed": completed, "failed": failed, "skipped_dup": skipped_dup})
+            finally:
+                ex.shutdown(wait=False, cancel_futures=True)
+        self._write_state(remaining, {"completed": completed, "failed": failed, "skipped_dup": skipped_dup})
         conn.close()
         return {
             "completed": completed,

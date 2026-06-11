@@ -75,3 +75,20 @@ def physical_cores():
     except (ImportError, ValueError):
         pass
     return max(1, (os.cpu_count() or 2) // 2)
+
+
+def unified_memory_bytes():
+    """Total addressable RAM in bytes. On Apple Silicon this is the unified pool
+    the GPU and CPU share, so it doubles as the training-memory ceiling. On
+    discrete-GPU hosts it is system RAM, not VRAM; mem_planner treats it as the
+    unified budget only when the device is mps."""
+    try:
+        import psutil
+        total = int(psutil.virtual_memory().total)
+        if total > 0:
+            return total
+    except (ImportError, ValueError):
+        pass
+    page = os.sysconf("SC_PAGE_SIZE")
+    count = os.sysconf("SC_PHYS_PAGES")
+    return int(page) * int(count)

@@ -14,7 +14,7 @@
 
 from .client import Client, complete, TeacherError, TeacherAuthError, TeacherRateLimitError, TeacherUnavailableError
 from .providers import list_providers, get_provider, resolve_api_key, default_model_for
-from .test_connection import test
+from .test_connection import test, list_models
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -31,6 +31,7 @@ __all__ = [
     "resolve_api_key",
     "default_model_for",
     "test",
+    "list_models",
 ]
 
 # ------------------------------------------------------------------------------------

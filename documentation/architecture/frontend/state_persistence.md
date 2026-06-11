@@ -11,7 +11,6 @@ Client-side persistence. Survives reloads, lost on private-browsing or storage c
 - **Chat history** at [index.js:1490–1497](../../../veritate_mri/web/index.js#L1490) — generation tab stores the last 100 messages under a `CHAT_KEY`.
 - **Run picks** at [index.js:2420–2424](../../../veritate_mri/web/index.js#L2420) — training tab caches the selected run name and other UI state.
 - **Trainer form values** at [index.js:7729](../../../veritate_mri/web/index.js#L7729) — trainer config inputs (batch size, lr, epochs) cached so reloads don't lose work.
-- **Coral lab picks** — [coral_lab.js](../../../veritate_mri/web/coral_lab.js) stores the three slot picks under `coral.pick.A`, `coral.pick.B`, `coral.pick.CMP`.
 
 Every localStorage call is wrapped in `try/catch`. Missing storage (private browsing, quota exceeded) silently falls back to no-op.
 

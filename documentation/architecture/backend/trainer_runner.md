@@ -8,7 +8,7 @@ The subprocess manager for trainer plugins at [veritate_mri/training/trainer_run
 
 Public API:
 
-- [`start(plugin_id, args)`](../../../veritate_mri/training/trainer_runner.py#L349) — finds the plugin manifest, builds `python plugins/<id>/plugin.py --arg val ...`, spawns it, writes `.plugin_pid.json`, tails stdout into the in-memory log ring.
+- [`start(plugin_id, args)`](../../../veritate_mri/training/trainer_runner.py#L349) — finds the plugin manifest, builds `python trainers/<id>/trainer.py --arg val ...`, spawns it, writes `.plugin_pid.json`, tails stdout into the in-memory log ring.
 - [`state()`](../../../veritate_mri/training/trainer_runner.py#L245) — returns `{status, plugin_id, args, started_at, finished_at, exit_code}`. Statuses are `idle`, `running`, `ok`, `failed`, `stopped`.
 - [`stop()`](../../../veritate_mri/training/trainer_runner.py#L372) — SIGTERM the subprocess.
 - [`is_running()`](../../../veritate_mri/training/trainer_runner.py#L250) — boolean shortcut.
@@ -34,4 +34,4 @@ Environment variables set on every spawn:
 
 - One-at-a-time is global, not per-GPU. Two trainers can't run concurrently even on different devices; this is intentional (shared CPU + memory budget).
 - Subprocesses survive dashboard exit on Windows but not always on macOS/Linux unless launched with `nohup` or detached process group. The dashboard's `start()` does not detach; killing the dashboard usually kills the subprocess.
-- Direct-script trainers (e.g., `tools/coral/`) launched outside `start()` are invisible to `state()`. The [heartbeat fallback](heartbeat.md) at [app.py:223](../../../veritate_mri/app.py#L223) uses `train.csv` mtime to detect those.
+- Direct-script trainers launched outside `start()` are invisible to `state()`. The [heartbeat fallback](heartbeat.md) at [app.py:223](../../../veritate_mri/app.py#L223) uses `train.csv` mtime to detect those.

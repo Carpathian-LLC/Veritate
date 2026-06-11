@@ -28,6 +28,9 @@ from veritate_core import qat     # noqa: E402  veritate_core/qat.py
 from veritate_core.plugin import oom_recovery  # noqa: E402  shared OOM helper
 from veritate_core.plugin import multicorpus   # noqa: E402  shared mixed-corpus loader
 from veritate_core.plugin import hardware      # noqa: E402  shared device/core detect
+from veritate_core.plugin import mem_planner   # noqa: E402  unified-memory plan
+from veritate_core.plugin import mem_executor  # noqa: E402  applies the plan
+from veritate_core.plugin import bench         # noqa: E402  empirical mem/throughput benchmark
 
 
 def get_teacher_client(provider_override=None, model_override=None):
@@ -44,4 +47,5 @@ def get_teacher_client(provider_override=None, model_override=None):
     return Client(provider_id, model=model, base_url=base_url, api_key=api_key)
 
 
-__all__ = ["save", "paths", "model", "qat", "hardware", "get_teacher_client"]
+__all__ = ["save", "paths", "model", "qat", "hardware",
+           "mem_planner", "mem_executor", "bench", "get_teacher_client"]

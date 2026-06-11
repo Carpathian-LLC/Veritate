@@ -40,9 +40,16 @@ def client():
         yield c
 
 
-def test_root_serves_index_html(client):
-    """GET / returns 200 and the dashboard HTML payload."""
+def test_root_serves_chat(client):
+    """GET / returns 200 and the public chat front door."""
     r = client.get("/")
+    assert r.status_code == 200
+    assert b"/hybrid/chat" in r.data
+
+
+def test_app_serves_dashboard(client):
+    """GET /app returns 200 and the dashboard HTML payload."""
+    r = client.get("/app")
     assert r.status_code == 200
     assert b"<html" in r.data.lower() or b"<!doctype" in r.data.lower()
 

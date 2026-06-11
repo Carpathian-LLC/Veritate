@@ -376,6 +376,40 @@ KINDS = {
     "loss_curve":   _build_loss_curve,
 }
 
+CHAT_SYSTEM_PROMPT = (
+    "You are Veritate, a concise and helpful assistant. Answer the user directly. "
+    "No emoji, no emdash."
+)
+
+
+def chat(message, system=None):
+    """General chat turn against the configured public model (Carpathian by
+    default). Availability is the presence of credentials, not the ai_enabled
+    explainer flag: the public key ships in settings DEFAULTS, so this works out
+    of the box. A user-set ai_api_key_user overrides it. Returns {ok, answer} or
+    {ok: False, error}."""
+    endpoint, key = _resolve_credentials()
+    if not endpoint or not key:
+        return {"ok": False, "error": "no public model key configured"}
+    try:
+        text = _post_chat(endpoint, key, system or CHAT_SYSTEM_PROMPT, message)
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = ""
+        logmod.error(LOG_SOURCE, f"chat http {e.code} {e.reason}: {_snip(err_body)}")
+        return {"ok": False, "error": f"http {e.code}: {_snip(err_body) or e.reason}"}
+    except urllib.error.URLError as e:
+        logmod.error(LOG_SOURCE, f"chat network: {e.reason}")
+        return {"ok": False, "error": f"network: {e.reason}"}
+    except (TimeoutError, json.JSONDecodeError) as e:
+        logmod.error(LOG_SOURCE, f"chat {type(e).__name__}: {e}")
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    if not text:
+        return {"ok": False, "error": "empty response (see Logs tab for raw response)"}
+    return {"ok": True, "answer": text}
+
 
 def ask(kind, payload):
     s = settings_mod.get()

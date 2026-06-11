@@ -14,6 +14,7 @@ Server-side architecture: Flask app, training pipeline, runtime, readers, engine
 
 - [app_py.md](app_py.md) — startup sequence, route registration, exception handling
 - [routes.md](routes.md) — the route-module pattern; per-module summary
+- [auth.md](auth.md): optional dashboard password gate
 - [readers.md](readers.md) — data layer (all disk I/O routes through readers)
 
 ## Training pipeline
@@ -37,6 +38,8 @@ Server-side architecture: Flask app, training pipeline, runtime, readers, engine
 
 - [inference_brain.md](inference_brain.md) — PyTorch inference (Generation tab backend)
 - [veritate_engine.md](veritate_engine.md) — C engine (fast byte-level decode)
+- [hybrid_chat.md](hybrid_chat.md): RAG chat endpoint (`/chat`, `/hybrid/*`)
+- [knowledge_base.md](knowledge_base.md): `kb_build.py` index pipeline for the hybrid chat
 
 ## Federation
 

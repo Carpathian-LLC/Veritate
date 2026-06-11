@@ -88,14 +88,14 @@ REGISTRY = [
         "applies_to":  [],
     },
     {
-        "id":          "neuron_balance",
-        "label":       "Neuron balance (100% use)",
-        "description": "Adds a load-balance penalty (l1_lambda=1e-2, reg_mode=balance) "
-                       "that pushes every FFN unit to carry equal load. The opposite of "
-                       "L1 sparsity: drives toward zero dead neurons. Pairs with ReLU.",
+        "id":          "neuron_prune_group",
+        "label":       "Group-lasso (prunable)",
+        "description": "Adds a group-lasso penalty (l1_lambda=5e-5, reg_mode=group) that "
+                       "drives whole FFN units to zero so they can be width-pruned away "
+                       "for a smaller, faster model. Pairs with ReLU.",
         "group":       GROUP_REGULARIZER,
         "default":     False,
-        "args":        {"l1_lambda": 1e-2, "reg_mode": "balance"},
+        "args":        {"l1_lambda": 5e-5, "reg_mode": "group"},
         "applies_to":  [],
     },
     {

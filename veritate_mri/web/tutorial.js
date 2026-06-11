@@ -40,7 +40,7 @@
       tab: "training",
       target: ['#trainFlowOpenBtn', '#trainStep1Row'],
       title: "3. Training starts here",
-      body: "Click 'Choose action' to begin: train a new model from scratch, continue an existing one, or distill from a teacher. The flow walks you through trainer, then settings, then start.",
+      body: "Click 'Choose action' to begin: train a new model from scratch, continue an existing one, or generate training data from a teacher. The flow walks you through trainer, then settings, then start.",
     },
     {
       tab: "training",

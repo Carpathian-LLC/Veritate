@@ -8,7 +8,8 @@ How the frontend gets data from the Flask backend: JSON polling for most things,
 
 | Route                          | Method | Purpose                                                |
 | ------------------------------ | ------ | ------------------------------------------------------ |
-| `/`                            | GET    | Serves `index.html`                                    |
+| `/`, `/chat`                   | GET    | Serves the chat front door (`hybrid.html`)             |
+| `/app`                         | GET    | Serves the dashboard (`index.html`)                    |
 | `/meta`                        | GET    | Current model metadata (layers, params, version)       |
 | `/runs`                        | GET    | All training runs (name, mtime, size, n_rows, caps)    |
 | `/run/<name>/csv`              | GET    | Raw `train.csv` for a run                              |
@@ -20,7 +21,7 @@ How the frontend gets data from the Flask backend: JSON polling for most things,
 | `/train_stream`                | SSE    | Live training frames (TFRM-lite)                       |
 | `/generate`                    | POST   | Inference request, token-by-token SSE response         |
 
-Route definitions live under [veritate_mri/routes/](../../../veritate_mri/routes/); each module exports a `register(app)` function called from [app.py:128–150](../../../veritate_mri/app.py#L128).
+Route definitions live under [veritate_mri/routes/](../../../veritate_mri/routes/); each module exports a `register(app)` function called from [app.py:140](../../../veritate_mri/app.py#L140). The page routes (`/`, `/app`, `/chat`) are defined directly on the app in [app.py:70](../../../veritate_mri/app.py#L70).
 
 ## Polling cadence
 
@@ -31,8 +32,6 @@ Route definitions live under [veritate_mri/routes/](../../../veritate_mri/routes
 - Classroom/confidence — every 30s.
 
 `stopTrainPolling()` clears all three. Polling only runs while the training tab is active so background tabs don't burn requests.
-
-Coral Lab uses the same `/runs` + `/run/<name>/csv` routes with its own 5s interval in [coral_lab.js](../../../veritate_mri/web/coral_lab.js). No new routes were added for Coral.
 
 ## SSE streams
 

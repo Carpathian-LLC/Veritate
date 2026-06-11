@@ -68,13 +68,14 @@ app.config["BRAIN_LAST_USED"] = 0.0
 # Functions
 
 @app.route("/")
+@app.route("/chat")
+def chat_page():
+    return send_from_directory(STATIC_DIR, "hybrid.html")
+
+
+@app.route("/app")
 def index():
     return send_from_directory(STATIC_DIR, "index.html")
-
-
-@app.route("/multimind")
-def multimind_page():
-    return send_from_directory(STATIC_DIR, "multimind.html")
 
 
 @app.errorhandler(Exception)
@@ -127,10 +128,12 @@ def _pytorch_idle_watcher():
 
 from routes import (
     atlas_routes, backends_routes, corpus_routes, engine_routes,
-    lifecycle_routes, logs_routes, mesh_routes, models_routes, multimind_routes,
+    lifecycle_routes, logs_routes, mesh_routes, models_routes,
     trainers_routes, pruning_routes, runs_routes, settings_routes, sys_routes,
-    teacher_routes, train_routes, wiki_routes,
+    teacher_routes, train_routes, wiki_routes, hybrid_routes, rag_routes,
+    auth_routes,
 )
+auth_routes.register(app)
 atlas_routes.register(app)
 backends_routes.register(app)
 corpus_routes.register(app)
@@ -139,7 +142,6 @@ lifecycle_routes.register(app)
 logs_routes.register(app)
 mesh_routes.register(app)
 models_routes.register(app)
-multimind_routes.register(app)
 trainers_routes.register(app)
 pruning_routes.register(app)
 runs_routes.register(app)
@@ -148,6 +150,8 @@ sys_routes.register(app)
 teacher_routes.register(app)
 train_routes.register(app)
 wiki_routes.register(app)
+hybrid_routes.register(app)
+rag_routes.register(app)
 
 _mesh_role = (settings_mod.get().get("mesh_role") or "off").lower()
 if _mesh_role in ("hub", "both"):
@@ -223,8 +227,7 @@ def main():
     def _detect_csv_based_training():
         """Fallback detector: any models/<name>/train.csv touched within the
         last CSV_ACTIVE_WINDOW seconds is treated as a live training run.
-        Catches direct-script trainers (e.g. tools/coral/run_coral.py) that
-        bypass plugin_runner. The canonical save.append_train_row() contract
+        Catches direct-script trainers launched outside plugin_runner. The canonical save.append_train_row() contract
         is what we rely on — any trainer that writes train.csv per the
         contract gets picked up automatically. Without this fallback, presence
         pings would falsely report "idle" for the entire duration of such a

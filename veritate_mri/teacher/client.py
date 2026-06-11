@@ -14,6 +14,7 @@
 
 import json
 import random
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -32,6 +33,14 @@ from .providers import (
 
 # ------------------------------------------------------------------------------------
 # Constants
+
+# certifi-backed context so HTTPS verification works on Python builds that don't
+# resolve a system CA bundle (macOS). Mirrors runtime.heartbeat / runtime.ai_assist.
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _SSL_CTX = ssl.create_default_context()
 
 _JSON_CONTENT_TYPE = "application/json"
 _AUTH_STATUS = (401, 403)
@@ -92,9 +101,11 @@ def _build_payload(provider, model, messages, temperature, max_tokens, system):
     body = {
         "model": model,
         provider["messages_key"]: msgs,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
     }
+    if temperature is not None:
+        body["temperature"] = temperature
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     if sys_field is not None:
         body["system"] = sys_field
     return body
@@ -147,7 +158,7 @@ class Client:
         for attempt in range(self.max_retries + 1):
             try:
                 req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                with urllib.request.urlopen(req, timeout=self.timeout_s, context=_SSL_CTX) as resp:
                     status = getattr(resp, "status", 200)
                     body = resp.read()
                     if status < 300:
@@ -178,6 +189,36 @@ class Client:
         if last_status is not None and 500 <= last_status < 600:
             raise TeacherUnavailableError(f"upstream unavailable: {last_status}")
         raise TeacherError(f"request failed: status={last_status} err={last_err}")
+
+    def list_models(self):
+        """GET the provider's model-listing endpoint. Returns a list of served
+        model-id strings, None when the provider has no listing endpoint or it
+        404s. Raises TeacherAuthError / TeacherUnavailableError so a probe can
+        tell a bad key or unreachable host from a missing listing API."""
+        path = self.provider.get("models_path") or ""
+        if not path:
+            return None
+        headers = _build_headers(self.provider, self.api_key)
+        headers.pop("Content-Type", None)
+        req = urllib.request.Request(self.base_url + path, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s, context=_SSL_CTX) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            if e.code in _AUTH_STATUS:
+                raise TeacherAuthError(f"auth failed: {e.code}")
+            if e.code == 404:
+                return None
+            raise TeacherError(f"models list http {e.code}")
+        except (urllib.error.URLError, OSError) as e:
+            raise TeacherUnavailableError(f"unreachable: {e}")
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return None
+        arr = data.get(self.provider.get("models_array", "data")) or []
+        idk = self.provider.get("models_id", "id")
+        return [str(m[idk]) for m in arr if isinstance(m, dict) and m.get(idk)]
 
 
 def complete(provider_id, model, messages, **opts):

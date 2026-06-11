@@ -2095,7 +2095,7 @@ $("goLive").addEventListener("click", () => {
 
 // ---- tabs ----
 function activateTab(name) {
-  const valid = ["generation", "learning", "training", "wiki", "logs", "settings", "coral" /* DELETABLE-CORAL */];
+  const valid = ["generation", "learning", "training", "wiki", "logs", "settings"];
   if (!valid.includes(name)) name = "generation";
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
   document.querySelectorAll(".tab-body").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
@@ -7161,8 +7161,6 @@ const TRAINER_SCHEMA = {
     { name: "rope_base",       type: "float",                 label: "RoPE base",               help: "rotary positional base (theta). 10000 = default, higher = longer-context extrapolation." },
     { name: "router_aux_loss_coef", type: "float",            label: "router balance weight",   help: "MoE load-balancing loss coefficient (~0.01). MEGA only." },
     // ---- experimental / test-model clusters (all ADVANCED) ----
-    { name: "rank",            type: "int",        advanced: true, label: "adapter rank",            help: "Multimind M3 only. higher = more adapter memory." },
-    { name: "n_slots",         type: "int",        advanced: true, label: "schema slots",            help: "Multimind M1 only. # of named slots (256 canonical)." },
     { name: "alpha",           type: "float",      advanced: true, label: "adapter write alpha",     help: "M1/M3 only. higher = stronger writes to memory." },
     { name: "inject_layer",    type: "int",        advanced: true, label: "inject layer (-1=auto)",  help: "M1/M3 only. -1 = mid-stack." },
     { name: "init_from",       type: "model_name", advanced: true, label: "init base from model",    help: "M1 only. load base weights, train M1 adapter on top." },
@@ -7420,19 +7418,19 @@ function _trUpdateVramEstimate() {
     budgetLine;
 }
 
-// Auto-pick training settings. Gated by Advanced telemetry consent + a
-// detected sys_specs file. Fills batch_size, base_lr, use_act_ckpt, and
-// (when total_steps is set) warmup_steps + log/eval/ckpt cadence. Leaves
-// total_steps and architecture-specific knobs to the manifest defaults
-// or the user. The Veritate trainers do not implement gradient
-// accumulation, so batch_size is the effective batch.
-function _trUpdateAutoOptimizeVisibility() {
-  const row  = $("trainAutoOptimizeRow");
-  const help = $("trainAutoOptimizeHelp");
+// Auto tune: measured benchmark via a trainer's --bench mode. Launches the
+// trainer subprocess on throwaway weights, streams its narration from the log
+// ring into the modal, then writes the measured batch/lr/cadence into the
+// trainer manifest (and the form when that trainer is selected). Gated by
+// Advanced telemetry consent + detected specs + an auto-tune-capable trainer.
+function _trUpdateAutoTuneVisibility() {
+  const row  = $("trainAutoTuneRow");
+  const help = $("trainAutoTuneHelp");
   if (!row) return;
   const consent = !!(settingsState.current && settingsState.current.analytics_advanced_enabled);
   const haveSpecs = !!(_sysSpecsCache && _sysSpecsCache.platform);
-  const visible = consent && haveSpecs;
+  const probeable = !!(trainState.selected && trainState.selected.manifest && trainState.selected.manifest.bench);
+  const visible = consent && haveSpecs && probeable;
   row.style.display = visible ? "flex" : "none";
   if (help) help.style.display = visible ? "block" : "none";
 }
@@ -7447,110 +7445,192 @@ function _trSetArgVal(name, val) {
   return true;
 }
 
-function _trAutoOptimize() {
-  const status = $("trainAutoOptimizeStatus");
-  const setStatus = (msg, color) => { if (status) { status.textContent = msg; status.style.color = color || "var(--dim)"; } };
+const _autoTuneState = { es: null, poll: null, plugin: null, result: null, recs: null };
 
-  const budget = _trMemoryBudget();
-  if (!budget) { setStatus("no system specs — click 'detect my system' in settings first.", "var(--hot)"); return; }
+function _autoTuneOpen() {
+  const sel = $("autoTuneTrainer");
+  const fill = (list) => {
+    const probeable = (list || []).filter(p => p.manifest && p.manifest.bench);
+    sel.innerHTML = probeable.length
+      ? probeable.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.manifest.name || p.id)}</option>`).join("")
+      : `<option value="">no auto-tune-capable trainers installed</option>`;
+    if (trainState.selected && probeable.some(p => p.id === trainState.selected.id)) {
+      sel.value = trainState.selected.id;
+    }
+    _autoTuneState.list = probeable;
+  };
+  if (trainState.list && trainState.list.length) fill(trainState.list);
+  else fetch("/trainers").then(r => r.json()).then(d => fill(d.trainers)).catch(() => fill([]));
+  $("autoTuneLog").style.display = "none";
+  $("autoTuneLog").innerHTML = "";
+  $("autoTuneResults").style.display = "none";
+  $("autoTuneStart").style.display = "";
+  $("autoTuneStop").style.display = "none";
+  $("autoTuneApplyStatus").textContent = "";
+  $("autoTuneModal").classList.remove("hidden");
+}
 
-  const plugin  = trainState.selected;
-  const defs    = (plugin && plugin.manifest && plugin.manifest.defaults) || {};
+function _autoTuneLine(msg, color) {
+  const log = $("autoTuneLog");
+  log.style.display = "";
+  const div = document.createElement("div");
+  div.textContent = msg;
+  if (color) div.style.color = color;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function _autoTuneCleanup() {
+  if (_autoTuneState.es)   { _autoTuneState.es.close(); _autoTuneState.es = null; }
+  if (_autoTuneState.poll) { clearInterval(_autoTuneState.poll); _autoTuneState.poll = null; }
+  $("autoTuneStart").style.display = "";
+  $("autoTuneStop").style.display = "none";
+}
+
+function _autoTuneStart() {
+  const id = $("autoTuneTrainer").value;
+  const plugin = (_autoTuneState.list || []).find(p => p.id === id);
+  if (!plugin) { _autoTuneLine("pick a trainer first.", "var(--hot)"); return; }
+  _autoTuneState.plugin = plugin;
+  _autoTuneState.result = null;
+  const defs = plugin.manifest.defaults || {};
+  // Form values win when this trainer is selected on the Training tab;
+  // manifest defaults otherwise (Settings entry point).
+  const fromForm = trainState.selected && trainState.selected.id === id;
+  const val = (k) => fromForm ? (_trArgVal(k) || defs[k]) : defs[k];
+  const args = { bench: true, size: val("size"), seq: val("seq"), precision: val("precision") };
+  $("autoTuneResults").style.display = "none";
+  $("autoTuneLog").innerHTML = "";
+  _autoTuneLine("starting benchmark (throwaway weights, nothing is saved)...", "var(--dim)");
+  fetch("/trainers/run", { method: "POST", headers: { "Content-Type": "application/json" },
+                           body: JSON.stringify({ id, args }) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) { _autoTuneLine(d.error || "could not start (is a training run active?)", "var(--hot)"); return; }
+      $("autoTuneStart").style.display = "none";
+      $("autoTuneStop").style.display = "";
+      _autoTuneSubscribe(id);
+    })
+    .catch(e => _autoTuneLine("start failed: " + e, "var(--hot)"));
+}
+
+function _autoTuneSubscribe(id) {
+  const src = "plugin:" + id;
+  const es = new EventSource("/logs/stream");
+  _autoTuneState.es = es;
+  es.onmessage = (ev) => {
+    let e; try { e = JSON.parse(ev.data); } catch (err) { return; }
+    if (!e || e.source !== src || !e.msg) return;
+    if (e.msg.startsWith("BENCH_RESULT ")) {
+      try { _autoTuneFinish(JSON.parse(e.msg.slice("BENCH_RESULT ".length))); }
+      catch (err) { _autoTuneLine("could not parse benchmark result", "var(--hot)"); _autoTuneCleanup(); }
+      return;
+    }
+    const benchLine = e.msg.startsWith("bench: ");
+    _autoTuneLine(benchLine ? e.msg.slice(7) : e.msg, benchLine ? undefined : "var(--dim)");
+  };
+  // The runner going idle without a BENCH_RESULT means the benchmark died early.
+  _autoTuneState.poll = setInterval(() => {
+    fetch("/trainers").then(r => r.json()).then(d => {
+      const running = d.running && d.running.status === "running";
+      if (!running && !_autoTuneState.result) {
+        _autoTuneLine("benchmark ended without a result — check the Logs tab.", "var(--hot)");
+        _autoTuneCleanup();
+      }
+    }).catch(() => {});
+  }, 4000);
+}
+
+// MPSGraph indexes tensor elements with int32; the attention-score tensor
+// (B * heads * T * T) crashes backward past INT_MAX elements. Cap the
+// recommended batch below that regardless of what fit in memory.
+const MPS_INT_MAX = 2147483647;
+const MPS_SAFETY  = 0.85;
+
+function _autoTuneRecommend(result, plugin) {
+  const defs  = plugin.manifest.defaults || {};
+  const sizes = plugin.manifest.sizes || {};
+  const shape = sizes[String(defs.size)] || {};
+  const ramp  = result.ramp || [];
+  const best  = ramp.reduce((a, b) => (b.tok_per_s > (a ? a.tok_per_s : 0) ? b : a), null);
+  if (!best) return null;
+  let batch = best.batch;
+  if (result.device === "mps" && shape.heads && result.seq > 0) {
+    const cap = Math.max(1, Math.floor((MPS_INT_MAX * MPS_SAFETY) / (shape.heads * result.seq * result.seq)));
+    batch = Math.min(batch, cap);
+  }
   const manifestBatch = parseInt(defs.batch_size, 10) || 8;
   const manifestLR    = parseFloat(defs.base_lr) || 6e-4;
-
-  // Memory-fit search. Start from manifest batch (already tuned per
-  // architecture) and only adjust to fit hardware: shrink if over budget,
-  // grow if there is comfortable headroom. Trainers do not implement
-  // gradient accumulation so batch_size is the effective batch.
-  const tryEstimate = (batch, ckpt) => {
-    const bEl = _trArgEl("batch_size");
-    const cEl = _trArgEl("use_act_ckpt");
-    const prevB = bEl ? bEl.value : null;
-    const prevC = cEl && cEl.type === "checkbox" ? cEl.checked : null;
-    if (bEl) bEl.value = batch;
-    if (cEl) cEl.checked = !!ckpt;
-    const e = _trEstimateMemory();
-    if (bEl && prevB !== null) bEl.value = prevB;
-    if (cEl && prevC !== null) cEl.checked = prevC;
-    return e;
-  };
-
-  const TARGET_RATIO = 0.75;     // aim for ~75% of budget
-  const TIGHT_RATIO  = 0.92;     // anything above this is "too tight"
-  const HEADROOM_RATIO = 0.45;   // anything below means there is room to grow
-
-  // Apple MPS (unified memory) indexes tensor elements with int32 inside
-  // MPSGraph. Any single tensor with > INT_MAX (2^31 - 1) elements crashes
-  // backward with "MPSGraph does not support tensor dims larger than
-  // INT_MAX". The largest tensor in this trainer is the attention scores
-  // (B * heads * T * T). Cap batch_size so that stays comfortably below
-  // INT_MAX even with a precision/grad-graph safety margin.
-  const MPS_INT_MAX = 2147483647;
-  const MPS_SAFETY  = 0.85;
-  const sizePreset  = _trSizeShape(_trArgVal("size"));
-  const seqVal      = parseInt(_trArgVal("seq"), 10);
-  let mpsBatchCap = Infinity;
-  if (budget.kind === "unified" && sizePreset && sizePreset.heads && seqVal > 0) {
-    const perBatch = sizePreset.heads * seqVal * seqVal;
-    if (perBatch > 0) {
-      mpsBatchCap = Math.max(1, Math.floor((MPS_INT_MAX * MPS_SAFETY) / perBatch));
-    }
-  }
-
-  let targetBatch = Math.min(manifestBatch, mpsBatchCap);
-  let actCkpt = !!defs.use_act_ckpt;
-
-  // Step 1: shrink if manifest at current ckpt setting overshoots.
-  let est = tryEstimate(targetBatch, actCkpt);
-  while (est && est.total > budget.bytes * TIGHT_RATIO && (targetBatch > 1 || !actCkpt)) {
-    if (!actCkpt) {
-      actCkpt = true;            // try act_ckpt before halving
-    } else if (targetBatch > 1) {
-      targetBatch = Math.max(1, Math.floor(targetBatch / 2));
-    } else {
-      break;
-    }
-    est = tryEstimate(targetBatch, actCkpt);
-  }
-
-  // Step 2: if still way under budget at current settings, try doubling
-  // batch (cap at 4× manifest to avoid extreme lr scaling).
-  const batchCap = Math.min(manifestBatch * 4, mpsBatchCap);
-  let growEst = est;
-  while (growEst && growEst.total < budget.bytes * HEADROOM_RATIO && targetBatch * 2 <= batchCap) {
-    const next = targetBatch * 2;
-    const probe = tryEstimate(next, actCkpt);
-    if (!probe || probe.total > budget.bytes * TARGET_RATIO) break;
-    targetBatch = next;
-    growEst = probe;
-  }
-
-  // sqrt scaling rule for lr.
-  const lrScale = Math.sqrt(targetBatch / manifestBatch);
-  const newLR = +(manifestLR * lrScale).toPrecision(2);
-
-  _trSetArgVal("batch_size",    targetBatch);
-  _trSetArgVal("base_lr",       newLR);
-  _trSetArgVal("use_act_ckpt",  actCkpt);
-
-  // Cadence + warmup as % of total_steps. total_steps is user-owned;
-  // if it's empty we don't touch the time-based knobs.
-  const totalSteps = parseInt(_trArgVal("total_steps"), 10);
+  const lr = +(manifestLR * Math.sqrt(batch / manifestBatch)).toPrecision(2);
+  const args = { batch_size: batch, base_lr: lr };
+  const totalSteps = parseInt(defs.total_steps, 10);
   if (totalSteps > 0) {
-    _trSetArgVal("warmup_steps", Math.max(50,  Math.round(totalSteps * 0.03)));
-    _trSetArgVal("log_every",    Math.max(10,  Math.round(totalSteps * 0.001)));
-    _trSetArgVal("eval_every",   Math.max(100, Math.round(totalSteps * 0.05)));
-    _trSetArgVal("ckpt_every",   Math.max(200, Math.round(totalSteps * 0.10)));
+    args.warmup_steps = Math.max(50,  Math.round(totalSteps * 0.03));
+    args.log_every    = Math.max(10,  Math.round(totalSteps * 0.001));
+    args.eval_every   = Math.max(100, Math.round(totalSteps * 0.05));
+    args.ckpt_every   = Math.max(200, Math.round(totalSteps * 0.10));
   }
+  const bestEntry = ramp.find(r => r.batch === best.batch) || best;
+  const hours = totalSteps > 0 && bestEntry.tok_per_s > 0
+    ? (totalSteps * batch * result.seq / bestEntry.tok_per_s / 3600) : null;
+  return { args, batch, lr, totalSteps, hours, best };
+}
 
-  _trUpdateVramEstimate();
-  const mpsCapHit = (mpsBatchCap !== Infinity) && (targetBatch >= mpsBatchCap);
-  const mpsNote   = mpsCapHit ? " (batch capped by MPS INT_MAX attention-tensor limit)" : "";
-  const cadenceNote = totalSteps > 0
-    ? ", warmup/log/eval/ckpt cadence scaled to total_steps"
-    : " — set total_steps then click again to also tune warmup/log/eval/ckpt";
-  setStatus(`training settings updated: batch=${targetBatch}, lr=${newLR}, act_ckpt=${actCkpt ? "on" : "off"}${mpsNote}${cadenceNote}.`, "var(--data-pos)");
+function _autoTuneFinish(result) {
+  _autoTuneState.result = result;
+  _autoTuneCleanup();
+  const plugin = _autoTuneState.plugin;
+  const recs = _autoTuneRecommend(result, plugin);
+  _autoTuneState.recs = recs;
+  $("autoTuneRam").textContent      = result.mem_ceiling_gb.toFixed(1) + " GB used at batch " + result.max_batch;
+  $("autoTuneMaxBatch").textContent = String(result.max_batch);
+  $("autoTuneBestBatch").textContent = recs ? String(recs.best.batch) : "—";
+  $("autoTuneTokS").textContent     = recs ? Math.round(recs.best.tok_per_s).toLocaleString() + " tok/s" : "—";
+  if (recs) {
+    const timeNote = recs.hours != null
+      ? ` At this speed, ${recs.totalSteps.toLocaleString()} steps would take ~${recs.hours.toFixed(1)} h.` : "";
+    $("autoTuneRecs").innerHTML =
+      `Recommended: <b>batch ${recs.batch}</b> at <b>lr ${recs.lr}</b>` +
+      (recs.args.warmup_steps ? `, warmup/log/eval/ckpt cadence scaled to ${recs.totalSteps.toLocaleString()} steps` : "") +
+      `.${timeNote}<br><span style="color:var(--dim)">Bigger batches fit (up to ${result.max_batch}) but measured slower — the recommendation is the throughput sweet spot.</span>`;
+  } else {
+    $("autoTuneRecs").textContent = "no usable measurements — see the log above.";
+  }
+  $("autoTuneResults").style.display = "";
+}
+
+function _autoTuneApply() {
+  const plugin = _autoTuneState.plugin, recs = _autoTuneState.recs, result = _autoTuneState.result;
+  const status = $("autoTuneApplyStatus");
+  if (!plugin || !recs) return;
+  const measured = { device: result.device, seq: result.seq, max_batch: result.max_batch,
+                     mem_ceiling_gb: result.mem_ceiling_gb, best_batch: recs.best.batch,
+                     tok_per_s: recs.best.tok_per_s };
+  fetch("/trainers/tune_defaults", { method: "POST", headers: { "Content-Type": "application/json" },
+                                     body: JSON.stringify({ id: plugin.id, args: recs.args, measured }) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) { status.textContent = d.error || "apply failed"; status.style.color = "var(--hot)"; return; }
+      if (trainState.selected && trainState.selected.id === plugin.id) {
+        Object.entries(recs.args).forEach(([k, v]) => _trSetArgVal(k, v));
+        _trUpdateVramEstimate();
+      }
+      fetch("/sys/specs").then(r => r.json()).then(s => { if (s && s.platform) { _sysSpecsCache = s; _renderSysSpecs(s); } }).catch(() => {});
+      status.textContent = "saved to trainer" + (d.manifest_updated ? " manifest" : "") + " — future runs start from these values.";
+      status.style.color = "var(--data-pos)";
+    })
+    .catch(e => { status.textContent = "apply failed: " + e; status.style.color = "var(--hot)"; });
+}
+
+function _autoTuneStop() {
+  fetch("/trainers/stop", { method: "POST" }).catch(() => {});
+  _autoTuneLine("stopped.", "var(--dim)");
+  _autoTuneCleanup();
+}
+
+function _autoTuneClose() {
+  if (_autoTuneState.es) _autoTuneStop();
+  $("autoTuneModal").classList.add("hidden");
 }
 
 function _trUpdateStepCascades() {
@@ -8292,7 +8372,7 @@ function _trRenderPicker() {
   const hint = _trEl("trainEmptyHint");
   const flowLabel = _trEl("trainFlowCurrent");
   if (flowLabel) {
-    const labels = { scratch: "from scratch", continue: "continue saved", distill: "distill", synth: "synthetic corpus", export: "export .bin" };
+    const labels = { scratch: "start a new model", continue: "continue a saved model", rag: "answer from context (RAG)", synth: "generate training data", export: "export to .bin" };
     if (trainState.flow) {
       flowLabel.textContent = labels[trainState.flow] || trainState.flow;
       flowLabel.style.color = "var(--accent)";
@@ -8302,7 +8382,10 @@ function _trRenderPicker() {
     }
   }
   if (!sel || !row) return;
-  if (!trainState.flow || trainState.flow === "export") { row.style.display = "none"; return; }
+  // export uses its own model/step picker; synth and rag have their own
+  // inline panels. None of them use the trainer picker.
+  const NO_PICKER = ["export", "synth", "rag"];
+  if (!trainState.flow || NO_PICKER.includes(trainState.flow)) { row.style.display = "none"; return; }
   row.style.display = "flex";
   const list = _trFiltered();
   const cur  = sel.value;
@@ -8381,10 +8464,110 @@ function _exPopulateSteps() {
 }
 
 // flows that require a configured teacher model
-const TEACHER_REQUIRED_FLOWS = ["distill", "synth"];
+const TEACHER_REQUIRED_FLOWS = ["synth", "rag"];
 const SYNTH_TRAIN_BTN_ID = "trainRun";
 
-const synthState = { seeds: [], jobId: null, pollTimer: null };
+const synthState = { seeds: [], jobId: null, pollTimer: null, jobs: [] };
+
+// Persist the selected flow + active synth job so a reload lands the user back
+// on the same action with its live status reattached.
+const TRAIN_FLOW_STORE = "vt:training:flow";
+const SYNTH_JOB_STORE = "vt:training:synth_job";
+const TRAIN_VALID_FLOWS = ["scratch", "continue", "rag", "synth", "export"];
+
+// Per-flow job descriptors: one place owns how to stop each running job type.
+// Consumed by the per-panel stop buttons (all confirm-gated).
+const TRAIN_JOB = { stop: () => fetch("/trainers/stop", { method: "POST" }) };
+const SYNTH_JOB = { stop: () => fetch(TEACHER_SYNTH_STOP, { method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ job_id: synthState.jobId }) }) };
+const RAG_JOB = { stop: () => fetch("/rag/stop", { method: "POST" }) };
+const TRAIN_FLOWS = {
+  scratch:  { job: TRAIN_JOB },
+  continue: { job: TRAIN_JOB },
+  rag: { job: RAG_JOB },
+  synth:    { job: SYNTH_JOB },
+  export:   { job: null },
+};
+
+function _trStore(flow) { try { localStorage.setItem(TRAIN_FLOW_STORE, flow); } catch (e) {} }
+function _trStored() { try { return localStorage.getItem(TRAIN_FLOW_STORE); } catch (e) { return null; } }
+
+// Reusable are-you-sure dialog. Resolves true on confirm, false on cancel.
+function confirmDialog(message) {
+  return new Promise((resolve) => {
+    const modal = $("confirmModal");
+    const ok = $("confirmModalOk");
+    const no = $("confirmModalCancel");
+    if (!modal || !ok || !no) { resolve(window.confirm(message)); return; }
+    const msgEl = $("confirmModalMsg");
+    if (msgEl) msgEl.textContent = message || "Are you sure?";
+    const close = (val) => {
+      modal.classList.add("hidden");
+      ok.removeEventListener("click", onOk);
+      no.removeEventListener("click", onNo);
+      resolve(val);
+    };
+    const onOk = () => close(true);
+    const onNo = () => close(false);
+    ok.addEventListener("click", onOk);
+    no.addEventListener("click", onNo);
+    modal.classList.remove("hidden");
+  });
+}
+window.confirmDialog = confirmDialog;
+
+function _synthStopJob() {
+  if (!synthState.jobId) return;
+  confirmDialog("Stop the synthesis job? Samples generated so far are kept.").then(ok => {
+    if (!ok) return;
+    SYNTH_JOB.stop().then(() => _synthPollOnce()).catch(() => {});
+  });
+}
+
+// Hide the training metrics/charts for actions that don't produce a training
+// run. Synth shows live teacher output instead; export is a one-shot.
+const TRAIN_METRICS_FLOWS = ["scratch", "continue", "rag"];
+function _trToggleMetrics(flow) {
+  const sec = $("trainMetricsSection");
+  if (!sec) return;
+  sec.style.display = TRAIN_METRICS_FLOWS.includes(flow) ? "" : "none";
+}
+
+function _synthRenderSamples(samples) {
+  const wrap = $("synthLiveWrap");
+  const out = $("synthLiveOutput");
+  const cnt = $("synthLiveCount");
+  if (!out || !wrap) return;
+  if (!samples || !samples.length) { wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+  if (cnt) cnt.textContent = `(${samples.length} shown)`;
+  out.innerHTML = samples.map(s =>
+    `<div style="border-bottom:1px solid var(--line);padding:6px 0">` +
+    `<div style="color:var(--accent);font-size:10px;margin-bottom:2px">${_trEsc(s.id)}</div>` +
+    `${_trEsc(s.response)}</div>`).join("");
+  out.scrollTop = out.scrollHeight;
+}
+
+function _synthLoadSamples() {
+  if (!synthState.jobId) return;
+  fetch(`${TEACHER_SYNTH_SAMPLES}?job_id=${encodeURIComponent(synthState.jobId)}`)
+    .then(r => r.json())
+    .then(d => { if (d && d.samples) _synthRenderSamples(d.samples); })
+    .catch(() => {});
+}
+
+function _synthReattach() {
+  let saved = null;
+  try { saved = localStorage.getItem(SYNTH_JOB_STORE); } catch (e) {}
+  if (!saved || synthState.jobId === saved) return;
+  synthState.jobId = saved;
+  const info = $("synthJobInfo");
+  if (info) { info.style.display = "block"; info.textContent = `job ${saved}`; }
+  if (synthState.pollTimer) clearInterval(synthState.pollTimer);
+  synthState.pollTimer = setInterval(_synthPollOnce, TEACHER_POLL_MS);
+  _synthPollOnce();
+}
 
 function _teacherConfigured() {
   const s = settingsState.current || {};
@@ -8403,6 +8586,8 @@ function _trUpdateTeacherGate() {
   if (run && need && !ok) run.disabled = true;
   const ss = $("synthStartBtn");
   if (ss) ss.disabled = (need && !ok);
+  const rt = $("ragTrain");
+  if (rt && need && !ok) rt.disabled = true;
 }
 
 function _synthRenderSeeds(list) {
@@ -8428,6 +8613,22 @@ function _synthLoadSeeds() {
   return fetch(TEACHER_SEEDS).then(r => r.json()).then(d => {
     synthState.seeds = (d && d.seeds) || [];
     _synthRenderSeeds(synthState.seeds);
+  }).catch(() => {});
+}
+
+function _synthLoadJobs() {
+  const sel = $("synthJobSelect");
+  if (!sel) return Promise.resolve();
+  return fetch(TEACHER_SYNTH_JOBS).then(r => r.json()).then(d => {
+    synthState.jobs = (d && d.jobs) || [];
+    const cur = sel.value;
+    const opts = synthState.jobs.map(j => {
+      const cats = (j.categories || []).join(", ") || "empty";
+      const run = j.running ? " · running" : "";
+      return `<option value="${_trEsc(j.job_id)}">${_trEsc(j.job_id)} · ${j.completed || 0} samples · ${_trEsc(cats)}${run}</option>`;
+    }).join("");
+    sel.innerHTML = '<option value="">&mdash; new job &mdash;</option>' + opts;
+    if (cur && synthState.jobs.some(j => j.job_id === cur)) sel.value = cur;
   }).catch(() => {});
 }
 
@@ -8457,6 +8658,7 @@ function _synthStopPoll(msg) {
 
 function _synthPollOnce() {
   if (!synthState.jobId) return;
+  _synthLoadSamples();
   fetch(`${TEACHER_SYNTH_STATUS}?job_id=${encodeURIComponent(synthState.jobId)}`)
     .then(r => r.json())
     .then(s => {
@@ -8466,9 +8668,35 @@ function _synthPollOnce() {
       const c = s.completed || 0, f = s.failed || 0, d = s.skipped_dup || 0;
       line.textContent = `${running ? "running" : "done"}: completed ${c}, failed ${f}, skipped ${d}`;
       line.style.color = running ? "var(--warm)" : "var(--data-pos)";
+      const stopBtn = $("synthStopPollBtn");
+      if (stopBtn) stopBtn.style.display = running ? "" : "none";
+      // Build corpus only after the job is complete or stopped, and only with
+      // samples to build from; disabled (and hidden) while still running.
+      const ready = !running && c > 0;
+      const buildRow = $("synthBuildRow");
+      if (buildRow) buildRow.style.display = ready ? "flex" : "none";
+      const buildBtn = $("synthBuildBtn");
+      if (buildBtn) buildBtn.disabled = !ready;
       if (!running) _synthStopPoll();
     })
     .catch(() => {});
+}
+
+function _synthBuild() {
+  const stat = $("synthBuildStatus");
+  const stem = ($("synthCorpusStem") && $("synthCorpusStem").value || "").trim();
+  if (!synthState.jobId) { if (stat) { stat.textContent = "no job"; stat.style.color = "var(--hot)"; } return; }
+  if (!stem) { if (stat) { stat.textContent = "name the corpus"; stat.style.color = "var(--hot)"; } return; }
+  if (stat) { stat.textContent = "building..."; stat.style.color = "var(--warm)"; }
+  fetch(TEACHER_SYNTH_BUILD, { method: "POST", headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ job_id: synthState.jobId, stem: stem }) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) { if (stat) { stat.textContent = "error: " + (d && d.error || "failed"); stat.style.color = "var(--hot)"; } return; }
+      if (stat) { stat.textContent = `built ${d.stem}: ${d.n_train} train, ${d.n_val} val`; stat.style.color = "var(--data-pos)"; }
+      _trPoll();
+    })
+    .catch(e => { if (stat) { stat.textContent = _backendErrMsg(e); stat.style.color = "var(--hot)"; } });
 }
 
 function _synthStart() {
@@ -8480,20 +8708,43 @@ function _synthStart() {
   const fmt = ($("synthFormat") && $("synthFormat").value) || "text";
   _synthGatherPrompts(ids).then(prompts => {
     if (!prompts.length) { if (line) { line.textContent = "no prompts in seeds"; line.style.color = "var(--hot)"; } return; }
-    if (line) { line.textContent = "starting..."; line.style.color = "var(--warm)"; }
-    return fetch(TEACHER_SYNTH_START, { method: "POST", headers: { "Content-Type": "application/json" },
-                                         body: JSON.stringify({ prompts: prompts, format: fmt }) })
-      .then(r => r.json())
-      .then(d => {
-        if (!d || d.error) { if (line) { line.textContent = "error: " + (d && d.error || "failed"); line.style.color = "var(--hot)"; } return; }
-        synthState.jobId = d.job_id;
-        if (info) { info.style.display = "block"; info.textContent = `job ${d.job_id} -> ${d.output_dir}`; }
-        const stop = $("synthStopPollBtn"); if (stop) stop.style.display = "";
-        if (synthState.pollTimer) clearInterval(synthState.pollTimer);
-        synthState.pollTimer = setInterval(_synthPollOnce, TEACHER_POLL_MS);
-        _synthPollOnce();
-      });
+    const target = ($("synthJobSelect") && $("synthJobSelect").value) || "";
+    const cats = Array.from(new Set(prompts.map(p => p.category).filter(Boolean)));
+    const go = () => _synthStartReq(prompts, fmt, ids, target, line, info);
+    if (target) {
+      const job = (synthState.jobs || []).find(j => j.job_id === target);
+      const jobCats = (job && job.categories) || [];
+      const newCats = cats.filter(c => jobCats.indexOf(c) < 0);
+      if (newCats.length) {
+        const m = `Job ${target} already contains: ${jobCats.join(", ") || "(empty)"}. You are adding different data: ${newCats.join(", ")}. Mixing corpora can reduce purity. Continue?`;
+        (window.confirmDialog ? window.confirmDialog(m) : Promise.resolve(window.confirm(m)))
+          .then(ok => { if (ok) go(); else if (line) { line.textContent = "cancelled"; line.style.color = "var(--dim)"; } });
+        return;
+      }
+    }
+    go();
   }).catch(e => { if (line) { line.textContent = _backendErrMsg(e); line.style.color = "var(--hot)"; } });
+}
+
+function _synthStartReq(prompts, fmt, ids, target, line, info) {
+  if (line) { line.textContent = "starting..."; line.style.color = "var(--warm)"; }
+  const body = { prompts: prompts, format: fmt, seed_ids: ids };
+  if (target) body.job_id = target;
+  fetch(TEACHER_SYNTH_START, { method: "POST", headers: { "Content-Type": "application/json" },
+                               body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) { if (line) { line.textContent = "error: " + (d && d.error || "failed"); line.style.color = "var(--hot)"; } return; }
+      synthState.jobId = d.job_id;
+      try { localStorage.setItem(SYNTH_JOB_STORE, d.job_id); } catch (e) {}
+      if (info) { info.style.display = "block"; info.textContent = `job ${d.job_id} -> ${d.output_dir}`; }
+      const stop = $("synthStopPollBtn"); if (stop) stop.style.display = "";
+      if (synthState.pollTimer) clearInterval(synthState.pollTimer);
+      synthState.pollTimer = setInterval(_synthPollOnce, TEACHER_POLL_MS);
+      _synthPollOnce();
+      _synthLoadJobs();
+    })
+    .catch(e => { if (line) { line.textContent = _backendErrMsg(e); line.style.color = "var(--hot)"; } });
 }
 
 function _trShowSynthPanel(show) {
@@ -8506,6 +8757,11 @@ function _trShowSynthPanel(show) {
   if (show && formWrap) formWrap.style.display = "none";
   const runRow = _trEl("trainRunRow");
   if (show && runRow) runRow.style.display = "none";
+}
+
+function _trShowRagPanel(show) {
+  const panel = $("ragTrainPanel");
+  if (panel) panel.style.display = show ? "block" : "none";
 }
 
 function _trGotoTeacherSettings(ev) {
@@ -8521,19 +8777,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const flowModal = $("trainFlowModal");
   const flowOpen  = $("trainFlowOpenBtn");
   const flowClose = $("trainFlowModalClose");
-  const flowUse   = $("trainFlowUseBtn");
   const flowSetActive = (flow) => {
     if (!flowModal) return;
-    flowModal.querySelectorAll(".train-flow-tab").forEach(t => {
-      t.classList.toggle("active", t.dataset.flowTab === flow);
+    flowModal.querySelectorAll(".train-flow-card").forEach(c => {
+      c.classList.toggle("active", c.dataset.flow === flow);
     });
-    flowModal.querySelectorAll(".train-flow-pane").forEach(p => {
-      p.classList.toggle("active", p.dataset.flowPane === flow);
-    });
-    if (flowUse) flowUse.style.display = (flow === "pipeline") ? "none" : "";
   };
   const flowOpenModal = () => {
-    flowSetActive(trainState.flow || "pipeline");
+    flowSetActive(trainState.flow);
     flowModal.classList.remove("hidden");
     document.body.style.overflow = "hidden";
   };
@@ -8541,35 +8792,56 @@ document.addEventListener("DOMContentLoaded", () => {
     flowModal.classList.add("hidden");
     document.body.style.overflow = "";
   };
-  if (flowOpen && flowModal) flowOpen.addEventListener("click", flowOpenModal);
-  if (flowClose && flowModal) flowClose.addEventListener("click", flowCloseModal);
-  if (flowModal) {
-    flowModal.querySelectorAll(".train-flow-tab").forEach(t => {
-      t.addEventListener("click", () => flowSetActive(t.dataset.flowTab));
-    });
-  }
-  if (flowUse && flowModal) flowUse.addEventListener("click", () => {
-    const activeTab = flowModal.querySelector(".train-flow-tab.active");
-    const flow = activeTab ? activeTab.dataset.flowTab : "scratch";
+  const flowPick = (flow) => {
     trainState.flow = flow;
     trainState.selected = null;
+    _trStore(flow);
+    _trToggleMetrics(flow);
     // Core Trainers list is flow-scoped; force a refetch on the next render.
     coreTrainersState.ready = false;
     _trShowSynthPanel(flow === "synth");
+    _trShowRagPanel(flow === "rag");
     _trUpdateTeacherGate();
-    if (flow === "synth" && !synthState.seeds.length) _synthLoadSeeds();
+    if (flow === "synth") {
+      if (!synthState.seeds.length) _synthLoadSeeds();
+      _synthLoadJobs();
+      _synthReattach();
+    }
     _trRenderPicker();
     _trRenderForm();
     _trRenderStatus();
     _exRender();
     flowCloseModal();
-  });
+  };
+  if (flowOpen && flowModal) flowOpen.addEventListener("click", flowOpenModal);
+  if (flowClose && flowModal) flowClose.addEventListener("click", flowCloseModal);
+  if (flowModal) {
+    flowModal.addEventListener("click", (ev) => { if (ev.target === flowModal) flowCloseModal(); });
+    flowModal.querySelectorAll(".train-flow-card").forEach(c => {
+      c.addEventListener("click", () => flowPick(c.dataset.flow));
+    });
+  }
+  const restoredFlow = _trStored();
+  if (restoredFlow && TRAIN_VALID_FLOWS.includes(restoredFlow)) flowPick(restoredFlow);
+  else _trToggleMetrics(null);
   const gotoLink = $("teacherGotoSettings");
   if (gotoLink) gotoLink.addEventListener("click", _trGotoTeacherSettings);
   const synthStart = $("synthStartBtn");
   if (synthStart) synthStart.addEventListener("click", _synthStart);
   const synthStop = $("synthStopPollBtn");
-  if (synthStop) synthStop.addEventListener("click", () => _synthStopPoll("stopped polling, job continues in background"));
+  if (synthStop) synthStop.addEventListener("click", _synthStopJob);
+  const synthBuild = $("synthBuildBtn");
+  if (synthBuild) synthBuild.addEventListener("click", _synthBuild);
+  const synthJobSel = $("synthJobSelect");
+  if (synthJobSel) synthJobSel.addEventListener("change", () => {
+    const jid = synthJobSel.value;
+    if (!jid) return;
+    synthState.jobId = jid;
+    try { localStorage.setItem(SYNTH_JOB_STORE, jid); } catch (e) {}
+    if (synthState.pollTimer) clearInterval(synthState.pollTimer);
+    synthState.pollTimer = setInterval(_synthPollOnce, TEACHER_POLL_MS);
+    _synthPollOnce();
+  });
   const exModel = _trEl("exportModel");
   if (exModel) exModel.addEventListener("change", _exPopulateSteps);
   const exRun = _trEl("exportRun");
@@ -8610,6 +8882,7 @@ document.addEventListener("DOMContentLoaded", () => {
     _trRenderForm();
     _trRenderStatus();
     _trCheckSizeMismatch();
+    _trUpdateAutoTuneVisibility();
   });
   const refresh = _trEl("trainRefresh");
   if (refresh) refresh.addEventListener("click", _trPoll);
@@ -8643,7 +8916,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   const stop = _trEl("trainStop");
   if (stop) stop.addEventListener("click", () => {
-    fetch("/trainers/stop", { method: "POST" }).then(r => r.json()).then(_trPoll).catch(_trPoll);
+    confirmDialog("Stop the training run? The latest checkpoint is kept; progress since it is lost.").then(ok => {
+      if (!ok) return;
+      TRAIN_JOB.stop().then(r => r.json()).then(_trPoll).catch(_trPoll);
+    });
   });
   const tog = _trEl("trainFormToggle");
   if (tog) tog.addEventListener("click", () => {
@@ -9043,17 +9319,25 @@ function _aiUpdateEffectiveLine(s) {
 // ---- teacher model ----
 const TEACHER_GET = "/teacher";
 const TEACHER_TEST = "/teacher/test";
+const TEACHER_MODELS = "/teacher/models";
 const TEACHER_SEEDS = "/teacher/seeds";
 const TEACHER_SYNTH_START = "/teacher/synth/start";
 const TEACHER_SYNTH_STATUS = "/teacher/synth/status";
+const TEACHER_SYNTH_BUILD = "/teacher/synth/build_corpus";
+const TEACHER_SYNTH_STOP = "/teacher/synth/stop";
+const TEACHER_SYNTH_SAMPLES = "/teacher/synth/samples";
+const TEACHER_SYNTH_JOBS = "/teacher/synth/jobs";
 const TEACHER_KIND_API = "api";
 const TEACHER_KIND_LOCAL = "local";
 const TEACHER_DEFAULT_MAX_CONC = 16;
 const TEACHER_DEFAULT_MAX_TOK = 2048;
-const TEACHER_DEFAULT_TEMP = 0.7;
 const TEACHER_POLL_MS = 2000;
-const TEACHER_NOTE_API = "leave empty to use VERITATE_TEACHER_API_KEY env var if set.";
+const TEACHER_KEY_MASK = "•".repeat(12);
 const TEACHER_NOTE_LOCAL = "ensure your local server is running at the base URL.";
+const TEACHER_MODEL_LIST_LABEL = "- pick a model -";
+const TEACHER_MODEL_GROUP = "connected models";
+const TEACHER_MODEL_CUSTOM = "__custom__";
+const TEACHER_CONNECTED_SUFFIX = " (connected)";
 
 const teacherState = { providers: [], current: null, pollTimer: null, jobId: null };
 
@@ -9061,22 +9345,28 @@ function _teacherProviderById(pid) {
   return teacherState.providers.find(p => p.id === pid) || null;
 }
 
+function _teacherConfigFor(pid) {
+  const cur = teacherState.current;
+  return (cur && cur.configs && cur.configs[pid]) || null;
+}
+
+function _teacherSelectedHasKey() {
+  const pid = ($("teacherProvider").value || "").trim();
+  const cfg = _teacherConfigFor(pid);
+  if (cfg) return !!cfg.has_key;
+  const cur = teacherState.current;
+  return !!(cur && pid && pid === cur.provider && cur.has_api_key);
+}
+
 function _teacherPopulateProviderSelect() {
   const sel = $("teacherProvider");
   if (!sel) return;
+  const opt = p => `<option value="${p.id}">${p.display_name || p.id}${_teacherConfigFor(p.id) ? TEACHER_CONNECTED_SUFFIX : ""}</option>`;
   const api = teacherState.providers.filter(p => p.kind === TEACHER_KIND_API);
   const loc = teacherState.providers.filter(p => p.kind === TEACHER_KIND_LOCAL);
   let html = '<option value="">- pick a provider -</option>';
-  if (api.length) {
-    html += '<optgroup label="API">';
-    html += api.map(p => `<option value="${p.id}">${p.display_name || p.id}</option>`).join("");
-    html += '</optgroup>';
-  }
-  if (loc.length) {
-    html += '<optgroup label="Local">';
-    html += loc.map(p => `<option value="${p.id}">${p.display_name || p.id}</option>`).join("");
-    html += '</optgroup>';
-  }
+  if (api.length) html += '<optgroup label="API">' + api.map(opt).join("") + '</optgroup>';
+  if (loc.length) html += '<optgroup label="Local">' + loc.map(opt).join("") + '</optgroup>';
   sel.innerHTML = html;
 }
 
@@ -9085,20 +9375,64 @@ function _teacherApplyProviderUI(pid) {
   const apiLbl = $("teacherApiKeyLabel");
   const note = $("teacherProviderNote");
   const modelEl = $("teacherModel");
+  const modelLbl = modelEl ? modelEl.closest("label") : null;
   const baseEl = $("teacherBaseUrl");
   if (!prov) {
     if (apiLbl) apiLbl.style.display = "";
     if (note) note.textContent = "";
+    if (modelLbl) modelLbl.style.display = "";
     if (modelEl) modelEl.placeholder = "";
     if (baseEl) baseEl.placeholder = "";
     return;
   }
   const isLocal = prov.kind === TEACHER_KIND_LOCAL;
   if (apiLbl) apiLbl.style.display = isLocal ? "none" : "";
-  if (note) note.textContent = isLocal ? TEACHER_NOTE_LOCAL : TEACHER_NOTE_API;
+  if (note) note.textContent = isLocal ? TEACHER_NOTE_LOCAL : "";
+  // Some providers route to a fixed model via the API key; hide the model field.
+  if (modelLbl) modelLbl.style.display = (prov.model_selectable === false) ? "none" : "";
   const defModel = (prov.default_models && prov.default_models[0]) || "";
   if (modelEl) modelEl.placeholder = defModel;
   if (baseEl) baseEl.placeholder = prov.base_url || "";
+}
+
+function _teacherFillModelList(models) {
+  const sel = $("teacherModelList");
+  if (!sel) return;
+  const uniq = [...new Set(models)];
+  const cur = ($("teacherModel").value || "").trim();
+  const inList = cur && uniq.includes(cur);
+  let html = `<option value="">${TEACHER_MODEL_LIST_LABEL}</option>`;
+  if (uniq.length) {
+    html += `<optgroup label="${TEACHER_MODEL_GROUP}">`
+      + uniq.map(m => `<option value="${_trEsc(m)}"${m === cur ? " selected" : ""}>${_trEsc(m)}</option>`).join("")
+      + "</optgroup>";
+  }
+  html += `<option value="${TEACHER_MODEL_CUSTOM}"${cur && !inList ? " selected" : ""}>custom...</option>`;
+  sel.innerHTML = html;
+  _teacherSyncModelInput();
+}
+
+function _teacherSyncModelInput() {
+  const sel = $("teacherModelList");
+  const m = $("teacherModel");
+  if (!sel || !m) return;
+  m.style.display = (sel.value === TEACHER_MODEL_CUSTOM) ? "" : "none";
+}
+
+function _teacherLoadModels() {
+  const prov = ($("teacherProvider").value || "").trim();
+  if (!prov) { _teacherFillModelList([]); return; }
+  const rawKey = ($("teacherApiKey").value || "");
+  const body = {
+    provider: prov,
+    base_url: ($("teacherBaseUrl").value || "").trim(),
+    api_key: (rawKey === TEACHER_KEY_MASK) ? "" : rawKey,
+  };
+  fetch(TEACHER_MODELS, { method: "POST", headers: { "Content-Type": "application/json" },
+                         body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(res => _teacherFillModelList((res && res.models) || []))
+    .catch(() => _teacherFillModelList([]));
 }
 
 function _teacherRenderStatus(s) {
@@ -9122,12 +9456,14 @@ function _teacherApplyToForm(s) {
   if (sel) sel.value = s.provider || "";
   const m = $("teacherModel"); if (m) m.value = s.model || "";
   const b = $("teacherBaseUrl"); if (b) b.value = s.base_url || "";
-  const k = $("teacherApiKey"); if (k) k.value = "";
+  const k = $("teacherApiKey"); if (k) k.value = s.has_api_key ? TEACHER_KEY_MASK : "";
   const mc = $("teacherMaxConcurrency"); if (mc) mc.value = s.max_concurrency || TEACHER_DEFAULT_MAX_CONC;
   const mt = $("teacherMaxTokens"); if (mt) mt.value = s.max_tokens || TEACHER_DEFAULT_MAX_TOK;
-  const tp = $("teacherTemperature"); if (tp) tp.value = (s.temperature != null ? s.temperature : TEACHER_DEFAULT_TEMP);
   _teacherApplyProviderUI(s.provider || "");
+  _teacherLoadModels();
   _teacherRenderStatus(s);
+  const tb = $("teacherTestBtn");
+  if (tb) tb.disabled = !(s && s.configured);
   _teacherSyncSettingsCache(s);
 }
 
@@ -9153,14 +9489,13 @@ function _teacherFormPatch() {
     teacher_base_url: ($("teacherBaseUrl").value || "").trim(),
     teacher_max_concurrency: parseInt($("teacherMaxConcurrency").value, 10) || TEACHER_DEFAULT_MAX_CONC,
     teacher_max_tokens: parseInt($("teacherMaxTokens").value, 10) || TEACHER_DEFAULT_MAX_TOK,
-    teacher_temperature: parseFloat($("teacherTemperature").value) || TEACHER_DEFAULT_TEMP,
   };
 }
 
 function _saveTeacher() {
   const patch = _teacherFormPatch();
   const key = ($("teacherApiKey").value || "");
-  if (key) patch.teacher_api_key = key;
+  if (key && key !== TEACHER_KEY_MASK) patch.teacher_api_key = key;
   const lab = $("teacherTestResult");
   if (lab) { lab.textContent = "saving..."; lab.style.color = "var(--warm)"; }
   fetch(TEACHER_GET, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -9173,17 +9508,17 @@ function _saveTeacher() {
       }
       _teacherApplyToForm(s);
       if (lab) { lab.textContent = "saved"; lab.style.color = "var(--data-pos)"; }
-      const keyEl = $("teacherApiKey"); if (keyEl) keyEl.value = "";
     })
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } });
 }
 
 function _testTeacher() {
+  const rawKey = ($("teacherApiKey").value || "");
   const body = {
     provider: ($("teacherProvider").value || "").trim(),
     model: ($("teacherModel").value || "").trim(),
     base_url: ($("teacherBaseUrl").value || "").trim(),
-    api_key: ($("teacherApiKey").value || ""),
+    api_key: (rawKey === TEACHER_KEY_MASK) ? "" : rawKey,
   };
   const lab = $("teacherTestResult");
   if (!body.provider) { if (lab) { lab.textContent = "pick a provider"; lab.style.color = "var(--hot)"; } return; }
@@ -9193,7 +9528,7 @@ function _testTeacher() {
     .then(r => r.json())
     .then(res => {
       if (res && res.ok) {
-        if (lab) { lab.textContent = `ok, ${res.latency_ms || 0} ms`; lab.style.color = "var(--data-pos)"; }
+        if (lab) { lab.textContent = `ok: ${res.model ? res.model + " " : ""}${res.latency_ms || 0} ms`; lab.style.color = "var(--data-pos)"; }
       } else {
         const msg = (res && res.error) || "failed";
         if (lab) { lab.textContent = "error: " + msg; lab.style.color = "var(--hot)"; }
@@ -9412,7 +9747,7 @@ function _saveSettings(patch) {
   fetch("/settings", { method: "POST", headers: { "Content-Type": "application/json" },
                        body: JSON.stringify(patch) })
     .then(r => r.json())
-    .then(s => { settingsState.current = s; _applySettingsToUI(s); _sysPollEnsure(); _trUpdateAutoOptimizeVisibility(); })
+    .then(s => { settingsState.current = s; _applySettingsToUI(s); _sysPollEnsure(); _trUpdateAutoTuneVisibility(); })
     .catch(() => {})
     .finally(() => { settingsState.saving = false; });
 }
@@ -10053,11 +10388,19 @@ function _syncFileRowHtml(scope, row) {
   } else if (row.state === "orphan") {
     actions = `<button class="action" data-sync-action="adopt"
                        data-sync-path="${_syncEsc(row.path)}"
-                       title="record locally; sync ignores from now on">adopt</button>`;
+                       title="record locally; sync ignores from now on">adopt</button>`
+            + ` <button class="action" data-sync-action="delete"
+                       data-sync-path="${_syncEsc(row.path)}"
+                       data-sync-warn="1"
+                       title="remove the local file and stop tracking it">delete</button>`;
   }
 
   const parentTag = sp.parent
     ? `<span style="color:var(--dim);font-size:10px;margin-right:6px;flex-shrink:0">${_syncEsc(sp.parent)}/</span>`
+    : "";
+
+  const editNote = (row.state === "modified" || row.state === "conflict")
+    ? `<div style="color:var(--dim);font-size:10px;line-height:1.5">it looks like you may have edited this file (e.g. auto tune). leave it as is to keep your changes; "force overwrite" replaces them with the upstream version.</div>`
     : "";
 
   return `<div class="sync-row" data-sync-path="${_syncEsc(row.path)}"
@@ -10072,6 +10415,7 @@ function _syncFileRowHtml(scope, row) {
       <span style="flex:1"></span>
       <span class="inline" style="gap:4px;flex-wrap:wrap;justify-content:flex-end">${actions}</span>
     </div>
+    ${editNote}
   </div>`;
 }
 
@@ -10090,7 +10434,7 @@ function _syncRenderPanel(scope, data) {
   let header = `<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px;font-size:10.5px;color:var(--dim)">
     <span>${rows.length} file${rows.length === 1 ? "" : "s"} tracked · `
     + `${counts.current || 0} current · ${counts.update_available || 0} updates · `
-    + `${counts.missing || 0} missing · ${counts.modified || 0} modified · ${counts.conflict || 0} conflict</span>
+    + `${counts.missing || 0} missing · ${counts.modified || 0} modified · ${counts.conflict || 0} conflict · ${counts.orphan || 0} orphan</span>
     <span>branch: <code style="color:var(--text)">${_syncEsc(data.branch || "main")}</code></span>
   </div>`;
 
@@ -10147,6 +10491,9 @@ function _syncConfirmDestructive(scope, action, path, row) {
     what = `Veritate will record your local copy as the new baseline. No file ` +
            `will be overwritten; future syncs will treat this version as ` +
            `"current" until either side changes again.`;
+  } else if (action === "delete") {
+    what = `This orphaned file was removed upstream. Veritate will DELETE your ` +
+           `local copy and stop tracking it.\nThis cannot be undone from inside Veritate.`;
   }
   return confirm(
     `${action.toUpperCase()}\n\n` +
@@ -10183,6 +10530,7 @@ function _syncResultSummary(results) {
     ["updated",   pick(r.updated)],
     ["forced",    pick(r.forced)],
     ["adopted",   pick(r.adopted)],
+    ["deleted",   pick(r.deleted)],
     ["skipped",   pick(r.skipped)],
     ["errors",    pick(r.errors)],
   ].filter(([_, paths]) => paths.length > 0);
@@ -10787,10 +11135,15 @@ function _renderSysSpecs(s) {
     const vram = g.vram_total ? " &middot; " + fmtBytes(g.vram_total) + " VRAM" : "";
     return `<div>${escapeHtml(g.name || g.vendor || "GPU")} <span style="color:var(--dim)">(${tag}${vram})</span></div>`;
   }).join("") || `<div style="color:var(--dim)">no GPU detected</div>`;
+  const m = s.measured;
+  const measuredLine = (m && m.tok_per_s)
+    ? `<div style="color:var(--data-pos);margin-top:4px">auto-tuned: batch ${m.best_batch || m.max_batch} &middot; ${Math.round(m.tok_per_s).toLocaleString()} tok/s &middot; ${(m.mem_ceiling_gb || 0).toFixed(1)} GB measured (${escapeHtml(m.device || "?")})</div>`
+    : "";
   view.innerHTML = `
     <div>${escapeHtml(p.system || "?")} ${escapeHtml(p.release || "")} (${escapeHtml(p.machine || "?")}) &middot; Python ${escapeHtml(p.python || "?")}</div>
     <div>${cpu.count_logical || "?"} logical cores${cpu.count_physical ? " (" + cpu.count_physical + " physical)" : ""} &middot; ${fmtBytes(mem.total_bytes)} RAM</div>
     ${gpuLines}
+    ${measuredLine}
     <div style="color:var(--dim);margin-top:4px">captured ${new Date((s.captured_at || 0) * 1000).toLocaleString()}</div>
   `;
   view.style.color = "var(--text)";
@@ -10954,13 +11307,23 @@ document.addEventListener("DOMContentLoaded", () => {
     settingsState.loaded = true;
     _applySettingsToUI(s);
     _sysPollEnsure();
-    _trUpdateAutoOptimizeVisibility();
+    _trUpdateAutoTuneVisibility();
     if (!s.consent_modal_seen) showConsentModal({ allowDecline: false });
     else showBuildNoticesIfAny();
   }).catch(() => {});
 
-  const autoBtn = $("trainAutoOptimizeBtn");
-  if (autoBtn) autoBtn.addEventListener("click", _trAutoOptimize);
+  const autoBtn = $("trainAutoTuneBtn");
+  if (autoBtn) autoBtn.addEventListener("click", _autoTuneOpen);
+  const sysTuneBtn = $("sysAutoTuneBtn");
+  if (sysTuneBtn) sysTuneBtn.addEventListener("click", _autoTuneOpen);
+  const tuneStart = $("autoTuneStart");
+  if (tuneStart) tuneStart.addEventListener("click", _autoTuneStart);
+  const tuneStop = $("autoTuneStop");
+  if (tuneStop) tuneStop.addEventListener("click", _autoTuneStop);
+  const tuneApply = $("autoTuneApply");
+  if (tuneApply) tuneApply.addEventListener("click", _autoTuneApply);
+  const tuneClose = $("autoTuneClose");
+  if (tuneClose) tuneClose.addEventListener("click", _autoTuneClose);
 
   document.querySelectorAll('input[name="pytorchMode"]').forEach(r => {
     r.addEventListener("change", () => {
@@ -11017,11 +11380,11 @@ document.addEventListener("DOMContentLoaded", () => {
     detectBtn.textContent = "detecting…";
     fetch("/sys/detect", { method: "POST" })
       .then(r => r.json())
-      .then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoOptimizeVisibility(); _applyDevicePrefCapabilities(); })
+      .then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoTuneVisibility(); _applyDevicePrefCapabilities(); })
       .catch(() => {})
       .finally(() => { detectBtn.disabled = false; detectBtn.textContent = prev; });
   });
-  fetch("/sys/specs").then(r => r.json()).then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoOptimizeVisibility(); _applyDevicePrefCapabilities(); }).catch(() => {});
+  fetch("/sys/specs").then(r => r.json()).then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoTuneVisibility(); _applyDevicePrefCapabilities(); }).catch(() => {});
   const hbBtn = $("heartbeatSendBtn");
   if (hbBtn) hbBtn.addEventListener("click", () => {
     const lab = $("heartbeatSendStatus");
@@ -11205,7 +11568,38 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // teacher model wiring
   const tProv = $("teacherProvider");
-  if (tProv) tProv.addEventListener("change", () => _teacherApplyProviderUI(tProv.value));
+  if (tProv) tProv.addEventListener("change", () => {
+    _teacherApplyProviderUI(tProv.value);
+    const prov = _teacherProviderById(tProv.value);
+    const cfg = _teacherConfigFor(tProv.value);
+    const baseEl = $("teacherBaseUrl");
+    if (baseEl && prov) baseEl.value = (cfg && cfg.base_url) || prov.base_url || "";
+    const modelEl = $("teacherModel");
+    if (modelEl) {
+      if (prov && prov.model_selectable === false) modelEl.value = "";
+      else modelEl.value = (cfg && cfg.model) || "";
+    }
+    const keyEl = $("teacherApiKey");
+    if (keyEl) keyEl.value = _teacherSelectedHasKey() ? TEACHER_KEY_MASK : "";
+    _teacherLoadModels();
+  });
+  const tList = $("teacherModelList");
+  if (tList) tList.addEventListener("change", () => {
+    const m = $("teacherModel");
+    if (m) m.value = (tList.value === TEACHER_MODEL_CUSTOM) ? "" : tList.value;
+    _teacherSyncModelInput();
+    if (m && tList.value === TEACHER_MODEL_CUSTOM) m.focus();
+  });
+  const tBase = $("teacherBaseUrl");
+  if (tBase) tBase.addEventListener("blur", _teacherLoadModels);
+  const tKey = $("teacherApiKey");
+  if (tKey) {
+    tKey.addEventListener("focus", () => { if (tKey.value === TEACHER_KEY_MASK) tKey.value = ""; });
+    tKey.addEventListener("blur", () => {
+      if (!tKey.value && _teacherSelectedHasKey()) tKey.value = TEACHER_KEY_MASK;
+      _teacherLoadModels();
+    });
+  }
   const tAdv = $("teacherAdvancedToggle");
   if (tAdv) tAdv.addEventListener("click", () => {
     const box = $("teacherAdvancedBox");

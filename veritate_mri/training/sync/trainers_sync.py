@@ -302,7 +302,7 @@ def sync(actions=None, branch=None):
 
         # Execute. Track results per file.
         results = {"installed": [], "updated": [], "forced": [], "adopted": [],
-                   "skipped": [], "errors": []}
+                   "deleted": [], "skipped": [], "errors": []}
         os.makedirs(PLUGINS_DIR, exist_ok=True)
 
         for r in rows:
@@ -327,6 +327,27 @@ def sync(actions=None, branch=None):
                     "via":           "adopt",
                 }
                 results["adopted"].append({"path": rel})
+                continue
+
+            if act == sc.ACTION_DELETE:
+                # Only orphans are deletable: file dropped from upstream. Removes
+                # the local copy (if present) and drops the tracking entry.
+                if st != sc.STATE_ORPHAN:
+                    results["skipped"].append({"path": rel, "state": st,
+                                               "reason": "delete only valid for orphan"})
+                    continue
+                dest = sc.safe_dest(rel, PLUGINS_DIR)
+                if dest is None:
+                    results["errors"].append({"path": rel, "error": "unsafe path"})
+                    continue
+                try:
+                    if os.path.isfile(dest):
+                        os.remove(dest)
+                except OSError as e:
+                    results["errors"].append({"path": rel, "error": f"delete failed: {e}"})
+                    continue
+                state.pop(rel, None)
+                results["deleted"].append({"path": rel})
                 continue
 
             if act == sc.ACTION_INSTALL and st != sc.STATE_MISSING:
@@ -373,10 +394,11 @@ def sync(actions=None, branch=None):
         n_upd  = len(results["updated"])
         n_frc  = len(results["forced"])
         n_adp  = len(results["adopted"])
+        n_del  = len(results["deleted"])
         n_skp  = len(results["skipped"])
         n_err  = len(results["errors"])
         msg = (f"installed {n_inst}, updated {n_upd}, forced {n_frc}, "
-               f"adopted {n_adp}, skipped {n_skp}, errors {n_err}")
+               f"adopted {n_adp}, deleted {n_del}, skipped {n_skp}, errors {n_err}")
         if n_err:
             logmod.warn("plugins-sync", msg)
             _record("sync", False, msg)

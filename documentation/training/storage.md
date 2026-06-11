@@ -2,6 +2,10 @@
 
 Layout of `models/<name>/` directories. Gitignored. Every trainer writes here through [veritate_mri/training/save.py](../../veritate_mri/training/save.py); readers under [veritate_mri/readers/](../../veritate_mri/readers/) consume it.
 
+## Save guarantee
+
+Every training path persists through `save.save()`, which always writes the full dump suite (`hooks/step_<N>/`) plus `config.json` and the checkpoint, and `append_train_row()` for `train.csv`. No training path bypasses the hooks dump. The shared plugin loop ([trainers/common/vanilla_trainer.py:536](../../trainers/common/vanilla_trainer.py#L536)), the per-trainer loops (`trainers/<id>/trainer.py`, reaching `save` via `veritate_core.plugin.save`), and the grounded SFT ([experiments/v2/rag/sft_grounded.py:66](../../experiments/v2/rag/sft_grounded.py#L66)) all call it. See [save.md](../architecture/backend/save.md).
+
 ## Layout
 
 ```
@@ -27,8 +31,7 @@ models/<name>/
 │       ├── writing_health.json       # higher-tier eval
 │       ├── reading_comprehension.json
 │       └── generation.json           # sample generations at this step
-├── veritate.bin                      # exported engine artifact (when generated)
-└── coral_meta.json                   # only for coral-merged models
+└── veritate.bin                      # exported engine artifact (when generated)
 ```
 
 ## File responsibilities

@@ -8,6 +8,8 @@ Live + historical view of training runs. Shows loss curves, learning rate, throu
 
 Markup at [index.html:901–1043](../../../veritate_mri/web/index.html#L901).
 
+- **Auto tune** (`#trainAutoTuneBtn`, next to the memory estimate) opens `#autoTuneModal`: a measured benchmark that runs the selected trainer's `--bench` mode on throwaway weights, streams its narration from the log-ring SSE, and writes the measured batch/lr/cadence into the manifest and form. Visible with Advanced consent + detected specs + a `"bench": true` trainer. See [../../platform/bench.md](../../platform/bench.md).
+
 - Run picker at `#runPicker` populated by `loadRunsList()` ([index.js:3418](../../../veritate_mri/web/index.js#L3418)) which fetches `/runs`.
 - `loadTrainCsv()` ([index.js:3485](../../../veritate_mri/web/index.js#L3485)) fetches the selected run's `train.csv` and parses train/val rows.
 - Charts: `cLossT` (loss), `cLrT` (lr schedule), `cTpsT` (throughput), `cGnT` (grad norm), plus confidence-evolution and reading-grade panels.
@@ -20,6 +22,25 @@ Polling starts when the tab activates ([index.js:2122–2123](../../../veritate_
 - `trainStreamStart()` ([index.js:11447](../../../veritate_mri/web/index.js#L11447)) — opens `/train_stream` SSE.
 
 Polling stops on tab switch.
+
+### Flow actions, persistence, and stop
+
+- The action picker (`#trainFlowModal`) sets `trainState.flow` via `flowPick()` (`index.js`). The
+  selected flow is persisted to `localStorage["vt:training:flow"]` and restored on load so a reload
+  lands on the same action. Valid flows: `scratch`, `continue`, `rag`, `synth`, `export`.
+- Per-flow job control goes through one job registry (`TRAIN_FLOWS` → `TRAIN_JOB`/`SYNTH_JOB`/
+  `RAG_JOB`), each exposing `stop()`. Every stop button routes through `confirmDialog()` (the
+  shared `#confirmModal`) before calling its endpoint: training `POST /trainers/stop`, synth
+  `POST /teacher/synth/stop` (cooperative), rag `POST /rag/stop`.
+- Per-action layout: the metrics/charts block is wrapped in `#trainMetricsSection` and shown by
+  `_trToggleMetrics(flow)` only for the training flows (`scratch`/`continue`/`rag`); it is hidden
+  when no action is picked yet and for `synth`/`export`. The synth panel shows live teacher output instead (`#synthLiveWrap`
+  / `#synthLiveOutput`), polled from `GET /teacher/synth/samples` inside `_synthPollOnce`.
+- Synth reattach: the active synth job id is stored at `localStorage["vt:training:synth_job"]`;
+  `_synthReattach()` resumes polling on load. `GET /teacher/synth/status` falls back to reading the
+  job dir from disk when the id is no longer in the server's in-memory `_JOBS`, so status survives a
+  server restart. Training reattaches via the backend PID file; rag reattaches via its singleton
+  status poll.
 
 ## Dependencies
 

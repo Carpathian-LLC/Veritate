@@ -13,10 +13,10 @@ A trainer plugin is a folder under `trainers/<name>/` containing a `trainer.py` 
 Trainers import the surface from `veritate_core.plugin`:
 
 ```python
-from veritate_core.plugin import save, paths, model, qat, hardware, get_teacher_client
+from veritate_core.plugin import save, paths, model, qat, hardware, mem_planner, mem_executor, bench, get_teacher_client
 ```
 
-`save`, `paths`, `model`, `qat`, and `hardware` are the namespaces in this contract. `get_teacher_client(provider=None, model=None)` returns a configured teacher-model `Client` for distillation, or `None` when no `teacher_provider` is set in settings. Nothing else in the parent repo is callable from a trainer.
+`save`, `paths`, `model`, `qat`, `hardware`, `mem_planner`, `mem_executor`, and `bench` are the namespaces in this contract. `get_teacher_client(provider=None, model=None)` returns a configured teacher-model `Client` for distillation, or `None` when no `teacher_provider` is set in settings. Nothing else in the parent repo is callable from a trainer.
 
 ## hardware
 
@@ -33,6 +33,34 @@ True only when the backend is actually usable (MPS additionally requires arm64).
 ### `hardware.physical_cores() -> int`
 
 Physical core count via psutil, with an `os.cpu_count()//2` fallback. Callers apply their own cap.
+
+### `hardware.unified_memory_bytes() -> int`
+
+Total addressable RAM. On Apple Silicon this is the unified pool the GPU and CPU share, so it is the training-memory ceiling that `mem_planner` budgets against.
+
+## mem_planner
+
+Size-adaptive training-memory planner. Decides whether a run fits in unified memory and which offload tier to engage. Full reference: [documentation/platform/mem_planner.md](../platform/mem_planner.md).
+
+### `mem_planner.plan_training_memory(param_count, hidden, layers, ffn, batch, seq, dtype="bf16", budget_bytes=None) -> MemoryPlan`
+
+`param_count` is `sum(p.numel() for p in model.parameters())`. Returns the cheapest escalation tier that fits: `none`, `checkpoint_activations`, `checkpoint+bf16_optimizer`, `checkpoint+page_optimizer_to_nvme`, or `infeasible_reduce_batch_or_seq`. `budget_bytes` defaults to `hardware.unified_memory_bytes()` times a usable fraction. `MemoryPlan` is a frozen dataclass: `tier`, `fits`, `budget_bytes`, `required_bytes`, and the four bucket sizes. `mem_planner.format_plan(plan)` renders a one-line GB summary.
+
+## bench
+
+Measured memory/throughput benchmark powering the dashboard's Auto tune. Full reference: [documentation/platform/bench.md](../platform/bench.md).
+
+### `bench.run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=None) -> dict`
+
+Ramps batch size on the already-built model with throwaway synthetic batches until OOM; returns `{device, seq, max_batch, mem_ceiling_gb, tok_per_s, ramp}`. Saves nothing. A trainer exposes it as a `--bench` flag and prints `BENCH_RESULT <json>`; the manifest declares `"bench": true` so the dashboard knows the flag exists.
+
+## mem_executor
+
+Applies a `MemoryPlan` to a model. Full reference: [documentation/platform/mem_executor.md](../platform/mem_executor.md).
+
+### `mem_executor.apply_plan(model, plan) -> AppliedPlan`
+
+Engages activation checkpointing when the plan's tier calls for it (wraps each `model.blocks` entry). Returns `AppliedPlan(tier, grad_checkpoint, unmet)`; `unmet` lists interventions the tier needs that are not yet wired (optimizer-level offload). A trainer should print `unmet` so an unmet target is visible rather than silently OOMing. Checkpointing is numerically transparent: identical logits, loss, and grads.
 
 ## save
 

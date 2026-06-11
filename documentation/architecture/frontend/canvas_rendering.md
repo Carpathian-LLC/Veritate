@@ -19,7 +19,6 @@ Each chart has a named drawer. Examples:
 - `drawFfn(canvas, ctx, ffnFull)` at [index.js:277–304](../../../veritate_mri/web/index.js#L277) — FFN layer × bucket heatmap.
 - `drawTelemetry(canvas, ctx, frames, idx)` at [index.js:603–661](../../../veritate_mri/web/index.js#L603) — time-series traces (loss, lr, throughput).
 - `drawQuantKl(canvas, ctx, checkpoints, idx)` at [index.js:382–471](../../../veritate_mri/web/index.js#L382) — quantization KL with checkpoint markers.
-- `drawSeries(canvas, series, opts)` in [coral_lab.js](../../../veritate_mri/web/coral_lab.js) — generic multi-series line chart for Coral Lab.
 
 All drawers follow the same shape: fitCanvas, clear background, compute bounds, draw geometry, draw axes and labels.
 

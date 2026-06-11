@@ -347,12 +347,19 @@ def _run(plugin, args):
 
 
 def start(plugin_id, args=None):
+    # Atomic claim: test-and-set status under the lock so two near-simultaneous
+    # starts cannot both pass the guard (the worker thread only sets RUNNING
+    # later, leaving a race window otherwise).
     with _LOCK:
         if _STATE["status"] == STATUS_RUNNING:
             return {"ok": False, "error": f"already running: {_STATE['plugin_id']}"}
+        _STATE["status"] = STATUS_RUNNING
+        _STATE["plugin_id"] = plugin_id
     plugins = plugins_reader.scan()
     plugin = next((p for p in plugins if p["id"] == plugin_id), None)
     if plugin is None:
+        with _LOCK:
+            _STATE["status"] = STATUS_IDLE
         return {"ok": False, "error": f"plugin not found: {plugin_id}"}
     if plugins_reader.update_defaults(plugin_id, args or {}):
         logmod.info("plugin", f"manifest defaults updated: {plugin_id}")

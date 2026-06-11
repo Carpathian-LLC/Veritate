@@ -2,15 +2,19 @@
 
 ## What it is
 
-Dashboard preferences, trainer/plugin configuration, device preference, heartbeat consent, teacher (Ollama) endpoint, mesh role.
+Dashboard preferences, trainer/plugin configuration, device preference, heartbeat consent, teacher model (provider + model), mesh role.
 
 ## How it works
 
-Markup at [index.html:1266–1642](../../../veritate_mri/web/index.html#L1266). Sectioned panels for: display, runtime, trainers, teachers, mesh, advanced.
+Markup at [index.html:1266–1642](../../../veritate_mri/web/index.html#L1266). Sectioned panels for: display, runtime, engine, training, analytics, teachers, mesh, advanced.
+
+- **Training** section holds the compute-device override (`#devicePreferenceSelect`, posts `device_preference`).
+- **Analytics** section is three boxes: Detect system, Heartbeat, Advanced. Heartbeat is always on (no off switch) and shows the auto-generated, editable device name. Advanced groups the three opt-in telemetry toggles — `analytics_advanced_enabled`, `heartbeat_send_errors`, `diagnostics_logs_enabled` — plus the review/preview buttons.
 
 - Settings load via `GET /settings`. The whole `mri_settings.json` object is returned and used to hydrate every form field.
 - Each form change POSTs the patched key to `/settings`.
 - `#sysDetectBtn` triggers `POST /sys/detect` to re-detect hardware (CPU, GPU, RAM) and store the result.
+- `#sysAutoTuneBtn` opens the Auto tune modal (`#autoTuneModal`, shared with the Training tab): a measured benchmark that finds the real RAM ceiling and throughput sweet spot via a trainer's `--bench` mode, then writes the values into the trainer manifest and the `measured` key of `data/system_specs.json`. `_renderSysSpecs` shows the measured line in green when present. See [../../platform/bench.md](../../platform/bench.md).
 - A build-notices banner reads the build number from `versions.json` (via `/versions`) and shows acknowledgement prompts for new builds.
 
 Settings store at [settings.py](../../../veritate_mri/runtime/settings.py); see [../backend/settings.md](../backend/settings.md).
@@ -24,5 +28,8 @@ Settings store at [settings.py](../../../veritate_mri/runtime/settings.py); see 
 ## Pitfalls
 
 - Some settings only take effect after a dashboard restart (e.g., `pytorch_load_mode`, `mesh_role`). The UI doesn't yet flag which ones — when in doubt, restart.
-- `device_name` is capped at 15 characters (validated server-side at [settings.py:132](../../../veritate_mri/runtime/settings.py#L132)).
+- `device_name` is auto-generated on first setup (`_random_device_name()` in [settings.py](../../../veritate_mri/runtime/settings.py), e.g. `brave-otter-07`) and capped at 15 characters (validated server-side). It is the editable device id shown in the heartbeat box.
 - `analytics_advanced_enabled` and `diagnostics_logs_enabled` gate what fields the heartbeat ships; see [../backend/heartbeat.md](../backend/heartbeat.md) for the tier definitions.
+- Teacher model is a dropdown (`#teacherModelList`): a "connected models" optgroup lists every model the provider reports via `POST /teacher/models` (`list_models()`, deduped), plus a "custom..." entry that reveals the free-text input (`#teacherModel`) for names not in the list. The hidden input always holds the value that saves; picking from the list writes into it. The list refreshes on provider change, base-url blur, api-key blur, and form hydrate; a failed fetch (e.g. local server down) leaves only "custom...", with the saved name still editable. Providers with `model_selectable: false` (Carpathian — the API key picks the model) hide both controls.
+- Key policy: the bundled Carpathian `cai_` key in [settings.py](../../../veritate_mri/runtime/settings.py) is a PUBLIC shared key, intentionally committed.
+- Teacher provider configs are remembered per provider (`teacher_configs` in settings): every Save snapshots that provider's key/model/base-url, the provider dropdown appends "(connected)" to saved entries, and switching providers restores the remembered values (key shown as a mask; raw keys never reach the frontend). Picking a never-saved provider starts blank — keys are not carried across providers.

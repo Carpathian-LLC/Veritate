@@ -10,7 +10,7 @@ Imports `from veritate_core import qat as veritate_qat` ([line 42](../../../veri
 
 Exposes loop building blocks: corpus sampler integration, LR scheduling, gradient accumulation, optimizer step, checkpoint trigger. Plugins compose these — they don't have to use the whole package.
 
-Most existing plugins (`distill_teacher`, `multimind_m3`) hand-roll their own loops in `plugin.py` and don't call this module. Newer trainers can opt in for the common parts.
+The canonical trainers share the loop in [trainers/common/vanilla_trainer.py](../../../trainers/common/vanilla_trainer.py) rather than this module. A trainer that needs only individual building blocks can compose them from here.
 
 ## Dependencies
 

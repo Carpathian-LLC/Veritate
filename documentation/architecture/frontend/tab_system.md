@@ -31,7 +31,7 @@ Click handler at [index.js:2142–2146](../../../veritate_mri/web/index.js#L2142
 Hardcoded array at [index.js:2098](../../../veritate_mri/web/index.js#L2098):
 
 ```js
-const valid = ["generation", "learning", "training", "wiki", "logs", "settings", "coral"];
+const valid = ["generation", "learning", "training", "wiki", "logs", "settings"];
 if (!valid.includes(name)) name = "generation";
 ```
 

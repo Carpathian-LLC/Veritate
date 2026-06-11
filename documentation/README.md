@@ -11,7 +11,6 @@ Central reference for the codebase. Every shipped component is documented here. 
 - **[engine/](engine/)** — C engine internals.
 - **[hooks/](hooks/)** — checkpoint dump artifacts (probe.json, lens.npz, classroom.json, etc.).
 - **[kernels/](kernels/)** — quantized matmul kernels (INT8, INT4, ternary).
-- **[multimind/](multimind/)** — multimind variants and experiments.
 - **[platform/](platform/)** — hardware tiers and platform-specific notes.
 - **[plugins/](plugins/)** — trainer plugin contract.
 - **[trainers/](trainers/)** — per-trainer specs.

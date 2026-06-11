@@ -2,7 +2,7 @@
 
 ## What it is
 
-A thin compatibility package at [veritate/](../../../veritate/) that re-exports the renamed `veritate_core` and `veritate_mri` modules under the legacy `veritate.X` paths. Without it, every trainer plugin in [trainers/](../../../trainers/) fails at import.
+A thin compatibility package at [veritate/](../../../veritate/) that re-exports the renamed `veritate_core` and `veritate_mri` modules under the legacy `veritate.X` paths. It exists so any code still written against the old `from veritate.X import ...` paths keeps resolving.
 
 ## How it works
 
@@ -18,15 +18,9 @@ A thin compatibility package at [veritate/](../../../veritate/) that re-exports 
 
 Re-exports use both attribute binding (`from training import save`) and `sys.modules` aliasing so `from veritate.plugin.save import X` works in addition to `from veritate.plugin import save`.
 
-## Trainers that depend on it
+## Consumers
 
-- `trainers/distill_teacher/plugin.py`
-- `trainers/multimind_m1/plugin.py` + `m1_model.py`
-- `trainers/multimind_m3/plugin.py` + `m3_model.py`
-- `trainers/multimind_mega/plugin.py` + `mega_model.py`
-- `trainers/example_plugin/plugin.py`
-
-All of these import `from veritate.X import ...`. The shim resolves them without per-trainer edits.
+The canonical trainers in [trainers/](../../../trainers/) import the new paths directly (`from veritate_core.plugin import save, paths, model, qat, multicorpus`), not the shim. The shim has no current in-repo consumers; it remains only as a safety net for legacy `from veritate.X import ...` code.
 
 ## Coexistence with `veritate.py`
 
@@ -39,5 +33,5 @@ The launcher script `veritate.py` lives at the repo root next to `veritate/`. Py
 
 ## Pitfalls
 
-- The shim is for legacy compatibility, not new code. Write new code against the canonical paths (`from veritate_core.model import Veritate`, `from training import save`).
-- Removing the shim breaks every existing trainer. Migrating each trainer to canonical imports is a parallel cleanup task that can happen later.
+- The shim is for legacy compatibility, not new code. Write new code against the canonical paths (`from veritate_core.model import Veritate`, `from veritate_core.plugin import save`).
+- It has no current consumers; treat it as removable once verified no out-of-repo code imports `veritate.X`.
