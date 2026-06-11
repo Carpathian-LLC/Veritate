@@ -49,6 +49,7 @@ NATIVE_TRAINER_MANIFEST = {
     "name":        "Native trainer (no plugin)",
     "description": "Train, continue, or refine any size from the dashboard. Canonical Veritate (GELU FFN + RMSNorm + learned pos-emb + tied LM head); QAT-aware; same save.save / append_train_row contract as a plugin.",
     "kind":        "trainer",
+    "bench":       True,
     "flow":        ["scratch", "continue"],
     "sizes": {
         "5m":   {"layers":  6, "hidden":  256, "ffn":  1024, "heads":  4, "params":      5000000},

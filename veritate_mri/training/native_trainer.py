@@ -18,6 +18,7 @@
 # Imports:
 
 import argparse
+import json
 import math
 import os
 import sys
@@ -253,6 +254,7 @@ def _parse_args():
     # path / identity
     ap.add_argument("--name",        type=str, default="")
     ap.add_argument("--resume",      type=str, default="")
+    ap.add_argument("--bench",       action="store_true")
     ap.add_argument("--description", type=str, default="")
     ap.add_argument("--version",     type=str, default="")
     ap.add_argument("--variant",     type=str, default="")
@@ -311,23 +313,33 @@ def _parse_args():
 def main():
     args = _parse_args()
     _resolve_shape(args)
-    _resolve_corpus(args)
-    name = _resolve_output_dir(args)
+    name = None
+    if not args.bench:
+        _resolve_corpus(args)
+        name = _resolve_output_dir(args)
 
     device_type = _pick_device(args.device)
     device = torch.device(device_type)
     amp_dtype = torch.bfloat16 if (args.precision == "bf16" and device_type == "cuda") else None
 
     print(f"[native] device={device_type} amp={amp_dtype}", flush=True)
-    print(f"[native] output={args.output_dir}", flush=True)
+    if not args.bench:
+        print(f"[native] output={args.output_dir}", flush=True)
+        print(f"[native] corpus_bin={args.corpus_bin}", flush=True)
     print(f"[native] shape h={args.hidden} L={args.layers} ffn={args.ffn} heads={args.heads} seq={args.seq}", flush=True)
-    print(f"[native] corpus_bin={args.corpus_bin}", flush=True)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     model = _build_model(args).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[native] params: {n_params:,} ({n_params/1e6:.1f}M)", flush=True)
+
+    if args.bench:
+        from veritate_core.plugin import bench
+        result = bench.run(model, device_type, args.seq, args.vocab,
+                           on_progress=lambda s: print("bench: " + s, flush=True))
+        print("BENCH_RESULT " + json.dumps(result), flush=True)
+        return
 
     opt = torch.optim.AdamW(
         model.parameters(),

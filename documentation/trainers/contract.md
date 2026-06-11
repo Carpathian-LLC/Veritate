@@ -302,7 +302,7 @@ Every trainer ships a `manifest.json` next to its `trainer.py`. The dashboard re
 | `description` | string | one-line summary; appears in the trainer picker tooltip and the form header. |
 | `kind` | string | `"trainer"` is the only kind today. |
 | `flow` | string or array | which start flows this trainer supports. `"scratch"` (new model) and `"continue"` (resume an existing model). May be a single string or an array. |
-| `sizes` | object | shape table for the size dropdown. Keys are size labels (`"80m"`, `"1b"`); values are dicts with `layers`, `hidden`, `ffn`, `heads`, `params`, optionally `active_params` for MoE. The size dropdown choices and the VRAM estimator both read from this. |
+| `sizes` | object | single-entry shape table. Each trainer is standalone at exactly one size; the entry's key is the size label (`"80m"`, `"1b3"`, `"200b"`) and its value carries `layers`, `hidden`, `ffn`, `heads`, `params` (optionally `active_params` for MoE). The dashboard fixes the size from the selected trainer and renders no size selector for single-size manifests; the VRAM estimator reads the shape from here. |
 | `defaults` | object | preset values for the form fields. Keys are the field names; values are the default (number, string, bool, or array). The dashboard only renders fields whose name appears here (or that are required). |
 
 ### what the manifest does NOT carry
@@ -315,7 +315,7 @@ Every trainer's manifest declares these three keys:
 
 | key | type | sample | meaning |
 |---|---|---|---|
-| `size` | string | `"80m"` | shape preset name; must be a key in the manifest's top-level `sizes` table. |
+| `size` | string | `"80m"` | the single key of the manifest's `sizes` table. One trainer = one size; the dashboard derives it from the trainer selection and the trainer's argparse default applies on launch. |
 | `precision` | string | `"bf16"` | training precision. `"bf16"` or `"fp32"`. |
 | `version` | string | `"v1"` | version tag for legacy `compose_name`. `v1`, `v1a`, `v2`, ... |
 
@@ -399,8 +399,7 @@ A scratch-only trainer with the bare minimum surface:
   "kind": "trainer",
   "flow": ["scratch"],
   "sizes": {
-    "30m": { "layers": 10, "hidden":  512, "ffn": 2048, "heads":  8, "params":  31000000 },
-    "80m": { "layers": 12, "hidden":  768, "ffn": 3072, "heads": 12, "params":  85000000 }
+    "30m": { "layers": 10, "hidden":  512, "ffn": 2048, "heads":  8, "params":  31000000 }
   },
   "defaults": {
     "size": "30m",

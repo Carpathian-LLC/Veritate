@@ -1,5 +1,5 @@
 {
-  "_comment": "Default corpus catalog shipped with Veritate. Each entry's stem is the on-disk basename (foo -> foo_train.bin / foo_val.bin in trainers/corpus/). format='raw_bytes' = direct URL written as a uint8 byte stream (Veritate trains byte-level, so plaintext bytes ARE tokens). format='hf_dataset' = stream rows from a HuggingFace dataset, encode each text column as UTF-8, separate rows with two newlines. max_bytes_train caps how much of streaming HF data is written before stopping. val_split_ratio carves off the tail of the downloaded train file as val.bin when no separate val source is supplied. recommended_min_params / _max_params drive the training-tab size-mismatch warning. The dashboard prompts the user for confirmation before installing any corpus larger than 10 GB; the backend additionally requires confirm_large=true in the install body for those.",
+  "_comment": "Default corpus catalog shipped with Veritate. Each entry's stem is the on-disk basename (foo -> foo_train.bin / foo_val.bin in trainers/corpus/). format='raw_bytes' = direct URL written as a uint8 byte stream (Veritate trains byte-level, so plaintext bytes ARE tokens). format='hf_dataset' = stream rows from a HuggingFace dataset, encode each text column as UTF-8, separate rows with two newlines. format='native' = the bins ship inside the repo at veritate_mri/data/corpus/; install copies them into trainers/corpus/ with no network, and sizes are read from the bundled files. max_bytes_train caps how much of streaming HF data is written before stopping. val_split_ratio carves off the tail of the downloaded train file as val.bin when no separate val source is supplied. recommended_min_params / _max_params drive the training-tab size-mismatch warning. The dashboard prompts the user for confirmation before installing any corpus larger than 10 GB; the backend additionally requires confirm_large=true in the install body for those.",
   "corpora": [
     {
       "stem": "chat_50mb",
@@ -89,6 +89,15 @@
       "sha256_val":   "29e3bccb43031120b5685b4784a93f5d4fe691a0f07cb6b2730da3ade3d3f3f9",
       "trained_modes": ["agent"],
       "recommended_min_params": 1500000000,
+      "recommended_max_params": null
+    },
+    {
+      "stem": "mcp_docs",
+      "label": "Model Context Protocol docs",
+      "description": "The complete modelcontextprotocol.io documentation: the 2025-11-25 specification, build guides, SDK and registry docs, governance. ~2 MB. Ships inside Veritate — installing copies it from the repo, no download. Domain corpus: fine-tune a chat model on it rather than training from scratch.",
+      "format": "native",
+      "trained_modes": ["autocomplete"],
+      "recommended_min_params": 0,
       "recommended_max_params": null
     },
     {

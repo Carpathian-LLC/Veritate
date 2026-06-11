@@ -25,12 +25,15 @@ CORPUS_ROOT     = os.path.join(PLUGINS_ROOT, "corpus")
 MRI_ROOT        = os.path.join(REPO_ROOT, "veritate_mri")
 # Platform-level data lives under veritate_mri/data/. eval/grade/ holds the
 # committed grade-level eval corpora; eval/samples/ holds the small smoke
-# subsets of MMLU / HellaSwag / IFEval; wiki/ holds dashboard wiki markdown.
+# subsets of MMLU / HellaSwag / IFEval; wiki/ holds dashboard wiki markdown;
+# corpus/ holds the Veritate-native corpora the Settings library installs by
+# copying into trainers/corpus/.
 DATA_ROOT          = os.path.join(MRI_ROOT, "data")
 EVAL_ROOT          = os.path.join(DATA_ROOT, "eval")
 GRADE_EVAL_ROOT    = os.path.join(EVAL_ROOT, "grade")
 EVAL_SAMPLES_ROOT  = os.path.join(EVAL_ROOT, "samples")
 WIKI_ROOT          = os.path.join(DATA_ROOT, "wiki")
+NATIVE_CORPUS_ROOT = os.path.join(DATA_ROOT, "corpus")
 ENGINE_ROOT     = os.path.join(REPO_ROOT, "veritate_engine")
 # v1 is the primary (and only built) engine. v2 is an empty scratchpad folder
 # reserved for future engine experiments (see documentation/engine/v2.md).
@@ -107,6 +110,14 @@ def corpus_train_path(stem):
 
 def corpus_val_path(stem):
     return os.path.join(CORPUS_ROOT, f"{stem}{CORPUS_VAL_SUFFIX}")
+
+
+def native_corpus_train_path(stem):
+    return os.path.join(NATIVE_CORPUS_ROOT, f"{stem}{CORPUS_TRAIN_SUFFIX}")
+
+
+def native_corpus_val_path(stem):
+    return os.path.join(NATIVE_CORPUS_ROOT, f"{stem}{CORPUS_VAL_SUFFIX}")
 
 
 def grade_eval_path(level):

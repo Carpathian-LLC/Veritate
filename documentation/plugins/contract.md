@@ -31,9 +31,10 @@ Optional per-trainer files (corpus builders, helpers used by only this trainer) 
 }
 ```
 
-- `name` — display name in the dashboard.
+- `name` — display name in the dashboard. Named by size (`"Veritate 200B"`).
 - `kind` — `"trainer"` (currently the only kind).
 - `flow` — list of valid entry modes. `scratch` = new model; `continue` = resume from a checkpoint.
+- `sizes` — single-entry shape table. Each trainer is standalone at exactly one size; the dashboard fixes the size from the trainer selection (no size dropdown for plugin trainers).
 - `defaults` — every argparse arg the plugin accepts, with its default value. The dashboard generates form fields from this; missing keys mean missing form fields.
 - `bench` (optional) — `true` when the trainer implements the `--bench` flag ([bench.md](../platform/bench.md)). Gates the dashboard's Auto tune; without it the flag would be silently dropped by `parse_known_args` and a real run would start.
 

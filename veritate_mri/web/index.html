@@ -998,8 +998,8 @@
         <div id="trainFormIntro" style="color:var(--dim);font-size:10.5px;margin-bottom:10px;line-height:1.5"></div>
         <div id="trainCoreTrainersWrap" class="core-trainers-wrap" style="display:none">
           <div class="core-trainers-head">
-            <span class="core-trainers-title">Core Trainers</span>
-            <span class="core-trainers-sub">research knobs that mutate the training recipe. boxes in the same group are mutually exclusive.</span>
+            <span class="core-trainers-title">Additional options</span>
+            <span class="core-trainers-sub">optional recipe choices &mdash; one pick per group.</span>
           </div>
           <div id="trainCoreTrainersGrid" class="core-trainers-grid"></div>
         </div>
@@ -1802,14 +1802,16 @@
       <h3>Auto tune</h3>
       <button id="autoTuneClose">×</button>
     </div>
-    <div style="font-size:11.5px;color:var(--dim);line-height:1.55;margin-bottom:10px">
+    <div style="font-size:11.5px;color:var(--dim);line-height:1.55;margin-bottom:6px">
       Runs short throwaway training steps at increasing batch sizes to measure what your
       machine can really do. No checkpoints are written and your models are untouched.
     </div>
+    <div style="font-size:11px;color:var(--warm);line-height:1.5;margin-bottom:10px">
+      Heads up: this intentionally pushes memory to its limit, so your computer may slow
+      down or stutter while it runs (usually 2&ndash;5 minutes). You can stop it at any time.
+    </div>
     <div class="inline" style="gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-      <label style="font-size:11px;color:var(--dim)">trainer
-        <select id="autoTuneTrainer" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;margin-left:6px;min-width:220px"></select>
-      </label>
+      <span style="font-size:11px;color:var(--dim)">trainer <b id="autoTuneTrainerName" style="color:var(--text)">&mdash;</b></span>
       <button id="autoTuneStart" class="go" type="button">start benchmark</button>
       <button id="autoTuneStop" type="button" style="display:none;background:var(--hot);color:#000">stop</button>
     </div>

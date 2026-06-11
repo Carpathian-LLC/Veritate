@@ -110,6 +110,28 @@ REGISTRY = [
         "applies_to":  [],
     },
     {
+        "id":          "qat_int8",
+        "label":       "QAT (INT8 training)",
+        "description": "Quantization-aware training: weights, activations, and "
+                       "norms run under fake-quant INT8 ops, so the checkpoint "
+                       "exports straight to an INT8 engine binary. On continue, "
+                       "fine-tunes an existing model into INT8 (use lr ~1e-5).",
+        "group":       "quantization",
+        "default":     False,
+        "args":        {"qat_enabled": True},
+        "applies_to":  [],
+    },
+    {
+        "id":          "freeze_base",
+        "label":       "Freeze base (adapter only)",
+        "description": "Lock the base trunk so only the adapter (M1/M3) learns. "
+                       "Faster, smaller deltas, lower forgetting.",
+        "group":       "adapter",
+        "default":     False,
+        "args":        {"freeze_base": True},
+        "applies_to":  ["scratch"],
+    },
+    {
         "id":          "adam8bit",
         "label":       "8-bit AdamW",
         "description": "Optimizer state in INT8 instead of FP32 (bitsandbytes). "

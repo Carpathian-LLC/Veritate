@@ -6935,6 +6935,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 const trainState = {
   list: [],
+  loaded: false,  // first /trainers response received
   flow: null,
   selected: null,
   running: { status: "idle" },
@@ -6986,19 +6987,18 @@ function _trBuildInput(a) {
         : (source === "shared" ? "the shared corpus folder (trainers/corpus/)" : "any corpus folder");
       return `<p class="train-no-corpus-error">No training data file found in ${what}. Drop a <code>&lt;name&gt;_train.bin</code> file at ${where}, then click <i>refresh</i>.</p><input type="hidden" data-arg="${_trEsc(name)}" value="">`;
     }
-    // Multi-select: cmd/ctrl-click to pick more than one corpus. Submit joins
-    // selections with "+" -> the trainer's multicorpus helper handles weighting.
-    // Pre-fill: parse existing def, supports "a", "a+b+c", or "a:0.5,b:0.3"
-    // by extracting bare stems so the dropdown can reflect them.
+    // Collapsed checkbox picker. The hidden input carries the joined "+"
+    // stem list (multicorpus handles weighting); the summary echoes it.
     const selectedSet = new Set(
       String(def || "").split(/[+,]/).map(s => s.split(":")[0].trim()).filter(Boolean)
     );
-    const visible = Math.max(2, Math.min(6, filtered.length));
-    const opts = filtered.map(c =>
-      `<option value="${_trEsc(c.stem)}" ${selectedSet.has(c.stem) ? "selected" : ""}>${_trEsc(c.label)}</option>`
+    const initial = filtered.filter(c => selectedSet.has(c.stem)).map(c => c.stem);
+    const boxes = filtered.map(c =>
+      `<label class="corpus-opt"><input type="checkbox" value="${_trEsc(c.stem)}" ${selectedSet.has(c.stem) ? "checked" : ""}><span>${_trEsc(c.label)}</span></label>`
     ).join("");
-    return `<select multiple data-arg="${_trEsc(name)}" data-arg-kind="corpus" size="${visible}" style="${inputBase};height:auto">${opts}</select>` +
-           `<div style="font-size:10.5px;color:var(--dim);margin-top:3px">cmd/ctrl-click to mix multiple corpora &mdash; sampling is size-weighted. blank = reuse original on resume.</div>`;
+    return `<details class="corpus-picker"><summary data-corpus-summary>${initial.length ? _trEsc(initial.join(" + ")) : "pick training data"}</summary>` +
+           `<div class="corpus-list">${boxes}<div class="corpus-note">check several to mix &mdash; sampling is size-weighted. blank = reuse original on resume.</div></div></details>` +
+           `<input type="hidden" data-arg="${_trEsc(name)}" data-arg-kind="corpus" value="${_trEsc(initial.join("+"))}">`;
   }
   if (t === "model_name") {
     const opts = ['<option value="">- pick a model -</option>']
@@ -7022,9 +7022,6 @@ function _trArgVal(name) {
   const el = _trArgEl(name);
   if (!el) return "";
   if (el.type === "checkbox") return !!el.checked;
-  // Multi-select (corpus mix): join selections with "+" so the trainer's
-  // multicorpus.parse_spec sees an additive spec.
-  if (el.multiple) return Array.from(el.selectedOptions).map(o => o.value).join("+");
   return el.value;
 }
 
@@ -7044,7 +7041,7 @@ function _trUpdateComposedName() {
   const out = _trEl("trainComposedName");
   if (!out) return;
   const name      = _trArgVal("name");
-  const size      = _trArgVal("size");
+  const size      = _trResolvedSize();
   const corpus    = _trArgVal("corpus");
   const precision = _trArgVal("precision");
   const version   = _trArgVal("version");
@@ -7111,6 +7108,15 @@ function _trSizeShape(size) {
   return (size && t[size]) ? t[size] : null;
 }
 
+// Size is fixed per trainer (single-entry sizes table); the form only renders
+// a size dropdown for multi-size manifests (native trainer).
+function _trResolvedSize() {
+  const v = _trArgVal("size");
+  if (v) return v;
+  const p = (typeof trainState !== "undefined" && trainState) ? trainState.selected : null;
+  return (p && p.manifest && p.manifest.defaults && p.manifest.defaults.size) || "";
+}
+
 // ---------------------------------------------------------------
 // Trainer form schema. The dashboard owns labels, helps, types,
 // choices, and required-flags. Plugin manifests only carry preset
@@ -7122,7 +7128,7 @@ const TRAINER_SCHEMA = {
     // ---- required (every trainer) ----
     { name: "name",         type: "str",    required: true,  label: "model name",               help: "your name for this model; the model size is auto-appended to make the on-disk folder (e.g. 'chatty_otter' becomes 'chatty_otter_85m')." },
     { name: "corpus",       type: "corpus", required: true,  label: "training data file",      help: "the file the model reads." },
-    { name: "size",         type: "str",    required: true,  label: "model size",               help: "bigger = smarter, slower, more VRAM. MoE sizes (the ones with active_params in the trainer's manifest) store all experts on disk but only fire a slice per byte.", choices: _trSizeOrder },
+    { name: "size",         type: "str",    required: true,  label: "model size",               help: "bigger = smarter, slower, more VRAM. Plugin trainers are fixed to one size (the trainer IS the size); this dropdown only appears for multi-size trainers like the native trainer.", choices: _trSizeOrder },
     { name: "precision",    type: "str",    required: true,  label: "number precision",         help: "bf16 = half memory; fp32 = double.", choices: ["bf16","fp32"] },
     { name: "version",      type: "str",                     label: "version tag (optional)",   help: "free-form revision label (v1, v2a, ...); shows up in the description, not the folder name." },
     { name: "description",  type: "text",                    label: "what this model is for",   help: "saved into the model config. If left blank, auto-filled from corpus/size/precision/version/variant." },
@@ -7150,7 +7156,6 @@ const TRAINER_SCHEMA = {
     { name: "variant",         type: "str",                   label: "variant tag",             help: "single-token suffix appended to the model dir name (e.g. 'sparse', 'qat'). leave blank for no variant." },
     { name: "n_predict",       type: "int",                   label: "MTP heads (n_predict)",   help: "multi-token-prediction head count; 1 = vanilla, 2 = byte-t+2 head, 4 = 800M-style." },
     { name: "mtp_aux_weight",  type: "float",                 label: "MTP aux weight",          help: "loss weight on the auxiliary MTP heads (heads 1..N-1). 0 = MTP heads untrained." },
-    { name: "l1_lambda",       type: "float",                 label: "L1 sparsity penalty",     help: "coefficient on mean(|post-activation|) loss for sparse-ReLU FFNs. 0 = off." },
     { name: "wsd_decay_frac",  type: "float",                 label: "WSD decay fraction",      help: "fraction of total steps spent in decay phase. typical 0.1." },
     { name: "wsd_decay_kind",  type: "str",                   label: "WSD decay shape",         help: "shape of the LR decay tail.", choices: ["sqrt","linear","cosine"] },
     { name: "hidden",          type: "int",                   label: "hidden width",            help: "transformer hidden dim. plugin-set; rarely edited." },
@@ -7170,17 +7175,10 @@ const TRAINER_SCHEMA = {
     { name: "router_topk",     type: "int",        advanced: true, label: "router top-k",            help: "MEGA only. experts that fire per token." },
     { name: "router_aux_loss", type: "float",      advanced: true, label: "router balance weight",   help: "MEGA only. load-balance loss coefficient (~0.01)." },
     // ---- checkboxes (all together at the end) ----
-    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "Trades compute for memory: rerun the forward pass during backward instead of storing every layer's activations. About 30% slower, about 50% less activation VRAM." },
-    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "Quantization-aware training. Wraps weights + activations + RMSNorm in fake-quant ops (INT8 per-tensor maxabs) during the forward pass; the resulting checkpoint exports to a v9 (canonical trunk) or v12 (MTP head) INT8 engine binary with no post-hoc calibration loss. RoPE trunks (Veritate800M and friends) are still PyTorch-only until a future format ships." },
-    { name: "freeze_base",   type: "bool", featured: true, advanced: true,  label: "freeze base",                help: "Adapter-only training: lock the base trunk so only the adapter (M1/M3) learns. Faster, smaller deltas, lower forgetting." },
-    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "Optimizer state in INT8 instead of FP32. Cuts ~6 bytes/param from VRAM (10 vs 16). Required to fit 1B+ MoE on 12 GB. Tiny convergence cost." },
   ],
   continue: [
     // ---- required ----
     { name: "resume",       type: "model_name", required: true, label: "model to continue", help: "previously-trained model; its config sets shape, corpus, adapter." },
-    // QAT is featured at the top so the canonical "repair my non-QAT model into
-    // an INT8 export" workflow is one click and one resume away.
-    { name: "qat_enabled",   type: "bool", featured: true,      label: "convert this model to INT8 (QAT)", help: "Fine-tune the resumed model under fake-quant ops. Result exports to a v9 INT8 binary (canonical trunk) or v12 (MTP head). Use lr ~1e-5 to avoid breaking the base. New checkpoints overwrite the resumed model's directory; keep a copy of the pre-QAT checkpoint if you want to roll back." },
     // ---- optional corpus override ----
     // The resume-target's config.json holds the original corpus, and
     // apply_resume_overrides() restores it when this field is left blank
@@ -7211,8 +7209,6 @@ const TRAINER_SCHEMA = {
     { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "BPTT depth. 1 = frozen, 4 = balanced, n_chunks = full." },
     { name: "quant_mode",   type: "str", advanced: true,        label: "weight quant mode",     help: "active only when QAT enabled. int8 (default), int4, or ternary (BitNet 1.58).", choices: ["int8","int4","ternary"] },
     // ---- checkboxes (all together at the end; qat_enabled is up top with resume) ----
-    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "Trades compute for memory: rerun the forward during backward. ~30% slower, ~50% less activation VRAM." },
-    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "INT8 optimizer state. Match the original run's setting or VRAM math breaks." },
   ],
 };
 
@@ -7234,6 +7230,9 @@ function _trArgsForPlugin(p) {
   // locked on continue.
   const sch  = TRAINER_SCHEMA[trainState.flow] || [];
   const defs = (p && p.manifest && p.manifest.defaults) || {};
+  // Single-size trainers get no size row: the size is a given of the trainer.
+  const nSizes = Object.keys((p && p.manifest && p.manifest.sizes) || {}).length;
+  const fields = nSizes > 1 ? sch : sch.filter(a => a.name !== "size");
 
   const _withDefault = (base, defaultVal) => {
     const o = Object.assign({}, base, { default: defaultVal });
@@ -7253,7 +7252,7 @@ function _trArgsForPlugin(p) {
     return o;
   };
 
-  return sch.map(a => _withDefault(a, defs[a.name]));
+  return fields.map(a => _withDefault(a, defs[a.name]));
 }
 
 const _TR_CONTINUE_CFG_CACHE = {};
@@ -7307,10 +7306,9 @@ function _trEstimateMemory() {
   let seq         = parseInt(_trArgVal("seq"), 10);
   const batch     = parseInt(_trArgVal("batch_size"), 10);
   const bpttRaw   = parseInt(_trArgVal("bptt_window"), 10);
-  const ckpt      = _trArgEl("use_act_ckpt");
-  const ckptOn    = ckpt && ckpt.type === "checkbox" && ckpt.checked;
-  const a8        = _trArgEl("use_8bit_adam");
-  const adam8On   = a8 && a8.type === "checkbox" && a8.checked;
+  const coreArgs  = _corePluginsArgs();
+  const ckptOn    = !!coreArgs.use_act_ckpt;
+  const adam8On   = !!coreArgs.use_8bit_adam;
 
   if (!size || !precision || !seq) {
     const resumeName = _trArgVal("resume");
@@ -7328,6 +7326,7 @@ function _trEstimateMemory() {
     }
   }
 
+  if (!size) size = _trResolvedSize();
   const sz = _trSizeShape(size);
   if (!sz || !batch || !seq) return null;
 
@@ -7446,27 +7445,20 @@ function _trSetArgVal(name, val) {
 }
 
 const _autoTuneState = { es: null, poll: null, plugin: null, result: null, recs: null };
+// Modal uses the Training tab's selected trainer; no separate picker.
 
 function _autoTuneOpen() {
-  const sel = $("autoTuneTrainer");
-  const fill = (list) => {
-    const probeable = (list || []).filter(p => p.manifest && p.manifest.bench);
-    sel.innerHTML = probeable.length
-      ? probeable.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.manifest.name || p.id)}</option>`).join("")
-      : `<option value="">no auto-tune-capable trainers installed</option>`;
-    if (trainState.selected && probeable.some(p => p.id === trainState.selected.id)) {
-      sel.value = trainState.selected.id;
-    }
-    _autoTuneState.list = probeable;
-  };
-  if (trainState.list && trainState.list.length) fill(trainState.list);
-  else fetch("/trainers").then(r => r.json()).then(d => fill(d.trainers)).catch(() => fill([]));
+  const p = trainState.selected;
+  const usable = !!(p && p.manifest && p.manifest.bench);
+  $("autoTuneTrainerName").textContent = usable ? (p.manifest.name || p.id) : "none selected";
+  $("autoTuneStart").disabled = !usable;
   $("autoTuneLog").style.display = "none";
   $("autoTuneLog").innerHTML = "";
   $("autoTuneResults").style.display = "none";
   $("autoTuneStart").style.display = "";
   $("autoTuneStop").style.display = "none";
   $("autoTuneApplyStatus").textContent = "";
+  if (!usable) _autoTuneLine("pick a trainer on the Training tab first (step 2).", "var(--warm)");
   $("autoTuneModal").classList.remove("hidden");
 }
 
@@ -7488,20 +7480,19 @@ function _autoTuneCleanup() {
 }
 
 function _autoTuneStart() {
-  const id = $("autoTuneTrainer").value;
-  const plugin = (_autoTuneState.list || []).find(p => p.id === id);
-  if (!plugin) { _autoTuneLine("pick a trainer first.", "var(--hot)"); return; }
+  const plugin = trainState.selected;
+  if (!plugin || !plugin.manifest || !plugin.manifest.bench) { _autoTuneLine("pick a trainer on the Training tab first.", "var(--hot)"); return; }
+  const id = plugin.id;
   _autoTuneState.plugin = plugin;
   _autoTuneState.result = null;
   const defs = plugin.manifest.defaults || {};
-  // Form values win when this trainer is selected on the Training tab;
-  // manifest defaults otherwise (Settings entry point).
-  const fromForm = trainState.selected && trainState.selected.id === id;
-  const val = (k) => fromForm ? (_trArgVal(k) || defs[k]) : defs[k];
+  // Form values win when the form is rendered; manifest defaults otherwise.
+  const val = (k) => _trArgVal(k) || defs[k];
   const args = { bench: true, size: val("size"), seq: val("seq"), precision: val("precision") };
   $("autoTuneResults").style.display = "none";
   $("autoTuneLog").innerHTML = "";
   _autoTuneLine("starting benchmark (throwaway weights, nothing is saved)...", "var(--dim)");
+  _autoTuneLine("your computer may slow down while memory is pushed to its limit — this is expected.", "var(--warm)");
   fetch("/trainers/run", { method: "POST", headers: { "Content-Type": "application/json" },
                            body: JSON.stringify({ id, args }) })
     .then(r => r.json())
@@ -7826,14 +7817,43 @@ function _trRestoreFormState() {
   }
 }
 
+// Knobs that only matter under another knob's setting stay hidden otherwise.
+const ARG_VISIBLE_WHEN = {
+  wsd_decay_frac: () => _trArgVal("lr_schedule") === "wsd",
+  wsd_decay_kind: () => _trArgVal("lr_schedule") === "wsd",
+  min_lr:         () => _trArgVal("lr_schedule") !== "constant",
+  warmup_steps:   () => _trArgVal("lr_schedule") !== "constant",
+  quant_mode:     () => !!_corePluginsArgs().qat_enabled,
+  mtp_aux_weight: () => parseInt(_trArgVal("n_predict"), 10) > 1,
+};
+
+function _trUpdateKnobVisibility() {
+  for (const [name, visible] of Object.entries(ARG_VISIBLE_WHEN)) {
+    const cell = document.querySelector(`#trainArgs .cell[data-cell="${name}"]`);
+    if (cell) cell.style.display = visible() ? "" : "none";
+  }
+}
+
 function _trWireArgListeners() {
   document.querySelectorAll('#trainArgs [data-arg]').forEach(el => {
-    const fn = () => { _trUpdateComposedName(); _trUpdateStepCascades(); _trUpdateCorpusMeta(); _trUpdateVramEstimate(); _trCorpusSizeWarning(); _trSaveFormState(); };
+    const fn = () => { _trUpdateComposedName(); _trUpdateStepCascades(); _trUpdateCorpusMeta(); _trUpdateVramEstimate(); _trCorpusSizeWarning(); _trSaveFormState(); _trUpdateKnobVisibility(); };
     el.addEventListener("change", fn);
     el.addEventListener("input",  fn);
     if (el.dataset.arg === "resume") {
       el.addEventListener("change", () => _trApplyResumeConfig(el.value));
     }
+  });
+  document.querySelectorAll('#trainArgs .corpus-picker').forEach(picker => {
+    const hidden  = picker.parentElement.querySelector('input[type=hidden][data-arg]');
+    const summary = picker.querySelector('[data-corpus-summary]');
+    picker.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const stems = Array.from(picker.querySelectorAll('input[type=checkbox]:checked')).map(c => c.value);
+        hidden.value = stems.join('+');
+        summary.textContent = stems.length ? stems.join(' + ') : 'pick training data';
+        hidden.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    });
   });
   document.querySelectorAll('#trainArgs .hint').forEach(hint => {
     hint.addEventListener("mouseenter", () => _trPosHintPop(hint));
@@ -8038,6 +8058,7 @@ function _trAutoPickBundledCorpus() {
 const coreTrainersState = {
   list:     [],   // fetched plugin metadata
   selected: new Set(),
+  detailId: null, // card whose description shows in the shared detail panel
   ready:    false,
   flow:     null,
 };
@@ -8085,19 +8106,19 @@ function _coreTrainersRender() {
   }
   wrap.style.display = "block";
 
-  // Group sizes so we can pick the right control: single-member groups stay
-  // as toggles (independent switches), multi-member groups render as radios
-  // (one-of-many, with a "none" affordance via re-click).
+  // Cards cluster by group: multi-member groups are one-of-many (the "pick
+  // one" badge says so); single-member groups are independent toggles.
+  // Descriptions render in ONE shared panel below the strip, so opening or
+  // switching details never reflows the cards.
+  const groupOrder = [...new Set(items.map(p => p.group))];
   const groupCounts = items.reduce((acc, p) => {
     acc[p.group] = (acc[p.group] || 0) + 1;
     return acc;
   }, {});
-
-  grid.innerHTML = items.map(p => {
+  const card = (p) => {
     const sel  = coreTrainersState.selected.has(p.id);
     const mode = (groupCounts[p.group] > 1) ? "radio" : "toggle";
-    const argsStr = Object.entries(p.args || {})
-      .map(([k, v]) => `${k}=${v}`).join("  ");
+    const open = coreTrainersState.detailId === p.id;
     return `<div class="core-plugin-box${sel ? " is-selected" : ""}"
                  data-id="${_trEsc(p.id)}"
                  data-group="${_trEsc(p.group)}"
@@ -8106,24 +8127,56 @@ function _coreTrainersRender() {
       <div class="core-plugin-name">
         <input type="checkbox" ${sel ? "checked" : ""} aria-label="${_trEsc(p.label)}" />
         <span>${_trEsc(p.label)}</span>
-        <span class="core-plugin-group">${_trEsc(p.group)}</span>
+        <button type="button" class="core-plugin-info">${open ? "hide details" : "see details"}</button>
       </div>
-      <div class="core-plugin-desc">${_trEsc(p.description)}</div>
-      ${argsStr ? `<div class="core-plugin-args">${_trEsc(argsStr)}</div>` : ""}
+    </div>`;
+  };
+  let html = groupOrder.map(g => {
+    const members = items.filter(p => p.group === g);
+    const pick = members.length > 1 ? `<span class="core-group-pick">pick one</span>` : "";
+    return `<div class="core-group">
+      <div class="core-group-head">${_trEsc(g)}${pick}</div>
+      <div class="core-group-cards">${members.map(card).join("")}</div>
     </div>`;
   }).join("");
+  const detail = items.find(p => p.id === coreTrainersState.detailId);
+  if (detail) {
+    const argsStr = Object.entries(detail.args || {}).map(([k, v]) => `${k}=${v}`).join("  ");
+    html += `<div class="core-plugin-detail">
+      <b>${_trEsc(detail.label)}</b> <span class="core-plugin-group">${_trEsc(detail.group)}</span>
+      <div class="core-plugin-desc">${_trEsc(detail.description)}</div>
+      ${argsStr ? `<div class="core-plugin-args">${_trEsc(argsStr)}</div>` : ""}
+    </div>`;
+  }
+  grid.innerHTML = html;
 
   grid.querySelectorAll(".core-plugin-box").forEach(node => {
     const cb = node.querySelector("input[type=checkbox]");
     const click = (e) => {
+      if (e.target.closest(".core-plugin-info")) return;
       // Avoid double-toggle when the click bubbles from the checkbox itself.
       if (e.target !== cb) e.preventDefault();
       _corePluginsToggle(node.dataset.id);
     };
     node.addEventListener("click", click);
     cb.addEventListener("click", (e) => { e.stopPropagation(); _corePluginsToggle(node.dataset.id); });
+    const info = node.querySelector(".core-plugin-info");
+    if (info) info.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = node.dataset.id;
+      coreTrainersState.detailId = (coreTrainersState.detailId === id) ? null : id;
+      _coreTrainersRender();
+    });
   });
 }
+
+// Click anywhere outside the detail panel (and outside the cards) closes it.
+document.addEventListener("click", (e) => {
+  if (!coreTrainersState.detailId) return;
+  if (e.target.closest(".core-plugin-detail") || e.target.closest(".core-plugin-box")) return;
+  coreTrainersState.detailId = null;
+  _coreTrainersRender();
+});
 
 function _corePluginsToggle(id) {
   const items = coreTrainersState.list || [];
@@ -8146,6 +8199,8 @@ function _corePluginsToggle(id) {
     sel.add(id);
   }
   _coreTrainersRender();
+  _trUpdateVramEstimate();
+  _trUpdateKnobVisibility();
 }
 
 function _corePluginsArgs() {
@@ -8159,8 +8214,34 @@ function _corePluginsArgs() {
 }
 
 
+// Size-derived capability line for the picker. manifest.teaches (a capability
+// tier keyword) wins when set; otherwise headline param count picks the list.
+const IDEAL_FOR_TIERS = [
+  [50e6,  "autocomplete"],
+  [300e6, "autocomplete, short replies"],
+  [1e9,   "autocomplete, chat"],
+  [5e9,   "autocomplete, chat, light coding"],
+];
+const IDEAL_FOR_TOP = "autocomplete, chat, coding";
+
+function _trIdealFor(m) {
+  if (m && m.teaches) return String(m.teaches);
+  const sizes = (m && m.sizes) || {};
+  const d = (m && m.defaults) || {};
+  const sz = sizes[d.size] || {};
+  let params = sz.params;
+  if (params == null) {
+    const all = Object.values(sizes).map(s => s.params || 0);
+    params = all.length ? Math.max(...all) : 0;
+  }
+  for (const [cap, label] of IDEAL_FOR_TIERS) {
+    if (params < cap) return label;
+  }
+  return IDEAL_FOR_TOP;
+}
+
 // Compact manifest summary: chips for shape, params, corpus, output dir,
-// engine target, QAT, teaches. Replaces the multi-line paragraph from
+// engine target, QAT, ideal-for. Replaces the multi-line paragraph from
 // manifest.description, which still lives in the form's tooltip on hover.
 function _trRenderManifestSummary(m) {
   if (!m || typeof m !== "object") return "";
@@ -8178,7 +8259,7 @@ function _trRenderManifestSummary(m) {
     if (value == null || value === "") return;
     chips.push(`<span class="stat" style="color:var(--dim)">${_trEsc(label)} <b style="color:var(--text)">${_trEsc(String(value))}</b></span>`);
   };
-  push("teaches",  m.teaches || "autocomplete");
+  push("ideal for", _trIdealFor(m));
   if (layers || hidden || ffn || heads) {
     push("shape", `h=${hidden ?? "?"} L=${layers ?? "?"} ffn=${ffn ?? "?"} heads=${heads ?? "?"}`);
   }
@@ -8212,27 +8293,33 @@ function _trRenderForm() {
   if (descEl) descEl.innerHTML = _trRenderManifestSummary(p.manifest);
   const introEl = _trEl("trainFormIntro");
   if (introEl) {
-    const teaches = _trEsc((p.manifest.teaches || "autocomplete"));
-    introEl.innerHTML = `teaches <b>${teaches}</b> &middot; <span style="color:var(--hot)">*</span> required`;
+    const ideal = _trEsc(_trIdealFor(p.manifest));
+    introEl.innerHTML = `ideal for <b>${ideal}</b> &middot; <span style="color:var(--hot)">*</span> required`;
   }
   // Responsive grid: small fields auto-pack into columns; wide types (text/path/tools)
   // and bool span the full row. Help text is condensed to a hoverable blue ? badge so
   // the form stays compact; the popover surfaces the same explanation.
   let html = `<style>
-    .trArgsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px 16px; font-size: 11.5px; }
-    .trArgsGrid .cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; position: relative; }
+    .trArgsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 12px; font-size: 10.5px; }
+    .trArgsGrid .cell { display: flex; flex-direction: column; gap: 3px; min-width: 0; position: relative; }
     .trArgsGrid .cell.wide { grid-column: 1 / -1; }
     .trArgsGrid .cell .row { display: flex; align-items: center; gap: 6px; }
-    .trArgsGrid .cell label { color: var(--text); font-size: 11px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; }
+    .trArgsGrid .cell label { color: var(--text); font-size: 10px; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; }
+    .trArgsGrid .cell input, .trArgsGrid .cell select, .trArgsGrid .cell textarea { padding: 3px 6px; font-size: 10.5px; }
     .trArgsGrid .cell input[type="text"],
     .trArgsGrid .cell input[type="number"],
     .trArgsGrid .cell select,
     .trArgsGrid .cell textarea { width: 100%; min-width: 0; box-sizing: border-box; }
     .trArgsGrid .cell.bool { flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap; }
     .trArgsGrid .cell.bool label { font-size: 11.5px; }
-    .trArgsGrid .cell.featured { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 6px; }
+    .trArgsGrid .cell.featured { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px; }
     .trArgsGrid .cell.featured label { color: var(--text); font-weight: 600; }
     .trArgsGrid .cell .adv-badge { color: var(--warm); font-weight: 600; font-size: 9.5px; letter-spacing: 0.5px; }
+    .corpus-picker { background: #0a0c12; border: 1px solid var(--line); border-radius: 2px; font-size: 10.5px; }
+    .corpus-picker summary { cursor: pointer; padding: 3px 6px; color: var(--text); list-style-position: inside; }
+    .corpus-picker .corpus-list { border-top: 1px solid var(--line); padding: 4px 6px; max-height: 130px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+    .corpus-picker .corpus-opt { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text); }
+    .corpus-picker .corpus-note { color: var(--dim); font-size: 9.5px; margin-top: 3px; }
     .trArgsGrid .cell .hint {
       display: inline-block;
       cursor: help; user-select: none; vertical-align: middle;
@@ -8276,9 +8363,9 @@ function _trRenderForm() {
     const wide     = (a.type === "text" || a.type === "path") ? " wide" : "";
     const featured = a.featured ? " featured" : "";
     if (a.type === "bool") {
-      html += `<div class="cell bool wide${featured}">${_trBuildInput(a)}<label>${labelTxt}${req}</label>${advBadge}${hint}</div>`;
+      html += `<div class="cell bool wide${featured}" data-cell="${_trEsc(a.name)}">${_trBuildInput(a)}<label>${labelTxt}${req}</label>${advBadge}${hint}</div>`;
     } else {
-      html += `<div class="cell${wide}${featured}"><label>${labelTxt}${req} ${advBadge}${hint}</label>${_trBuildInput(a)}</div>`;
+      html += `<div class="cell${wide}${featured}" data-cell="${_trEsc(a.name)}"><label>${labelTxt}${req} ${advBadge}${hint}</label>${_trBuildInput(a)}</div>`;
     }
   }
   html += `</div>`;
@@ -8287,6 +8374,7 @@ function _trRenderForm() {
   if (runRow) runRow.style.display = "flex";
   _trWireArgListeners();
   _trApplyDefaults();
+  _trUpdateKnobVisibility();
   _trUpdateComposedName();
   _trUpdateStepCascades();
   _trUpdateCorpusMeta();
@@ -8389,7 +8477,10 @@ function _trRenderPicker() {
   row.style.display = "flex";
   const list = _trFiltered();
   const cur  = sel.value;
-  if (list.length === 0) {
+  if (!trainState.loaded && list.length === 0) {
+    sel.innerHTML = `<option value="">loading trainers&hellip;</option>`;
+    if (hint) hint.style.display = "none";
+  } else if (list.length === 0) {
     sel.innerHTML = `<option value="">- no ${_trEsc(trainState.flow)} trainers -</option>`;
     if (hint) {
       hint.style.display = "inline";
@@ -8409,6 +8500,7 @@ function _trPoll() {
     fetch("/trainers").then(r => r.json()),
     fetch("/train/discovery").then(r => r.json()),
   ]).then(([plug, disc]) => {
+    trainState.loaded    = true;
     trainState.list      = plug.trainers || [];
     trainState.running   = plug.running || { status: "idle" };
     trainState.discovery = disc || { corpora: [], models: [] };
@@ -8590,6 +8682,27 @@ function _trUpdateTeacherGate() {
   if (rt && need && !ok) rt.disabled = true;
 }
 
+function _synthSeedRow(s, child) {
+  const name = _trEsc(child ? (s.tier || s.display_name || s.id) : (s.display_name || s.id));
+  const cat = _trEsc(s.category || "");
+  const lic = _trEsc(s.license || "");
+  const grp = _trEsc(s.group || "");
+  return `<label class="synth-seed-row${child ? " child" : ""}">
+    <input type="checkbox" class="synth-seed-cb" data-id="${_trEsc(s.id)}" data-group="${grp}">
+    <span>${name}</span>
+    <span class="meta">${s.count || 0} ${cat ? "&middot; " + cat : ""} ${lic ? "&middot; " + lic : ""}</span>
+  </label>`;
+}
+
+function _synthSyncGroupCbs(host) {
+  host.querySelectorAll(".synth-group-cb").forEach(gc => {
+    const kids = host.querySelectorAll(`.synth-seed-cb[data-group="${gc.dataset.group}"]`);
+    const on = Array.from(kids).filter(cb => cb.checked).length;
+    gc.checked = on > 0 && on === kids.length;
+    gc.indeterminate = on > 0 && on < kids.length;
+  });
+}
+
 function _synthRenderSeeds(list) {
   const host = $("synthSeedList");
   if (!host) return;
@@ -8597,16 +8710,37 @@ function _synthRenderSeeds(list) {
     host.innerHTML = '<div class="meta" style="font-size:10.5px;color:var(--dim)">no seeds available</div>';
     return;
   }
-  host.innerHTML = list.map(s => {
-    const name = _trEsc(s.display_name || s.id);
-    const cat = _trEsc(s.category || "");
-    const lic = _trEsc(s.license || "");
-    return `<label class="synth-seed-row">
-      <input type="checkbox" class="synth-seed-cb" data-id="${_trEsc(s.id)}">
-      <span>${name}</span>
-      <span class="meta">${s.count || 0} ${cat ? "&middot; " + cat : ""} ${lic ? "&middot; " + lic : ""}</span>
-    </label>`;
-  }).join("");
+  const groups = [];
+  const byGroup = {};
+  const flat = [];
+  for (const s of list) {
+    if (!s.group) { flat.push(s); continue; }
+    if (!byGroup[s.group]) { byGroup[s.group] = []; groups.push(s.group); }
+    byGroup[s.group].push(s);
+  }
+  const html = [];
+  for (const g of groups) {
+    const kids = byGroup[g].slice().sort((a, b) =>
+      SEED_TIER_ORDER.indexOf(a.tier) - SEED_TIER_ORDER.indexOf(b.tier));
+    const total = kids.reduce((n, s) => n + (s.count || 0), 0);
+    html.push(`<label class="synth-seed-row group">
+      <input type="checkbox" class="synth-group-cb" data-group="${_trEsc(g)}">
+      <span>${_trEsc(g)}</span>
+      <span class="meta">${total}</span>
+    </label>`);
+    kids.forEach(s => html.push(_synthSeedRow(s, true)));
+  }
+  flat.forEach(s => html.push(_synthSeedRow(s, false)));
+  host.innerHTML = html.join("");
+  host.querySelectorAll(".synth-group-cb").forEach(gc => {
+    gc.addEventListener("change", () => {
+      host.querySelectorAll(`.synth-seed-cb[data-group="${gc.dataset.group}"]`)
+        .forEach(cb => { cb.checked = gc.checked; });
+    });
+  });
+  host.querySelectorAll(".synth-seed-cb").forEach(cb => {
+    cb.addEventListener("change", () => _synthSyncGroupCbs(host));
+  });
 }
 
 function _synthLoadSeeds() {
@@ -9333,13 +9467,14 @@ const TEACHER_DEFAULT_MAX_CONC = 16;
 const TEACHER_DEFAULT_MAX_TOK = 2048;
 const TEACHER_POLL_MS = 2000;
 const TEACHER_KEY_MASK = "•".repeat(12);
+const SEED_TIER_ORDER = ["easy", "basic", "advanced"];
 const TEACHER_NOTE_LOCAL = "ensure your local server is running at the base URL.";
 const TEACHER_MODEL_LIST_LABEL = "- pick a model -";
 const TEACHER_MODEL_GROUP = "connected models";
 const TEACHER_MODEL_CUSTOM = "__custom__";
 const TEACHER_CONNECTED_SUFFIX = " (connected)";
 
-const teacherState = { providers: [], current: null, pollTimer: null, jobId: null };
+const teacherState = { providers: [], current: null, pollTimer: null, jobId: null, localUp: {} };
 
 function _teacherProviderById(pid) {
   return teacherState.providers.find(p => p.id === pid) || null;
@@ -9358,10 +9493,46 @@ function _teacherSelectedHasKey() {
   return !!(cur && pid && pid === cur.provider && cur.has_api_key);
 }
 
+// connected: API provider with a stored key, or local provider whose server answers.
+function _teacherIsConnected(pid) {
+  const prov = _teacherProviderById(pid);
+  if (prov && prov.kind === TEACHER_KIND_LOCAL) return !!teacherState.localUp[pid];
+  const cfg = _teacherConfigFor(pid);
+  if (cfg && cfg.has_key) return true;
+  const cur = teacherState.current;
+  return !!(cur && pid && pid === cur.provider && cur.has_api_key);
+}
+
+function _teacherRefreshConnectedLabels() {
+  const sel = $("teacherProvider");
+  if (!sel) return;
+  for (const o of sel.options) {
+    const p = _teacherProviderById(o.value);
+    if (p) o.textContent = (p.display_name || p.id) + (_teacherIsConnected(p.id) ? TEACHER_CONNECTED_SUFFIX : "");
+  }
+}
+
+function _teacherProbeLocalProviders() {
+  teacherState.providers.filter(p => p.kind === TEACHER_KIND_LOCAL).forEach(p => {
+    const cfg = _teacherConfigFor(p.id);
+    const body = { provider: p.id, base_url: (cfg && cfg.base_url) || p.base_url || "" };
+    fetch(TEACHER_MODELS, { method: "POST", headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(body) })
+      .then(r => r.json())
+      .then(res => {
+        const up = !!(res && res.models && res.models.length);
+        if (teacherState.localUp[p.id] === up) return;
+        teacherState.localUp[p.id] = up;
+        _teacherRefreshConnectedLabels();
+      })
+      .catch(() => {});
+  });
+}
+
 function _teacherPopulateProviderSelect() {
   const sel = $("teacherProvider");
   if (!sel) return;
-  const opt = p => `<option value="${p.id}">${p.display_name || p.id}${_teacherConfigFor(p.id) ? TEACHER_CONNECTED_SUFFIX : ""}</option>`;
+  const opt = p => `<option value="${p.id}">${p.display_name || p.id}${_teacherIsConnected(p.id) ? TEACHER_CONNECTED_SUFFIX : ""}</option>`;
   const api = teacherState.providers.filter(p => p.kind === TEACHER_KIND_API);
   const loc = teacherState.providers.filter(p => p.kind === TEACHER_KIND_LOCAL);
   let html = '<option value="">- pick a provider -</option>';
@@ -9461,6 +9632,7 @@ function _teacherApplyToForm(s) {
   const mt = $("teacherMaxTokens"); if (mt) mt.value = s.max_tokens || TEACHER_DEFAULT_MAX_TOK;
   _teacherApplyProviderUI(s.provider || "");
   _teacherLoadModels();
+  _teacherProbeLocalProviders();
   _teacherRenderStatus(s);
   const tb = $("teacherTestBtn");
   if (tb) tb.disabled = !(s && s.configured);
@@ -10704,7 +10876,9 @@ function _corpusRenderCatalog(data) {
 
   list.innerHTML = data.corpora.map(c => {
     const installed = c.installed_train;
-    const hasUrl    = (c.format === "hf_dataset") ? !!c.hf_dataset : !!c.train_url;
+    const hasUrl    = (c.format === "hf_dataset") ? !!c.hf_dataset
+                    : (c.format === "native")     ? !!c.native_available
+                    : !!c.train_url;
     const isUser    = c.is_user_source;
     const sizeLabel = c.size_train != null ? _corpusFmtBytes(c.size_train) : null;
     const progress  = c.progress;
@@ -10722,6 +10896,7 @@ function _corpusRenderCatalog(data) {
 
     // Platform-style boxy badges (mirrors the .case badge design used elsewhere).
     const tags = [];
+    if (c.format === "native") tags.push(`<span class="corpus-tag t-info" title="ships inside Veritate; installing copies it into trainers/corpus/, no download">built-in</span>`);
     if (recLabel)  tags.push(`<span class="corpus-tag t-info" title="recommended for these model sizes">${recLabel}</span>`);
     if (sizeLabel) tags.push(`<span class="corpus-tag t-dim" title="approximate download size">~${sizeLabel}</span>`);
     if (installed) tags.push(`<span class="corpus-tag t-good">installed${c.installed_size_val ? " + val" : ""}</span>`);
@@ -10848,6 +11023,11 @@ function _corpusInstallTrigger(stem) {
   if (fmt === "hf_dataset" && !entry.hf_dataset) {
     const lab = $("corpusActionStatus");
     if (lab) { lab.textContent = `${stem}: hf_dataset name missing`; lab.style.color = "var(--hot)"; }
+    return;
+  }
+  if (fmt === "native" && !entry.native_available) {
+    const lab = $("corpusActionStatus");
+    if (lab) { lab.textContent = `${stem}: built-in corpus files missing from this install`; lab.style.color = "var(--hot)"; }
     return;
   }
 
@@ -11074,7 +11254,7 @@ function _trCorpusSizeWarning() {
     meta.parentNode.insertBefore(warnEl, meta.nextSibling);
   }
   const stem = _trCorpusBaseStem(typeof _trArgVal === "function" ? _trArgVal("corpus") : "");
-  const size = (typeof _trArgVal === "function") ? _trArgVal("size") : "";
+  const size = (typeof _trResolvedSize === "function") ? _trResolvedSize() : "";
   if (!stem || !size) { warnEl.style.display = "none"; return; }
   const data = corpusLibState.catalog;
   if (!data || !data.corpora) {
@@ -11611,11 +11791,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const tTest = $("teacherTestBtn");
   if (tTest) tTest.addEventListener("click", _testTeacher);
   _loadTeacher();
+  const AI_NO_RUN_MSG = "no training run selected: start or pick a run in live training, then ask again.";
   const askRT = $("askAiRecentTrain");
   if (askRT) askRT.addEventListener("click", () => {
     const sel = $("runPicker");
     const name = sel && sel.value ? sel.value : "";
-    if (!name) { window.ai_ask("recent_train", {}, "explain recent training"); return; }
+    if (!name) { window.ai_fail("explain recent training", AI_NO_RUN_MSG); return; }
     window.ai_ask("recent_train", { model: name }, "explain recent training");
   });
   const askLC = $("askAiLossCurve");
@@ -11623,6 +11804,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const cached = window._aiLossCurve || null;
     const sel = $("runPicker");
     const name = (cached && cached.model) || (sel && sel.value) || "";
+    if (!name) { window.ai_fail("explain loss curve", AI_NO_RUN_MSG); return; }
     const verdict = cached && cached.verdict ? cached.verdict : { state: "warming" };
     window.ai_ask("loss_curve", {
       model: name,
@@ -11637,6 +11819,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const cached = window._aiTrainHealth || null;
     const sel = $("runPicker");
     const name = (cached && cached.model) || (sel && sel.value) || "";
+    if (!name) { window.ai_fail("explain training health", AI_NO_RUN_MSG); return; }
     const verdict = cached && cached.verdict ? cached.verdict : { state: "warming" };
     const recent  = cached && cached.series ? cached.series : [];
     window.ai_ask("train_health", {
@@ -12348,13 +12531,19 @@ const _AI = (() => {
     }
   }
 
+  function fail(titleText, msg) {
+    _open(titleText);
+    _renderError(msg);
+  }
+
   function applyEnabled(enabled) {
     document.body.classList.toggle("ai-disabled", !enabled);
   }
 
-  return { ask, applyEnabled };
+  return { ask, fail, applyEnabled };
 })();
 window.ai_ask = _AI.ask;
+window.ai_fail = _AI.fail;
 
 (function _emptyStateMonitor() {
   function _bodyHasRealText(body) {

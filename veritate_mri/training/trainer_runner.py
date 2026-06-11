@@ -361,6 +361,12 @@ def start(plugin_id, args=None):
         with _LOCK:
             _STATE["status"] = STATUS_IDLE
         return {"ok": False, "error": f"plugin not found: {plugin_id}"}
+    # A trainer without --bench silently drops the flag (parse_known_args) and
+    # starts a real run. Only manifests declaring bench may launch bench mode.
+    if (args or {}).get("bench") and not (plugin.get("manifest") or {}).get("bench"):
+        with _LOCK:
+            _STATE["status"] = STATUS_IDLE
+        return {"ok": False, "error": f"trainer does not implement bench mode: {plugin_id}"}
     if plugins_reader.update_defaults(plugin_id, args or {}):
         logmod.info("plugin", f"manifest defaults updated: {plugin_id}")
     a = args or {}

@@ -201,12 +201,30 @@ def test_seeds_list_returns_catalog(client):
     assert isinstance(body["seeds"], list) and len(body["seeds"]) > 0
 
 
-def test_seeds_gsm8k_returns_prompts(client):
-    """GET /teacher/seeds/gsm8k_sample returns prompt list with the right count."""
-    r = client.get("/teacher/seeds/gsm8k_sample")
+def test_seeds_detail_returns_prompts(client):
+    """GET /teacher/seeds/math_word_problems returns prompt list with the right count."""
+    r = client.get("/teacher/seeds/math_word_problems")
     assert r.status_code == 200
     body = r.get_json()
     assert body["count"] == len(body["prompts"]) > 0
+
+
+def test_seeds_catalog_counts_match_files(client):
+    """every catalog entry's jsonl file exists and its line count equals the entry's count."""
+    from routes.teacher_routes import SEEDS_DIR
+    seeds = client.get("/teacher/seeds").get_json()["seeds"]
+    for s in seeds:
+        with open(os.path.join(SEEDS_DIR, s["file"]), encoding="utf-8") as f:
+            n = sum(1 for line in f if line.strip())
+        assert n == s["count"], s["id"]
+
+
+def test_seeds_grouped_entries_carry_tier(client):
+    """every grouped catalog entry has a tier in {easy, basic, advanced}."""
+    seeds = client.get("/teacher/seeds").get_json()["seeds"]
+    grouped = [s for s in seeds if s.get("group")]
+    assert grouped
+    assert all(s.get("tier") in {"easy", "basic", "advanced"} for s in grouped)
 
 
 def test_seeds_unknown_id_returns_404(client):

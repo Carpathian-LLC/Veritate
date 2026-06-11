@@ -21,6 +21,10 @@
 #   as a uint8 byte stream. since Veritate trains byte-level (np.uint8 memmap),
 #   plaintext bytes ARE tokens — no tokenizer step. val_split_ratio carves off
 #   the tail of the downloaded train file as val.bin when no val_url is given.
+# - format='native' means the corpus ships inside the repo at
+#   veritate_mri/data/corpus/<stem>_{train,val}.bin. install copies the files
+#   into trainers/corpus/ — no network, no sha. uninstall only removes the
+#   user copy; the repo copy stays, so reinstall is always possible.
 # - install() does the HTTP download, optionally verifies sha256, and writes
 #   atomically (.part -> rename). uninstall() deletes the two .bin files.
 # - this module never touches git. it lives next to plugins_sync / models_sync
@@ -49,10 +53,13 @@ from readers import paths
 from runtime import logs as logmod
 from runtime import settings as settings_mod
 
+from . import sync_common as sc
+
 # ------------------------------------------------------------------------------------
 # Constants
 
-CORPUS_DIR = paths.CORPUS_ROOT
+CORPUS_DIR        = paths.CORPUS_ROOT
+NATIVE_CORPUS_DIR = paths.NATIVE_CORPUS_ROOT
 
 LOCAL_CATALOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus_catalog.json")
 
@@ -63,7 +70,7 @@ DOWNLOAD_MAX_ATTEMPTS       = 4
 DOWNLOAD_RETRY_BASE_S       = 2.0
 DOWNLOAD_RETRY_MAX_S        = 30.0
 
-SUPPORTED_FORMATS = {"raw_bytes", "hf_dataset", "raw_bytes_zip"}
+SUPPORTED_FORMATS = {"raw_bytes", "hf_dataset", "raw_bytes_zip", "native"}
 
 # Inserted between rows when streaming HF text columns into bytes. Keeps
 # document boundaries visible to the byte-level model without inflating output
@@ -125,6 +132,14 @@ def _train_path(stem):
 
 def _val_path(stem):
     return os.path.join(CORPUS_DIR, f"{stem}{paths.CORPUS_VAL_SUFFIX}")
+
+
+def _native_train_path(stem):
+    return os.path.join(NATIVE_CORPUS_DIR, f"{stem}{paths.CORPUS_TRAIN_SUFFIX}")
+
+
+def _native_val_path(stem):
+    return os.path.join(NATIVE_CORPUS_DIR, f"{stem}{paths.CORPUS_VAL_SUFFIX}")
 
 
 def _file_size(path):
@@ -244,6 +259,12 @@ def catalog():
         vp = _val_path(stem)
         installed_train = os.path.isfile(tp)
         installed_val   = os.path.isfile(vp)
+        if entry["format"] == "native":
+            ntp = _native_train_path(stem)
+            entry["native_available"] = os.path.isfile(ntp)
+            if entry["native_available"]:
+                entry["size_train"] = _file_size(ntp)
+                entry["size_val"]   = _file_size(_native_val_path(stem))
         entry["installed_train"]      = installed_train
         entry["installed_val"]        = installed_val
         entry["installed_size_train"] = _file_size(tp) if installed_train else None
@@ -651,6 +672,29 @@ def _install_hf_dataset(entry):
         pass
 
 
+def _install_native(stem):
+    """Copy the repo-bundled <stem>_{train,val}.bin from veritate_mri/data/corpus/
+    into trainers/corpus/. Local copy only — no network, no sha."""
+    os.makedirs(CORPUS_DIR, exist_ok=True)
+    try:
+        for src, dest in ((_native_train_path(stem), _train_path(stem)),
+                          (_native_val_path(stem),   _val_path(stem))):
+            if not os.path.isfile(src):
+                continue
+            tmp = dest + ".part"
+            shutil.copyfile(src, tmp)
+            os.replace(tmp, dest)
+    except OSError as e:
+        msg = f"native copy failed: {e}"
+        logmod.error("corpus-sync", f"{stem}: {msg}")
+        _record("install", False, msg, stem=stem)
+        return {"ok": False, "error": msg}
+    wrote = _file_size(_train_path(stem)) or 0
+    logmod.ok("corpus-sync", f"installed {stem} (native, {wrote/1e6:.1f} MB)")
+    _record("install", True, f"installed {stem} (native)", stem=stem)
+    return {"ok": True, "stem": stem, "bytes_train": wrote}
+
+
 def _split_val_from_train(stem, ratio):
     """After train.bin lands, carve the last `ratio` fraction of bytes off the
     end into val.bin and shrink train.bin to match. Used when the catalog
@@ -738,6 +782,9 @@ def install(entry):
     elif fmt == "hf_dataset":
         if not entry.get("hf_dataset"):
             return {"ok": False, "error": f"corpus '{stem}' has format=hf_dataset but no hf_dataset name"}
+    elif fmt == "native":
+        if not os.path.isfile(_native_train_path(stem)):
+            return {"ok": False, "error": f"corpus '{stem}' is not bundled with this build (missing {_native_train_path(stem)})"}
 
     with _LOCK:
         if stem in _PROGRESS:
@@ -745,6 +792,8 @@ def install(entry):
         _PROGRESS[stem] = {"kind": "train", "bytes": 0, "total": expected or None, "started_at": time.time()}
 
     try:
+        if fmt == "native":
+            return _install_native(stem)
         if fmt == "hf_dataset":
             return _install_hf_dataset(entry)
         logmod.info("corpus-sync", f"installing {stem}: train={train_url}")
