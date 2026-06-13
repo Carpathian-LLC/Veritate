@@ -132,6 +132,30 @@ def test_post_invalid_concurrency_returns_400(client):
     assert "error" in r.get_json()
 
 
+def test_local_concurrency_capped(teacher_pkgs):
+    """local providers clamp a high global concurrency to the safe ceiling; cloud keeps it."""
+    from routes import teacher_routes
+    from teacher import providers
+    high = {"teacher_max_concurrency": 64}
+    assert teacher_routes._resolve_concurrency(high, "ollama") == providers.LOCAL_MAX_CONCURRENCY
+    assert teacher_routes._resolve_concurrency(high, "openai") == 64
+    assert teacher_routes._resolve_concurrency({"teacher_max_concurrency": 2}, "ollama") == 2
+
+
+def test_synth_delete_removes_dir(client, teacher_pkgs, monkeypatch, tmp_path):
+    """POST /teacher/synth/delete removes an existing job dir; unknown and traversal ids 404."""
+    from routes import teacher_routes
+    monkeypatch.setattr(teacher_routes, "REPO_ROOT", str(tmp_path))
+    job_dir = tmp_path / teacher_routes.SYNTH_JOBS_DIR / "abc123"
+    job_dir.mkdir(parents=True)
+    (job_dir / "samples.jsonl").write_text("{}\n")
+    r = client.post("/teacher/synth/delete", json={"job_id": "abc123"})
+    assert r.status_code == 200
+    assert not job_dir.exists()
+    assert client.post("/teacher/synth/delete", json={"job_id": "nope"}).status_code == 404
+    assert client.post("/teacher/synth/delete", json={"job_id": "../mri_settings.json"}).status_code == 404
+
+
 def test_test_unknown_provider_returns_ok_false(client, teacher_pkgs, monkeypatch):
     """POST /teacher/test for an unreachable provider returns ok=False."""
     def fake_test(provider_id, model=None, base_url=None, api_key=None):

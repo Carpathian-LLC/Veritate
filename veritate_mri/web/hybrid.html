@@ -25,6 +25,7 @@
 
   #settings { display:none; border-bottom:1px solid var(--line); background:var(--panel); }
   #settings.open { display:block; }
+  #settings.open ~ .wrap { filter:blur(4px); pointer-events:none; user-select:none; }
   #settings .panel { max-width:760px; margin:0 auto; padding:20px 18px;
                      display:flex; flex-direction:column; gap:20px; }
   .sgroup { display:flex; flex-direction:column; gap:9px; }
@@ -56,7 +57,7 @@
          padding:8px 15px; border-radius:6px; cursor:pointer; font:inherit; }
   .btn:disabled { opacity:.4; cursor:default; }
 
-  .wrap { max-width:760px; margin:0 auto; padding:18px; }
+  .wrap { max-width:760px; margin:0 auto; padding:18px; transition:filter .15s ease; }
   #log { min-height:60vh; display:flex; flex-direction:column; gap:14px; padding-bottom:20px; }
   .msg { max-width:86%; padding:10px 13px; border-radius:10px; white-space:pre-wrap; }
   .user { align-self:flex-end; background:var(--me); }
@@ -65,13 +66,29 @@
               font-size:11.5px; color:var(--dim); }
   .bot .src b { color:var(--accent); font-weight:600; }
   .bar { position:sticky; bottom:0; background:var(--bg); padding:12px 0 20px;
-         display:flex; gap:8px; border-top:1px solid var(--line); }
+         display:flex; align-items:center; gap:8px; border-top:1px solid var(--line); }
+  .ctxwrap { position:relative; flex:none; display:flex; align-items:center; }
+  #ctxRing { cursor:pointer; }
+  #ctxRing:hover #ctxPct { fill:var(--text); }
+  .ctxpop { position:absolute; bottom:135%; left:0; width:248px; background:var(--panel);
+            border:1px solid var(--line); border-radius:8px; padding:11px 13px; font-size:12px;
+            color:var(--soft); line-height:1.5; box-shadow:0 8px 28px rgba(0,0,0,.45); z-index:6; }
+  .ctxpop b { color:var(--text); font-weight:600; }
+  .ctxpop-detail { margin-top:7px; padding-top:7px; border-top:1px solid var(--line); color:var(--dim); }
+  .settings-close { align-self:stretch; margin-top:4px; background:var(--field); color:var(--text);
+                    border:1px solid var(--line); border-radius:6px; padding:11px; font:inherit;
+                    cursor:pointer; }
+  .settings-close:hover { border-color:var(--accent); }
   #q { flex:1; background:var(--field); border:1px solid var(--line); color:var(--text);
        padding:11px 13px; border-radius:8px; font:inherit; }
   #send { background:var(--accent); color:#06121f; font-weight:600; border:none;
           padding:0 18px; border-radius:8px; cursor:pointer; }
   #send:disabled { opacity:.5; cursor:default; }
   .hint-row { color:var(--dim); font-size:12px; text-align:center; padding:30px 0; }
+  .spin { display:inline-block; width:15px; height:15px; border:2px solid var(--line);
+          border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite;
+          vertical-align:middle; }
+  @keyframes spin { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -81,6 +98,7 @@
     <div class="meta">answering with <b id="activeModel">…</b></div>
   </div>
   <div class="actions">
+    <button class="gear" id="newChat">new chat</button>
     <button class="gear" id="gear">settings</button>
     <a href="/app">platform</a>
   </div>
@@ -110,23 +128,46 @@
 
     <div class="sgroup" id="ragRow">
       <div class="srow">
-        <span class="lbl">Knowledge</span>
-        <label class="check"><input type="checkbox" id="ragChk"> Ground answers with your knowledge base</label>
+        <span class="lbl">Context</span>
+        <label class="check"><input type="checkbox" id="ragChk"> Use my uploaded files when answering</label>
+      </div>
+      <div class="srow">
+        <span class="lbl"></span>
+        <label class="check"><input type="checkbox" id="logChk"> Read my recent training logs</label>
       </div>
       <div class="kb">
         <label class="filebtn">Choose file<input type="file" id="kbFile" accept=".txt,.md,.rst,.text" hidden></label>
         <span class="fname" id="kbFileName">no file selected</span>
-        <button class="btn" id="kbUpload">Add to knowledge base</button>
+        <button class="btn" id="kbUpload">Add file</button>
       </div>
       <div class="hint" id="kbHint"></div>
     </div>
 
+    <button class="settings-close" id="settingsClose">Close settings</button>
   </div>
 </div>
 
 <div class="wrap">
   <div id="log"><div class="hint-row">Ask a question. Pick a model in settings, or let the cloud answer.</div></div>
   <div class="bar">
+    <div class="ctxwrap">
+      <svg id="ctxRing" width="34" height="34" viewBox="0 0 34 34" role="button" tabindex="0" aria-label="context used">
+        <title>context used</title>
+        <circle cx="17" cy="17" r="14" fill="none" stroke="var(--line)" stroke-width="3"></circle>
+        <circle id="ctxArc" cx="17" cy="17" r="14" fill="none" stroke="var(--accent)" stroke-width="3"
+                stroke-linecap="round" transform="rotate(-90 17 17)"
+                stroke-dasharray="87.96" stroke-dashoffset="87.96"></circle>
+        <text id="ctxPct" x="17" y="17" text-anchor="middle" dominant-baseline="central"
+              font-size="9" fill="var(--soft)">0%</text>
+      </svg>
+      <div id="ctxPop" class="ctxpop" hidden>
+        <b>Model context</b><br>
+        How full the conversation is against this model's context window, before it auto-compacts. At
+        100% the oldest turns are summarized and dropped to free room. The window differs per model
+        (a local model is small; cloud models are far larger).
+        <div id="ctxPopDetail" class="ctxpop-detail"></div>
+      </div>
+    </div>
     <input id="q" placeholder="Ask anything..." autocomplete="off">
     <button id="send">Send</button>
   </div>
@@ -134,17 +175,21 @@
 
 <script>
   const SETTINGS_KEY = "veritate_chat_settings_v1";
+  const CONVO_KEY = "veritate_chat_convo_v1";
   const CLOUD_ID = "cloud";
   const TEACHER_ID = "teacher";
+  const TEACHER_PREFIX = "teacher:";
+  const VERITATE_DOCS_ID = "veritate_docs";   // grounds the public model on the platform docs
   const $ = id => document.getElementById(id);
   const log = $("log"), q = $("q"), send = $("send");
 
   const state = Object.assign(
-    { model: CLOUD_ID, backend: "pytorch", use_rag: false },
+    { model: VERITATE_DOCS_ID, backend: "pytorch", use_rag: false, use_logs: false },
     loadSettings());
-  let cCapable = new Set();   // models with a veritate.bin (c-engine runnable)
+  let cCapable = new Set();    // models with a veritate.bin (c-engine runnable)
   let hasCorpus = false, nFiles = 0, busy = false;
-  let teacherCfg = { configured: false, label: "" };
+  let remoteById = new Map();  // remote model id -> {label, group} from /hybrid/models
+  let convo = loadConvo();     // {summary, turns} conversation memory, server-compacted
 
   function loadSettings() {
     try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") || {}; }
@@ -152,6 +197,68 @@
   }
   function saveSettings() {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(state)); } catch (_) {}
+  }
+  function loadConvo() {
+    try { const c = JSON.parse(localStorage.getItem(CONVO_KEY) || "{}") || {};
+          return { summary: c.summary || "", turns: Array.isArray(c.turns) ? c.turns : [] }; }
+    catch (_) { return { summary: "", turns: [] }; }
+  }
+  function saveConvo() {
+    try { localStorage.setItem(CONVO_KEY, JSON.stringify(convo)); } catch (_) {}
+  }
+  function newChat() {
+    convo = { summary: "", turns: [] }; saveConvo();
+    lastCtx = null;
+    log.innerHTML = '<div class="hint-row">Ask a question. Pick a model in settings, or let the cloud answer.</div>';
+    updateCtxRing(0); q.focus();
+  }
+
+  // Gauge is driven entirely by the server's per-model `context` meter on each reply.
+  const CTX_CIRC = 2 * Math.PI * 14;
+  let lastCtx = null;   // last server context meter {turns, chars, char_limit, pct}; null until a reply lands
+  function updateCtxRing(pct) {
+    const arc = $("ctxArc"); if (!arc) return;
+    const p = Math.max(0, Math.min(1, pct || 0));
+    arc.style.strokeDashoffset = (CTX_CIRC * (1 - p)).toFixed(2);
+    arc.style.stroke = p >= 0.9 ? "#e0a45a" : "var(--accent)";
+    $("ctxPct").textContent = Math.round(p * 100) + "%";
+    $("ctxRing").querySelector("title").textContent = `context ${Math.round(p * 100)}% full`;
+  }
+  function ctxDetail() {
+    if (lastCtx) return `${lastCtx.chars} / ${lastCtx.char_limit} chars · ${lastCtx.turns} turns`;
+    return "send a message to measure";
+  }
+  function toggleCtxPop() {
+    const pop = $("ctxPop");
+    if (pop.hidden) { $("ctxPopDetail").textContent = ctxDetail(); pop.hidden = false; }
+    else pop.hidden = true;
+  }
+
+  function findModelOption(arg) {
+    if (!arg) return null;
+    const a = arg.toLowerCase(), opts = Array.from($("modelSel").options);
+    return opts.find(o => o.value.toLowerCase() === a)
+        || opts.find(o => o.textContent.toLowerCase().includes(a)) || null;
+  }
+  function handleSlash(text) {
+    const parts = text.slice(1).trim().split(/\s+/);
+    const cmd = (parts.shift() || "").toLowerCase(), arg = parts.join(" ");
+    if (cmd === "new") { newChat(); return true; }
+    if (cmd === "help") {
+      bubble("bot", "commands: /new (clear conversation), /model <name>, /rag on|off, /help");
+      return true;
+    }
+    if (cmd === "rag") {
+      state.use_rag = /^(on|1|true|yes)$/i.test(arg); renderControls();
+      bubble("bot", `grounding ${state.use_rag ? "on" : "off"}`); return true;
+    }
+    if (cmd === "model") {
+      const opt = findModelOption(arg);
+      if (!opt) { bubble("bot", `no model matches "${arg}"`); return true; }
+      state.model = opt.value; renderControls();
+      bubble("bot", `model: ${opt.textContent}`); return true;
+    }
+    bubble("bot", `unknown command: /${cmd}. try /help`); return true;
   }
 
   function bubble(cls, text) {
@@ -162,11 +269,16 @@
     return d;
   }
 
-  function isRemote() { return state.model === CLOUD_ID || state.model === TEACHER_ID; }
+  function isRemote() {
+    return state.model === CLOUD_ID || state.model === TEACHER_ID
+        || state.model === VERITATE_DOCS_ID || state.model.startsWith(TEACHER_PREFIX);
+  }
 
   function activeLabel() {
+    if (state.model === VERITATE_DOCS_ID) return "Veritate (platform docs)";
+    const r = remoteById.get(state.model);
+    if (r) return r.label;
     if (state.model === CLOUD_ID) return "Carpathian AI (public)";
-    if (state.model === TEACHER_ID) return teacherCfg.label || "Teacher model";
     return state.model;
   }
 
@@ -175,7 +287,7 @@
     if (sel.value !== state.model) sel.value = state.model;
     $("activeModel").textContent = activeLabel();
     $("engineRow").style.display = isRemote() ? "none" : "";
-    $("ragRow").style.display = isRemote() ? "none" : "";
+    $("ragRow").style.display = (state.model === VERITATE_DOCS_ID) ? "none" : "";
 
     const cOk = cCapable.has(state.model);
     for (const b of $("engineSeg").children) {
@@ -189,6 +301,7 @@
     const chk = $("ragChk");
     chk.checked = state.use_rag && hasCorpus;
     chk.disabled = !hasCorpus;
+    $("logChk").checked = state.use_logs;
     renderKb();
     saveSettings();
   }
@@ -196,14 +309,14 @@
   function renderKb() {
     $("kbUpload").disabled = busy;
     $("kbHint").textContent = busy ? "adding…"
-      : (hasCorpus ? `${nFiles} file${nFiles === 1 ? "" : "s"} in your knowledge base. Add more anytime.`
-                   : "No knowledge base yet. Upload a .txt to enable retrieval.");
+      : (nFiles > 0 ? `${nFiles} file${nFiles === 1 ? "" : "s"} in your knowledge base, plus the Veritate platform docs. Add more anytime.`
+         : (hasCorpus ? "Veritate platform docs are loaded. Tick grounding to ask about the platform, or add your own files."
+                      : "No knowledge base yet. Upload a .txt to enable retrieval."));
   }
 
   function refreshHealth() {
     return fetch("/hybrid/health").then(r => r.json()).then(d => {
       hasCorpus = !!d.has_corpus; nFiles = d.n_files || 0;
-      teacherCfg = d.teacher || { configured: false, label: "" };
     }).catch(() => {});
   }
 
@@ -223,59 +336,82 @@
     }).catch(() => { busy = false; renderKb(); $("kbHint").textContent = "upload failed"; });
   }
 
-  function fillModels(models) {
+  function addGroup(sel, label, opts) {
+    if (!opts.length) return;
+    const g = document.createElement("optgroup"); g.label = label;
+    for (const o of opts) {
+      const opt = document.createElement("option");
+      opt.value = o.value; opt.textContent = o.text;
+      g.appendChild(opt);
+    }
+    sel.appendChild(g);
+  }
+
+  function fillModels(models, remote) {
     const sel = $("modelSel");
     sel.innerHTML = "";
-    for (const m of models) {
-      const o = document.createElement("option");
+    remoteById = new Map(remote.map(r => [r.id, r]));
+
+    addGroup(sel, "Veritate", [{ value: VERITATE_DOCS_ID, text: "Veritate (platform docs)" }]);
+
+    addGroup(sel, "Local (trained)", models.map(m => {
       const params = m.n_params ? ` · ${(m.n_params / 1e6).toFixed(0)}M` : "";
-      o.value = m.name;
-      o.textContent = `${m.name} (step ${m.step}${params})`;
-      sel.appendChild(o);
+      return { value: m.name, text: `${m.name} (step ${m.step}${params})` };
+    }));
+
+    const groups = [];
+    for (const r of remote) {
+      let g = groups.find(x => x.label === r.group);
+      if (!g) { g = { label: r.group, opts: [] }; groups.push(g); }
+      g.opts.push({ value: r.id, text: r.label });
     }
-    const cloud = document.createElement("option");
-    cloud.value = CLOUD_ID; cloud.textContent = "Carpathian AI (public)";
-    sel.appendChild(cloud);
-    if (teacherCfg.configured) {
-      const t = document.createElement("option");
-      t.value = TEACHER_ID; t.textContent = teacherCfg.label;
-      sel.appendChild(t);
-    }
+    for (const g of groups) addGroup(sel, g.label, g.opts);
+
     const names = models.map(m => m.name);
-    const valid = state.model === CLOUD_ID
-      || (state.model === TEACHER_ID && teacherCfg.configured)
-      || names.includes(state.model);
-    if (!valid) state.model = names.length ? names[0] : CLOUD_ID;
+    const valid = state.model === VERITATE_DOCS_ID || names.includes(state.model) || remoteById.has(state.model);
+    if (!valid) state.model = VERITATE_DOCS_ID;
     renderControls();
   }
 
   function init() {
-    refreshHealth().finally(() => {
-      Promise.all([
-        fetch("/pytorch-models").then(r => r.json()).catch(() => ({ models: [] })),
-        fetch("/c-models").then(r => r.json()).catch(() => ({ models: [] })),
-      ]).then(([pt, c]) => {
-        cCapable = new Set((c.models || []).map(m => m.name));
-        fillModels(pt.models || []);
-      });
+    Promise.all([
+      refreshHealth(),
+      fetch("/pytorch-models").then(r => r.json()).catch(() => ({ models: [] })),
+      fetch("/c-models").then(r => r.json()).catch(() => ({ models: [] })),
+      fetch("/hybrid/models").then(r => r.json()).catch(() => ({ models: [] })),
+    ]).then(([_h, pt, c, rm]) => {
+      cCapable = new Set((c.models || []).map(m => m.name));
+      fillModels(pt.models || [], rm.models || []);
+      updateCtxRing(0);
     });
   }
 
   function ask() {
     const text = q.value.trim(); if (!text) return;
+    if (text[0] === "/" && handleSlash(text)) { q.value = ""; q.focus(); return; }
     bubble("user", text); q.value = ""; send.disabled = true;
-    const pending = bubble("bot", "…");
+    const pending = bubble("bot", "");
+    pending.innerHTML = '<span class="spin"></span>';
     fetch("/hybrid/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text, model: state.model,
-                             backend: state.backend, use_rag: state.use_rag }),
+                             backend: state.backend, use_rag: state.use_rag, use_logs: state.use_logs,
+                             history: convo.turns, summary: convo.summary }),
     }).then(r => r.json()).then(d => {
       if (!d.ok) { pending.textContent = "error: " + (d.error || "failed"); return; }
       pending.textContent = d.answer || "(no answer)";
+      if (d.memory) {
+        convo = { summary: d.memory.summary || "",
+                  turns: Array.isArray(d.memory.turns) ? d.memory.turns : [] };
+        saveConvo();
+      }
+      lastCtx = d.context || null;
+      updateCtxRing(lastCtx ? lastCtx.pct : 0);
       if (d.sources && d.sources.length) {
         const s = document.createElement("div"); s.className = "src";
-        s.innerHTML = "<b>retrieved</b> · " +
-          d.sources.map(x => x.text + " (" + x.score + ")").join(" · ");
+        s.innerHTML = "<b>retrieved</b> · ";
+        s.appendChild(document.createTextNode(
+          d.sources.map(x => x.score == null ? x.text : `${x.text} (${x.score})`).join(" · ")));
         pending.appendChild(s);
       }
       pending.scrollIntoView({ block: "end" });
@@ -283,13 +419,21 @@
       .finally(() => { send.disabled = false; q.focus(); });
   }
 
+  $("newChat").addEventListener("click", newChat);
   $("gear").addEventListener("click", () => $("settings").classList.toggle("open"));
+  $("settingsClose").addEventListener("click", () => $("settings").classList.remove("open"));
+  $("ctxRing").addEventListener("click", e => { e.stopPropagation(); toggleCtxPop(); });
+  document.addEventListener("click", e => {
+    const pop = $("ctxPop");
+    if (pop && !pop.hidden && !e.target.closest(".ctxwrap")) pop.hidden = true;
+  });
   $("modelSel").addEventListener("change", e => { state.model = e.target.value; renderControls(); });
   $("engineSeg").addEventListener("click", e => {
     const b = e.target.closest("button"); if (!b || b.disabled) return;
     state.backend = b.dataset.engine; renderControls();
   });
   $("ragChk").addEventListener("change", e => { state.use_rag = e.target.checked; saveSettings(); });
+  $("logChk").addEventListener("change", e => { state.use_logs = e.target.checked; saveSettings(); });
   $("kbFile").addEventListener("change", e => {
     const f = e.target.files[0]; $("kbFileName").textContent = f ? f.name : "no file selected";
   });

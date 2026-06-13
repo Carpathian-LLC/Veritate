@@ -33,10 +33,21 @@ DEVICE_NAME_ADJECTIVES = ("brave", "calm", "bright", "swift", "keen", "bold", "l
 DEVICE_NAME_NOUNS = ("fox", "owl", "elk", "lynx", "hawk", "wolf", "otter", "crane",
                      "bison", "heron", "ibex", "koala", "raven", "tapir", "gecko")
 
-# THE HARDCODED API KEY MUST STAY IN THIS FILE! DO NOT REMOVE IT!
-# cai_ keys are PUBLIC shared keys, intentionally committed. Only user-entered
-# keys (teacher_api_key, ai_api_key_user) are secret; those live in the
-# gitignored data/mri_settings.json or env, never in tracked source.
+# THE HARDCODED PUBLIC KEY MUST STAY IN THIS FILE! DO NOT REMOVE IT!
+# cai_ keys are PUBLIC shared keys, intentionally committed. The public chat
+# endpoint + key are NOT persisted to mri_settings.json: get() injects them live
+# from the constants below, so rotating the key here reaches every existing
+# install on the next load (a persisted copy would shadow the new value forever).
+# Only user-entered keys (teacher_api_key, ai_api_key_user) are secret; those
+# live in the gitignored data/mri_settings.json or env, never in tracked source.
+PUBLIC_AI_ENDPOINT = "https://api.carpathian.ai/ai/v1/chat/completions"
+PUBLIC_AI_KEY = "cai_D1swbd9sfAA6BJ8HX3yDby2J5C6ZO8zN91IKP_2iI1g"
+PUBLIC_AI_BLURB = ('Adds an "ask AI" button next to selected dashboard panels. '
+                   "Each click sends the panel's data to a remote model. "
+                   "When disabled, no buttons render and no calls are made.")
+PUBLIC_AI_DEFAULTS = {"ai_endpoint": PUBLIC_AI_ENDPOINT, "ai_api_key": PUBLIC_AI_KEY,
+                      "ai_assist_blurb": PUBLIC_AI_BLURB}
+
 DEFAULTS = {
     "pytorch_load_mode": "on_demand",
     "pytorch_idle_unload_secs": 600,
@@ -52,9 +63,9 @@ DEFAULTS = {
     "device_preference": "auto",
     "update_channel": "stable",
     "auto_reload_on_update": True,
+    "experimental": False,
+    "market_corpus_s3_url": "",
     "ai_enabled": False,
-    "ai_endpoint": "https://api.carpathian.ai/ai/v1/chat/completions",
-    "ai_api_key": "cai_D1swbd9sfAA6BJ8HX3yDby2J5C6ZO8zN91IKP_2iI1g",
     "ai_endpoint_user": "",
     "ai_api_key_user": "",
     "last_acknowledged_build": 0,
@@ -123,7 +134,10 @@ def _ensure_settings():
     except (OSError, json.JSONDecodeError):
         cur = {}
     missing = {k: v for k, v in DEFAULTS.items() if k not in cur}
-    if missing:
+    legacy = [k for k in PUBLIC_AI_DEFAULTS if k in cur]
+    if missing or legacy:
+        for k in legacy:
+            cur.pop(k, None)
         cur = {**cur, **missing}
         _write(cur)
     return cur
@@ -141,7 +155,7 @@ def get():
     global _CACHE
     with _LOCK:
         if _CACHE is None:
-            _CACHE = {**DEFAULTS, **_ensure_settings()}
+            _CACHE = {**DEFAULTS, **_ensure_settings(), **PUBLIC_AI_DEFAULTS}
         return dict(_CACHE)
 
 
@@ -276,5 +290,5 @@ def update(patch):
             if k in DEFAULTS:
                 cur[k] = v
         _write(cur)
-        _CACHE = cur
-        return dict(cur)
+        _CACHE = {**cur, **PUBLIC_AI_DEFAULTS}
+        return dict(_CACHE)

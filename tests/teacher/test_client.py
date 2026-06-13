@@ -28,6 +28,7 @@ from veritate_mri.teacher.client import (
 
 _OPENAI_BODY = {"choices": [{"message": {"content": "ok"}}]}
 _ANTHROPIC_BODY = {"content": [{"text": "ok"}]}
+_SSE_DONE = b"data: [DONE]\n"
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -47,10 +48,28 @@ class _MockResp:
         return False
 
 
+class _MockStream:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def __iter__(self):
+        return iter(self._lines)
+
+
+def _sse(content):
+    return ("data: " + json.dumps({"choices": [{"delta": {"content": content}}]}) + "\n").encode("utf-8")
+
+
 def _mock_open_returning(*resps):
     calls = {"count": 0, "requests": []}
 
-    def fake(req, timeout=None):
+    def fake(req, timeout=None, context=None):
         calls["requests"].append(req)
         i = calls["count"]
         calls["count"] += 1
@@ -146,3 +165,16 @@ def test_unavailable_after_retries():
         with patch("time.sleep", return_value=None):
             with pytest.raises(TeacherUnavailableError):
                 c.complete([{"role": "user", "content": "hi"}])
+
+
+def test_stream_retries_empty_then_succeeds():
+    """streaming path retries an empty stream and returns the next attempt's text."""
+    empty = _MockStream([b"\n", _SSE_DONE])
+    good = _MockStream([_sse("hello "), _sse("world"), _SSE_DONE])
+    fake, calls = _mock_open_returning(empty, good)
+    c = Client("ollama", model="m", max_retries=2)
+    with patch("urllib.request.urlopen", side_effect=fake):
+        with patch("time.sleep", return_value=None):
+            out = c.complete([{"role": "user", "content": "hi"}], cancel_check=lambda: False)
+    assert out == "hello world"
+    assert calls["count"] == 2

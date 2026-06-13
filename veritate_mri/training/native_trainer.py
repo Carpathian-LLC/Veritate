@@ -41,6 +41,7 @@ from readers import paths as paths_mod, models as models_mod   # noqa: E402
 from training import save as save_mod                          # noqa: E402
 from veritate_core import model as veritate_model              # noqa: E402
 from veritate_core import qat as veritate_qat                  # noqa: E402
+from veritate_core.plugin import mem_planner, mem_executor     # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -50,6 +51,11 @@ PRECISIONS        = ("fp32", "bf16")
 LR_SCHEDULES      = ("cosine", "linear", "constant", "wsd")
 WSD_DECAY_KINDS   = ("sqrt", "linear", "cosine")
 QAT_MODES         = ("int8", "int4", "ternary")
+
+# fp32 weights+grads+Adam moments (autocast keeps fp32 masters), so the memory
+# planner sizes its buckets in fp32; paged optimizer state lives under the model dir.
+PLAN_DTYPE        = "fp32"
+PAGED_STATE_DIR   = "optim_state"
 
 CKPT_PREFIX       = "step_"
 CKPT_SUFFIX       = ".pt"
@@ -334,18 +340,34 @@ def main():
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[native] params: {n_params:,} ({n_params/1e6:.1f}M)", flush=True)
 
+    plan_batch = 1 if args.bench else args.batch_size
+    mem_plan = mem_planner.plan_training_memory(
+        n_params, args.hidden, args.layers, args.ffn, plan_batch, args.seq, PLAN_DTYPE)
+    print("[native] mem plan: " + mem_planner.format_plan(mem_plan), flush=True)
+    if mem_plan.tier in mem_executor.CHECKPOINT_TIERS:
+        mem_executor.enable_grad_checkpoint(model)
+        print("[native] activation checkpointing: ENABLED (tier " + mem_plan.tier + ")", flush=True)
+
     if args.bench:
         from veritate_core.plugin import bench
-        result = bench.run(model, device_type, args.seq, args.vocab,
+        result = bench.run(model, device_type, args.seq, args.vocab, plan=mem_plan,
                            on_progress=lambda s: print("bench: " + s, flush=True))
         print("BENCH_RESULT " + json.dumps(result), flush=True)
         return
 
-    opt = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.base_lr, betas=(args.beta1, args.beta2),
-        eps=1e-6, weight_decay=args.weight_decay, foreach=True,
-    )
+    if mem_plan.tier in mem_executor.OFFLOAD_TIERS:
+        print("[native] optimizer state paged to NVMe (" + mem_plan.tier + ")", flush=True)
+        opt = mem_executor.make_optimizer(
+            model.parameters(), mem_plan,
+            lr=args.base_lr, betas=(args.beta1, args.beta2), eps=1e-6,
+            weight_decay=args.weight_decay,
+            state_dir=os.path.join(args.output_dir, PAGED_STATE_DIR))
+    else:
+        opt = torch.optim.AdamW(
+            model.parameters(),
+            lr=args.base_lr, betas=(args.beta1, args.beta2),
+            eps=1e-6, weight_decay=args.weight_decay, foreach=True,
+        )
     start_step = _maybe_resume(model, opt, args, device)
     if start_step:
         print(f"[native] resumed from step {start_step}", flush=True)

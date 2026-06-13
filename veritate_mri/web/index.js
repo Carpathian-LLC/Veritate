@@ -7455,11 +7455,13 @@ function _autoTuneOpen() {
   $("autoTuneLog").style.display = "none";
   $("autoTuneLog").innerHTML = "";
   $("autoTuneResults").style.display = "none";
+  $("autoTuneInfeasible").style.display = "none";
   $("autoTuneStart").style.display = "";
   $("autoTuneStop").style.display = "none";
   $("autoTuneApplyStatus").textContent = "";
   if (!usable) _autoTuneLine("pick a trainer on the Training tab first (step 2).", "var(--warm)");
   $("autoTuneModal").classList.remove("hidden");
+  document.body.classList.add("no-scroll");
 }
 
 function _autoTuneLine(msg, color) {
@@ -7490,6 +7492,7 @@ function _autoTuneStart() {
   const val = (k) => _trArgVal(k) || defs[k];
   const args = { bench: true, size: val("size"), seq: val("seq"), precision: val("precision") };
   $("autoTuneResults").style.display = "none";
+  $("autoTuneInfeasible").style.display = "none";
   $("autoTuneLog").innerHTML = "";
   _autoTuneLine("starting benchmark (throwaway weights, nothing is saved)...", "var(--dim)");
   _autoTuneLine("your computer may slow down while memory is pushed to its limit — this is expected.", "var(--warm)");
@@ -7538,6 +7541,23 @@ function _autoTuneSubscribe(id) {
 const MPS_INT_MAX = 2147483647;
 const MPS_SAFETY  = 0.85;
 
+// mem_planner tier -> human label for the modal. The two offload tiers are
+// delivered by paging the Adam optimizer state to NVMe (veritate_core/plugin/
+// paged_optimizer.py); their tok/s is disk-bound and the modal says so.
+const TIER_LABELS = {
+  "none": "fits in memory (no offload)",
+  "checkpoint_activations": "activation checkpointing",
+  "checkpoint+bf16_optimizer": "checkpointing + optimizer paged to NVMe",
+  "checkpoint+page_optimizer_to_nvme": "checkpointing + optimizer paged to NVMe",
+};
+const CHECKPOINT_TIERS = new Set([
+  "checkpoint_activations", "checkpoint+bf16_optimizer",
+  "checkpoint+page_optimizer_to_nvme",
+]);
+const PAGED_TIERS = new Set([
+  "checkpoint+bf16_optimizer", "checkpoint+page_optimizer_to_nvme",
+]);
+
 function _autoTuneRecommend(result, plugin) {
   const defs  = plugin.manifest.defaults || {};
   const sizes = plugin.manifest.sizes || {};
@@ -7554,6 +7574,7 @@ function _autoTuneRecommend(result, plugin) {
   const manifestLR    = parseFloat(defs.base_lr) || 6e-4;
   const lr = +(manifestLR * Math.sqrt(batch / manifestBatch)).toPrecision(2);
   const args = { batch_size: batch, base_lr: lr };
+  if (CHECKPOINT_TIERS.has(result.tier)) args.use_act_ckpt = true;
   const totalSteps = parseInt(defs.total_steps, 10);
   if (totalSteps > 0) {
     args.warmup_steps = Math.max(50,  Math.round(totalSteps * 0.03));
@@ -7570,6 +7591,8 @@ function _autoTuneRecommend(result, plugin) {
 function _autoTuneFinish(result) {
   _autoTuneState.result = result;
   _autoTuneCleanup();
+  if (result.fits === false) { _autoTuneShowInfeasible(result); return; }
+  $("autoTuneInfeasible").style.display = "none";
   const plugin = _autoTuneState.plugin;
   const recs = _autoTuneRecommend(result, plugin);
   _autoTuneState.recs = recs;
@@ -7577,17 +7600,37 @@ function _autoTuneFinish(result) {
   $("autoTuneMaxBatch").textContent = String(result.max_batch);
   $("autoTuneBestBatch").textContent = recs ? String(recs.best.batch) : "—";
   $("autoTuneTokS").textContent     = recs ? Math.round(recs.best.tok_per_s).toLocaleString() + " tok/s" : "—";
+  $("autoTuneTier").textContent     = TIER_LABELS[result.tier] || result.tier || "—";
   if (recs) {
     const timeNote = recs.hours != null
       ? ` At this speed, ${recs.totalSteps.toLocaleString()} steps would take ~${recs.hours.toFixed(1)} h.` : "";
+    const pagedNote = PAGED_TIERS.has(result.tier)
+      ? `<br><span style="color:var(--warm)">This size only fits by paging the optimizer to NVMe, so each step is disk-bound — the tok/s above already reflects that. Bigger batches amortize the disk cost.</span>`
+      : "";
     $("autoTuneRecs").innerHTML =
       `Recommended: <b>batch ${recs.batch}</b> at <b>lr ${recs.lr}</b>` +
       (recs.args.warmup_steps ? `, warmup/log/eval/ckpt cadence scaled to ${recs.totalSteps.toLocaleString()} steps` : "") +
-      `.${timeNote}<br><span style="color:var(--dim)">Bigger batches fit (up to ${result.max_batch}) but measured slower — the recommendation is the throughput sweet spot.</span>`;
+      (recs.args.use_act_ckpt ? `, activation checkpointing on` : "") +
+      `.${timeNote}<br><span style="color:var(--dim)">Bigger batches fit (up to ${result.max_batch}) but measured slower — the recommendation is the throughput sweet spot.</span>${pagedNote}`;
   } else {
     $("autoTuneRecs").textContent = "no usable measurements — see the log above.";
   }
   $("autoTuneResults").style.display = "";
+}
+
+function _autoTuneShowInfeasible(result) {
+  _autoTuneState.recs = null;
+  $("autoTuneResults").style.display = "none";
+  const gb = (x) => (x == null ? "—" : Math.round(x).toLocaleString() + " GB");
+  const optLine = result.optimizer_gb
+    ? ` + optimizer ${gb(result.optimizer_gb)}` : "";
+  $("autoTuneInfeasibleBody").innerHTML =
+    `Training this size needs about <b>${gb(result.required_gb)}</b> (weights ${gb(result.params_gb)} ` +
+    `+ grads ${gb(result.grads_gb)}${optLine}), but this machine's usable budget is ` +
+    `<b>${gb(result.budget_gb)}</b>.<br>Weights and gradients alone exceed the budget, so ` +
+    `paging the optimizer to disk cannot make it fit. Pick a smaller model size, shorten ` +
+    `sequence length, or train on a larger-memory machine.`;
+  $("autoTuneInfeasible").style.display = "";
 }
 
 function _autoTuneApply() {
@@ -7622,6 +7665,7 @@ function _autoTuneStop() {
 function _autoTuneClose() {
   if (_autoTuneState.es) _autoTuneStop();
   $("autoTuneModal").classList.add("hidden");
+  document.body.classList.remove("no-scroll");
 }
 
 function _trUpdateStepCascades() {
@@ -8586,7 +8630,7 @@ function _trStore(flow) { try { localStorage.setItem(TRAIN_FLOW_STORE, flow); } 
 function _trStored() { try { return localStorage.getItem(TRAIN_FLOW_STORE); } catch (e) { return null; } }
 
 // Reusable are-you-sure dialog. Resolves true on confirm, false on cancel.
-function confirmDialog(message) {
+function confirmDialog(message, okLabel) {
   return new Promise((resolve) => {
     const modal = $("confirmModal");
     const ok = $("confirmModalOk");
@@ -8594,6 +8638,7 @@ function confirmDialog(message) {
     if (!modal || !ok || !no) { resolve(window.confirm(message)); return; }
     const msgEl = $("confirmModalMsg");
     if (msgEl) msgEl.textContent = message || "Are you sure?";
+    ok.textContent = okLabel || "Confirm";
     const close = (val) => {
       modal.classList.add("hidden");
       ok.removeEventListener("click", onOk);
@@ -8611,10 +8656,22 @@ window.confirmDialog = confirmDialog;
 
 function _synthStopJob() {
   if (!synthState.jobId) return;
-  confirmDialog("Stop the synthesis job? Samples generated so far are kept.").then(ok => {
+  confirmDialog("Stop the synthesis job? Samples generated so far are kept.", "Stop").then(ok => {
     if (!ok) return;
     SYNTH_JOB.stop().then(() => _synthPollOnce()).catch(() => {});
   });
+}
+
+// Start button doubles as Resume: a stopped job with samples on disk gets a
+// "Resume" label; clicking it re-submits to the same job_id and the runner
+// skips ids already in samples.jsonl.
+function _synthSyncStartLabel() {
+  const btn = $("synthStartBtn");
+  const sel = $("synthJobSelect");
+  if (!btn || !sel) return;
+  const job = (synthState.jobs || []).find(j => j.job_id === sel.value);
+  const resume = !!(job && !job.running && (job.completed || 0) > 0);
+  btn.textContent = resume ? "Resume" : "Start Synthesis";
 }
 
 // Hide the training metrics/charts for actions that don't produce a training
@@ -8626,6 +8683,7 @@ function _trToggleMetrics(flow) {
   sec.style.display = TRAIN_METRICS_FLOWS.includes(flow) ? "" : "none";
 }
 
+const SYNTH_SCROLL_STICK_PX = 48;
 function _synthRenderSamples(samples) {
   const wrap = $("synthLiveWrap");
   const out = $("synthLiveOutput");
@@ -8634,11 +8692,12 @@ function _synthRenderSamples(samples) {
   if (!samples || !samples.length) { wrap.style.display = "none"; return; }
   wrap.style.display = "block";
   if (cnt) cnt.textContent = `(${samples.length} shown)`;
+  const stick = out.scrollHeight - out.scrollTop - out.clientHeight < SYNTH_SCROLL_STICK_PX;
   out.innerHTML = samples.map(s =>
     `<div style="border-bottom:1px solid var(--line);padding:6px 0">` +
     `<div style="color:var(--accent);font-size:10px;margin-bottom:2px">${_trEsc(s.id)}</div>` +
     `${_trEsc(s.response)}</div>`).join("");
-  out.scrollTop = out.scrollHeight;
+  if (stick) out.scrollTop = out.scrollHeight;
 }
 
 function _synthLoadSamples() {
@@ -8654,6 +8713,9 @@ function _synthReattach() {
   try { saved = localStorage.getItem(SYNTH_JOB_STORE); } catch (e) {}
   if (!saved || synthState.jobId === saved) return;
   synthState.jobId = saved;
+  const sel = $("synthJobSelect");
+  if (sel && synthState.jobs.some(j => j.job_id === saved)) sel.value = saved;
+  _synthSyncStartLabel();
   const info = $("synthJobInfo");
   if (info) { info.style.display = "block"; info.textContent = `job ${saved}`; }
   if (synthState.pollTimer) clearInterval(synthState.pollTimer);
@@ -8763,12 +8825,42 @@ function _synthLoadJobs() {
     }).join("");
     sel.innerHTML = '<option value="">&mdash; new job &mdash;</option>' + opts;
     if (cur && synthState.jobs.some(j => j.job_id === cur)) sel.value = cur;
+    _trFilesRender();
   }).catch(() => {});
 }
 
 function _synthSelectedIds() {
   return Array.from(document.querySelectorAll(".synth-seed-cb"))
     .filter(cb => cb.checked).map(cb => cb.dataset.id);
+}
+
+function _trFilesRender() {
+  const host = $("trainFilesList");
+  if (!host) return;
+  const jobs = synthState.jobs || [];
+  if (!jobs.length) { host.textContent = "no synth jobs on disk."; return; }
+  host.innerHTML = jobs.map(j => {
+    const cats = (j.categories || []).join(", ") || "empty";
+    const run = j.running ? ' <span style="color:var(--warm)">running</span>' : "";
+    const del = j.running
+      ? '<button type="button" disabled style="opacity:.5">delete</button>'
+      : `<button type="button" class="train-file-del" data-id="${_trEsc(j.job_id)}" style="background:var(--hot);color:#000">delete</button>`;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)">`
+      + `<code style="min-width:130px">${_trEsc(j.job_id)}</code>`
+      + `<span style="flex:1">${j.completed || 0} samples · ${_trEsc(cats)}${run}</span>${del}</div>`;
+  }).join("");
+  host.querySelectorAll(".train-file-del").forEach(b => {
+    b.addEventListener("click", () => _trFilesDelete(b.dataset.id));
+  });
+}
+
+function _trFilesDelete(jobId) {
+  if (!jobId || !confirm(`Delete synth job ${jobId}? This removes its files from disk.`)) return;
+  fetch(TEACHER_SYNTH_DELETE, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: jobId }) })
+    .then(r => r.json())
+    .then(() => { _synthLoadJobs(); })
+    .catch(() => {});
 }
 
 function _synthGatherPrompts(ids) {
@@ -8800,8 +8892,21 @@ function _synthPollOnce() {
       if (!line) return;
       const running = !!s.running;
       const c = s.completed || 0, f = s.failed || 0, d = s.skipped_dup || 0;
-      line.textContent = `${running ? "running" : "done"}: completed ${c}, failed ${f}, skipped ${d}`;
-      line.style.color = running ? "var(--warm)" : "var(--data-pos)";
+      const head = s.aborted ? "ABORTED" : (running ? "running" : "done");
+      let txt = `${head}: completed ${c}, failed ${f}, skipped ${d}`;
+      const sum = s.error_summary || {};
+      const reasons = Object.keys(sum);
+      if (f > 0 && reasons.length) {
+        const top = reasons.map(k => `${k} x${sum[k]}`).slice(0, 3).join("; ");
+        txt += ` — ${top}`;
+      } else if (f > 0 && s.last_error) {
+        txt += ` — ${s.last_error}`;
+      }
+      line.textContent = txt;
+      line.style.color = s.aborted ? "var(--hot)" : (running ? "var(--warm)" : (f > c ? "var(--hot)" : "var(--data-pos)"));
+      const job = (synthState.jobs || []).find(j => j.job_id === synthState.jobId);
+      if (job) { job.running = running; job.completed = c; }
+      _synthSyncStartLabel();
       const stopBtn = $("synthStopPollBtn");
       if (stopBtn) stopBtn.style.display = running ? "" : "none";
       // Build corpus only after the job is complete or stopped, and only with
@@ -8836,13 +8941,18 @@ function _synthBuild() {
 function _synthStart() {
   const line = $("synthStatusLine");
   const info = $("synthJobInfo");
-  const ids = _synthSelectedIds();
+  const target = ($("synthJobSelect") && $("synthJobSelect").value) || "";
+  let ids = _synthSelectedIds();
+  // Resume with no boxes ticked: continue the destination job from its own seeds.
+  if (!ids.length && target) {
+    const job = (synthState.jobs || []).find(j => j.job_id === target);
+    ids = (job && job.seeds) || [];
+  }
   if (!ids.length) { if (line) { line.textContent = "pick at least one seed"; line.style.color = "var(--hot)"; } return; }
   if (line) { line.textContent = "loading prompts..."; line.style.color = "var(--warm)"; }
   const fmt = ($("synthFormat") && $("synthFormat").value) || "text";
   _synthGatherPrompts(ids).then(prompts => {
     if (!prompts.length) { if (line) { line.textContent = "no prompts in seeds"; line.style.color = "var(--hot)"; } return; }
-    const target = ($("synthJobSelect") && $("synthJobSelect").value) || "";
     const cats = Array.from(new Set(prompts.map(p => p.category).filter(Boolean)));
     const go = () => _synthStartReq(prompts, fmt, ids, target, line, info);
     if (target) {
@@ -8851,7 +8961,7 @@ function _synthStart() {
       const newCats = cats.filter(c => jobCats.indexOf(c) < 0);
       if (newCats.length) {
         const m = `Job ${target} already contains: ${jobCats.join(", ") || "(empty)"}. You are adding different data: ${newCats.join(", ")}. Mixing corpora can reduce purity. Continue?`;
-        (window.confirmDialog ? window.confirmDialog(m) : Promise.resolve(window.confirm(m)))
+        (window.confirmDialog ? window.confirmDialog(m, "Continue") : Promise.resolve(window.confirm(m)))
           .then(ok => { if (ok) go(); else if (line) { line.textContent = "cancelled"; line.style.color = "var(--dim)"; } });
         return;
       }
@@ -8876,7 +8986,11 @@ function _synthStartReq(prompts, fmt, ids, target, line, info) {
       if (synthState.pollTimer) clearInterval(synthState.pollTimer);
       synthState.pollTimer = setInterval(_synthPollOnce, TEACHER_POLL_MS);
       _synthPollOnce();
-      _synthLoadJobs();
+      _synthLoadJobs().then(() => {
+        const sel = $("synthJobSelect");
+        if (sel) sel.value = d.job_id;
+        _synthSyncStartLabel();
+      });
     })
     .catch(e => { if (line) { line.textContent = _backendErrMsg(e); line.style.color = "var(--hot)"; } });
 }
@@ -8884,6 +8998,8 @@ function _synthStartReq(prompts, fmt, ids, target, line, info) {
 function _trShowSynthPanel(show) {
   const panel = $("synthPanel");
   if (panel) panel.style.display = show ? "block" : "none";
+  const files = $("trainFilesPanel");
+  if (files) files.style.display = show ? "block" : "none";
   // hide trainer picker + form when synth flow active
   const pickerRow = _trEl("trainPickerRow");
   if (show && pickerRow) pickerRow.style.display = "none";
@@ -8938,8 +9054,7 @@ document.addEventListener("DOMContentLoaded", () => {
     _trUpdateTeacherGate();
     if (flow === "synth") {
       if (!synthState.seeds.length) _synthLoadSeeds();
-      _synthLoadJobs();
-      _synthReattach();
+      _synthLoadJobs().then(() => _synthReattach());
     }
     _trRenderPicker();
     _trRenderForm();
@@ -8966,8 +9081,11 @@ document.addEventListener("DOMContentLoaded", () => {
   if (synthStop) synthStop.addEventListener("click", _synthStopJob);
   const synthBuild = $("synthBuildBtn");
   if (synthBuild) synthBuild.addEventListener("click", _synthBuild);
+  const filesRefresh = $("trainFilesRefresh");
+  if (filesRefresh) filesRefresh.addEventListener("click", _synthLoadJobs);
   const synthJobSel = $("synthJobSelect");
   if (synthJobSel) synthJobSel.addEventListener("change", () => {
+    _synthSyncStartLabel();
     const jid = synthJobSel.value;
     if (!jid) return;
     synthState.jobId = jid;
@@ -9050,7 +9168,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   const stop = _trEl("trainStop");
   if (stop) stop.addEventListener("click", () => {
-    confirmDialog("Stop the training run? The latest checkpoint is kept; progress since it is lost.").then(ok => {
+    confirmDialog("Stop the training run? The latest checkpoint is kept; progress since it is lost.", "Stop").then(ok => {
       if (!ok) return;
       TRAIN_JOB.stop().then(r => r.json()).then(_trPoll).catch(_trPoll);
     });
@@ -9424,6 +9542,8 @@ function _applySettingsToUI(s) {
   if (aiEp) aiEp.value = s.ai_endpoint_user || "";
   const aiKy = $("aiApiKeyUser");
   if (aiKy) aiKy.value = s.ai_api_key_user || "";
+  const aiBlurb = $("aiAssistBlurb");
+  if (aiBlurb) aiBlurb.textContent = s.ai_assist_blurb || "";
   _aiUpdateEffectiveLine(s);
   if (typeof _AI !== "undefined" && _AI && _AI.applyEnabled) _AI.applyEnabled(!!s.ai_enabled);
 }
@@ -9461,14 +9581,16 @@ const TEACHER_SYNTH_BUILD = "/teacher/synth/build_corpus";
 const TEACHER_SYNTH_STOP = "/teacher/synth/stop";
 const TEACHER_SYNTH_SAMPLES = "/teacher/synth/samples";
 const TEACHER_SYNTH_JOBS = "/teacher/synth/jobs";
+const TEACHER_SYNTH_DELETE = "/teacher/synth/delete";
 const TEACHER_KIND_API = "api";
 const TEACHER_KIND_LOCAL = "local";
 const TEACHER_DEFAULT_MAX_CONC = 16;
+const TEACHER_LOCAL_MAX_CONC = 4;
 const TEACHER_DEFAULT_MAX_TOK = 2048;
 const TEACHER_POLL_MS = 2000;
 const TEACHER_KEY_MASK = "•".repeat(12);
 const SEED_TIER_ORDER = ["easy", "basic", "advanced"];
-const TEACHER_NOTE_LOCAL = "ensure your local server is running at the base URL.";
+const TEACHER_NOTE_LOCAL = 'ensure your local server is running at the base URL. synth auto-caps concurrency for local servers so a single GPU is not overloaded. no server-side parallelism tuning needed.';
 const TEACHER_MODEL_LIST_LABEL = "- pick a model -";
 const TEACHER_MODEL_GROUP = "connected models";
 const TEACHER_MODEL_CUSTOM = "__custom__";
@@ -9478,6 +9600,20 @@ const teacherState = { providers: [], current: null, pollTimer: null, jobId: nul
 
 function _teacherProviderById(pid) {
   return teacherState.providers.find(p => p.id === pid) || null;
+}
+
+function _teacherConcDefault(pid) {
+  const p = _teacherProviderById(pid);
+  return (p && p.kind === TEACHER_KIND_LOCAL) ? TEACHER_LOCAL_MAX_CONC : TEACHER_DEFAULT_MAX_CONC;
+}
+
+// Effective value the synth will run: local servers are clamped to the safe cap
+// so the field never shows a number that the backend silently overrides.
+function _teacherEffectiveConc(pid, saved) {
+  const p = _teacherProviderById(pid);
+  const cap = _teacherConcDefault(pid);
+  const v = saved || cap;
+  return (p && p.kind === TEACHER_KIND_LOCAL) ? Math.min(v, cap) : v;
 }
 
 function _teacherConfigFor(pid) {
@@ -9558,7 +9694,7 @@ function _teacherApplyProviderUI(pid) {
   }
   const isLocal = prov.kind === TEACHER_KIND_LOCAL;
   if (apiLbl) apiLbl.style.display = isLocal ? "none" : "";
-  if (note) note.textContent = isLocal ? TEACHER_NOTE_LOCAL : "";
+  if (note) note.innerHTML = isLocal ? TEACHER_NOTE_LOCAL : "";
   // Some providers route to a fixed model via the API key; hide the model field.
   if (modelLbl) modelLbl.style.display = (prov.model_selectable === false) ? "none" : "";
   const defModel = (prov.default_models && prov.default_models[0]) || "";
@@ -9628,7 +9764,7 @@ function _teacherApplyToForm(s) {
   const m = $("teacherModel"); if (m) m.value = s.model || "";
   const b = $("teacherBaseUrl"); if (b) b.value = s.base_url || "";
   const k = $("teacherApiKey"); if (k) k.value = s.has_api_key ? TEACHER_KEY_MASK : "";
-  const mc = $("teacherMaxConcurrency"); if (mc) mc.value = s.max_concurrency || TEACHER_DEFAULT_MAX_CONC;
+  const mc = $("teacherMaxConcurrency"); if (mc) mc.value = _teacherEffectiveConc(s.provider || "", s.max_concurrency);
   const mt = $("teacherMaxTokens"); if (mt) mt.value = s.max_tokens || TEACHER_DEFAULT_MAX_TOK;
   _teacherApplyProviderUI(s.provider || "");
   _teacherLoadModels();
@@ -11761,6 +11897,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     const keyEl = $("teacherApiKey");
     if (keyEl) keyEl.value = _teacherSelectedHasKey() ? TEACHER_KEY_MASK : "";
+    const mcEl = $("teacherMaxConcurrency");
+    if (mcEl) mcEl.value = _teacherConcDefault(tProv.value);
     _teacherLoadModels();
   });
   const tList = $("teacherModelList");
@@ -11768,8 +11906,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const m = $("teacherModel");
     if (m) m.value = (tList.value === TEACHER_MODEL_CUSTOM) ? "" : tList.value;
     _teacherSyncModelInput();
-    if (m && tList.value === TEACHER_MODEL_CUSTOM) m.focus();
+    if (tList.value === TEACHER_MODEL_CUSTOM) { if (m) m.focus(); }
+    else _saveTeacher();
   });
+  const tModelInput = $("teacherModel");
+  if (tModelInput) tModelInput.addEventListener("change", () => { if (tModelInput.value.trim()) _saveTeacher(); });
   const tBase = $("teacherBaseUrl");
   if (tBase) tBase.addEventListener("blur", _teacherLoadModels);
   const tKey = $("teacherApiKey");

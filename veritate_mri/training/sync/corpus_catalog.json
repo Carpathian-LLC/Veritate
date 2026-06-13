@@ -225,19 +225,19 @@
     },
     {
       "stem": "slimpajama627b",
-      "label": "SlimPajama (100 GB subset)",
-      "description": "Cleaned and deduplicated RedPajama (Cerebras). Streamed and capped at 100 GB. Chinchilla-fits 3B-10B parameter models at default cap; raise the cap for full 627B-token training.",
+      "label": "SlimPajama (6B-token public subset)",
+      "description": "Cleaned and deduplicated RedPajama sample (DKYoon public mirror). No auth required. ~22 GB of text, streamed in full. Chinchilla-fits 100M-500M parameter models.",
       "format": "hf_dataset",
-      "hf_dataset": "cerebras/SlimPajama-627B",
+      "hf_dataset": "DKYoon/SlimPajama-6B",
       "hf_split_train": "train",
       "hf_split_val": "validation",
       "hf_text_column": "text",
-      "max_bytes_train": 107374182400,
-      "max_bytes_val": 1073741824,
-      "size_train": 107374182400,
-      "size_val": 1073741824,
-      "recommended_min_params": 3000000000,
-      "recommended_max_params": 10000000000
+      "max_bytes_train": 22000000000,
+      "max_bytes_val": 268435456,
+      "size_train": 22000000000,
+      "size_val": 268435456,
+      "recommended_min_params": 100000000,
+      "recommended_max_params": 500000000
     },
     {
       "stem": "redpajama_v2",

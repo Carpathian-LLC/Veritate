@@ -10,6 +10,8 @@ Persistent dashboard settings at [veritate_mri/runtime/settings.py](../../../ver
 
 `get()` returns the current settings as a dict. `update(patch)` applies a patch with validation.
 
+The public Carpathian chat endpoint + key are an exception: `PUBLIC_AI_ENDPOINT` / `PUBLIC_AI_KEY` are module constants (`PUBLIC_AI_DEFAULTS`), **not** keys in `DEFAULTS`. `get()` and `update()` inject them live over whatever is on disk, so they always reflect the current source value and are never persisted; a persisted copy from an older build is stripped on load. This is why rotating the public key in source reaches every existing install on next load instead of being shadowed forever by a stale `mri_settings.json` value. Only `ai_api_key_user` (a user's own override) is persisted.
+
 Validation lives inline: e.g., `device_name` capped at 15 characters at [settings.py:132](../../../veritate_mri/runtime/settings.py#L132).
 
 ## Key settings

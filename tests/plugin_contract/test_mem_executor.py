@@ -49,25 +49,37 @@ def _batch(device):
 
 
 def test_none_tier_applies_nothing():
-    """tier none leaves the model unwrapped and reports no unmet work."""
+    """tier none leaves the model unwrapped and needs no optimizer offload."""
     applied = me.apply_plan(_build(), _plan(mp.TIER_NONE))
     assert applied.grad_checkpoint is False
-    assert applied.unmet == ()
+    assert applied.optimizer_offload is False
 
 
 def test_checkpoint_tier_enables_checkpointing():
-    """tier checkpoint_activations wraps the blocks."""
+    """tier checkpoint_activations wraps the blocks, no optimizer offload."""
     model = _build()
     applied = me.apply_plan(model, _plan(mp.TIER_CHECKPOINT))
     assert applied.grad_checkpoint is True
+    assert applied.optimizer_offload is False
     assert all(getattr(b.forward, "_grad_checkpointed", False) for b in model.blocks)
 
 
-def test_page_tier_reports_unmet_optimizer_offload():
-    """tier page still checkpoints but flags the unwired optimizer paging."""
+def test_page_tier_requests_optimizer_offload():
+    """tier page checkpoints and flags that the optimizer must be offloaded."""
     applied = me.apply_plan(_build(), _plan(mp.TIER_PAGE))
     assert applied.grad_checkpoint is True
-    assert "page_optimizer_to_nvme" in applied.unmet
+    assert applied.optimizer_offload is True
+
+
+def test_make_optimizer_offloads_only_for_offload_tiers(tmp_path):
+    """make_optimizer returns a paged optimizer for offload tiers, plain AdamW else."""
+    from veritate_core.plugin import paged_optimizer
+    params = [torch.zeros(4, requires_grad=True)]
+    hp = dict(lr=1e-3, betas=(0.9, 0.95), eps=1e-6, weight_decay=0.0)
+    plain = me.make_optimizer(params, _plan(mp.TIER_CHECKPOINT), **hp)
+    paged = me.make_optimizer(params, _plan(mp.TIER_PAGE), state_dir=str(tmp_path), **hp)
+    assert isinstance(plain, torch.optim.AdamW)
+    assert isinstance(paged, paged_optimizer.PagedAdamW)
 
 
 def test_enable_is_idempotent():

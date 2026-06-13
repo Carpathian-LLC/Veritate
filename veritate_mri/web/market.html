@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<!-- ---------------------------------------------------------------------------------
+ Developed by Carpathian, LLC.  Legal Notice: Distribution Not Authorized.
+ Market LLM: experimental comparison ground. Trains a byte-level Veritate model on JUST
+ market data and shows, on one chart, what the market actually did vs what the model
+ predicted, across multiple instruments, plus a custom-dollar trading simulation and a
+ live feed. Self-contained vanilla JS + canvas; calls /market/* on the canonical server.
+ veritate_mri/web/market.html
+---------------------------------------------------------------------------------- -->
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Market LLM (Experimental)</title>
+<style>
+:root{--bg:#0b0e14;--panel:#131823;--panel2:#1b2230;--line:#262f40;--tx:#dfe6f2;--mut:#8b97ad;
+--up:#27c08a;--dn:#f0556a;--neu:#8b97ad;--acc:#4d8cff;--warn:#f5b94d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:#0e131c;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+header h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.2px}
+.badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#26314a;color:#9db4ff;border:1px solid #34436b}
+.ctl{display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap}
+label.fld{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--mut)}
+select,input,button{background:var(--panel2);color:var(--tx);border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:13px}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+button.go{background:#1c3a5e;border-color:#2f5e8f;color:#cfe1ff}
+.wrap{padding:16px;display:grid;gap:14px;grid-template-columns:1fr 1fr;max-width:1500px;margin:0 auto}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+.panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);margin:0 0 10px}
+.span2{grid-column:1/3}
+canvas{width:100%;display:block}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--mut);margin-top:8px}
+.legend span{display:flex;align-items:center;gap:5px}
+.sw{width:11px;height:11px;border-radius:2px;display:inline-block}
+.dec{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.cell{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.cell .k{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.4px}
+.cell .v{font-size:24px;font-weight:680;margin-top:3px}
+.cell .s{font-size:11px;color:var(--mut);margin-top:2px}
+.up{color:var(--up)}.dn{color:var(--dn)}.neu{color:var(--neu)}.warn{color:var(--warn)}
+.regime{display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600}
+.r-calm{background:#123726;color:#5fe0a8}.r-normal{background:#1d2740;color:#9db4ff}.r-turbulent{background:#3a1c24;color:#ff8a9c}
+.note{font-size:12px;color:var(--mut);margin-top:8px;line-height:1.5}
+.honest{grid-column:1/3;background:#171205;border:1px solid #3a2e10;border-radius:10px;padding:11px 14px;font-size:12.5px;color:#e8d9a8}
+.loading{color:var(--mut);font-size:12px}
+.grid6{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.mini{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:8px 10px;cursor:pointer}
+.mini:hover{border-color:var(--acc)}
+.mini .top{display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:4px}
+.mini .stat{font-size:11px;color:var(--mut);margin-top:3px;display:flex;justify-content:space-between}
+@media(max-width:960px){.wrap{grid-template-columns:1fr}.span2,.honest{grid-column:1}.dec{grid-template-columns:repeat(2,1fr)}.grid6{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Market LLM</h1><span class="badge">EXPERIMENTAL</span>
+  <div class="ctl">
+    <label class="fld">Market
+      <select id="source"><option value="crypto">Crypto</option><option value="stocks">Stocks</option></select></label>
+    <input id="symbol" list="symlist" value="BTCUSDT" style="width:120px"/><datalist id="symlist"></datalist>
+    <label class="fld">Model <select id="model" style="max-width:170px"></select></label>
+    <label class="fld">Trade $<input id="dollars" type="number" value="10000" min="1" style="width:90px"/></label>
+    <button id="go" class="go">Run</button>
+    <button id="live">Live</button>
+  </div>
+</header>
+<div id="livestat" style="padding:6px 18px;font-size:12px;color:var(--mut);background:#0e131c;border-bottom:1px solid var(--line)"></div>
+
+<div class="wrap">
+  <div class="panel span2">
+    <h2>Market vs model: what actually happened, and what the LLM predicted</h2>
+    <canvas id="hind" height="340"></canvas>
+    <div class="legend">
+      <span><i class="sw" style="background:#dfe6f2"></i>actual price</span>
+      <span><i class="sw" style="background:rgba(77,140,255,0.45)"></i>move size the model predicted (range it expected)</span>
+      <span><i class="sw" style="background:var(--up)"></i>model called direction right</span>
+      <span><i class="sw" style="background:var(--dn)"></i>model called direction wrong</span>
+    </div>
+    <div class="note" id="hindnote"></div>
+  </div>
+
+  <div class="panel span2">
+    <h2>If the model traded this for you</h2>
+    <div class="dec" id="pnlcells"><div class="loading">run a model to simulate trading...</div></div>
+    <canvas id="equity" height="180" style="margin-top:10px"></canvas>
+    <div class="note" id="eqnote"></div>
+  </div>
+
+  <div class="panel span2">
+    <h2>Does it work across markets? Same model, multiple instruments</h2>
+    <div class="grid6" id="multi"><div class="loading">running the model across the majors...</div></div>
+    <div class="note">Each box: the model run on a different instrument. Hit = how often it called direction right. P/L = result of trading $<span id="dlbl">10000</span> after fees. Click a box to load it above.</div>
+  </div>
+
+  <div class="panel span2">
+    <h2>Live market and live model call</h2>
+    <canvas id="livechart" height="200"></canvas>
+    <div class="note" id="livenote">Press Live to stream the market and the model's next-bar call in real time.</div>
+  </div>
+
+  <div class="honest" id="honest"></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const fmtPct=x=>(x*100).toFixed(1)+'%';
+const fmtUsd=x=>(x<0?'-$':'$')+Math.abs(x).toLocaleString(undefined,{maximumFractionDigits:0});
+const COL={up:'#27c08a',dn:'#f0556a',acc:'#4d8cff',mut:'#8b97ad',grid:'#222b3c'};
+const CH={hind:340,equity:180,livechart:200};
+function dpr(c){
+  const d=window.devicePixelRatio||1,H=CH[c.id]||220;
+  const w=c.clientWidth||(c.parentElement&&c.parentElement.clientWidth)||600;
+  c.style.height=H+'px';c.width=Math.max(1,Math.round(w*d));c.height=Math.round(H*d);
+  const x=c.getContext('2d');x.setTransform(d,0,0,d,0,0);return[x,w,H];
+}
+function clr(x,w,h){x.clearRect(0,0,w,h);}
+const FEE=0.0010;            // 10 bps per side
+let liveTimer=null, liveBuf=[];
+
+async function loadModels(){
+  const j=await fetch('/market/veritate_models').then(r=>r.json());
+  const m=$('model');m.innerHTML='';
+  (j.models||[]).forEach(k=>{const o=document.createElement('option');o.value=k;o.textContent=k;m.appendChild(o);});
+  if(!(j.models||[]).length)m.innerHTML='<option value="">no trained model yet</option>';
+  return j.models||[];
+}
+async function loadInstruments(){
+  const j=await fetch('/market/instruments?source='+$('source').value).then(r=>r.json());
+  $('symlist').innerHTML=(j.instruments||[]).map(s=>`<option value="${s}">`).join('');
+}
+
+// ---- charts ----
+function drawHind(g){
+  const[x,w,h]=dpr($('hind'));clr(x,w,h);
+  const p=g.price;if(!p||!p.length)return;
+  const his=p.map((v,i)=>v*Math.exp(g.band[i])), los=p.map((v,i)=>v*Math.exp(-g.band[i]));
+  const lo=Math.min(...los),hi=Math.max(...his),pad=52,n=p.length;
+  const X=i=>pad+i/(n-1)*(w-pad-10), Y=v=>12+(hi-v)/(hi-lo||1)*(h-34);
+  x.strokeStyle=COL.grid;x.fillStyle=COL.mut;x.font='10px sans-serif';
+  for(let i=0;i<=4;i++){const yy=12+i*(h-34)/4,vv=hi-(hi-lo)*i/4;x.beginPath();x.moveTo(pad,yy);x.lineTo(w-10,yy);x.stroke();x.fillText(vv.toPrecision(6),2,yy-2);}
+  x.fillStyle='rgba(77,140,255,0.16)';x.beginPath();x.moveTo(X(0),Y(his[0]));
+  for(let i=1;i<n;i++)x.lineTo(X(i),Y(his[i]));
+  for(let i=n-1;i>=0;i--)x.lineTo(X(i),Y(los[i]));x.closePath();x.fill();
+  x.strokeStyle='#dfe6f2';x.lineWidth=1.5;x.beginPath();p.forEach((v,i)=>i?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v)));x.stroke();
+  for(let i=0;i<n;i++){const mk=g.mark[i];if(!mk)continue;x.fillStyle=mk>0?COL.up:COL.dn;x.beginPath();x.arc(X(i),Y(p[i]),2.0,0,7);x.fill();}
+}
+function simulate(g,dollars){
+  const eq=[dollars];let cash=dollars,pos=0,trades=0;
+  for(let i=0;i<g.price.length-1;i++){
+    const want=g.p_up[i]>0.5?1:-1;
+    if(want!==pos){cash-=dollars*FEE*Math.abs(want-pos)/2;trades++;pos=want;}
+    cash+=pos*dollars*(g.price[i+1]/g.price[i]-1);
+    eq.push(cash);
+  }
+  return {eq,final:cash,pnl:cash-dollars,trades};
+}
+function drawEquity(eq,dollars){
+  const[x,w,h]=dpr($('equity'));clr(x,w,h);if(!eq||eq.length<2)return;
+  const lo=Math.min(...eq),hi=Math.max(...eq),pad=58;
+  const X=i=>pad+i/(eq.length-1)*(w-pad-8),Y=v=>10+(hi-v)/(hi-lo||1)*(h-26);
+  x.strokeStyle=COL.grid;x.fillStyle=COL.mut;x.font='10px sans-serif';
+  for(let i=0;i<=3;i++){const yy=10+i*(h-26)/3,vv=hi-(hi-lo)*i/3;x.beginPath();x.moveTo(pad,yy);x.lineTo(w-8,yy);x.stroke();x.fillText(fmtUsd(vv),2,yy-2);}
+  const yb=Y(dollars);x.strokeStyle='#3a4660';x.setLineDash([4,4]);x.beginPath();x.moveTo(pad,yb);x.lineTo(w-8,yb);x.stroke();x.setLineDash([]);
+  x.strokeStyle=eq[eq.length-1]>=dollars?COL.up:COL.dn;x.lineWidth=1.6;x.beginPath();eq.forEach((v,i)=>i?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v)));x.stroke();
+}
+function drawMini(cv,g){
+  const[x,w,h]=dpr(cv);clr(x,w,h);const p=g.price;if(!p||!p.length)return;
+  const lo=Math.min(...p),hi=Math.max(...p);
+  const X=i=>2+i/(p.length-1)*(w-4),Y=v=>4+(hi-v)/(hi-lo||1)*(h-8);
+  x.strokeStyle='#cfd8e6';x.lineWidth=1;x.beginPath();p.forEach((v,i)=>i?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v)));x.stroke();
+  for(let i=0;i<p.length;i+=2){const mk=g.mark[i];if(!mk)continue;x.fillStyle=mk>0?COL.up:COL.dn;x.fillRect(X(i)-0.8,Y(p[i])-0.8,1.6,1.6);}
+}
+
+// ---- run ----
+async function run(){
+  const src=$('source').value,sym=$('symbol').value.trim().toUpperCase(),model=$('model').value,dollars=Math.max(1,+$('dollars').value||10000);
+  $('dlbl').textContent=dollars.toLocaleString();
+  if(!model){$('hindnote').textContent='No trained model yet. Train one first.';return;}
+  $('hindnote').textContent='Running the model over '+sym+'...';
+  try{
+    const g=await fetch(`/market/veritate_hindcast?source=${src}&symbol=${sym}&model=${model}&n=1500`).then(r=>r.json());
+    if(!g.ok){$('hindnote').textContent='Error: '+(g.error||'failed');return;}
+    drawHind(g);
+    const sim=simulate(g,dollars);
+    $('hindnote').innerHTML=`Model <b>${g.model}</b> (checkpoint ${g.step}) on ${g.symbol}. It called the next-minute direction right <b>${isFinite(g.hit_rate)?fmtPct(g.hit_rate):'n/a'}</b> of the time across ${g.n.toLocaleString()} minutes. The blue band is the size move it expected each minute.`;
+    $('pnlcells').innerHTML=`
+      <div class="cell"><div class="k">Starting</div><div class="v">${fmtUsd(dollars)}</div><div class="s">${g.symbol}, last ${g.n.toLocaleString()} min</div></div>
+      <div class="cell"><div class="k">Ending</div><div class="v ${sim.final>=dollars?'up':'dn'}">${fmtUsd(sim.final)}</div><div class="s">after ${FEE*1e4*2}bps round-trip fees</div></div>
+      <div class="cell"><div class="k">Profit / loss</div><div class="v ${sim.pnl>=0?'up':'dn'}">${sim.pnl>=0?'+':''}${fmtUsd(sim.pnl)}</div><div class="s">${(sim.pnl/dollars*100).toFixed(1)}% on capital</div></div>
+      <div class="cell"><div class="k">Direction right</div><div class="v">${isFinite(g.hit_rate)?fmtPct(g.hit_rate):'n/a'}</div><div class="s">${sim.trades.toLocaleString()} position changes</div></div>`;
+    drawEquity(sim.eq,dollars);
+    $('eqnote').innerHTML = sim.pnl>=0
+      ? `On this stretch the model would have finished ahead. Be skeptical: minute trading pays fees on every flip, and a small edge rarely survives live.`
+      : `On this stretch the model would have <b>lost</b> money: a near-coin-flip direction call cannot beat ${FEE*1e4*2}bps fees at minute speed. This is the honest result of trading raw price direction.`;
+    $('honest').innerHTML=`<b>What this is.</b> A test of whether a byte-level model trained on JUST market data (no news, no labels) can predict price. It learns the size of moves (volatility) reasonably, but direction at the minute scale is close to a coin flip for any model, so trading it after fees is hard. Use this page to compare, across instruments, what the market did against what the model predicted.`;
+    loadMulti();
+  }catch(e){$('hindnote').textContent='Error: '+e;}
+}
+
+async function loadMulti(){
+  const src=$('source').value,model=$('model').value,dollars=Math.max(1,+$('dollars').value||10000);
+  if(!model)return;
+  const set = src==='stocks'
+    ? ['AAPL','MSFT','NVDA','AMZN','TSLA','GOOGL']
+    : ['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','DOGEUSDT','LINKUSDT'];
+  $('multi').innerHTML=set.map(s=>`<div class="mini" data-sym="${s}"><div class="top"><span>${s.replace('USDT','')}</span><span class="loading">...</span></div><canvas height="64" id="mc_${s}"></canvas><div class="stat" id="ms_${s}"><span>hit -</span><span>P/L -</span></div></div>`).join('');
+  document.querySelectorAll('.mini').forEach(el=>el.onclick=()=>{$('symbol').value=el.dataset.sym;run();window.scrollTo({top:0,behavior:'smooth'});});
+  for(const s of set){
+    try{
+      const g=await fetch(`/market/veritate_hindcast?source=${src}&symbol=${s}&model=${model}&n=800`).then(r=>r.json());
+      const top=document.querySelector(`.mini[data-sym="${s}"] .top span:last-child`);
+      if(!g.ok){if(top)top.textContent='n/a';continue;}
+      drawMini($('mc_'+s),g);
+      const sim=simulate(g,dollars);
+      if(top)top.textContent='';
+      $('ms_'+s).innerHTML=`<span>hit ${isFinite(g.hit_rate)?fmtPct(g.hit_rate):'-'}</span><span class="${sim.pnl>=0?'up':'dn'}">${sim.pnl>=0?'+':''}${fmtUsd(sim.pnl)}</span>`;
+    }catch(e){}
+  }
+}
+
+// ---- live ----
+function setLive(on){
+  if(on){$('live').style.background='#123726';$('live').style.borderColor='#27c08a';liveBuf=[];pollLive();liveTimer=setInterval(pollLive,12000);}
+  else{clearInterval(liveTimer);liveTimer=null;$('live').style.background='';$('live').style.borderColor='';$('livestat').textContent='';}
+}
+async function pollLive(){
+  const src=$('source').value,sym=$('symbol').value.trim().toUpperCase(),model=$('model').value;
+  if(!model){$('livestat').textContent='No trained model yet.';return;}
+  $('livestat').textContent='Fetching live '+sym+'...';
+  try{
+    const f=await fetch(`/market/veritate_live?source=${src}&symbol=${sym}&model=${model}`).then(r=>r.json());
+    if(!f.ok){$('livestat').textContent='Error: '+(f.error||'live failed');return;}
+    liveBuf.push(f.last_close);if(liveBuf.length>180)liveBuf.shift();
+    drawLive(liveBuf,f);
+    const dir=f.p_up>0.5?'UP':'DOWN';
+    $('livestat').innerHTML=`LIVE ${sym} <b>${f.last_close.toPrecision(6)}</b>, model calls next minute <b class="${f.p_up>0.5?'up':'dn'}">${dir} ${fmtPct(f.p_up)}</b>, expected move ${f.expected_move_bps.toFixed(0)} bps, updated ${new Date().toLocaleTimeString()} (every 12s)`;
+    $('livenote').innerHTML=`Streaming the live market and the model's next-minute call. Direction confidence is usually close to 50/50 by nature of the market.`;
+  }catch(e){$('livestat').textContent='Error: '+e;}
+}
+function drawLive(buf,f){
+  const[x,w,h]=dpr($('livechart'));clr(x,w,h);if(buf.length<2)return;
+  const lo=Math.min(...buf),hi=Math.max(...buf),pad=54;
+  const X=i=>pad+i/(buf.length-1)*(w-pad-60),Y=v=>12+(hi-v)/(hi-lo||1)*(h-30);
+  x.strokeStyle=COL.grid;x.fillStyle=COL.mut;x.font='10px sans-serif';
+  for(let i=0;i<=3;i++){const yy=12+i*(h-30)/3,vv=hi-(hi-lo)*i/3;x.beginPath();x.moveTo(pad,yy);x.lineTo(w-60,yy);x.stroke();x.fillText(vv.toPrecision(6),2,yy-2);}
+  x.strokeStyle='#dfe6f2';x.lineWidth=1.5;x.beginPath();buf.forEach((v,i)=>i?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v)));x.stroke();
+  // projected next-minute call as a short ray from the last point
+  const lx=X(buf.length-1),ly=Y(f.last_close);const mv=f.expected_move*(f.p_up>0.5?1:-1);
+  const ny=Y(f.last_close*Math.exp(mv));x.strokeStyle=f.p_up>0.5?COL.up:COL.dn;x.lineWidth=2;x.beginPath();x.moveTo(lx,ly);x.lineTo(lx+44,ny);x.stroke();
+  x.fillStyle=f.p_up>0.5?COL.up:COL.dn;x.fillText(f.p_up>0.5?'call: UP':'call: DOWN',lx-10,12);
+}
+
+$('go').onclick=run;
+$('live').onclick=()=>setLive(!liveTimer);
+$('source').onchange=async()=>{await loadInstruments();};
+$('dollars').onchange=()=>{ if($('model').value) run(); };
+(async()=>{
+  const models=await loadModels(); await loadInstruments();
+  if(models.length) run();
+  else $('hindnote').textContent='No trained Veritate model yet. Train one on the market corpus, then reload.';
+})();
+</script>
+</body>
+</html>

@@ -38,4 +38,4 @@ What the frontend reads but does not own:
 
 - localStorage is shared per origin. Two dashboards on the same machine (e.g., two ports) collide on chat history and run picks. Namespace keys if you add another instance.
 - Clearing localStorage doesn't clear in-memory state — a page reload is required for a true clean state.
-- Don't store secrets in localStorage. The `ai_api_key` field in settings lives server-side for this reason.
+- Don't store secrets in localStorage. The `ai_api_key_user` override in settings lives server-side for this reason (the public `PUBLIC_AI_KEY` is a source constant, injected server-side and never sent to the client).

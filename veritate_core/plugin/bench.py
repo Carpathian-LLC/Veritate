@@ -22,6 +22,7 @@
 import time
 
 from veritate_core.plugin import oom_recovery
+from veritate_core.plugin import mem_executor, mem_planner
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -30,7 +31,14 @@ DEFAULT_BATCH_RAMP = (1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256)
 WARMUP_STEPS = 2
 TIMED_STEPS  = 3
 PROBE_LR     = 1e-4
+PROBE_BETAS  = (0.9, 0.95)
+PROBE_EPS    = 1e-6
+PROBE_WD     = 0.0
 GB           = 1024 ** 3
+# On unified memory an over-budget allocation is SIGKILLed by the OS, not raised as a
+# catchable error, so the ramp must stop on a measured budget rather than wait for OOM.
+# Matches mem_planner.USABLE_FRACTION so bench and planner agree on the ceiling.
+BUDGET_FRACTION = 0.85
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -51,6 +59,18 @@ def _reset_high_water(device):
     import torch
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
+
+
+def _memory_budget(device):
+    """Usable training memory in bytes for the ramp's stop condition. None on cpu
+    (no device ceiling to guard). Unified memory uses total RAM; cuda uses VRAM."""
+    import torch
+    if device == "mps":
+        from veritate_core.plugin import hardware
+        return int(hardware.unified_memory_bytes() * BUDGET_FRACTION)
+    if device == "cuda":
+        return int(torch.cuda.get_device_properties(0).total_memory * BUDGET_FRACTION)
+    return None
 
 
 def _free(device):
@@ -89,19 +109,52 @@ def _measure_batch(model, opt, batch, seq, vocab, device):
     return _device_high_water(device), tok_per_s
 
 
-def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=None):
+def _bucket_gb(plan):
+    if plan is None:
+        return {}
+    return {"required_gb": plan.required_bytes / GB, "budget_gb": plan.budget_bytes / GB,
+            "params_gb": plan.params_bytes / GB, "grads_gb": plan.grads_bytes / GB,
+            "optimizer_gb": plan.optimizer_bytes / GB}
+
+
+def plan_result(plan, device, seq):
+    """Result dict for a size that cannot fit even at the planner's lowest tier:
+    weights+grads alone exceed the budget, so paging the optimizer does not help.
+    The trainer emits this instead of building the model (which would OOM/SIGKILL)."""
+    return {"device": device, "seq": seq, "fits": False, "tier": plan.tier,
+            "max_batch": 0, "mem_ceiling_gb": 0.0, "tok_per_s": 0.0, "ramp": [],
+            **_bucket_gb(plan)}
+
+
+def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=None, plan=None):
     """Ramp batch size on `model` until OOM; return the measured memory ceiling and
-    throughput. `on_progress(str)` receives human-readable lines as it runs (the modal
-    renders these). Returns a result dict with max_batch, mem_ceiling_gb, tok_per_s,
-    and the full ramp. Mutates throwaway weights only; saves nothing."""
+    throughput. When `plan` is an optimizer-offload tier the probe optimizer is the
+    NVMe-paged AdamW, so the measured tok/s reflects the real paged regime, not a
+    RAM-only fantasy. `on_progress(str)` receives human-readable lines as it runs.
+    Mutates throwaway weights + a throwaway optimizer-state dir only; saves nothing."""
     import torch
     emit = on_progress or (lambda _line: None)
     model.train()
-    opt = torch.optim.AdamW(model.parameters(), lr=PROBE_LR)
+    if plan is not None and plan.tier in mem_executor.OFFLOAD_TIERS:
+        opt = mem_executor.make_optimizer(model.parameters(), plan, lr=PROBE_LR,
+                                          betas=PROBE_BETAS, eps=PROBE_EPS, weight_decay=PROBE_WD)
+        emit(f"optimizer paged to NVMe (tier {plan.tier}); step time is disk-bound")
+    else:
+        opt = torch.optim.AdamW(model.parameters(), lr=PROBE_LR)
 
+    budget = _memory_budget(device)
+    if budget:
+        emit(f"memory budget: {budget / GB:.0f} GB (ramp stops here to avoid an OS kill)")
     emit("detecting RAM ceiling...")
     ramp = []
+    last_mem = None
     for batch in batch_ramp:
+        # Stop BEFORE attempting a rung once the previous one reached the budget: the
+        # next allocation is what gets SIGKILLed, and a kill loses the whole result.
+        if budget and last_mem is not None and last_mem >= budget:
+            emit(f"batch {batch}: would exceed the {budget / GB:.0f} GB budget; "
+                 f"stopping at batch {ramp[-1]['batch']} (ceiling found)")
+            break
         try:
             mem, tok_per_s = _measure_batch(model, opt, batch, seq, vocab, device)
         except RuntimeError as exc:
@@ -112,16 +165,23 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
             break
         ramp.append({"batch": batch, "mem_gb": mem / GB, "tok_per_s": tok_per_s})
         emit(f"batch {batch}: {mem / GB:.1f} GB, {tok_per_s:,.0f} tok/s")
+        last_mem = mem
         _free(device)
+
+    if hasattr(opt, "close"):
+        opt.close()
 
     top = ramp[-1] if ramp else None
     result = {
         "device": device,
         "seq": seq,
+        "fits": True,
+        "tier": plan.tier if plan is not None else mem_planner.TIER_NONE,
         "max_batch": top["batch"] if top else 0,
         "mem_ceiling_gb": top["mem_gb"] if top else 0.0,
         "tok_per_s": top["tok_per_s"] if top else 0.0,
         "ramp": ramp,
+        **_bucket_gb(plan),
     }
     if top:
         emit(f"ceiling: batch {top['batch']} at {top['mem_gb']:.1f} GB, "

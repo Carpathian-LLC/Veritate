@@ -245,6 +245,20 @@ def _manifest_path(plugin):
     return plugin["path"][:-3] + ".json"
 
 
+def _coerce_like(template, v):
+    # Dashboard form values arrive as strings; keep the manifest default's type
+    # so parse_args registers the correct argparse type. bool subclasses int, check first.
+    if isinstance(template, bool):
+        if isinstance(v, str):
+            return v.strip().lower() in ("1", "true", "yes", "on")
+        return bool(v)
+    if isinstance(template, int):
+        return int(v)
+    if isinstance(template, float):
+        return float(v)
+    return v
+
+
 def update_defaults(plugin_id, args):
     """Merge submitted args into the plugin manifest's `defaults` block. Only
     keys already present in defaults are overwritten so run-only fields
@@ -269,8 +283,14 @@ def update_defaults(plugin_id, args):
         return False
     changed = False
     for k, v in args.items():
-        if k in defaults and defaults[k] != v:
-            defaults[k] = v
+        if k not in defaults:
+            continue
+        try:
+            nv = _coerce_like(defaults[k], v)
+        except (TypeError, ValueError):
+            continue
+        if defaults[k] != nv:
+            defaults[k] = nv
             changed = True
     if not changed:
         return False

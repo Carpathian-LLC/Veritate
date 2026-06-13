@@ -16,6 +16,7 @@ import importlib
 import json
 import os
 import re
+import shutil
 import threading
 import uuid
 
@@ -76,6 +77,22 @@ def _public_view(s, teacher_mod):
         "max_tokens": int(s.get("teacher_max_tokens", 0)),
         "temperature": float(s.get("teacher_temperature", 0.0)),
     }
+
+
+def _resolve_concurrency(s, provider):
+    # Cloud APIs take the user value (or the high default). Local servers are
+    # clamped to a safe ceiling so a high global value never floods a single
+    # local GPU into an out-of-memory crash, whatever OLLAMA_NUM_PARALLEL is set
+    # to. No server-side tuning required.
+    providers = importlib.import_module(TEACHER_PKG + ".providers")
+    try:
+        local = providers.get_provider(provider).get("kind") == "local"
+    except ValueError:
+        local = False
+    saved = int(s.get("teacher_max_concurrency") or 0)
+    if local:
+        return min(saved, providers.LOCAL_MAX_CONCURRENCY) if saved > 0 else providers.LOCAL_MAX_CONCURRENCY
+    return saved if saved > 0 else providers.DEFAULT_MAX_CONCURRENCY
 
 
 def _stored_key(s, provider):
@@ -182,6 +199,9 @@ def _read_state_counts(output_dir):
     samples = os.path.join(output_dir, SAMPLES_FILE)
     failed = 0
     skipped = 0
+    last_error = ""
+    error_summary = {}
+    aborted = False
     state_path = os.path.join(output_dir, STATE_FILE)
     if os.path.isfile(state_path):
         try:
@@ -189,12 +209,18 @@ def _read_state_counts(output_dir):
                 st = json.load(f)
             failed = int(st.get("failed", 0))
             skipped = int(st.get("skipped_dup", 0))
+            last_error = st.get("last_error", "") or ""
+            error_summary = st.get("error_summary", {}) or {}
+            aborted = bool(st.get("aborted", False))
         except (OSError, ValueError):
             pass
     return {
         "completed": _count_lines(samples),
         "failed": failed,
         "skipped_dup": skipped,
+        "last_error": last_error,
+        "error_summary": error_summary,
+        "aborted": aborted,
         "output_path": samples,
     }
 
@@ -303,7 +329,7 @@ def register(app):
             api_key=api_key,
             temperature=float(s.get("teacher_temperature", 0.7)),
             max_tokens=int(s.get("teacher_max_tokens", 2048)),
-            max_concurrency=int(s.get("teacher_max_concurrency", 16)),
+            max_concurrency=_resolve_concurrency(s, provider),
         )
         thread = threading.Thread(target=job.run, name=f"teacher-synth-{job_id}", daemon=True)
         with _JOBS_LOCK:
@@ -331,6 +357,26 @@ def register(app):
                             "seeds": meta.get("seeds", []),
                             "running": jid in running_ids})
         return {"jobs": out}
+
+    @app.route("/teacher/synth/delete", methods=["POST"])
+    def teacher_synth_delete_route():
+        body = request.get_json(silent=True) or {}
+        job_id = (body.get("job_id") or "").strip()
+        if not job_id:
+            return {"error": "job_id required"}, 400
+        with _JOBS_LOCK:
+            entry = _JOBS.get(job_id)
+            if entry is not None and entry["thread"].is_alive():
+                return {"error": "job still running"}, 409
+        root = os.path.realpath(os.path.join(REPO_ROOT, SYNTH_JOBS_DIR))
+        target = os.path.realpath(os.path.join(root, job_id))
+        if os.path.dirname(target) != root or not os.path.isdir(target):
+            return {"error": "unknown job"}, 404
+        shutil.rmtree(target)
+        with _JOBS_LOCK:
+            _JOBS.pop(job_id, None)
+        logmod.info(LOG_SOURCE, f"synth job deleted: job={job_id}")
+        return {"job_id": job_id, "deleted": True}
 
     @app.route("/teacher/synth/build_corpus", methods=["POST"])
     def teacher_synth_build_corpus_route():
@@ -418,5 +464,8 @@ def register(app):
             "completed": counts["completed"],
             "failed": counts["failed"],
             "skipped_dup": counts["skipped_dup"],
+            "last_error": counts["last_error"],
+            "error_summary": counts["error_summary"],
+            "aborted": counts["aborted"],
             "output_path": counts["output_path"],
         }

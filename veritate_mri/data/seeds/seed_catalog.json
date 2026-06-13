@@ -22,94 +22,284 @@
       "description": "Advanced math: algebra, number theory, combinatorics, probability, geometry, sequences, logarithms, intro calculus."
     },
     {
-      "id": "code_python",
-      "display_name": "Python (function completion)",
-      "file": "code_python.jsonl",
+      "id": "code_python_easy",
+      "display_name": "Python (easy)",
+      "file": "code_python_easy.jsonl",
       "count": 2587,
-      "category": "code_python",
+      "category": "code_python_easy",
       "license": "synthetic",
       "upstream_url": "",
-      "description": "Python function stubs with a docstring describing the task to implement."
+      "description": "Python function stubs with a docstring describing the task to implement. Easy difficulty."
     },
     {
-      "id": "code_javascript",
-      "display_name": "JavaScript (function completion)",
-      "file": "code_javascript.jsonl",
+      "id": "code_python_basic",
+      "display_name": "Python (basic)",
+      "file": "code_python_basic.jsonl",
+      "count": 2434,
+      "category": "code_python_basic",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Python function stubs with a docstring describing the task to implement. Intermediate difficulty."
+    },
+    {
+      "id": "code_python_advanced",
+      "display_name": "Python (advanced)",
+      "file": "code_python_advanced.jsonl",
+      "count": 2425,
+      "category": "code_python_advanced",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Python function stubs with a docstring describing the task to implement. Advanced difficulty."
+    },
+    {
+      "id": "code_javascript_easy",
+      "display_name": "JavaScript (easy)",
+      "file": "code_javascript_easy.jsonl",
       "count": 2547,
-      "category": "code_javascript",
+      "category": "code_javascript_easy",
       "license": "synthetic",
       "upstream_url": "",
-      "description": "JavaScript function stubs with a JSDoc comment describing the task to implement."
+      "description": "JavaScript function stubs with a JSDoc comment describing the task to implement. Easy difficulty."
     },
     {
-      "id": "code_typescript",
-      "display_name": "TypeScript (typed function completion)",
-      "file": "code_typescript.jsonl",
+      "id": "code_javascript_basic",
+      "display_name": "JavaScript (basic)",
+      "file": "code_javascript_basic.jsonl",
+      "count": 2415,
+      "category": "code_javascript_basic",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "JavaScript function stubs with a JSDoc comment describing the task to implement. Intermediate difficulty."
+    },
+    {
+      "id": "code_javascript_advanced",
+      "display_name": "JavaScript (advanced)",
+      "file": "code_javascript_advanced.jsonl",
+      "count": 2430,
+      "category": "code_javascript_advanced",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "JavaScript function stubs with a JSDoc comment describing the task to implement. Advanced difficulty."
+    },
+    {
+      "id": "code_typescript_easy",
+      "display_name": "TypeScript (easy)",
+      "file": "code_typescript_easy.jsonl",
       "count": 2700,
-      "category": "code_typescript",
+      "category": "code_typescript_easy",
       "license": "synthetic",
       "upstream_url": "",
-      "description": "TypeScript function stubs with full type annotations and a comment describing the task."
+      "description": "TypeScript function stubs with full type annotations and a comment describing the task. Easy difficulty."
     },
     {
-      "id": "code_java",
-      "display_name": "Java (method completion)",
-      "file": "code_java.jsonl",
+      "id": "code_typescript_basic",
+      "display_name": "TypeScript (basic)",
+      "file": "code_typescript_basic.jsonl",
+      "count": 2460,
+      "category": "code_typescript_basic",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "TypeScript function stubs with full type annotations and a comment describing the task. Intermediate difficulty."
+    },
+    {
+      "id": "code_typescript_advanced",
+      "display_name": "TypeScript (advanced)",
+      "file": "code_typescript_advanced.jsonl",
+      "count": 2469,
+      "category": "code_typescript_advanced",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "TypeScript function stubs with full type annotations and a comment describing the task. Advanced difficulty."
+    },
+    {
+      "id": "code_java_easy",
+      "display_name": "Java (easy)",
+      "file": "code_java_easy.jsonl",
       "count": 2510,
-      "category": "code_java",
+      "category": "code_java_easy",
       "license": "synthetic",
       "upstream_url": "",
-      "description": "Java static method stubs with typed signatures and a comment describing the task."
+      "description": "Java static method stubs with typed signatures and a comment describing the task. Easy difficulty."
     },
     {
-      "id": "code_c",
-      "display_name": "C (function completion)",
-      "file": "code_c.jsonl",
+      "id": "code_c_easy",
+      "display_name": "C (easy)",
+      "file": "code_c_easy.jsonl",
       "count": 2501,
-      "category": "code_c",
+      "category": "code_c_easy",
       "license": "synthetic",
       "upstream_url": "",
-      "description": "C function stubs with typed signatures and a comment describing the task."
+      "description": "C function stubs with typed signatures and a comment describing the task. Easy difficulty."
     },
     {
-      "id": "code_cpp",
-      "display_name": "C++ (function completion)",
-      "file": "code_cpp.jsonl",
+      "id": "code_c_basic",
+      "display_name": "C (basic)",
+      "file": "code_c_basic.jsonl",
+      "count": 2463,
+      "category": "code_c_basic",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "C function stubs with typed signatures and a comment describing the task. Intermediate difficulty."
+    },
+    {
+      "id": "code_c_advanced",
+      "display_name": "C (advanced)",
+      "file": "code_c_advanced.jsonl",
+      "count": 2434,
+      "category": "code_c_advanced",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "C function stubs with typed signatures and a comment describing the task. Advanced difficulty."
+    },
+    {
+      "id": "code_cpp_easy",
+      "display_name": "C++ (easy)",
+      "file": "code_cpp_easy.jsonl",
       "count": 2702,
-      "category": "code_cpp",
+      "category": "code_cpp_easy",
       "license": "synthetic",
       "upstream_url": "",
-      "description": "C++ function stubs using STL types and a comment describing the task."
+      "description": "C++ function stubs using STL types and a comment describing the task. Easy difficulty."
     },
     {
-      "id": "code_go",
-      "display_name": "Go (function completion)",
-      "file": "code_go.jsonl",
+      "id": "code_cpp_basic",
+      "display_name": "C++ (basic)",
+      "file": "code_cpp_basic.jsonl",
+      "count": 2510,
+      "category": "code_cpp_basic",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "C++ function stubs using STL types and a comment describing the task. Intermediate difficulty."
+    },
+    {
+      "id": "code_cpp_advanced",
+      "display_name": "C++ (advanced)",
+      "file": "code_cpp_advanced.jsonl",
+      "count": 2520,
+      "category": "code_cpp_advanced",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "C++ function stubs using STL types and a comment describing the task. Advanced difficulty."
+    },
+    {
+      "id": "code_go_easy",
+      "display_name": "Go (easy)",
+      "file": "code_go_easy.jsonl",
       "count": 2527,
-      "category": "code_go",
+      "category": "code_go_easy",
       "license": "synthetic",
       "upstream_url": "",
-      "description": "Go function stubs with typed signatures and a doc comment describing the task."
+      "description": "Go function stubs with typed signatures and a doc comment describing the task. Easy difficulty."
     },
     {
-      "id": "code_rust",
-      "display_name": "Rust (function completion)",
-      "file": "code_rust.jsonl",
+      "id": "code_go_basic",
+      "display_name": "Go (basic)",
+      "file": "code_go_basic.jsonl",
+      "count": 2438,
+      "category": "code_go_basic",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Go function stubs with typed signatures and a doc comment describing the task. Intermediate difficulty."
+    },
+    {
+      "id": "code_go_advanced",
+      "display_name": "Go (advanced)",
+      "file": "code_go_advanced.jsonl",
+      "count": 2460,
+      "category": "code_go_advanced",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Go function stubs with typed signatures and a doc comment describing the task. Advanced difficulty."
+    },
+    {
+      "id": "code_rust_easy",
+      "display_name": "Rust (easy)",
+      "file": "code_rust_easy.jsonl",
       "count": 2578,
-      "category": "code_rust",
+      "category": "code_rust_easy",
       "license": "synthetic",
       "upstream_url": "",
-      "description": "Rust function stubs with typed signatures and a doc comment describing the task."
+      "description": "Rust function stubs with typed signatures and a doc comment describing the task. Easy difficulty."
     },
     {
-      "id": "code_sql",
-      "display_name": "SQL (query writing)",
-      "file": "code_sql.jsonl",
-      "count": 2566,
-      "category": "code_sql",
+      "id": "code_rust_basic",
+      "display_name": "Rust (basic)",
+      "file": "code_rust_basic.jsonl",
+      "count": 2448,
+      "category": "code_rust_basic",
       "license": "synthetic",
       "upstream_url": "",
-      "description": "SQL tasks: a table schema plus a natural-language description of the query to write."
+      "description": "Rust function stubs with typed signatures and a doc comment describing the task. Intermediate difficulty."
+    },
+    {
+      "id": "code_rust_advanced",
+      "display_name": "Rust (advanced)",
+      "file": "code_rust_advanced.jsonl",
+      "count": 2402,
+      "category": "code_rust_advanced",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Rust function stubs with typed signatures and a doc comment describing the task. Advanced difficulty."
+    },
+    {
+      "id": "code_sql_easy",
+      "display_name": "SQL (easy)",
+      "file": "code_sql_easy.jsonl",
+      "count": 2566,
+      "category": "code_sql_easy",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "SQL tasks: a table schema plus a natural-language description of the query to write. Easy difficulty."
+    },
+    {
+      "id": "code_sql_basic",
+      "display_name": "SQL (basic)",
+      "file": "code_sql_basic.jsonl",
+      "count": 2677,
+      "category": "code_sql_basic",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "SQL tasks: a table schema plus a natural-language description of the query to write. Intermediate difficulty."
+    },
+    {
+      "id": "code_sql_advanced",
+      "display_name": "SQL (advanced)",
+      "file": "code_sql_advanced.jsonl",
+      "count": 2592,
+      "category": "code_sql_advanced",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "SQL tasks: a table schema plus a natural-language description of the query to write. Advanced difficulty."
+    },
+    {
+      "id": "code_asm_easy",
+      "display_name": "Assembly (easy)",
+      "file": "code_asm_easy.jsonl",
+      "count": 2522,
+      "category": "code_asm_easy",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Assembly routines with a comment describing the task to implement. Easy difficulty."
+    },
+    {
+      "id": "code_asm_basic",
+      "display_name": "Assembly (basic)",
+      "file": "code_asm_basic.jsonl",
+      "count": 2436,
+      "category": "code_asm_basic",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Assembly routines with a comment describing the task to implement. Intermediate difficulty."
+    },
+    {
+      "id": "code_asm_advanced",
+      "display_name": "Assembly (advanced)",
+      "file": "code_asm_advanced.jsonl",
+      "count": 2418,
+      "category": "code_asm_advanced",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Assembly routines with a comment describing the task to implement. Advanced difficulty."
     },
     {
       "id": "tool_use_calls",
@@ -150,6 +340,146 @@
       "license": "synthetic",
       "upstream_url": "",
       "description": "Elementary science questions paired with a supporting fact and four options."
+    },
+    {
+      "id": "oco_recon",
+      "display_name": "OCO: Reconnaissance & enumeration",
+      "file": "oco_recon.jsonl",
+      "count": 360,
+      "category": "oco_recon",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Authorized recon and enumeration tasks: host/port/service discovery, OSINT, attack-surface mapping."
+    },
+    {
+      "id": "oco_web_exploit",
+      "display_name": "OCO: Web application exploitation",
+      "file": "oco_web_exploit.jsonl",
+      "count": 360,
+      "category": "oco_web_exploit",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Authorized web-app exploitation: identifying and proving common web vulnerabilities with PoCs."
+    },
+    {
+      "id": "oco_network",
+      "display_name": "OCO: Network attacks & lateral movement",
+      "file": "oco_network.jsonl",
+      "count": 360,
+      "category": "oco_network",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Authorized network-layer testing and lateral-movement concepts within an engagement scope."
+    },
+    {
+      "id": "oco_privesc",
+      "display_name": "OCO: Privilege escalation",
+      "file": "oco_privesc.jsonl",
+      "count": 360,
+      "category": "oco_privesc",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Authorized local privilege-escalation enumeration and technique explanation for Linux and Windows."
+    },
+    {
+      "id": "oco_postex",
+      "display_name": "OCO: Post-exploitation & persistence",
+      "file": "oco_postex.jsonl",
+      "count": 360,
+      "category": "oco_postex",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Authorized post-exploitation concepts: situational awareness, persistence, and exfiltration testing."
+    },
+    {
+      "id": "oco_password",
+      "display_name": "OCO: Password & credential attacks",
+      "file": "oco_password.jsonl",
+      "count": 360,
+      "category": "oco_password",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Authorized password cracking, spraying, and credential-attack tasks."
+    },
+    {
+      "id": "oco_tooling",
+      "display_name": "OCO: Offensive tooling",
+      "file": "oco_tooling.jsonl",
+      "count": 360,
+      "category": "oco_tooling",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Writing custom offensive-security tooling for authorized engagements (scanners, fuzzers, handlers)."
+    },
+    {
+      "id": "oco_binexp",
+      "display_name": "OCO: Binary exploitation (CTF/PoC)",
+      "file": "oco_binexp.jsonl",
+      "count": 140,
+      "category": "oco_binexp",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "CTF-style and proof-of-concept binary-exploitation fundamentals against authorized targets."
+    },
+    {
+      "id": "dco_detection",
+      "display_name": "DCO: Detection engineering",
+      "file": "dco_detection.jsonl",
+      "count": 360,
+      "category": "dco_detection",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Writing detections: Sigma, YARA, Suricata/Snort, and SIEM rules from attacker behavior."
+    },
+    {
+      "id": "dco_ir",
+      "display_name": "DCO: Incident response & forensics",
+      "file": "dco_ir.jsonl",
+      "count": 360,
+      "category": "dco_ir",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Incident triage, containment, and host/network forensic artifact collection and analysis."
+    },
+    {
+      "id": "dco_threat_hunt",
+      "display_name": "DCO: Threat hunting",
+      "file": "dco_threat_hunt.jsonl",
+      "count": 360,
+      "category": "dco_threat_hunt",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Hypothesis-driven threat hunting and log/query analysis across SIEM and EDR telemetry."
+    },
+    {
+      "id": "dco_hardening",
+      "display_name": "DCO: Hardening & configuration review",
+      "file": "dco_hardening.jsonl",
+      "count": 360,
+      "category": "dco_hardening",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "System and service hardening, secure configuration review, and remediation guidance."
+    },
+    {
+      "id": "dco_malware_analysis",
+      "display_name": "DCO: Malware analysis",
+      "file": "dco_malware_analysis.jsonl",
+      "count": 190,
+      "category": "dco_malware_analysis",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Static and dynamic malware analysis, IOC extraction, and family classification (defensive)."
+    },
+    {
+      "id": "dco_vuln_assess",
+      "display_name": "DCO: Vulnerability assessment & secure code review",
+      "file": "dco_vuln_assess.jsonl",
+      "count": 360,
+      "category": "dco_vuln_assess",
+      "license": "synthetic",
+      "upstream_url": "",
+      "description": "Vulnerability assessment, CVE analysis, secure code review, and remediation."
     }
   ]
 }

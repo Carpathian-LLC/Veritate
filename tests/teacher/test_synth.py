@@ -32,7 +32,7 @@ def _mock_client_factory(responses):
     def factory():
         c = MagicMock()
 
-        def complete(messages, temperature=0.7, max_tokens=2048, system=None):
+        def complete(messages, temperature=0.7, max_tokens=2048, system=None, cancel_check=None):
             i = idx["i"]
             idx["i"] += 1
             return responses[i % len(responses)]
@@ -85,7 +85,7 @@ def test_rerun_skips_done(tmp_path):
     def factory2():
         c = MagicMock()
 
-        def complete(messages, temperature=0.7, max_tokens=2048, system=None):
+        def complete(messages, temperature=0.7, max_tokens=2048, system=None, cancel_check=None):
             calls_seen["n"] += 1
             return "should not be called"
 
@@ -134,7 +134,7 @@ def test_cache_hit_avoids_call(tmp_path):
     def factory2():
         c = MagicMock()
 
-        def complete(messages, temperature=0.7, max_tokens=2048, system=None):
+        def complete(messages, temperature=0.7, max_tokens=2048, system=None, cancel_check=None):
             call_count["n"] += 1
             return "should not be called from network"
 

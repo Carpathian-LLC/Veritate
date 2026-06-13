@@ -51,7 +51,7 @@
       if (!ok) return;
       fetch(STOP_URL, { method: "POST" }).then(r => r.json()).then(() => poll()).catch(() => {});
     };
-    if (window.confirmDialog) window.confirmDialog("Stop the rag job? The latest checkpoint is kept.").then(go);
+    if (window.confirmDialog) window.confirmDialog("Stop the rag job? The latest checkpoint is kept.", "Stop").then(go);
     else go(window.confirm("Stop the rag job?"));
   }
 

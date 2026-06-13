@@ -38,3 +38,5 @@ veritate_trace.bin
 dev_documentation/multimind/*.pt
 dev_documentation/multimind/affect_probe_stats.json
 trainers/multimind_poc/corpus/
+external_data/
+corpus_for_s3/

@@ -4,14 +4,15 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - Applies a MemoryPlan to a model. Owns the activation-checkpointing wiring that
-#   trainers used to monkeypatch inline, so the decision is plan-driven and shared
-#   instead of a per-trainer flag. Wraps each transformer block's forward in
-#   torch.utils.checkpoint when the plan's tier calls for it; the block list is the
-#   model's `.blocks` contract, common to every Veritate model class.
-# - Optimizer-level rungs (bf16 moments, NVMe paging) are not wired here yet. When a
-#   plan needs one, apply_plan returns it in `unmet` so the trainer surfaces the gap
-#   loudly rather than silently under-delivering and OOMing.
+# - Applies a MemoryPlan to a training run. Two halves: apply_plan owns the model-side
+#   activation-checkpointing wiring (wraps each block's forward in torch.utils.checkpoint
+#   when the tier calls for it; the block list is the model's `.blocks` contract), and
+#   make_optimizer owns the optimizer-side choice. For the optimizer-offload tiers
+#   (bf16_optimizer, page_optimizer_to_nvme) make_optimizer returns a PagedAdamW whose
+#   moment buffers live on NVMe, dropping resident optimizer memory toward zero.
+# - apply_plan reports `optimizer_offload`: a caller that checkpoints but then builds a
+#   plain in-RAM optimizer for an offload tier would silently under-deliver and OOM, so
+#   the flag tells the caller it MUST route the optimizer through make_optimizer.
 # veritate_core/plugin/mem_executor.py
 # ------------------------------------------------------------------------------------
 # Imports
@@ -29,11 +30,13 @@ CHECKPOINT_TIERS = frozenset((
     mem_planner.TIER_PAGE,
 ))
 
-# Tier -> intervention this executor does not yet perform. Reported in `unmet`.
-UNWIRED_INTERVENTIONS = {
-    mem_planner.TIER_LOWP_OPT: "bf16_optimizer_state",
-    mem_planner.TIER_PAGE:     "page_optimizer_to_nvme",
-}
+# Tiers whose memory saving comes from moving optimizer state off the resident pool.
+# Both are delivered by paging the Adam moments to NVMe (a superset of the bf16-moment
+# saving the planner models for the lighter rung), so one mechanism serves both.
+OFFLOAD_TIERS = frozenset((
+    mem_planner.TIER_LOWP_OPT,
+    mem_planner.TIER_PAGE,
+))
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -43,7 +46,8 @@ UNWIRED_INTERVENTIONS = {
 class AppliedPlan:
     tier: str
     grad_checkpoint: bool
-    unmet: tuple
+    optimizer_offload: bool
+    unmet: tuple = ()   # retained for back-compat; every tier is now wired, so always ()
 
 
 def _checkpointed(forward):
@@ -65,11 +69,23 @@ def enable_grad_checkpoint(model):
 
 
 def apply_plan(model, plan):
-    """Apply the interventions a MemoryPlan calls for. Returns what was applied and
-    which interventions the plan needs that this executor does not yet perform."""
+    """Apply the model-side interventions a MemoryPlan calls for (activation
+    checkpointing). `optimizer_offload` tells the caller it must build the optimizer
+    via make_optimizer for this tier rather than a plain in-RAM AdamW."""
     grad_checkpoint = plan.tier in CHECKPOINT_TIERS
     if grad_checkpoint:
         enable_grad_checkpoint(model)
-    unmet = tuple(name for tier, name in UNWIRED_INTERVENTIONS.items()
-                  if tier == plan.tier)
-    return AppliedPlan(plan.tier, grad_checkpoint, unmet)
+    return AppliedPlan(plan.tier, grad_checkpoint, plan.tier in OFFLOAD_TIERS)
+
+
+def make_optimizer(params, plan, *, lr, betas, eps, weight_decay, state_dir=None):
+    """Return the optimizer the plan's tier requires: a NVMe-paged AdamW for the
+    optimizer-offload tiers, a plain in-RAM AdamW otherwise. `state_dir` is where the
+    paged moment files live (kept across resume); None gives a throwaway temp dir."""
+    if plan.tier in OFFLOAD_TIERS:
+        from veritate_core.plugin import paged_optimizer
+        return paged_optimizer.PagedAdamW(params, lr=lr, betas=betas, eps=eps,
+                                          weight_decay=weight_decay, state_dir=state_dir)
+    import torch
+    return torch.optim.AdamW(params, lr=lr, betas=betas, eps=eps,
+                             weight_decay=weight_decay)

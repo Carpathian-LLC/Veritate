@@ -50,7 +50,7 @@ Estimate is biased to meet-or-exceed measured: under-prediction OOMs and costs t
 ## pitfalls
 
 - The activation estimate is linear in `(hidden + ffn) × batch × seq × layers`. It does not carry a separate `seq²` attention term, so very long sequences drift toward under-prediction; the `est/meas = 1.00` point above is already at the conservative edge for seq 512. Add an attention term before trusting it past seq ~2k.
-- The planner decides the tier; it does not execute offload. Wiring checkpointing, bf16 moments, and NVMe paging into the training step is separate work that consumes this plan.
+- The planner decides the tier; [mem_executor](mem_executor.md) executes it. Checkpointing and NVMe optimizer paging ([paged_optimizer](paged_optimizer.md)) are wired; both offload tiers are delivered by paging the Adam moments to disk. Paging frees only the optimizer bucket — a size where params+grads alone exceed the budget returns `infeasible` and the trainer refuses before building.
 - Optimizer bucket assumes Adam. A different optimizer (e.g. Muon) changes the moment-slot count; the constant must follow the optimizer the trainer actually uses.
 
 ## tests
