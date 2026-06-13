@@ -406,6 +406,12 @@ def register(app):
         if not suites:
             return ({"error": f"no valid suites in {body.get('suite')!r}; expected one of {sorted(valid)} or 'all'"}, 400)
 
+        # MMLU/HellaSwag/IFEval are language benchmarks; refuse them for a model
+        # declared code/statistical/other so a non-text model never gets a bogus score.
+        mtype = ((cfg_reader.load(name) or {}).get("training_args") or {}).get("model_type")
+        if mtype and str(mtype).lower() != "language":
+            return ({"error": f"deep eval is language-only; model {name!r} is type {mtype!r}."}, 400)
+
         step = body.get("step")
         if step in (None, "", "latest"):
             step = checkpoints.latest_step(name)

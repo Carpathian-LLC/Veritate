@@ -45,6 +45,11 @@ PYTORCH_ALLOC_ENV_DEFAULT = "expandable_segments:True"
 # the parent process and shouldn't pay that cost).
 PLUGIN_ID_ENV = "VERITATE_PLUGIN_ID"
 
+# Carries the dashboard's model_type to save() so it can gate language probes.
+# Needed because trainers parse_known_args() and drop the --model_type flag (it is
+# not in any manifest), so it cannot ride in through the CLI / parsed args.
+MODEL_TYPE_ENV = "VERITATE_MODEL_TYPE"
+
 # Trainer device override. The settings-tab "Device preference" dropdown
 # writes this; trainers' pick_device() reads it. "auto" or unset = historical
 # best-available selection.
@@ -278,6 +283,9 @@ def _run(plugin, args):
     env = os.environ.copy()
     env.setdefault(PYTORCH_ALLOC_ENV_KEY, PYTORCH_ALLOC_ENV_DEFAULT)
     env[PLUGIN_ID_ENV] = str(plugin["id"])
+    _mt = (args or {}).get("model_type")
+    if _mt:
+        env[MODEL_TYPE_ENV] = str(_mt)
     pref = (settings_mod.get().get("device_preference") or "auto").strip().lower()
     if pref and pref != "auto":
         env[DEVICE_ENV] = pref

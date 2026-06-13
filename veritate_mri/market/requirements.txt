@@ -1,8 +1,6 @@
 # Extra dependencies for the experimental market platform (veritate_mri/market/).
 # Kept separate from the canonical Veritate requirements.txt so the market platform's
 # deps never bleed into the core product. Install:  pip install -r veritate_mri/market/requirements.txt
-# (pandas + numpy are already required by canonical Veritate.)
-scikit-learn>=1.4
-scipy>=1.11
-joblib>=1.3
+# (pandas + numpy + torch are already required by canonical Veritate; the byte model uses those.)
+# certifi is the only extra: live.py uses it for Binance.US REST over TLS.
 certifi>=2023.0

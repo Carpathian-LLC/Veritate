@@ -39,9 +39,18 @@ GB           = 1024 ** 3
 # catchable error, so the ramp must stop on a measured budget rather than wait for OOM.
 # Matches mem_planner.USABLE_FRACTION so bench and planner agree on the ceiling.
 BUDGET_FRACTION = 0.85
+# Backend tensor-size limits (not OOM): a rung whose tensors exceed what the backend can
+# address bounds the ramp exactly like OOM, so it must stop the sweep, never crash the run.
+# e.g. MPS: "MPSGaph does not support tensor dims larger than INT_MAX"; "Invalid buffer size".
+SIZE_LIMIT_MARKERS = ("int_max", "invalid buffer size", "tensor dims larger")
 
 # ------------------------------------------------------------------------------------
 # Functions
+
+
+def _is_size_limit_error(exc):
+    msg = str(exc).lower()
+    return any(m in msg for m in SIZE_LIMIT_MARKERS)
 
 
 def _device_high_water(device):
@@ -158,11 +167,20 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
         try:
             mem, tok_per_s = _measure_batch(model, opt, batch, seq, vocab, device)
         except RuntimeError as exc:
-            if not oom_recovery.is_oom_error(exc):
-                raise
-            emit(f"batch {batch}: out of memory (ceiling found)")
             _free(device)
-            break
+            if oom_recovery.is_oom_error(exc):
+                emit(f"batch {batch}: out of memory (ceiling found)")
+                break
+            if _is_size_limit_error(exc):
+                emit(f"batch {batch}: exceeds the backend tensor-size limit (ceiling found)")
+                break
+            # Any other failure once a rung has already fit means the ramp found the
+            # ceiling; only re-raise if even the first rung fails (a real model bug).
+            if ramp:
+                emit(f"batch {batch}: failed ({type(exc).__name__}: {exc}); "
+                     f"stopping at batch {ramp[-1]['batch']} (ceiling found)")
+                break
+            raise
         ramp.append({"batch": batch, "mem_gb": mem / GB, "tok_per_s": tok_per_s})
         emit(f"batch {batch}: {mem / GB:.1f} GB, {tok_per_s:,.0f} tok/s")
         last_mem = mem

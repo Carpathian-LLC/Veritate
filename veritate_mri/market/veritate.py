@@ -4,8 +4,8 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - Drives the market page with the VERITATE byte-level model (the on-mission engine),
-#   so the dashboard shows OUR model's predictions, not just the GBDT baseline.
+# - Drives the market page with the VERITATE byte-level model (the on-mission engine).
+#   The byte model is the only engine the page serves.
 # - The byte model forecasts the next bar's return BUCKET (a z-scored, scale-free class).
 #   hindcast() walks an instrument, turns each predicted bucket distribution into a
 #   price-space guess: directional lean + expected move (E|z| x trailing sigma), and
@@ -260,7 +260,7 @@ def benchmark(model, seq_len, df, max_points=360):
     arr = np.frombuffer(sc.encode_sequence(rz, gr, vr).encode("ascii"), dtype=np.uint8)
     probpos = _score_bytes(model, seq_len, arr)
 
-    pred = []; actual = []; conf = []; price = []; t = []
+    pred = []; actual = []; conf = []; price = []; t = []; calls = []
     for k in range(1, nb):
         gp = k * sc.BAR_STRIDE
         pr = probpos.get(gp)
@@ -270,7 +270,7 @@ def benchmark(model, seq_len, df, max_points=360):
         if ab < 0:
             continue
         ci = k + off
-        if ci >= len(c):
+        if ci >= len(c) or ci < 1:
             break
         s = pr.sum()
         if s <= 0:
@@ -278,11 +278,18 @@ def benchmark(model, seq_len, df, max_points=360):
         pr = pr / s
         up = float(pr[sc.RET_CENTER + 1:].sum()); dn = float(pr[:sc.RET_CENTER].sum())
         pu = up / (up + dn) if (up + dn) > 1e-9 else 0.5
+        cf = max(pu, 1.0 - pu)
         pred.append(int(np.argmax(pr)))
         actual.append(ab)
-        conf.append(max(pu, 1.0 - pu))
-        price.append(float(c[ci]))
-        t.append(int(df.index[ci].value // 1_000_000_000))
+        conf.append(cf)
+        px = float(c[ci]); ts = int(df.index[ci].value // 1_000_000_000)
+        price.append(px); t.append(ts)
+        ret = float(np.log(c[ci] / c[ci - 1])) if c[ci - 1] > 0 else 0.0
+        if ret != 0.0:
+            right = (pu >= 0.5) == (ret > 0)
+            calls.append({"t": ts, "price": round(px, 6), "dir": "UP" if pu >= 0.5 else "DOWN",
+                          "conf": round(cf, 4), "move": round(ret, 6), "right": bool(right),
+                          "score": cf * abs(ret)})
 
     if len(pred) < 30:
         return None
@@ -293,11 +300,16 @@ def benchmark(model, seq_len, df, max_points=360):
     equity = np.cumsum(edge)
     ao = (aa - rc).astype(float)
     base_mae = float(np.abs(ao[1:] - ao[:-1]).mean()) if len(ao) > 1 else None
+    best = sorted((c for c in calls if c["right"]), key=lambda r: r["score"], reverse=True)[:6]
+    worst = sorted((c for c in calls if not c["right"]), key=lambda r: r["score"], reverse=True)[:6]
+    for r in best + worst:
+        r.pop("score", None)
     return {
         "engine": "veritate", "n": int(len(pred)),
         "ret_center": rc, "ret_bins": sc.RET_BINS,
         "metrics": m,
         "baseline": {"magnitude_mae_buckets": base_mae},
+        "best": best, "worst": worst,
         "equity": _downsample(equity, max_points).round(3).tolist(),
         "actual": _downsample(aa, max_points).tolist(),
         "pred": _downsample(pa, max_points).tolist(),

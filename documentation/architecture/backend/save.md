@@ -62,6 +62,10 @@ Returns the absolute path of the `.pt` written. It writes:
 
 The dump files are produced by [checkpoint_probe.py](checkpoint_probe.md) and renamed per `RENAME_MAP_TEMPLATE` at [save.py:51](../../../veritate_mri/training/save.py#L51). Each dump runs under its own try/except, so one failed probe logs and continues without aborting the checkpoint. The `generation` dump is skipped (with a logged reason) when the model has no resolvable corpus stem.
 
+### Model-type gate
+
+The language probes in `LANGUAGE_DUMPS` (`probe`, `grades`, `reading_comprehension`, `math`, `grammar`, `reasoning`, `concepts`, `writing_health`, `generation`) are meaningless for a non-text model, so `save()` adds them to `skip` when the run's `model_type` is not `language`. The architecture probes (`classroom`, `surprise`, `quant_kl`) and the checkpoint itself always run. `model_type` comes from the `VERITATE_MODEL_TYPE` env that `trainer_runner` sets from the dashboard's selector — it cannot ride in through the parsed args because trainers `parse_known_args()` and drop the unknown `--model_type` flag. `save()` also stamps `model_type` into `config.json`'s `training_args` so the `/run/<name>/eval_deep` route and the dashboard panels agree on the type. Resumed runs (no env) read it from the existing config.
+
 ## Dependencies
 
 - [readers/paths.py](../../../veritate_mri/readers/paths.py) — for `model_dir`, `checkpoints_dir`, `train_csv` paths.

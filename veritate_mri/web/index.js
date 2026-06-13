@@ -5775,6 +5775,24 @@ function render_reading_comprehension(refs, run, compSteps, compByStep, haveChec
 // load classroom panels for a model name into the supplied (state, refs) pair.
 // state holds the cached config/steps/probes/lens; refs hold the dom IDs / canvas to render into.
 // shared by the live-training tab (trainSelectedRun) and the learning tab (timeline picker).
+// Language probe panels are meaningless for a code/statistical/other model. When the
+// selected run's config says it is not a language model, hide those panels so the tab
+// shows only the universal metrics (size, lens drift, confidence). The backend skips
+// computing these probes for such models, so the panels would be empty anyway.
+function applyEvalGate(refs, config) {
+  const mtype = ((config && config.training_args && config.training_args.model_type) || "language").toLowerCase();
+  const lang = mtype === "language";
+  const langPanelIds = [refs.readLevelId, refs.readingCompId, refs.mathLevelId,
+                        refs.grammarLevelId, refs.reasoningLevelId, refs.writingHealthId, refs.conceptsId];
+  for (const id of langPanelIds) {
+    if (!id) continue;
+    const el = $(id);
+    const panel = el && el.closest(".panel");
+    if (panel) panel.style.display = lang ? "" : "none";
+  }
+  document.querySelectorAll('[data-eval="language"]').forEach(el => { el.style.display = lang ? "" : "none"; });
+}
+
 async function loadClassroomFor(state, refs, run) {
   if (!run) return;
   if (state.run === run && state.loaded && state.steps.length > 0) return;
@@ -5815,6 +5833,7 @@ async function loadClassroomFor(state, refs, run) {
     const r = await fetch(`/run/${encodeURIComponent(run)}/config?` + Date.now(), { cache: "no-store" });
     if (r.ok) state.config = await r.json();
   } catch (e) {}
+  applyEvalGate(refs, state.config);
   render_size_meter(refs, run, state.config);
   if (refs.pruneBodyId) load_pruning_report(refs, run);
   // probes index
@@ -7132,6 +7151,7 @@ const TRAINER_SCHEMA = {
     { name: "precision",    type: "str",    required: true,  label: "number precision",         help: "bf16 = half memory; fp32 = double.", choices: ["bf16","fp32"] },
     { name: "version",      type: "str",                     label: "version tag (optional)",   help: "free-form revision label (v1, v2a, ...); shows up in the description, not the folder name." },
     { name: "description",  type: "text",                    label: "what this model is for",   help: "saved into the model config. If left blank, auto-filled from corpus/size/precision/version/variant." },
+    { name: "model_type",   type: "str",                     label: "model type",               help: "what this model is for. Controls which checkpoint evaluations run: 'language' runs the full language probe suite (fluency, reading, grammar, reasoning, concepts, writing); 'code', 'statistical', and 'other' skip the language tests because they are meaningless for non-text models.", choices: ["language","code","statistical","other"] },
     // ---- standard training loop ----
     { name: "total_steps",  type: "int",   required: true,   label: "total training steps",     help: "the training loop stops when it reaches this many steps. More = longer training, lower final loss, more wall-clock and disk." },
     { name: "batch_size",   type: "int",   required: true,   label: "batch size",               help: "rows processed per step. Higher = faster wall-clock and smoother gradients but more VRAM." },
@@ -10914,6 +10934,44 @@ const CORPUS_COMING_SOON = new Set([
   "agent_150mb", "agent_1500mb",
 ]);
 
+// Corpus categories by purpose. Order is render order. A catalog entry maps to
+// a category by stem (CORPUS_STEM_CATEGORY), falling back to its trained_modes,
+// then "facts".
+const CORPUS_CATEGORIES = [
+  { id: "chatting",     label: "Chatting",     blurb: "teach a model to converse" },
+  { id: "autocomplete", label: "Autocomplete", blurb: "tool-use and code/doc completion" },
+  { id: "facts",        label: "Facts",        blurb: "raw text for base knowledge" },
+  { id: "statistics",   label: "Statistics",   blurb: "market time-series for the Market LLM" },
+];
+const CORPUS_STEM_CATEGORY = {
+  chat_50mb: "chatting", chat_500mb: "chatting", chat_5gb: "chatting",
+  chat_distill_v1: "chatting", chat_distill_v2: "chatting",
+  agent_15mb: "autocomplete", agent_150mb: "autocomplete", agent_1500mb: "autocomplete",
+  mcp_docs: "autocomplete", python_synth: "autocomplete", python_test: "autocomplete",
+  fineweb_edu: "facts", openwebtext10g: "facts", enwik8: "facts",
+  grounded_v1: "facts", grounded_v2: "facts", grounded_chunk: "facts", grounded_ui: "facts",
+  crypto: "statistics", stocks: "statistics",
+};
+const CORPUS_MODE_CATEGORY = { chat: "chatting", agent: "autocomplete", autocomplete: "autocomplete" };
+
+// Market LLM data not published yet; rendered as disabled "coming soon" rows
+// under Statistics. Install links land once the bins are hosted.
+const CORPUS_MARKET_PLACEHOLDERS = [
+  { stem: "crypto", label: "Crypto byte corpus", category: "statistics", coming_soon: true,
+    description: "1m crypto OHLCV as a byte stream (trainers/corpus/crypto_{train,val}.bin), plus its training set and raw data." },
+  { stem: "stocks", label: "Stocks byte corpus", category: "statistics", coming_soon: true,
+    description: "1m equities OHLCV as a byte stream (trainers/corpus/stocks_{train,val}.bin), plus its training set and raw data." },
+];
+
+function _corpusCategoryOf(c) {
+  if (c.category) return c.category;
+  const byStem = CORPUS_STEM_CATEGORY[c.stem];
+  if (byStem) return byStem;
+  const modes = c.trained_modes || [];
+  for (const m of modes) { if (CORPUS_MODE_CATEGORY[m]) return CORPUS_MODE_CATEGORY[m]; }
+  return "facts";
+}
+
 function _corpusFmtBytes(n) {
   if (n == null) return "?";
   if (n < 1024) return n + " B";
@@ -11005,12 +11063,51 @@ function _corpusRenderCatalog(data) {
     }
   }
 
-  if (!data.corpora || data.corpora.length === 0) {
+  const entries = (data.corpora || []).concat(CORPUS_MARKET_PLACEHOLDERS);
+  if (entries.length === 0) {
     list.innerHTML = '<div class="meta" style="color:var(--dim);font-size:11px">no corpora in catalog yet</div>';
     return;
   }
 
-  list.innerHTML = data.corpora.map(c => {
+  // Bucket by purpose, render each category as a labeled section. Categories
+  // with no entries are skipped; an "Other" catch-all holds anything unmapped.
+  const buckets = {};
+  for (const c of entries) {
+    const cat = _corpusCategoryOf(c);
+    (buckets[cat] || (buckets[cat] = [])).push(c);
+  }
+  const sections = [];
+  for (const cat of CORPUS_CATEGORIES) {
+    const rows = buckets[cat.id];
+    if (!rows || !rows.length) continue;
+    sections.push(
+      `<div style="font-weight:600;font-size:11.5px;color:var(--accent);letter-spacing:.03em;margin:8px 0 2px;padding:0 8px">` +
+      `${_corpusEsc(cat.label)} <span class="meta" style="font-weight:400;font-size:10px;color:var(--dim);letter-spacing:0">: ${_corpusEsc(cat.blurb)}</span></div>` +
+      rows.map(_corpusRowHtml).join("")
+    );
+    delete buckets[cat.id];
+  }
+  const leftover = Object.keys(buckets).flatMap(k => buckets[k]);
+  if (leftover.length) {
+    sections.push(
+      `<div style="font-weight:600;font-size:11.5px;color:var(--accent);letter-spacing:.03em;margin:8px 0 2px;padding:0 8px">Other</div>` +
+      leftover.map(_corpusRowHtml).join("")
+    );
+  }
+  list.innerHTML = sections.join("");
+
+  list.querySelectorAll("[data-corpus-install]").forEach(b => {
+    b.addEventListener("click", () => _corpusInstallTrigger(b.getAttribute("data-corpus-install")));
+  });
+  list.querySelectorAll("[data-corpus-uninstall]").forEach(b => {
+    b.addEventListener("click", () => _corpusUninstallTrigger(b.getAttribute("data-corpus-uninstall")));
+  });
+  list.querySelectorAll("[data-corpus-remove-source]").forEach(b => {
+    b.addEventListener("click", () => _corpusRemoveSourceTrigger(b.getAttribute("data-corpus-remove-source")));
+  });
+}
+
+function _corpusRowHtml(c) {
     const installed = c.installed_train;
     const hasUrl    = (c.format === "hf_dataset") ? !!c.hf_dataset
                     : (c.format === "native")     ? !!c.native_available
@@ -11037,6 +11134,7 @@ function _corpusRenderCatalog(data) {
     if (sizeLabel) tags.push(`<span class="corpus-tag t-dim" title="approximate download size">~${sizeLabel}</span>`);
     if (installed) tags.push(`<span class="corpus-tag t-good">installed${c.installed_size_val ? " + val" : ""}</span>`);
     else if (downloading) tags.push(`<span class="corpus-tag t-warm">downloading</span>`);
+    else if (c.coming_soon) tags.push(`<span class="corpus-tag t-warm" title="not published yet; download link lands later">coming soon</span>`);
     else if (!hasUrl) tags.push(`<span class="corpus-tag t-hot" title="add a custom source or set a working catalog URL">no source</span>`);
     if (isUser) tags.push(`<span class="corpus-tag t-info">custom</span>`);
 
@@ -11056,7 +11154,7 @@ function _corpusRenderCatalog(data) {
     // Primary install gets accent border so it stands out from the secondary
     // "remove" button.
     let actions = "";
-    const gated = !isUser && CORPUS_COMING_SOON.has(c.stem);
+    const gated = c.coming_soon || (!isUser && CORPUS_COMING_SOON.has(c.stem));
     if (gated) {
       actions = `<button class="action" type="button" disabled title="not yet available">coming soon</button>`;
     } else if (downloading) {
@@ -11112,17 +11210,6 @@ function _corpusRenderCatalog(data) {
         ${descLine}
         ${progressLine}
       </div>`;
-  }).join("");
-
-  list.querySelectorAll("[data-corpus-install]").forEach(b => {
-    b.addEventListener("click", () => _corpusInstallTrigger(b.getAttribute("data-corpus-install")));
-  });
-  list.querySelectorAll("[data-corpus-uninstall]").forEach(b => {
-    b.addEventListener("click", () => _corpusUninstallTrigger(b.getAttribute("data-corpus-uninstall")));
-  });
-  list.querySelectorAll("[data-corpus-remove-source]").forEach(b => {
-    b.addEventListener("click", () => _corpusRemoveSourceTrigger(b.getAttribute("data-corpus-remove-source")));
-  });
 }
 
 function _corpusRefreshCatalog() {

@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <!-- ---------------------------------------------------------------------------------
  Developed by Carpathian, LLC.  Legal Notice: Distribution Not Authorized.
- Market LLM: experimental comparison ground. Trains a byte-level Veritate model on JUST
- market data and shows, on one chart, what the market actually did vs what the model
- predicted, across multiple instruments, plus a custom-dollar trading simulation and a
- live feed. Self-contained vanilla JS + canvas; calls /market/* on the canonical server.
+ Market LLM: experimental comparison ground. A byte-level Veritate model trained on JUST
+ market data walks an instrument and shows, in the platform's design language, what the
+ market actually did vs what each trained model predicted: a multi-model price overlay, a
+ custom-dollar trading sim, the full scored metric set, a dropdown-driven analytics viewer
+ with expand-to-modal, multi-instrument coverage, and a live feed. Charts only render with
+ real data. Self-contained vanilla JS + canvas; calls /market/* on the canonical server.
  veritate_mri/web/market.html
 ---------------------------------------------------------------------------------- -->
 <html lang="en">
@@ -13,252 +15,585 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Market LLM (Experimental)</title>
 <style>
-:root{--bg:#0b0e14;--panel:#131823;--panel2:#1b2230;--line:#262f40;--tx:#dfe6f2;--mut:#8b97ad;
---up:#27c08a;--dn:#f0556a;--neu:#8b97ad;--acc:#4d8cff;--warn:#f5b94d}
+:root{
+  --bg:#08090c;--panel:#11141b;--line:#1e2330;--text:#d6d8db;--dim:#6f7480;--soft:#9aa4b5;
+  --accent:#6aa6ff;--hot:#ff5d5d;--cool:#5dc8ff;--warm:#ffae5d;--data-pos:#5d9c75;
+  --highlight:#f0d65a;--purple:#b075ff;--grid:#161b27;--input:#0a0c12;--canvas:#06070a;
+}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif}
-header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:#0e131c;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
-header h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.2px}
-.badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#26314a;color:#9db4ff;border:1px solid #34436b}
-.ctl{display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap}
-label.fld{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--mut)}
-select,input,button{background:var(--panel2);color:var(--tx);border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:13px}
-button{cursor:pointer}button:hover{border-color:var(--acc)}
-button.go{background:#1c3a5e;border-color:#2f5e8f;color:#cfe1ff}
-.wrap{padding:16px;display:grid;gap:14px;grid-template-columns:1fr 1fr;max-width:1500px;margin:0 auto}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
-.panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);margin:0 0 10px}
-.span2{grid-column:1/3}
-canvas{width:100%;display:block}
-.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--mut);margin-top:8px}
-.legend span{display:flex;align-items:center;gap:5px}
-.sw{width:11px;height:11px;border-radius:2px;display:inline-block}
-.dec{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-.cell{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
-.cell .k{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.4px}
-.cell .v{font-size:24px;font-weight:680;margin-top:3px}
-.cell .s{font-size:11px;color:var(--mut);margin-top:2px}
-.up{color:var(--up)}.dn{color:var(--dn)}.neu{color:var(--neu)}.warn{color:var(--warn)}
-.regime{display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600}
-.r-calm{background:#123726;color:#5fe0a8}.r-normal{background:#1d2740;color:#9db4ff}.r-turbulent{background:#3a1c24;color:#ff8a9c}
-.note{font-size:12px;color:var(--mut);margin-top:8px;line-height:1.5}
-.honest{grid-column:1/3;background:#171205;border:1px solid #3a2e10;border-radius:10px;padding:11px 14px;font-size:12.5px;color:#e8d9a8}
-.loading{color:var(--mut);font-size:12px}
-.grid6{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
-.mini{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:8px 10px;cursor:pointer}
-.mini:hover{border-color:var(--acc)}
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace}
+a{color:var(--accent);text-decoration:none}
+.topbar{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.topbar h1{color:#fff;font-size:22px;font-weight:600;letter-spacing:.04em;margin:0}
+.badge{font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:3px 7px;border-radius:3px;background:#0a0c12;border:1px solid var(--line);color:var(--warm)}
+.ckpt{align-self:flex-end;font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:5px 9px;border-radius:4px;background:#0a1410;border:1px solid #1c3326;color:var(--data-pos)}
+.ckpt b{color:#7fd6a0;font-weight:600}
+.topbar .right{margin-left:auto;display:flex;gap:14px;align-items:center}
+.controls{display:flex;gap:14px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap;background:#0a0c12}
+label.fld{display:flex;flex-direction:column;gap:4px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+select,input[type=number]{background:var(--input);border:1px solid var(--line);color:var(--text);padding:7px 9px;font:inherit;border-radius:6px}
+input[type=number]{width:92px;border-radius:3px}
+button{background:#1a2030;border:1px solid var(--line);color:var(--text);padding:7px 14px;border-radius:3px;cursor:pointer;font:inherit}
+button:hover{background:#232a3a}
+button:disabled{opacity:.5;cursor:default}
+button.go{background:var(--accent);border-color:var(--accent);color:#000;font-weight:600;align-self:flex-end}
+button.go:hover{background:#80b4ff}
+button.go.running{background:var(--line);border-color:var(--line);color:var(--text);font-weight:400}
+.spin{display:inline-block;width:10px;height:10px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:rot .7s linear infinite;vertical-align:-1px;margin-right:7px}
+@keyframes rot{100%{transform:rotate(360deg)}}
+.statusbar{padding:7px 20px;font-size:11.5px;color:var(--dim);border-bottom:1px solid var(--line);min-height:30px;display:flex;align-items:center;gap:8px}
+.statusbar .dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:0 0 auto}
+.statusbar.busy .dot{background:var(--accent);animation:pulse 1s ease-in-out infinite}
+.statusbar.ok .dot{background:var(--data-pos)}
+.statusbar.err .dot{background:var(--hot)}
+@keyframes pulse{50%{opacity:.3}}
+.wrap{max-width:1180px;margin:0 auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:14px 16px}
+.phead{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.phead h2{color:var(--accent);font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:600;margin:0}
+.phead .pright{margin-left:auto;display:flex;gap:8px;align-items:center}
+.phead .pright select{padding:5px 8px;font-size:12px;border-radius:4px}
+.expand{background:transparent;border:1px solid var(--line);color:var(--dim);padding:3px 9px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;border-radius:3px}
+.expand:hover{color:var(--text);border-color:var(--accent);background:transparent}
+.note{font-size:11.5px;color:var(--soft);line-height:1.5;margin-top:9px}
+.chartwrap{position:relative;min-height:60px}
+canvas{display:block;width:100%;background:var(--canvas);border:1px solid var(--line);border-radius:3px}
+.chart-skel,.empty{position:absolute;inset:0;border-radius:3px;display:none}
+.chartwrap.loading .chart-skel{display:block}
+.chartwrap.loading canvas,.chartwrap.empty canvas{visibility:hidden}
+.chartwrap.empty .empty{display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:12px;text-align:center;padding:0 16px}
+.skel{position:relative;overflow:hidden;background:var(--input);border:1px solid var(--line);border-radius:3px}
+.skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(106,166,255,0.09),transparent);animation:shimmer 1.15s infinite}
+@keyframes shimmer{100%{transform:translateX(100%)}}
+.legend{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.legend .leg{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:3px;background:var(--input);border:1px solid var(--line);font-size:11px;color:var(--soft)}
+.legend .leg i{width:11px;height:3px;border-radius:1px;display:inline-block}
+.legend .leg i.dot{width:9px;height:9px;border-radius:2px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.card{background:var(--input);border:1px solid var(--line);border-radius:3px;padding:8px 10px}
+.card .k{color:var(--dim);font-size:10px;letter-spacing:.06em;text-transform:uppercase}
+.card .v{font-size:18px;font-weight:600;margin-top:3px}
+.card .v.pos{color:var(--data-pos)}.card .v.neg{color:var(--hot)}
+.card .s{color:var(--dim);font-size:10.5px;margin-top:2px}
+.pos{color:var(--data-pos)}.neg{color:var(--hot)}
+.skcard{height:58px}
+.grid6{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.mini{background:var(--input);border:1px solid var(--line);border-radius:3px;padding:8px 10px;cursor:pointer}
+.mini:hover{border-color:var(--accent)}
 .mini .top{display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:4px}
-.mini .stat{font-size:11px;color:var(--mut);margin-top:3px;display:flex;justify-content:space-between}
-@media(max-width:960px){.wrap{grid-template-columns:1fr}.span2,.honest{grid-column:1}.dec{grid-template-columns:repeat(2,1fr)}.grid6{grid-template-columns:1fr 1fr}}
+.mini .stat{font-size:10.5px;color:var(--dim);margin-top:4px;display:flex;justify-content:space-between}
+.mini canvas{height:56px}
+table{width:100%;border-collapse:collapse;font-size:11.5px}
+th,td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);color:var(--soft)}
+th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+.scroll{max-height:320px;overflow:auto}
+.honest{background:#0d0f07;border:1px solid #2b2a12;border-radius:5px;padding:12px 14px;font-size:12px;color:var(--highlight);line-height:1.55}
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.72);display:flex;align-items:center;justify-content:center;z-index:100;padding:24px}
+.modal-backdrop.hidden{display:none}
+.modal-box{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:18px 22px;max-width:1100px;width:100%}
+.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.modal-header h3{color:#fff;font-size:14px;margin:0;font-weight:600}
+@media(max-width:820px){.grid6{grid-template-columns:1fr 1fr}.controls{gap:10px}}
 </style>
 </head>
 <body>
-<header>
-  <h1>Market LLM</h1><span class="badge">EXPERIMENTAL</span>
-  <div class="ctl">
-    <label class="fld">Market
-      <select id="source"><option value="crypto">Crypto</option><option value="stocks">Stocks</option></select></label>
-    <input id="symbol" list="symlist" value="BTCUSDT" style="width:120px"/><datalist id="symlist"></datalist>
-    <label class="fld">Model <select id="model" style="max-width:170px"></select></label>
-    <label class="fld">Trade $<input id="dollars" type="number" value="10000" min="1" style="width:90px"/></label>
-    <button id="go" class="go">Run</button>
-    <button id="live">Live</button>
+<div class="topbar">
+  <h1>Market LLM</h1><span class="badge">Experimental</span>
+  <div class="right">
+    <a href="/app">back to dashboard</a>
   </div>
-</header>
-<div id="livestat" style="padding:6px 18px;font-size:12px;color:var(--mut);background:#0e131c;border-bottom:1px solid var(--line)"></div>
+</div>
+<div class="controls">
+  <label class="fld">Market
+    <select id="source"><option value="crypto">Crypto</option><option value="stocks">Stocks</option></select></label>
+  <label class="fld" title="The asset to run the model on: a crypto pair (e.g. BTCUSDT) or a stock ticker (e.g. AAPL).">Symbol
+    <select id="symbol" style="min-width:140px"></select></label>
+  <label class="fld">Model (analytics)
+    <select id="model" style="min-width:180px"></select></label>
+  <label class="fld">Trade size $
+    <input id="dollars" type="number" value="10000" min="1"/></label>
+  <button id="go" class="go">Run</button>
+  <button id="live" class="go" style="background:#1a2030;border-color:var(--line);color:var(--text);font-weight:400">Live</button>
+  <span class="ckpt" id="ckptBadge" style="display:none"></span>
+</div>
+<div class="statusbar" id="status"><span class="dot"></span><span id="statusText">Loading models...</span></div>
 
 <div class="wrap">
-  <div class="panel span2">
-    <h2>Market vs model: what actually happened, and what the LLM predicted</h2>
-    <canvas id="hind" height="340"></canvas>
-    <div class="legend">
-      <span><i class="sw" style="background:#dfe6f2"></i>actual price</span>
-      <span><i class="sw" style="background:rgba(77,140,255,0.45)"></i>move size the model predicted (range it expected)</span>
-      <span><i class="sw" style="background:var(--up)"></i>model called direction right</span>
-      <span><i class="sw" style="background:var(--dn)"></i>model called direction wrong</span>
+
+  <div class="panel">
+    <div class="phead">
+      <h2>Market vs model</h2>
+      <div class="pright"><button class="expand" data-kind="overlay">Expand</button></div>
     </div>
-    <div class="note" id="hindnote"></div>
+    <div class="chartwrap" id="cw_hind"><canvas id="hind"></canvas><div class="skel chart-skel"></div><div class="empty">Run a model to compare what the market did against what each model predicted.</div></div>
+    <div class="legend" id="overlayLegend"></div>
+    <div class="note">The white line is the actual price. Each colored line is one trained model's predicted path if it followed its own minute-by-minute directional calls across the window. A model that tracks the white line called direction well; one that drifts away did not.</div>
   </div>
 
-  <div class="panel span2">
-    <h2>If the model traded this for you</h2>
-    <div class="dec" id="pnlcells"><div class="loading">run a model to simulate trading...</div></div>
-    <canvas id="equity" height="180" style="margin-top:10px"></canvas>
-    <div class="note" id="eqnote"></div>
+  <div class="panel">
+    <div class="phead">
+      <h2>If the model traded this for you</h2>
+      <div class="pright"><button class="expand" data-kind="dollar">Expand</button></div>
+    </div>
+    <div class="cards" id="pnlcells"></div>
+    <div class="chartwrap" id="cw_dollar" style="margin-top:10px"><canvas id="dollar"></canvas><div class="skel chart-skel"></div><div class="empty">Run a model to simulate trading.</div></div>
+    <div class="note" id="dollarNote"></div>
   </div>
 
-  <div class="panel span2">
-    <h2>Does it work across markets? Same model, multiple instruments</h2>
-    <div class="grid6" id="multi"><div class="loading">running the model across the majors...</div></div>
-    <div class="note">Each box: the model run on a different instrument. Hit = how often it called direction right. P/L = result of trading $<span id="dlbl">10000</span> after fees. Click a box to load it above.</div>
+  <div class="panel">
+    <div class="phead"><h2>How good were its calls</h2><div class="pright"><span id="benchModel" style="font-size:10.5px;color:var(--dim)"></span></div></div>
+    <div class="cards" id="benchcards"></div>
+    <div class="note">Direction at the minute scale is near a coin flip for any model. The real signal is in the high-confidence calls and in how well it sizes moves (magnitude and calibration), not raw accuracy.</div>
   </div>
 
-  <div class="panel span2">
-    <h2>Live market and live model call</h2>
-    <canvas id="livechart" height="200"></canvas>
-    <div class="note" id="livenote">Press Live to stream the market and the model's next-bar call in real time.</div>
+  <div class="panel">
+    <div class="phead">
+      <h2>Model analytics</h2>
+      <div class="pright">
+        <select id="viewSel">
+          <option value="edge">Edge equity curve</option>
+          <option value="acc">Cumulative directional accuracy</option>
+          <option value="calib">Confidence calibration</option>
+          <option value="pva">Predicted vs actual move</option>
+          <option value="mag">Magnitude scatter</option>
+          <option value="strip">Right or wrong per minute</option>
+          <option value="data">Data inventory</option>
+        </select>
+        <button class="expand" data-kind="view">Expand</button>
+      </div>
+    </div>
+    <div class="chartwrap" id="cw_view"><canvas id="view"></canvas><div class="skel chart-skel"></div><div class="empty">Run a model to see this.</div></div>
+    <div id="viewTable" class="scroll" style="display:none;margin-top:4px"></div>
+    <div class="note" id="viewNote"></div>
+  </div>
+
+  <div class="panel" id="callsPanel" style="display:none">
+    <div class="phead"><h2>Best and worst calls</h2><div class="pright"><span style="font-size:10.5px;color:var(--dim)">ranked by confidence x size of the move</span></div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div><div class="note" style="margin:0 0 6px;color:var(--data-pos)">Most confident, paid off</div><table id="bestTbl"></table></div>
+      <div><div class="note" style="margin:0 0 6px;color:var(--hot)">Most confident, got it wrong</div><table id="worstTbl"></table></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="phead"><h2>Same model, multiple instruments</h2></div>
+    <div class="legend"><span class="leg"><i style="background:#fff"></i>white = actual price</span><span class="leg"><i style="background:var(--accent)"></i>blue = model prediction</span></div>
+    <div class="grid6" id="multi"></div>
+    <div class="note">Each box runs the selected model on a different instrument. White is the actual price, blue is the model's predicted path. Hit = how often it called direction right. P/L = result of trading $<span id="dlbl">10,000</span> after fees. Click a box to load it above.</div>
+  </div>
+
+  <div class="panel" id="livePanel" style="display:none">
+    <div class="phead"><h2>Live market and live model call</h2><div class="pright"><button class="expand" data-kind="live">Expand</button></div></div>
+    <div class="chartwrap" id="cw_live"><canvas id="livechart"></canvas><div class="skel chart-skel"></div><div class="empty">Press Live to stream the market and the model's next-bar call.</div></div>
+    <div class="legend"><span class="leg"><i style="background:#fff"></i>actual price</span><span class="leg"><i style="background:#6aa6ff"></i>model picks</span></div>
+    <div class="note" id="livenote">Press Live to stream the market and the model's next-minute call in real time.</div>
   </div>
 
   <div class="honest" id="honest"></div>
 </div>
 
+<div class="modal-backdrop hidden" id="modal">
+  <div class="modal-box">
+    <div class="modal-header"><h3 id="modalTitle">Chart</h3><button id="modalClose">close</button></div>
+    <div class="chartwrap" id="cw_modal"><canvas id="modalCanvas"></canvas><div class="empty">No data.</div></div>
+    <div class="note" id="modalNote"></div>
+  </div>
+</div>
+
 <script>
 const $=id=>document.getElementById(id);
-const fmtPct=x=>(x*100).toFixed(1)+'%';
-const fmtUsd=x=>(x<0?'-$':'$')+Math.abs(x).toLocaleString(undefined,{maximumFractionDigits:0});
-const COL={up:'#27c08a',dn:'#f0556a',acc:'#4d8cff',mut:'#8b97ad',grid:'#222b3c'};
-const CH={hind:340,equity:180,livechart:200};
-function dpr(c){
-  const d=window.devicePixelRatio||1,H=CH[c.id]||220;
+const pct=x=>x==null||isNaN(x)?'n/a':(100*x).toFixed(1)+'%';
+const f2=x=>x==null||isNaN(x)?'n/a':(+x).toFixed(2);
+const usd=x=>(x<0?'-$':'$')+Math.abs(x).toLocaleString(undefined,{maximumFractionDigits:0});
+const fmtT=s=>new Date(s*1000).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+const bps=x=>(x*1e4>=0?'+':'')+(x*1e4).toFixed(0)+' bps';
+const hue=(v,base=0.5,eps=0.005)=>(v==null||isNaN(v))?'':(v>base+eps?'pos':(v<base-eps?'neg':''));
+const C={white:'#ffffff',pos:'#5d9c75',neg:'#ff5d5d',accent:'#6aa6ff',dim:'#6f7480',grid:'#161b27',soft:'#9aa4b5'};
+const MCOLORS=['#6aa6ff','#ffae5d','#b075ff','#5dc8ff','#f0d65a','#5d9c75'];
+const CH={hind:260,view:240,dollar:150,livechart:200,modalCanvas:460};
+const FEE=0.0010;
+let MODELS=[], STATE={primary:null,results:[],bench:null,sim:null,dollars:10000}, runTok=0;
+let liveTimer=null, liveBuf=[], livePred=[], liveLast=null;
+const LIVE_MAX=180;
+
+function dpr(c,hOver){
+  const d=window.devicePixelRatio||1,H=hOver||CH[c.id]||200;
   const w=c.clientWidth||(c.parentElement&&c.parentElement.clientWidth)||600;
   c.style.height=H+'px';c.width=Math.max(1,Math.round(w*d));c.height=Math.round(H*d);
-  const x=c.getContext('2d');x.setTransform(d,0,0,d,0,0);return[x,w,H];
+  const x=c.getContext('2d');x.setTransform(d,0,0,d,0,0);x.clearRect(0,0,w,H);return[x,w,H];
 }
-function clr(x,w,h){x.clearRect(0,0,w,h);}
-const FEE=0.0010;            // 10 bps per side
-let liveTimer=null, liveBuf=[];
+function cwState(wrapId,s){ // 'loading' | 'ready' | 'empty'
+  const w=$(wrapId);if(!w)return;w.classList.toggle('loading',s==='loading');w.classList.toggle('empty',s==='empty');
+}
+function setStatus(text,kind){const s=$('status');s.className='statusbar'+(kind?(' '+kind):'');$('statusText').textContent=text;}
+function setCkpt(step){const b=$('ckptBadge');if(step==null||step===''){b.style.display='none';return;}
+  b.style.display='';b.innerHTML='latest checkpoint &middot; step <b>'+(+step).toLocaleString()+'</b>';}
 
+// ---- persistence: cache chart data + last controls in localStorage so a page reload
+//      renders instantly from cache and never re-runs the model. Run forces a refresh.
+const CK='mktllm:';
+function cacheGet(k){try{const r=localStorage.getItem(CK+k);return r?JSON.parse(r):null;}catch(e){return null;}}
+function cacheSet(k,v){
+  try{localStorage.setItem(CK+k,JSON.stringify(v));}
+  catch(e){ // quota hit: purge our namespace and retry once
+    try{Object.keys(localStorage).forEach(x=>{if(x.indexOf(CK)===0)localStorage.removeItem(x);});localStorage.setItem(CK+k,JSON.stringify(v));}catch(_){}}
+}
+async function cf(url,force){            // cached fetch, keyed by URL
+  if(!force){const c=cacheGet(url);if(c&&c.d!==undefined)return c.d;}
+  const d=await fetch(url).then(r=>r.json());
+  cacheSet(url,{t:Date.now(),d});
+  return d;
+}
+function cacheAge(url){const c=cacheGet(url);return (c&&c.t)?Date.now()-c.t:null;}
+function ago(ms){if(ms==null)return'';const m=Math.round(ms/60000);if(m<1)return'just now';if(m<60)return m+'m ago';const h=Math.round(m/60);return h<24?h+'h ago':Math.round(h/24)+'d ago';}
+function saveControls(){cacheSet('controls',{source:$('source').value,symbol:$('symbol').value,model:$('model').value,dollars:$('dollars').value});}
+
+// ---- loaders ----
 async function loadModels(){
-  const j=await fetch('/market/veritate_models').then(r=>r.json());
+  const j=await fetch('/market/veritate_models').then(r=>r.json()).catch(()=>({}));
+  MODELS=(j.models||[]).slice(0,6);
   const m=$('model');m.innerHTML='';
-  (j.models||[]).forEach(k=>{const o=document.createElement('option');o.value=k;o.textContent=k;m.appendChild(o);});
-  if(!(j.models||[]).length)m.innerHTML='<option value="">no trained model yet</option>';
-  return j.models||[];
+  MODELS.forEach(k=>{const o=document.createElement('option');o.value=k;o.textContent=k;m.appendChild(o);});
+  if(!MODELS.length)m.innerHTML='<option value="">no trained model yet</option>';
+  return MODELS;
 }
-async function loadInstruments(){
-  const j=await fetch('/market/instruments?source='+$('source').value).then(r=>r.json());
-  $('symlist').innerHTML=(j.instruments||[]).map(s=>`<option value="${s}">`).join('');
+async function loadInstruments(keep){
+  const j=await fetch('/market/instruments?source='+$('source').value).then(r=>r.json()).catch(()=>({}));
+  const list=j.instruments||[];
+  const want=$('source').value==='stocks'?'AAPL':'BTCUSDT';
+  const sel=$('symbol');sel.innerHTML=list.map(s=>`<option value="${s}">${s}</option>`).join('');
+  const val=(keep&&list.includes(keep))?keep:(list.includes(want)?want:(list[0]||''));
+  sel.value=val;
+  return list;
 }
 
-// ---- charts ----
-function drawHind(g){
-  const[x,w,h]=dpr($('hind'));clr(x,w,h);
-  const p=g.price;if(!p||!p.length)return;
-  const his=p.map((v,i)=>v*Math.exp(g.band[i])), los=p.map((v,i)=>v*Math.exp(-g.band[i]));
-  const lo=Math.min(...los),hi=Math.max(...his),pad=52,n=p.length;
-  const X=i=>pad+i/(n-1)*(w-pad-10), Y=v=>12+(hi-v)/(hi-lo||1)*(h-34);
-  x.strokeStyle=COL.grid;x.fillStyle=COL.mut;x.font='10px sans-serif';
-  for(let i=0;i<=4;i++){const yy=12+i*(h-34)/4,vv=hi-(hi-lo)*i/4;x.beginPath();x.moveTo(pad,yy);x.lineTo(w-10,yy);x.stroke();x.fillText(vv.toPrecision(6),2,yy-2);}
-  x.fillStyle='rgba(77,140,255,0.16)';x.beginPath();x.moveTo(X(0),Y(his[0]));
-  for(let i=1;i<n;i++)x.lineTo(X(i),Y(his[i]));
-  for(let i=n-1;i>=0;i--)x.lineTo(X(i),Y(los[i]));x.closePath();x.fill();
-  x.strokeStyle='#dfe6f2';x.lineWidth=1.5;x.beginPath();p.forEach((v,i)=>i?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v)));x.stroke();
-  for(let i=0;i<n;i++){const mk=g.mark[i];if(!mk)continue;x.fillStyle=mk>0?COL.up:COL.dn;x.beginPath();x.arc(X(i),Y(p[i]),2.0,0,7);x.fill();}
+// ---- price overlay (multi-model lines) ----
+function predPath(g){
+  if(!g.price||g.price.length<2||!g.p_up||!g.band)return [];
+  const p=g.price,pr=[p[0]];
+  for(let i=1;i<p.length;i++){const lean=g.p_up[i-1]>0.5?1:-1;const mv=Math.min(g.band[i-1]||0,0.05);pr.push(pr[i-1]*Math.exp(lean*mv));}
+  return pr;
 }
+function gridY(x,w,h,lo,hi,fmt,pad){
+  x.strokeStyle=C.grid;x.fillStyle=C.dim;x.font='10px ui-monospace,monospace';
+  for(let i=0;i<=4;i++){const yy=12+i*(h-30)/4,vv=hi-(hi-lo)*i/4;x.beginPath();x.moveTo(pad,yy);x.lineTo(w-8,yy);x.stroke();x.fillText(fmt(vv),3,yy-2);}
+}
+function poly(x,arr,X,Y,color,wd){x.strokeStyle=color;x.lineWidth=wd;x.beginPath();arr.forEach((v,i)=>i?x.lineTo(X(i,arr.length),Y(v)):x.moveTo(X(i,arr.length),Y(v)));x.stroke();}
+function drawOverlay(cv,prim,results,hOver){
+  if(!prim||!prim.price||!prim.price.length)return false;
+  const[x,w,h]=dpr(cv,hOver);
+  const actual=prim.price;let lo=Infinity,hi=-Infinity;
+  const preds=results.map(r=>{const pp=predPath(r);for(const v of pp){if(v<lo)lo=v;if(v>hi)hi=v;}return pp;});
+  for(const v of actual){if(v<lo)lo=v;if(v>hi)hi=v;}
+  const pad=64;const X=(i,len)=>pad+i/((len||actual.length)-1)*(w-pad-8),Y=v=>12+(hi-v)/(hi-lo||1)*(h-30);
+  gridY(x,w,h,lo,hi,v=>v.toPrecision(6),pad);
+  results.forEach((r,k)=>poly(x,preds[k],X,Y,r.color,1.4));
+  poly(x,actual,X,Y,C.white,2);
+  return true;
+}
+
+// ---- analytics ----
+function cumAcc(a,p,rc){let h=0,t=0;const o=[];for(let i=1;i<a.length;i++){const s=Math.sign(a[i]-rc);if(s!==0){t++;if(s===Math.sign(p[i]-rc))h++;}o.push(t?h/t:0.5);}return o;}
+function lineChart(cv,pts,lo,hi,color,ref,reflabels,hOver){
+  if(!pts||!pts.length)return false;
+  const[x,w,h]=dpr(cv,hOver);const pad=48;
+  const X=i=>pad+i/(pts.length-1||1)*(w-pad-8),Y=v=>12-((v-lo)/((hi-lo)||1))*(h-30)+(h-18);
+  x.strokeStyle=C.grid;x.fillStyle=C.dim;x.font='10px ui-monospace,monospace';
+  (reflabels||[]).forEach(rl=>{const yy=Y(rl.v);x.beginPath();x.moveTo(pad,yy);x.lineTo(w-8,yy);x.strokeStyle=C.grid;x.stroke();x.fillStyle=C.dim;x.fillText(rl.t,3,yy-2);});
+  if(ref!=null){const yy=Y(ref);x.strokeStyle='#2a3550';x.setLineDash([5,5]);x.beginPath();x.moveTo(pad,yy);x.lineTo(w-8,yy);x.stroke();x.setLineDash([]);}
+  poly(x,pts,(i)=>X(i),Y,color,1.6);
+  return true;
+}
+function drawEdge(cv,e,hOver){if(!e||!e.length)return false;const mn=Math.min(0,...e),mx=Math.max(0,...e);return lineChart(cv,e,mn,mx,e[e.length-1]>=0?C.pos:C.neg,0,[{v:mx,t:mx.toFixed(0)},{v:mn,t:mn.toFixed(0)}],hOver);}
+function drawAcc(cv,s,hOver){if(!s||!s.length)return false;const mn=Math.min(0.35,...s),mx=Math.max(0.65,...s);return lineChart(cv,s,mn,mx,C.pos,0.5,[{v:mx,t:(mx*100).toFixed(0)+'%'},{v:0.5,t:'50%'},{v:mn,t:(mn*100).toFixed(0)+'%'}],hOver);}
+function drawCalib(cv,cal,hOver){
+  if(!cal||!cal.length)return false;
+  const[x,w,h]=dpr(cv,hOver);const pad=48;const xs=cal.map(p=>p.conf),mnx=Math.min(...xs),mxx=Math.max(...xs);
+  const X=c=>pad+((c-mnx)/((mxx-mnx)||1))*(w-pad-8),Y=v=>12+(1-v)*(h-30);
+  x.strokeStyle=C.grid;x.fillStyle=C.dim;x.font='10px ui-monospace,monospace';
+  [1,0.5,0].forEach(v=>{const yy=Y(v);x.beginPath();x.moveTo(pad,yy);x.lineTo(w-8,yy);x.stroke();x.fillText((v*100)+'%',3,yy-2);});
+  const yy=Y(0.5);x.strokeStyle='#2a3550';x.setLineDash([5,5]);x.beginPath();x.moveTo(pad,yy);x.lineTo(w-8,yy);x.stroke();x.setLineDash([]);
+  x.strokeStyle=C.accent;x.lineWidth=1.6;x.beginPath();cal.forEach((p,i)=>{const px=X(p.conf),py=Y(p.precision);i?x.lineTo(px,py):x.moveTo(px,py);});x.stroke();
+  cal.forEach(p=>{x.fillStyle=C.pos;x.beginPath();x.arc(X(p.conf),Y(p.precision),2.6,0,7);x.fill();});
+  x.fillStyle=C.dim;x.font='10px ui-monospace,monospace';x.textAlign='left';x.fillText('conf '+pct(mnx),pad,h-3);x.textAlign='right';x.fillText(pct(mxx),w-8,h-3);x.textAlign='left';
+  return true;
+}
+function drawPva(cv,a,p,rc,rb,hOver){
+  if(!a||!a.length||!p||p.length!==a.length||!rb||rb<2)return false;const[x,w,h]=dpr(cv,hOver);const pad=40;
+  const X=i=>pad+i/(a.length-1||1)*(w-pad-8),Y=v=>12+(1-v/(rb-1))*(h-30);
+  x.strokeStyle='#2a3550';x.setLineDash([5,5]);const yc=Y(rc);x.beginPath();x.moveTo(pad,yc);x.lineTo(w-8,yc);x.stroke();x.setLineDash([]);
+  poly(x,a,i=>X(i),Y,C.white,1.4);poly(x,p,i=>X(i),Y,C.accent,1.4);
+  return true;
+}
+function drawScatter(cv,a,p,rc,hOver){
+  if(!a||!a.length||!p||p.length!==a.length)return false;const[x,w,h]=dpr(cv,hOver);
+  x.strokeStyle='#2a3550';x.setLineDash([4,4]);x.beginPath();x.moveTo(8,h/2);x.lineTo(w-8,h/2);x.moveTo(w/2,8);x.lineTo(w/2,h-8);x.stroke();x.setLineDash([]);
+  x.fillStyle='rgba(106,166,255,0.32)';
+  for(let i=1;i<a.length;i++){const ax=(a[i]-rc)/rc,py=(p[i]-rc)/rc;x.beginPath();x.arc(w/2+ax*(w/2-8),h/2-py*(h/2-8),2,0,7);x.fill();}
+  x.fillStyle=C.dim;x.font='10px ui-monospace,monospace';x.fillText('actual',w-50,h/2-5);x.fillText('pred',w/2+5,13);
+  return true;
+}
+function drawStrip(cv,a,p,conf,rc,hOver){
+  if(!a||!a.length)return false;const[x,w,h]=dpr(cv,hOver||64);const n=a.length,bw=w/n;
+  for(let i=1;i<n;i++){const s=Math.sign(a[i]-rc);
+    const base=s===0?'111,116,128':(s===Math.sign(p[i]-rc)?'93,156,117':'255,93,93');
+    const al=0.22+0.78*Math.min(1,Math.max(0,((conf[i]||0.5)-0.5)*2));
+    x.fillStyle=`rgba(${base},${al})`;x.fillRect(i*bw,4,Math.max(1,bw),h-8);}
+  return true;
+}
+
+// ---- trading sim ----
 function simulate(g,dollars){
   const eq=[dollars];let cash=dollars,pos=0,trades=0;
-  for(let i=0;i<g.price.length-1;i++){
-    const want=g.p_up[i]>0.5?1:-1;
+  for(let i=0;i<g.price.length-1;i++){const want=g.p_up[i]>0.5?1:-1;
     if(want!==pos){cash-=dollars*FEE*Math.abs(want-pos)/2;trades++;pos=want;}
-    cash+=pos*dollars*(g.price[i+1]/g.price[i]-1);
-    eq.push(cash);
-  }
+    cash+=pos*dollars*(g.price[i+1]/g.price[i]-1);eq.push(cash);}
   return {eq,final:cash,pnl:cash-dollars,trades};
 }
-function drawEquity(eq,dollars){
-  const[x,w,h]=dpr($('equity'));clr(x,w,h);if(!eq||eq.length<2)return;
-  const lo=Math.min(...eq),hi=Math.max(...eq),pad=58;
-  const X=i=>pad+i/(eq.length-1)*(w-pad-8),Y=v=>10+(hi-v)/(hi-lo||1)*(h-26);
-  x.strokeStyle=COL.grid;x.fillStyle=COL.mut;x.font='10px sans-serif';
-  for(let i=0;i<=3;i++){const yy=10+i*(h-26)/3,vv=hi-(hi-lo)*i/3;x.beginPath();x.moveTo(pad,yy);x.lineTo(w-8,yy);x.stroke();x.fillText(fmtUsd(vv),2,yy-2);}
-  const yb=Y(dollars);x.strokeStyle='#3a4660';x.setLineDash([4,4]);x.beginPath();x.moveTo(pad,yb);x.lineTo(w-8,yb);x.stroke();x.setLineDash([]);
-  x.strokeStyle=eq[eq.length-1]>=dollars?COL.up:COL.dn;x.lineWidth=1.6;x.beginPath();eq.forEach((v,i)=>i?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v)));x.stroke();
+function drawDollar(cv,eq,dollars,hOver){
+  if(!eq||eq.length<2)return false;const[x,w,h]=dpr(cv,hOver);const lo=Math.min(...eq),hi=Math.max(...eq),pad=64;
+  const X=i=>pad+i/(eq.length-1)*(w-pad-8),Y=v=>12+(hi-v)/(hi-lo||1)*(h-30);
+  gridY(x,w,h,lo,hi,usd,pad);
+  const yb=Y(dollars);x.strokeStyle='#2a3550';x.setLineDash([4,4]);x.beginPath();x.moveTo(pad,yb);x.lineTo(w-8,yb);x.stroke();x.setLineDash([]);
+  poly(x,eq,i=>X(i),Y,eq[eq.length-1]>=dollars?C.pos:C.neg,1.7);
+  return true;
 }
-function drawMini(cv,g){
-  const[x,w,h]=dpr(cv);clr(x,w,h);const p=g.price;if(!p||!p.length)return;
-  const lo=Math.min(...p),hi=Math.max(...p);
-  const X=i=>2+i/(p.length-1)*(w-4),Y=v=>4+(hi-v)/(hi-lo||1)*(h-8);
-  x.strokeStyle='#cfd8e6';x.lineWidth=1;x.beginPath();p.forEach((v,i)=>i?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v)));x.stroke();
-  for(let i=0;i<p.length;i+=2){const mk=g.mark[i];if(!mk)continue;x.fillStyle=mk>0?COL.up:COL.dn;x.fillRect(X(i)-0.8,Y(p[i])-0.8,1.6,1.6);}
+
+// ---- view router (small viewer + modal share this) ----
+const VIEW_META={
+  edge:{t:'Edge equity curve',n:'Cumulative of (direction it called) x (actual move), in return-bucket units. Rising means its calls leaned the right way. This is the raw directional edge, before fees.'},
+  acc:{t:'Cumulative directional accuracy',n:'Running share of moves it called right, against the dashed 50 percent coin flip.'},
+  calib:{t:'Confidence calibration',n:'Higher confidence should mean a higher hit rate. A rising line is well calibrated. Dashed is 50 percent.'},
+  pva:{t:'Predicted vs actual move',n:'White is the actual next-move bucket, blue is what the model predicted. The dashed line is flat (no move).'},
+  mag:{t:'Magnitude scatter',n:'Each minute is a point: predicted move size vs actual. A tight diagonal means it sizes moves right.'},
+  strip:{t:'Right or wrong per minute',n:'Each minute: green right, red wrong, gray flat. Brighter means the model was more confident.'},
+  data:{t:'Data inventory',n:'The instruments this model can be tested on, pulled full-history (real bars, not synthetic).'},
+  overlay:{t:'Market vs model',n:'White is the actual price. Each colored line is one model predicting its own path across the window.'},
+  dollar:{t:'If the model traded this for you',n:'Equity of trading the selected model after round-trip fees.'},
+  live:{t:'Live market and live model call',n:'Streaming the live market and the model next-minute call.'},
+};
+function renderChart(kind,cv,hOver){
+  const B=STATE.bench;
+  if(kind==='overlay')return drawOverlay(cv,STATE.primary,STATE.results,hOver);
+  if(kind==='dollar')return STATE.sim?drawDollar(cv,STATE.sim.eq,STATE.dollars,hOver):false;
+  if(kind==='live')return liveBuf.length>1?drawLive(cv,liveBuf,livePred,liveLast,hOver):false;
+  if(!B)return false;
+  const rc=B.ret_center,rb=B.ret_bins;
+  if(kind==='edge')return drawEdge(cv,B.equity,hOver);
+  if(kind==='acc')return drawAcc(cv,cumAcc(B.actual,B.pred,rc),hOver);
+  if(kind==='calib')return drawCalib(cv,B.metrics.calibration,hOver);
+  if(kind==='pva')return drawPva(cv,B.actual,B.pred,rc,rb,hOver);
+  if(kind==='mag')return drawScatter(cv,B.actual,B.pred,rc,hOver);
+  if(kind==='strip')return drawStrip(cv,B.actual,B.pred,B.conf,rc,hOver);
+  return false;
+}
+async function renderView(){
+  const kind=$('viewSel').value;$('viewNote').textContent=(VIEW_META[kind]||{}).n||'';
+  if(kind==='data'){
+    $('cw_view').style.display='none';$('viewTable').style.display='block';
+    $('viewTable').innerHTML='<div class="note">loading data inventory...</div>';
+    try{
+      const d=await cf('/market/veritate_data_report?source='+$('source').value,false);
+      if(!d.ok){$('viewTable').innerHTML='<div class="note">could not load inventory.</div>';return;}
+      $('viewTable').innerHTML=`<div class="note"><b>${d.n}</b> instruments, <b>${(d.total_bars/1e6).toFixed(0)}M</b> bars (approx from file size), <b>${d.gb}</b> GB on disk. Showing the largest ${d.instruments.length}.</div>`+
+        `<table><tr><th>instrument</th><th>bars (approx)</th><th>first</th><th>last</th></tr>`+
+        d.instruments.map(r=>`<tr><td>${r.name}</td><td>${(r.bars||0).toLocaleString()}</td><td>${r.first}</td><td>${r.last}</td></tr>`).join('')+`</table>`;
+    }catch(e){$('viewTable').innerHTML='<div class="note">error loading inventory.</div>';}
+    return;
+  }
+  $('viewTable').style.display='none';$('cw_view').style.display='';
+  const ok=renderChart(kind,$('view'));
+  cwState('cw_view',ok?'ready':'empty');
 }
 
 // ---- run ----
-async function run(){
-  const src=$('source').value,sym=$('symbol').value.trim().toUpperCase(),model=$('model').value,dollars=Math.max(1,+$('dollars').value||10000);
-  $('dlbl').textContent=dollars.toLocaleString();
-  if(!model){$('hindnote').textContent='No trained model yet. Train one first.';return;}
-  $('hindnote').textContent='Running the model over '+sym+'...';
+function busy(on,text){
+  const g=$('go');
+  if(on){g.disabled=true;g.classList.add('running');g.innerHTML='<span class="spin"></span>Running';setStatus(text||'Running...','busy');}
+  else{g.disabled=false;g.classList.remove('running');g.textContent='Run';}
+}
+async function run(force){
+  const tok=++runTok;
+  const src=$('source').value,sym=$('symbol').value,primary=$('model').value,dollars=Math.max(1,+$('dollars').value||10000);
+  STATE.dollars=dollars;$('dlbl').textContent=dollars.toLocaleString();
+  if(!primary){setStatus('No trained model yet. Train one on the market corpus, then reload.','err');return;}
+  if(!sym){setStatus('Pick an instrument.','err');return;}
+  const benchUrl=`/market/veritate_benchmark?source=${src}&symbol=${encodeURIComponent(sym)}&model=${primary}&n=1500`;
+  const cached=!force&&cacheAge(benchUrl)!=null;
+  busy(true,cached?('Loading cached results for '+sym+'...'):('Scoring '+sym+' across '+MODELS.length+' model'+(MODELS.length>1?'s':'')+'...'));
+  ['cw_hind','cw_dollar','cw_view'].forEach(w=>cwState(w,'loading'));
+  $('benchcards').innerHTML=skcards(8);$('pnlcells').innerHTML=skcards(4);
   try{
-    const g=await fetch(`/market/veritate_hindcast?source=${src}&symbol=${sym}&model=${model}&n=1500`).then(r=>r.json());
-    if(!g.ok){$('hindnote').textContent='Error: '+(g.error||'failed');return;}
-    drawHind(g);
-    const sim=simulate(g,dollars);
-    $('hindnote').innerHTML=`Model <b>${g.model}</b> (checkpoint ${g.step}) on ${g.symbol}. It called the next-minute direction right <b>${isFinite(g.hit_rate)?fmtPct(g.hit_rate):'n/a'}</b> of the time across ${g.n.toLocaleString()} minutes. The blue band is the size move it expected each minute.`;
+    const [hinds,bench]=await Promise.all([
+      Promise.all(MODELS.map(m=>cf(`/market/veritate_hindcast?source=${src}&symbol=${encodeURIComponent(sym)}&model=${m}&n=1500`,force).catch(()=>({ok:false})))),
+      cf(benchUrl,force).catch(()=>({ok:false})),
+    ]);
+    if(tok!==runTok)return;
+    const results=hinds.map((g,i)=>g&&g.ok?Object.assign(g,{color:MCOLORS[i%MCOLORS.length]}):null).filter(Boolean);
+    if(!results.length){
+      setStatus('No data for '+sym+' on '+src+'. Try another instrument.','err');
+      ['cw_hind','cw_dollar','cw_view'].forEach(w=>cwState(w,'empty'));
+      $('benchcards').innerHTML='<div class="note">no data.</div>';$('pnlcells').innerHTML='';
+      busy(false);return;
+    }
+    const prim=results.find(r=>r.model===primary)||results[0];
+    STATE.primary=prim;STATE.results=results;STATE.bench=(bench&&bench.ok)?bench:null;
+    setCkpt((bench&&bench.step!=null)?bench.step:prim.step);
+    // overlay
+    cwState('cw_hind',drawOverlay($('hind'),prim,results)?'ready':'empty');
+    $('overlayLegend').innerHTML='<span class="leg"><i style="background:#fff"></i>actual price</span>'+
+      results.map(r=>`<span class="leg"><i style="background:${r.color}"></i>${r.model}${r.model===primary?' (selected)':''}${r.hit_rate!=null?' &middot; hit '+pct(r.hit_rate):''}</span>`).join('');
+    // trading sim
+    const sim=simulate(prim,dollars);STATE.sim=sim;
     $('pnlcells').innerHTML=`
-      <div class="cell"><div class="k">Starting</div><div class="v">${fmtUsd(dollars)}</div><div class="s">${g.symbol}, last ${g.n.toLocaleString()} min</div></div>
-      <div class="cell"><div class="k">Ending</div><div class="v ${sim.final>=dollars?'up':'dn'}">${fmtUsd(sim.final)}</div><div class="s">after ${FEE*1e4*2}bps round-trip fees</div></div>
-      <div class="cell"><div class="k">Profit / loss</div><div class="v ${sim.pnl>=0?'up':'dn'}">${sim.pnl>=0?'+':''}${fmtUsd(sim.pnl)}</div><div class="s">${(sim.pnl/dollars*100).toFixed(1)}% on capital</div></div>
-      <div class="cell"><div class="k">Direction right</div><div class="v">${isFinite(g.hit_rate)?fmtPct(g.hit_rate):'n/a'}</div><div class="s">${sim.trades.toLocaleString()} position changes</div></div>`;
-    drawEquity(sim.eq,dollars);
-    $('eqnote').innerHTML = sim.pnl>=0
-      ? `On this stretch the model would have finished ahead. Be skeptical: minute trading pays fees on every flip, and a small edge rarely survives live.`
-      : `On this stretch the model would have <b>lost</b> money: a near-coin-flip direction call cannot beat ${FEE*1e4*2}bps fees at minute speed. This is the honest result of trading raw price direction.`;
-    $('honest').innerHTML=`<b>What this is.</b> A test of whether a byte-level model trained on JUST market data (no news, no labels) can predict price. It learns the size of moves (volatility) reasonably, but direction at the minute scale is close to a coin flip for any model, so trading it after fees is hard. Use this page to compare, across instruments, what the market did against what the model predicted.`;
-    loadMulti();
-  }catch(e){$('hindnote').textContent='Error: '+e;}
+      <div class="card"><div class="k">Starting</div><div class="v">${usd(dollars)}</div><div class="s">${prim.symbol}, last ${prim.n.toLocaleString()} min</div></div>
+      <div class="card"><div class="k">Ending</div><div class="v ${sim.final>=dollars?'pos':'neg'}">${usd(sim.final)}</div><div class="s">after ${FEE*1e4*2} bps round-trip fees</div></div>
+      <div class="card"><div class="k">Profit / loss</div><div class="v ${sim.pnl>=0?'pos':'neg'}">${sim.pnl>=0?'+':''}${usd(sim.pnl)}</div><div class="s">${(sim.pnl/dollars*100).toFixed(1)}% on capital</div></div>
+      <div class="card"><div class="k">Direction right</div><div class="v ${hue(prim.hit_rate)}">${pct(prim.hit_rate)}</div><div class="s">${sim.trades.toLocaleString()} position changes</div></div>`;
+    cwState('cw_dollar',drawDollar($('dollar'),sim.eq,dollars)?'ready':'empty');
+    $('dollarNote').innerHTML=sim.pnl>=0
+      ? `On this stretch the selected model would have finished ahead. Be skeptical: minute trading pays fees on every flip, and a small edge rarely survives live.`
+      : `On this stretch the selected model would have <b>lost</b> money: a near coin-flip direction call cannot beat ${FEE*1e4*2} bps fees at minute speed. This is the honest result of trading raw price direction.`;
+    // metrics + analytics viewer
+    if(STATE.bench){renderBench(STATE.bench,primary);renderCalls(STATE.bench);$('benchModel').textContent=primary+' @ step '+(bench.step||'');}
+    else {$('benchcards').innerHTML='<div class="note">benchmark unavailable.</div>';$('callsPanel').style.display='none';}
+    await renderView();
+    $('honest').innerHTML=`<b>What this is.</b> A test of whether a byte-level model trained on JUST market data (no news, no labels) can predict price. It sizes moves (volatility) better than a naive carry-forward, but direction at the minute scale is close to a coin flip for any model, so trading it after fees is hard. Use this page to compare, across instruments, what the market did against what each model predicted.`;
+    $('status').className='statusbar ok';
+    $('statusText').innerHTML=prim.symbol+': scored '+prim.n.toLocaleString()+' minutes across '+results.length+' model'+(results.length>1?'s':'')+'. Direction right <b class="'+hue(prim.hit_rate)+'">'+pct(prim.hit_rate)+'</b>.'
+      +(cached?' <span style="color:var(--dim)">cached '+ago(cacheAge(benchUrl))+', press Run to refresh</span>':'');
+    busy(false);
+    saveControls();
+    loadMulti(src,primary,dollars,force);
+  }catch(e){if(tok===runTok){setStatus('Error: '+e,'err');busy(false);}}
+}
+function skcards(n){return Array.from({length:n},()=>'<div class="skel skcard"></div>').join('');}
+
+function renderBench(d,primary){
+  const m=d.metrics,b=d.baseline;
+  const pd=m.precision_decisive,pe=pd==null?null:pd-0.5;const hc=m.high_conf_precision,he=hc==null?null:hc-0.5;
+  const cl=v=>v==='good'?'pos':(v==='bad'?'neg':'');
+  const cards=[
+    ['Precision when decisive',pct(pd),pe==null?'never calls a move':((pe>0?'+':'')+(100*pe).toFixed(1)+' vs 50%'),pe==null?'':(pe>0.01?'good':(pe<-0.01?'bad':''))],
+    ['Precision at high conf',pct(hc),hc==null?'':('top quartile, n='+(m.high_conf_n||0)),he==null?'':(he>0.01?'good':(he<-0.01?'bad':''))],
+    ['Avg confidence',pct(m.avg_confidence),'mean P(called direction)',''],
+    ['Up precision',pct(m.up_precision),'when it calls up',m.up_precision==null?'':(m.up_precision>0.5?'good':(m.up_precision<0.5?'bad':''))],
+    ['Down precision',pct(m.down_precision),'when it calls down',m.down_precision==null?'':(m.down_precision>0.5?'good':(m.down_precision<0.5?'bad':''))],
+    ['Decisive rate',pct(m.decisive_rate),'how often it calls a move',''],
+    ['Directional acc (all)',pct(m.directional_accuracy),'abstentions count as misses',m.directional_accuracy==null?'':(m.directional_accuracy>0.5?'good':(m.directional_accuracy<0.5?'bad':''))],
+    ['Magnitude corr',f2(m.magnitude_corr),'predicted vs actual move size',m.magnitude_corr==null?'':(m.magnitude_corr>0.05?'good':(m.magnitude_corr<0?'bad':''))],
+    ['Magnitude error',f2(m.magnitude_mae_buckets),b?('vs persistence '+f2(b.magnitude_mae_buckets)):'buckets',(b&&m.magnitude_mae_buckets!=null)?(m.magnitude_mae_buckets<b.magnitude_mae_buckets?'good':'bad'):''],
+    ['Bars scored',(m.n||d.n||0).toLocaleString(),'',''],
+    ['Final edge',d.equity&&d.equity.length?f2(d.equity[d.equity.length-1]):'n/a','cumulative bucket-units',d.equity&&d.equity.length&&d.equity[d.equity.length-1]>0?'good':(d.equity&&d.equity.length&&d.equity[d.equity.length-1]<0?'bad':'')],
+    ['Move mix',pct(m.up_rate)+' / '+pct(m.down_rate),'up / down, flat '+pct(m.flat_rate),''],
+  ];
+  $('benchcards').innerHTML=cards.map(([k,v,s,c])=>`<div class="card"><div class="k">${k}</div><div class="v ${cl(c)}">${v}</div><div class="s">${s}</div></div>`).join('');
+}
+function renderCalls(d){
+  const best=d.best||[],worst=d.worst||[];
+  if(!best.length&&!worst.length){$('callsPanel').style.display='none';return;}
+  $('callsPanel').style.display='';
+  const head=`<tr><th>when</th><th>called</th><th>conf</th><th>actual move</th></tr>`;
+  const row=r=>`<tr><td>${fmtT(r.t)}</td><td class="${r.dir==='UP'?'pos':'neg'}">${r.dir}</td><td>${pct(r.conf)}</td><td class="${r.move>=0?'pos':'neg'}">${bps(r.move)}</td></tr>`;
+  $('bestTbl').innerHTML=head+best.map(row).join('');
+  $('worstTbl').innerHTML=head+worst.map(row).join('');
 }
 
-async function loadMulti(){
-  const src=$('source').value,model=$('model').value,dollars=Math.max(1,+$('dollars').value||10000);
+// ---- multi-instrument ----
+async function loadMulti(src,model,dollars,force){
   if(!model)return;
-  const set = src==='stocks'
-    ? ['AAPL','MSFT','NVDA','AMZN','TSLA','GOOGL']
-    : ['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','DOGEUSDT','LINKUSDT'];
-  $('multi').innerHTML=set.map(s=>`<div class="mini" data-sym="${s}"><div class="top"><span>${s.replace('USDT','')}</span><span class="loading">...</span></div><canvas height="64" id="mc_${s}"></canvas><div class="stat" id="ms_${s}"><span>hit -</span><span>P/L -</span></div></div>`).join('');
-  document.querySelectorAll('.mini').forEach(el=>el.onclick=()=>{$('symbol').value=el.dataset.sym;run();window.scrollTo({top:0,behavior:'smooth'});});
+  const set=src==='stocks'?['AAPL','MSFT','NVDA','AMZN','TSLA','GOOGL']:['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','DOGEUSDT','LINKUSDT'];
+  $('multi').innerHTML=set.map(s=>`<div class="mini" data-sym="${s}"><div class="top"><span>${s.replace('USDT','')}</span><span class="skel" style="width:30px;height:12px;display:inline-block"></span></div><div class="chartwrap"><canvas id="mc_${s}"></canvas></div><div class="stat" id="ms_${s}"><span>hit -</span><span>P/L -</span></div></div>`).join('');
+  document.querySelectorAll('.mini').forEach(el=>el.onclick=()=>{$('symbol').value=el.dataset.sym;run(false);});
   for(const s of set){
     try{
-      const g=await fetch(`/market/veritate_hindcast?source=${src}&symbol=${s}&model=${model}&n=800`).then(r=>r.json());
+      const g=await cf(`/market/veritate_hindcast?source=${src}&symbol=${s}&model=${model}&n=800`,force);
       const top=document.querySelector(`.mini[data-sym="${s}"] .top span:last-child`);
-      if(!g.ok){if(top)top.textContent='n/a';continue;}
-      drawMini($('mc_'+s),g);
+      if(!g.ok){if(top){top.className='';top.textContent='n/a';}continue;}
+      const cv=$('mc_'+s);const[x,w,h]=dpr(cv,56);const p=g.price,pp=predPath(g);
+      if(p&&p.length){let lo=Math.min(...p),hi=Math.max(...p);for(const v of pp){if(v<lo)lo=v;if(v>hi)hi=v;}
+        const X=(i,len)=>2+i/((len||p.length)-1)*(w-4),Y=v=>4+(hi-v)/(hi-lo||1)*(h-8);
+        if(pp.length)poly(x,pp,X,Y,C.accent,1);
+        poly(x,p,X,Y,C.white,1.2);}
       const sim=simulate(g,dollars);
-      if(top)top.textContent='';
-      $('ms_'+s).innerHTML=`<span>hit ${isFinite(g.hit_rate)?fmtPct(g.hit_rate):'-'}</span><span class="${sim.pnl>=0?'up':'dn'}">${sim.pnl>=0?'+':''}${fmtUsd(sim.pnl)}</span>`;
+      if(top){top.className='';top.textContent='';}
+      $('ms_'+s).innerHTML=`<span class="${hue(g.hit_rate)}">hit ${pct(g.hit_rate)}</span><span class="${sim.pnl>=0?'pos':'neg'}">${sim.pnl>=0?'+':''}${usd(sim.pnl)}</span>`;
     }catch(e){}
   }
 }
 
+// ---- expand modal ----
+function openModal(kind){
+  const meta=VIEW_META[kind]||{t:'Chart',n:''};let k=kind;
+  if(kind==='view')k=$('viewSel').value;
+  if(k==='data')return;
+  $('modalTitle').textContent=(VIEW_META[k]||{}).t||'Chart';$('modalNote').textContent=(VIEW_META[k]||{}).n||'';
+  $('modal').classList.remove('hidden');$('modal').dataset.kind=k;
+  const ok=renderChart(k,$('modalCanvas'),460);cwState('cw_modal',ok?'ready':'empty');
+}
+function closeModal(){$('modal').classList.add('hidden');}
+
 // ---- live ----
 function setLive(on){
-  if(on){$('live').style.background='#123726';$('live').style.borderColor='#27c08a';liveBuf=[];pollLive();liveTimer=setInterval(pollLive,12000);}
-  else{clearInterval(liveTimer);liveTimer=null;$('live').style.background='';$('live').style.borderColor='';$('livestat').textContent='';}
+  const lp=$('livePanel'),wrap=document.querySelector('.wrap');
+  if(on){$('live').style.background='#0d1a12';$('live').style.borderColor='var(--data-pos)';$('live').textContent='Stop live';
+    liveBuf=[];livePred=[];lp.style.display='';wrap.insertBefore(lp,wrap.firstElementChild);
+    cwState('cw_live','loading');pollLive();liveTimer=setInterval(pollLive,12000);}
+  else{clearInterval(liveTimer);liveTimer=null;$('live').style.background='#1a2030';$('live').style.borderColor='var(--line)';$('live').textContent='Live';lp.style.display='none';}
 }
 async function pollLive(){
-  const src=$('source').value,sym=$('symbol').value.trim().toUpperCase(),model=$('model').value;
-  if(!model){$('livestat').textContent='No trained model yet.';return;}
-  $('livestat').textContent='Fetching live '+sym+'...';
+  const src=$('source').value,sym=$('symbol').value,model=$('model').value;
+  if(!model)return;
   try{
-    const f=await fetch(`/market/veritate_live?source=${src}&symbol=${sym}&model=${model}`).then(r=>r.json());
-    if(!f.ok){$('livestat').textContent='Error: '+(f.error||'live failed');return;}
-    liveBuf.push(f.last_close);if(liveBuf.length>180)liveBuf.shift();
-    drawLive(liveBuf,f);
+    const f=await fetch(`/market/veritate_live?source=${src}&symbol=${encodeURIComponent(sym)}&model=${model}`).then(r=>r.json());
+    if(!f.ok){$('livenote').textContent='Live error: '+(f.error||'failed');cwState('cw_live','empty');return;}
+    liveLast=f;liveBuf.push(f.last_close);
+    livePred.push(f.last_close*Math.exp(f.expected_move*(f.p_up>0.5?1:-1)));
+    if(liveBuf.length>LIVE_MAX){liveBuf.shift();livePred.shift();}
+    if(f.step!=null)setCkpt(f.step);
+    cwState('cw_live',drawLive($('livechart'),liveBuf,livePred,f)?'ready':'empty');
     const dir=f.p_up>0.5?'UP':'DOWN';
-    $('livestat').innerHTML=`LIVE ${sym} <b>${f.last_close.toPrecision(6)}</b>, model calls next minute <b class="${f.p_up>0.5?'up':'dn'}">${dir} ${fmtPct(f.p_up)}</b>, expected move ${f.expected_move_bps.toFixed(0)} bps, updated ${new Date().toLocaleTimeString()} (every 12s)`;
-    $('livenote').innerHTML=`Streaming the live market and the model's next-minute call. Direction confidence is usually close to 50/50 by nature of the market.`;
-  }catch(e){$('livestat').textContent='Error: '+e;}
+    $('livenote').innerHTML=`LIVE ${sym} <b>${f.last_close.toPrecision(6)}</b>, model calls next minute <b class="${f.p_up>0.5?'pos':'neg'}">${dir} ${pct(f.p_up)}</b>, expected move ${f.expected_move_bps.toFixed(0)} bps, updated ${new Date().toLocaleTimeString()} (every 12s).`;
+  }catch(e){$('livenote').textContent='Live error: '+e;}
 }
-function drawLive(buf,f){
-  const[x,w,h]=dpr($('livechart'));clr(x,w,h);if(buf.length<2)return;
-  const lo=Math.min(...buf),hi=Math.max(...buf),pad=54;
-  const X=i=>pad+i/(buf.length-1)*(w-pad-60),Y=v=>12+(hi-v)/(hi-lo||1)*(h-30);
-  x.strokeStyle=COL.grid;x.fillStyle=COL.mut;x.font='10px sans-serif';
-  for(let i=0;i<=3;i++){const yy=12+i*(h-30)/3,vv=hi-(hi-lo)*i/3;x.beginPath();x.moveTo(pad,yy);x.lineTo(w-60,yy);x.stroke();x.fillText(vv.toPrecision(6),2,yy-2);}
-  x.strokeStyle='#dfe6f2';x.lineWidth=1.5;x.beginPath();buf.forEach((v,i)=>i?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v)));x.stroke();
-  // projected next-minute call as a short ray from the last point
-  const lx=X(buf.length-1),ly=Y(f.last_close);const mv=f.expected_move*(f.p_up>0.5?1:-1);
-  const ny=Y(f.last_close*Math.exp(mv));x.strokeStyle=f.p_up>0.5?COL.up:COL.dn;x.lineWidth=2;x.beginPath();x.moveTo(lx,ly);x.lineTo(lx+44,ny);x.stroke();
-  x.fillStyle=f.p_up>0.5?COL.up:COL.dn;x.fillText(f.p_up>0.5?'call: UP':'call: DOWN',lx-10,12);
+function drawLive(cv,buf,pred,f,hOver){
+  if(!buf||buf.length<2)return false;const[x,w,h]=dpr(cv,hOver);const pad=64;
+  const all=buf.concat(pred||[]).filter(v=>v>0);
+  const lo=Math.log(Math.min(...all)),hi=Math.log(Math.max(...all));
+  const X=(i,len)=>pad+i/((len||buf.length)-1)*(w-pad-50),Y=v=>12+(hi-Math.log(v))/(hi-lo||1)*(h-30);
+  x.strokeStyle=C.grid;x.fillStyle=C.dim;x.font='10px ui-monospace,monospace';
+  for(let i=0;i<=4;i++){const yy=12+i*(h-30)/4,vv=Math.exp(hi-(hi-lo)*i/4);x.beginPath();x.moveTo(pad,yy);x.lineTo(w-8,yy);x.stroke();x.fillText(vv.toPrecision(6),3,yy-2);}
+  if(pred&&pred.length>1)poly(x,pred,X,Y,C.accent,1.6);
+  poly(x,buf,X,Y,C.white,1.6);
+  if(f){const lx=X(buf.length-1),ly=Y(f.last_close),mv=f.expected_move*(f.p_up>0.5?1:-1),ny=Y(f.last_close*Math.exp(mv));
+    x.strokeStyle=f.p_up>0.5?C.pos:C.neg;x.lineWidth=2;x.beginPath();x.moveTo(lx,ly);x.lineTo(lx+40,ny);x.stroke();
+    x.fillStyle=f.p_up>0.5?C.pos:C.neg;x.font='10px ui-monospace,monospace';x.fillText(f.p_up>0.5?'call: UP':'call: DOWN',pad+2,12);}
+  return true;
 }
 
-$('go').onclick=run;
+// ---- wiring ----
+$('go').onclick=()=>run(true);                 // Run = force a fresh model run + refresh cache
 $('live').onclick=()=>setLive(!liveTimer);
-$('source').onchange=async()=>{await loadInstruments();};
-$('dollars').onchange=()=>{ if($('model').value) run(); };
+$('source').onchange=async()=>{await loadInstruments();run(false);};
+$('symbol').onchange=()=>run(false);           // cached per symbol; first view fetches, revisits are instant
+$('model').onchange=()=>run(false);
+$('dollars').onchange=()=>run(false);          // dollars only re-sims; cached fetch makes it instant
+$('viewSel').onchange=renderView;
+document.querySelectorAll('.expand').forEach(b=>b.onclick=()=>openModal(b.dataset.kind));
+$('modalClose').onclick=closeModal;
+$('modal').onclick=e=>{if(e.target.id==='modal')closeModal();};
+window.addEventListener('resize',()=>{ if(STATE.primary){renderChart('overlay',$('hind'));if(STATE.sim)renderChart('dollar',$('dollar'));renderView();} if(!$('modal').classList.contains('hidden'))renderChart($('modal').dataset.kind,$('modalCanvas'),460); });
+
 (async()=>{
-  const models=await loadModels(); await loadInstruments();
-  if(models.length) run();
-  else $('hindnote').textContent='No trained Veritate model yet. Train one on the market corpus, then reload.';
+  setStatus('Loading models...','busy');
+  const saved=cacheGet('controls')||{};
+  const models=await loadModels();
+  if(saved.source==='crypto'||saved.source==='stocks')$('source').value=saved.source;
+  if(saved.dollars)$('dollars').value=saved.dollars;
+  await loadInstruments(saved.symbol);                 // restore last symbol if still available
+  if(saved.model&&models.includes(saved.model))$('model').value=saved.model;
+  if(models.length){run(false);}                       // reload renders from cache, no re-run
+  else{setStatus('No trained Veritate model yet. Train one on the market corpus, then reload.','err');['cw_hind','cw_dollar','cw_view'].forEach(w=>cwState(w,'empty'));}
 })();
 </script>
 </body>

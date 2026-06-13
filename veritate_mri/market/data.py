@@ -34,6 +34,9 @@ AGG = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": 
 # pandas resample rules per named horizon
 HORIZONS = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1D"}
 
+# minutes per named horizon (single owner; dataset.py imports this)
+HORIZONS_MIN = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+
 _US = 1_000_000_000_000_000   # >= 1e15 -> microseconds
 _MS = 1_000_000_000_000       # >= 1e12 -> milliseconds
 _S = 1_000_000_000            # >= 1e9  -> seconds
@@ -99,6 +102,8 @@ def load_tail(symbol, n_bars, base="1m", source="crypto"):
     """Read only the last ~n_bars of a (possibly huge) 1m CSV and resample to `base`.
     Reads from the end of the file so a web request never loads the whole history."""
     path = path_for(symbol, source)
+    if not os.path.isfile(path):                    # wrong source/symbol -> clean miss, not a 500
+        return None
     mins = HORIZONS_MIN.get(base, 1)
     need_1m = int((n_bars + 160) * mins)
     sz = os.path.getsize(path)
@@ -128,9 +133,6 @@ def load_tail(symbol, n_bars, base="1m", source="crypto"):
     df = df[~df.index.duplicated(keep="last")].sort_index()
     out = df if base in ("1m", "1min") else resample(df, base)
     return out.iloc[-(n_bars + 150):]
-
-
-HORIZONS_MIN = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 
 
 # ------------------------------------------------------------------------------------

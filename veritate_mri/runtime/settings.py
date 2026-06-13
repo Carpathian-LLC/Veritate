@@ -64,7 +64,6 @@ DEFAULTS = {
     "update_channel": "stable",
     "auto_reload_on_update": True,
     "experimental": False,
-    "market_corpus_s3_url": "",
     "ai_enabled": False,
     "ai_endpoint_user": "",
     "ai_api_key_user": "",

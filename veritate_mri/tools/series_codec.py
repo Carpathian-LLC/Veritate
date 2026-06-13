@@ -35,8 +35,8 @@ ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
 BAR_STRIDE = 3
 SEQ_SEP = "\n"
 RET_CENTER = RET_BINS // 2
-_INDEX = {c: i for i, c in enumerate(ALPHABET)}
 _ALPHA_U8 = np.frombuffer(ALPHABET.encode("ascii"), dtype=np.uint8)
+_INDEX = {c: i for i, c in enumerate(ALPHABET)}
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -63,19 +63,6 @@ def compute_features(o, h, l, c, v, adj):
     return ret_z[valid], rng_ratio[valid], vol_ratio[valid]
 
 
-def _bucket(value, lo, hi, nbins):
-    t = (value - lo) / (hi - lo)
-    t = min(max(t, 0.0), 1.0)
-    return int(t * (nbins - 1) + 0.5)
-
-
-def encode_bar(ret_z, rng_ratio, vol_ratio):
-    rb = _bucket(ret_z, -RET_Z_CLIP, RET_Z_CLIP, RET_BINS)
-    gb = _bucket(rng_ratio, 0.0, RNG_RATIO_CLIP, RNG_BINS)
-    vb = _bucket(vol_ratio, 0.0, VOL_RATIO_CLIP, VOL_BINS)
-    return ALPHABET[rb] + ALPHABET[gb] + ALPHABET[vb]
-
-
 def _bucket_vec(v, lo, hi, nbins):
     t = np.clip((np.asarray(v, dtype=np.float64) - lo) / (hi - lo), 0.0, 1.0)
     return (t * (nbins - 1) + 0.5).astype(np.intp)
@@ -90,6 +77,19 @@ def encode_sequence(ret_z, rng_ratio, vol_ratio):
     out[:, 1] = _ALPHA_U8[gb]
     out[:, 2] = _ALPHA_U8[vb]
     return out.tobytes().decode("ascii")
+
+
+def _bucket(value, lo, hi, nbins):
+    t = (value - lo) / (hi - lo)
+    t = min(max(t, 0.0), 1.0)
+    return int(t * (nbins - 1) + 0.5)
+
+
+def encode_bar(ret_z, rng_ratio, vol_ratio):
+    rb = _bucket(ret_z, -RET_Z_CLIP, RET_Z_CLIP, RET_BINS)
+    gb = _bucket(rng_ratio, 0.0, RNG_RATIO_CLIP, RNG_BINS)
+    vb = _bucket(vol_ratio, 0.0, VOL_RATIO_CLIP, VOL_BINS)
+    return ALPHABET[rb] + ALPHABET[gb] + ALPHABET[vb]
 
 
 def decode_ret_bucket(ch):

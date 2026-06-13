@@ -115,6 +115,22 @@ def test_ramp_stops_at_memory_budget(monkeypatch):
     assert result["max_batch"] == 8
 
 
+def test_ramp_stops_at_backend_size_limit(monkeypatch):
+    """A backend tensor-size error (MPS INT_MAX) stops the ramp at the last good rung
+    instead of crashing, and still returns the rungs that fit."""
+    def _measure(model, opt, batch, seq, vocab, device):
+        if batch >= 8:
+            raise RuntimeError("MPSGaph does not support tensor dims larger than INT_MAX")
+        return 50 * bench.GB, 100.0 * batch
+    monkeypatch.setattr(bench, "_measure_batch", _measure)
+    monkeypatch.setattr(bench, "_memory_budget", lambda d: None)
+    monkeypatch.setattr(bench, "_free", lambda d: None)
+    result = bench.run(_model(), "mps", SMALL["seq"], SMALL["vocab"], batch_ramp=(1, 2, 4, 8, 16))
+    assert [r["batch"] for r in result["ramp"]] == [1, 2, 4]
+    assert result["max_batch"] == 4
+    assert result["fits"] is True
+
+
 @pytest.mark.slow
 def test_bench_finds_ceiling_on_mps():
     """On mps the ramp hits a real OOM ceiling and reports a finite max_batch."""
