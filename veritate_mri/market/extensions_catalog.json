@@ -1,0 +1,11 @@
+{
+  "_comment": "Downloadable market-data extensions. Each entry maps to a source dir at external_data/extension_data/<source> (a disposable cache). 'url' is the hosted archive to download; null = placeholder (not hosted yet -> UI shows 'coming soon'). Delete removes the local dir to reclaim disk; re-download from 'url'. Active training/serving sources (crypto_of, funding, sentiment, live) are NOT extensions and never appear here.",
+  "extensions": [
+    {"source": "stocks", "label": "US Stocks (daily)", "description": "S&P 500 daily adjusted OHLCV bars.", "url": null, "approx_gb": 0.43, "schema": "date,open,high,low,close,adjclose,volume"},
+    {"source": "forex", "label": "Forex (1m)", "description": "Major FX pairs at 1-minute, resampled from Dukascopy ticks.", "url": null, "approx_gb": 0.78, "schema": "time,open,high,low,close,volume"},
+    {"source": "futures", "label": "Futures (daily)", "description": "Continuous front-month contracts (ES, CL, GC, ...).", "url": null, "approx_gb": 0.01, "schema": "date,open,high,low,close,adjclose,volume"},
+    {"source": "indices", "label": "Indices (daily)", "description": "Cash index levels (^GSPC, ^NDX, ...).", "url": null, "approx_gb": 0.02, "schema": "date,open,high,low,close,adjclose,volume"},
+    {"source": "crypto", "label": "Crypto majors (1m)", "description": "200 major Binance USDT pairs at 1-minute.", "url": null, "approx_gb": 34.0, "schema": "time,open,high,low,close,volume,trades,taker_buy"},
+    {"source": "crypto_extra", "label": "Crypto full archive (1m)", "description": "451 additional Binance USDT pairs at 1-minute.", "url": null, "approx_gb": 41.0, "schema": "time,open,high,low,close,volume,trades,taker_buy"}
+  ]
+}

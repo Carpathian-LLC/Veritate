@@ -52,10 +52,10 @@ MODEL_TYPE_ENV = "VERITATE_MODEL_TYPE"
 
 # Dumps that only make sense for a text model. Skipped when training_args.model_type
 # is code/statistical/other, so a non-language model never accrues meaningless
-# language scores. The architecture probes (classroom, surprise, quant_kl) and the
-# checkpoint itself always run.
+# language scores. The architecture probes (probe/lens, classroom, surprise,
+# quant_kl) and the checkpoint itself always run, model_type agnostic.
 LANGUAGE_DUMPS = frozenset({
-    "probe", "grades", "reading_comprehension", "math", "grammar",
+    "grades", "reading_comprehension", "math", "grammar",
     "reasoning", "concepts", "writing_health", "generation",
 })
 
@@ -286,6 +286,39 @@ def _sync_capabilities(name, step, args):
         logmod.warn("save", f"capability mark failed: {e}")
 
 
+def _sync_model_meta(name, args):
+    """Promote model_type (from the launch env) and bar_stride (current series codec)
+    into config.json's training_args. The trainer drops --model_type (not a manifest
+    key, so parse_known_args discards it) and never sees the codec stride, so neither
+    lands in config.json on its own — leaving the dashboard, the eval-deep gate, and
+    resumed runs reading a stale "language" default. The checkpoint carries both already
+    (stamped onto the saved args); this keeps the on-disk config consistent with it.
+    No-op when already synced."""
+    cfg_path = paths.config_path(name)
+    if not os.path.isfile(cfg_path):
+        return
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(data.get("training_args"), dict):
+        return
+    ta = data["training_args"]
+    from tools import series_codec as _series_codec
+    stride = int(_series_codec.BAR_STRIDE)
+    mt = os.environ.get(MODEL_TYPE_ENV) or ta.get("model_type")
+    if ta.get("model_type") == mt and ta.get("bar_stride") == stride:
+        return
+    if mt:
+        ta["model_type"] = mt
+    ta["bar_stride"] = stride
+    tmp = cfg_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, cfg_path)
+
+
 def _sync_qat_flag(name, args):
     """Promote training_args.qat_enabled to a top-level qat_enabled key on every
     save. The trainer plugin contract says training_args is vars(args), which
@@ -434,7 +467,14 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
             ta.setdefault("model_type", _env_mt)
         else:
             args.setdefault("model_type", _env_mt)
+    # Stamp the series-codec stride this model trains against, so the Market LLM page can
+    # encode each model at its own stride and never break when the codec adds channels.
+    if isinstance(args, dict):
+        from tools import series_codec as _series_codec
+        ta = args.get("training_args")
+        (ta if isinstance(ta, dict) else args).setdefault("bar_stride", int(_series_codec.BAR_STRIDE))
     _ensure_config(name, args)
+    _sync_model_meta(name, args)
     _validate_description(name, args)
     _sync_capabilities(name, step, args)
 

@@ -29,9 +29,13 @@ a{color:var(--accent);text-decoration:none}
 .ckpt{align-self:flex-end;font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:5px 9px;border-radius:4px;background:#0a1410;border:1px solid #1c3326;color:var(--data-pos)}
 .ckpt b{color:#7fd6a0;font-weight:600}
 .topbar .right{margin-left:auto;display:flex;gap:14px;align-items:center}
-.controls{display:flex;gap:14px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap;background:#0a0c12}
+.controls{display:flex;gap:14px;align-items:flex-end;padding:12px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap;background:#0a0c12}
+.cgroup{display:flex;flex-direction:column;gap:5px}
+.cgroup .cap{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);padding-left:1px}
+.cgroup .row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.csep{align-self:stretch;width:1px;background:var(--line);margin:2px 0}
 label.fld{display:flex;flex-direction:column;gap:4px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
-select,input[type=number]{background:var(--input);border:1px solid var(--line);color:var(--text);padding:7px 9px;font:inherit;border-radius:6px}
+select,input[type=number],input[type=text],input:not([type]){background:var(--input);border:1px solid var(--line);color:var(--text);padding:7px 9px;font:inherit;border-radius:6px}
 input[type=number]{width:92px;border-radius:3px}
 button{background:#1a2030;border:1px solid var(--line);color:var(--text);padding:7px 14px;border-radius:3px;cursor:pointer;font:inherit}
 button:hover{background:#232a3a}
@@ -39,8 +43,38 @@ button:disabled{opacity:.5;cursor:default}
 button.go{background:var(--accent);border-color:var(--accent);color:#000;font-weight:600;align-self:flex-end}
 button.go:hover{background:#80b4ff}
 button.go.running{background:var(--line);border-color:var(--line);color:var(--text);font-weight:400}
+.ms{position:relative;display:inline-block}
+.msbtn{background:var(--input);border:1px solid var(--line);color:var(--text);padding:7px 9px;border-radius:6px;min-width:150px;text-align:left;cursor:pointer;font:inherit}
+.msbtn:hover{border-color:var(--accent)}
+.primarylbl{font-size:10px;letter-spacing:.04em;text-transform:none;color:var(--soft);margin-top:1px}
+.primarylbl b{color:var(--cool);font-weight:600}
+.primarylbl.none{color:var(--dim)}
+.mspop{position:absolute;top:calc(100% + 4px);left:0;z-index:50;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;min-width:210px;max-height:260px;overflow:auto;box-shadow:0 8px 24px rgba(0,0,0,.5);display:none}
+.mspop.open{display:block}
+.mspop label{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:4px;font-size:12px;color:var(--text);text-transform:none;letter-spacing:0;cursor:pointer;flex-direction:row}
+.mspop label:hover{background:var(--input)}
+.mspop .empty{color:var(--dim);padding:6px 7px;font-size:11.5px}
+.mspop input{accent-color:var(--accent);margin:0}
 .spin{display:inline-block;width:10px;height:10px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:rot .7s linear infinite;vertical-align:-1px;margin-right:7px}
 @keyframes rot{100%{transform:rotate(360deg)}}
+.aggr{display:flex;flex-direction:column;gap:4px;flex:1 1 100%;min-width:240px}
+.aggr .scale{display:flex;justify-content:space-between;font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);width:100%}
+.aggr input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:2px;background:linear-gradient(90deg,var(--warm),var(--cool));border:none;padding:0;margin:2px 0;cursor:pointer}
+.aggr input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--canvas);cursor:pointer}
+.aggr input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--canvas);cursor:pointer}
+.aggr .read{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.aggr .stat{font-size:10.5px;color:var(--soft);white-space:nowrap}
+.aggr .desc{font-size:11.5px;color:var(--soft);line-height:1.5}
+.subhead{display:flex;align-items:center;gap:10px;margin:0 0 8px}
+.subhead h3{color:var(--soft);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;margin:0}
+.subhead .expand{margin-left:auto}
+.tradectl{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin:0 0 12px}
+.sizebox{flex-direction:row;align-items:center;gap:7px;text-transform:none;letter-spacing:0;font-size:12px;color:var(--soft);align-self:flex-end;padding-bottom:7px;cursor:pointer}
+.sizebox input{accent-color:var(--accent);margin:0;width:auto;border-radius:3px}
+.chartkey{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:8px 0 0;font-size:11px;color:var(--soft)}
+.chartkey .k{display:inline-flex;align-items:center;gap:6px}
+.chartkey .k i{width:14px;height:10px;border-radius:2px;display:inline-block;border:1px solid var(--line)}
+.chartkey .k i.ln{height:3px;border:none}
 .statusbar{padding:7px 20px;font-size:11.5px;color:var(--dim);border-bottom:1px solid var(--line);min-height:30px;display:flex;align-items:center;gap:8px}
 .statusbar .dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:0 0 auto}
 .statusbar.busy .dot{background:var(--accent);animation:pulse 1s ease-in-out infinite}
@@ -104,16 +138,43 @@ th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em
   </div>
 </div>
 <div class="controls">
-  <label class="fld">Market
-    <select id="source"><option value="crypto">Crypto</option><option value="stocks">Stocks</option></select></label>
-  <label class="fld" title="The asset to run the model on: a crypto pair (e.g. BTCUSDT) or a stock ticker (e.g. AAPL).">Symbol
-    <select id="symbol" style="min-width:140px"></select></label>
-  <label class="fld">Model (analytics)
-    <select id="model" style="min-width:180px"></select></label>
-  <label class="fld">Trade size $
-    <input id="dollars" type="number" value="10000" min="1"/></label>
-  <button id="go" class="go">Run</button>
-  <button id="live" class="go" style="background:#1a2030;border-color:var(--line);color:var(--text);font-weight:400">Live</button>
+  <div class="cgroup">
+    <span class="cap">Data</span>
+    <div class="row">
+      <label class="fld" title="Crypto pairs (live, minute bars) or stocks (daily bars).">Market
+        <select id="source"><option value="crypto">Crypto</option><option value="stocks">Stocks</option></select></label>
+      <label class="fld" title="Bar size each step represents: per-minute up to hourly for crypto, daily for stocks. 1-second bars are not available (no free 1s data feed).">Resolution
+        <select id="res"></select></label>
+      <label class="fld" title="The asset to run on: a crypto pair (e.g. BTCUSDT) or a stock ticker (e.g. AAPL). Type to search; majors are listed first.">Symbol
+        <select id="symbol" style="min-width:140px"></select></label>
+    </div>
+  </div>
+  <div class="csep"></div>
+  <div class="cgroup">
+    <span class="cap">Models</span>
+    <div class="row">
+      <label class="fld" title="Tick the models you want overlaid and compared. Each gets its own color on the charts. The first checked model is the primary (analytics) model that drives the single-model cards, best/worst calls and live panel. The trading panel sims every checked model. Your picks are remembered across reloads.">Compare models
+        <div class="ms"><button type="button" id="msBtn" class="msbtn">none selected</button><div class="mspop" id="msPop"></div></div>
+        <span id="primaryLbl" class="primarylbl"></span></label>
+    </div>
+  </div>
+  <div class="csep"></div>
+  <div class="cgroup">
+    <span class="cap">Scoring</span>
+    <div class="row">
+      <label class="fld" title="How much history each run scores. '1 month' scores the model's calls over the last month. Total span is shown on the right.">Window
+        <select id="window"></select></label>
+    </div>
+  </div>
+  <div class="csep"></div>
+  <div class="cgroup">
+    <span class="cap">&nbsp;</span>
+    <div class="row">
+      <button id="go" class="go">Run</button>
+      <button id="live" class="go" style="background:#1a2030;border-color:var(--line);color:var(--text);font-weight:400">Live</button>
+    </div>
+  </div>
+  <span class="ckpt" id="spanBadge" style="display:none;background:#0a1014;border-color:#1c2a33;color:var(--cool)"></span>
   <span class="ckpt" id="ckptBadge" style="display:none"></span>
 </div>
 <div class="statusbar" id="status"><span class="dot"></span><span id="statusText">Loading models...</span></div>
@@ -122,28 +183,45 @@ th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em
 
   <div class="panel">
     <div class="phead">
-      <h2>Market vs model</h2>
-      <div class="pright"><button class="expand" data-kind="overlay">Expand</button></div>
-    </div>
-    <div class="chartwrap" id="cw_hind"><canvas id="hind"></canvas><div class="skel chart-skel"></div><div class="empty">Run a model to compare what the market did against what each model predicted.</div></div>
-    <div class="legend" id="overlayLegend"></div>
-    <div class="note">The white line is the actual price. Each colored line is one trained model's predicted path if it followed its own minute-by-minute directional calls across the window. A model that tracks the white line called direction well; one that drifts away did not.</div>
-  </div>
-
-  <div class="panel">
-    <div class="phead">
       <h2>If the model traded this for you</h2>
-      <div class="pright"><button class="expand" data-kind="dollar">Expand</button></div>
     </div>
+    <div class="note" style="margin-top:0;margin-bottom:6px">Two views of the same calls side by side: what each model predicted against the real price, and what trading those calls would have done to an account. All selected models appear in both; the <b>primary</b> model drives the shading and the trend-colored balance line.</div>
+
+    <div class="subhead"><h3>Market vs model</h3><button class="expand" data-kind="overlay">Expand</button></div>
+    <div class="chartwrap" id="cw_hind"><canvas id="hind"></canvas><div class="skel chart-skel"></div><div class="empty">Run a model to compare what the market did against what each model predicted.</div></div>
+    <div class="chartkey">
+      <span class="k"><i class="ln" style="background:#fff"></i>white line = actual price</span>
+      <span class="k"><i style="background:var(--data-pos);opacity:.35"></i>green shade = primary model went LONG here</span>
+      <span class="k"><i style="background:var(--hot);opacity:.35"></i>red shade = went SHORT here</span>
+      <span class="k"><i class="ln" style="background:var(--data-pos)"></i><i class="ln" style="background:var(--hot)"></i>balance line: green where it is rising, red where falling</span>
+    </div>
+    <div class="legend" id="overlayLegend"></div>
+    <div class="note">The white line is what the price actually did. Each colored line is one model's guess: it starts at the same price, then steps forward bar by bar following only that model's own up or down calls. A colored line that hugs the white one called direction well; one that wanders off did not. The shading and balance line above come from the <b>primary</b> model trading at the current boldness (set just below): green where it is long, red where it is short. The balance line on the right $ axis is colored by trend, green where the account is rising and red where it is falling. Make it bolder and more bars get shaded and the balance line redraws live.</div>
+
+    <div class="subhead" style="margin-top:14px"><h3>Trading the same calls</h3><button class="expand" data-kind="dollar">Expand</button></div>
+    <div class="tradectl">
+      <label class="fld">Trade size $
+        <input id="dollars" type="number" value="10000" min="1"/></label>
+      <label class="fld sizebox" title="When on, each trade is sized by how confident that call is: a small floor position on weak calls scaling up to the full Trade size on its surest calls. When off, every trade uses the full Trade size. On a near coin-flip 1m signal, bigger bets mostly amplify the fee bleed, not the profit.">
+        <input id="sizeConf" type="checkbox"/><span>Bet bigger when more confident</span></label>
+      <label class="fld aggr" title="How boldly the model trades. Slide toward 'trades often' for more trades and more fees; toward 'only its best bets' to act only on its most confident calls. The chart above reshades and the balance line redraws live as you drag. Each bar is one trade decision, so the resolution you pick sets how often it trades.">How boldly it trades
+        <input id="conf" type="range" min="0" max="0.9" step="0.02" value="0.20"/>
+        <div class="scale"><span>Trades often</span><span>Only its best bets</span></div>
+        <div class="read"><span id="confLbl" class="ckpt" style="background:#0a1014;border-color:#1c2a33;color:var(--cool)"></span><span id="confStat" class="stat"></span></div>
+        <div class="desc" id="confDesc"></div></label>
+    </div>
+    <div class="note" id="pnlReadout" style="font-size:13px;margin:0 0 10px"></div>
     <div class="cards" id="pnlcells"></div>
     <div class="chartwrap" id="cw_dollar" style="margin-top:10px"><canvas id="dollar"></canvas><div class="skel chart-skel"></div><div class="empty">Run a model to simulate trading.</div></div>
+    <div class="legend" id="dollarLegend"></div>
     <div class="note" id="dollarNote"></div>
   </div>
 
   <div class="panel">
     <div class="phead"><h2>How good were its calls</h2><div class="pright"><span id="benchModel" style="font-size:10.5px;color:var(--dim)"></span></div></div>
+    <div class="note" style="margin-top:0;margin-bottom:9px"><b>What this shows.</b> One scorecard for the analytics model over the window you scored. Each card grades one trait of its calls: how often it is right, whether being confident actually means being correct, and whether it guesses the size of the move. Green beats a coin flip / the naive baseline; red is worse.</div>
     <div class="cards" id="benchcards"></div>
-    <div class="note">Direction at the minute scale is near a coin flip for any model. The real signal is in the high-confidence calls and in how well it sizes moves (magnitude and calibration), not raw accuracy.</div>
+    <div class="note">At short bar sizes, calling up vs down is close to a coin flip for any model, so raw accuracy is not the story. What matters: is it right more often when it is confident, and does it guess the size of the move. The cards above turn the same calls into trader terms: win rate, profit factor, expectancy and drawdown (all before fees).</div>
   </div>
 
   <div class="panel">
@@ -151,17 +229,18 @@ th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em
       <h2>Model analytics</h2>
       <div class="pright">
         <select id="viewSel">
-          <option value="edge">Edge equity curve</option>
-          <option value="acc">Cumulative directional accuracy</option>
-          <option value="calib">Confidence calibration</option>
+          <option value="edge">Edge over time</option>
+          <option value="acc">Accuracy over time</option>
+          <option value="calib">Does confidence mean anything</option>
           <option value="pva">Predicted vs actual move</option>
-          <option value="mag">Magnitude scatter</option>
-          <option value="strip">Right or wrong per minute</option>
+          <option value="mag">Did it size the move</option>
+          <option value="strip">Right or wrong per bar</option>
           <option value="data">Data inventory</option>
         </select>
         <button class="expand" data-kind="view">Expand</button>
       </div>
     </div>
+    <div class="note" style="margin-top:0;margin-bottom:9px"><b>What this is.</b> A set of close-up views of the same scored calls, one at a time. Pick a view from the dropdown; the line below the chart says in plain words what it plots and what a good shape looks like. Every view is driven by the analytics model's calls over the window you scored.</div>
     <div class="chartwrap" id="cw_view"><canvas id="view"></canvas><div class="skel chart-skel"></div><div class="empty">Run a model to see this.</div></div>
     <div id="viewTable" class="scroll" style="display:none;margin-top:4px"></div>
     <div class="note" id="viewNote"></div>
@@ -179,14 +258,16 @@ th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em
     <div class="phead"><h2>Same model, multiple instruments</h2></div>
     <div class="legend"><span class="leg"><i style="background:#fff"></i>white = actual price</span><span class="leg"><i style="background:var(--accent)"></i>blue = model prediction</span></div>
     <div class="grid6" id="multi"></div>
-    <div class="note">Each box runs the selected model on a different instrument. White is the actual price, blue is the model's predicted path. Hit = how often it called direction right. P/L = result of trading $<span id="dlbl">10,000</span> after fees. Click a box to load it above.</div>
+    <div class="note">Each box runs the analytics model on a different instrument. White is the real price, blue is the model's path. Hit is how often it called direction right. P/L is what trading $<span id="dlbl">10,000</span> would have made or lost after fees. Click any box to load it up top.</div>
   </div>
 
   <div class="panel" id="livePanel" style="display:none">
-    <div class="phead"><h2>Live market and live model call</h2><div class="pright"><button class="expand" data-kind="live">Expand</button></div></div>
-    <div class="chartwrap" id="cw_live"><canvas id="livechart"></canvas><div class="skel chart-skel"></div><div class="empty">Press Live to stream the market and the model's next-bar call.</div></div>
-    <div class="legend"><span class="leg"><i style="background:#fff"></i>actual price</span><span class="leg"><i style="background:#6aa6ff"></i>model picks</span></div>
-    <div class="note" id="livenote">Press Live to stream the market and the model's next-minute call in real time.</div>
+    <div class="phead"><h2>Live market and live model call</h2><div class="pright" id="liveExpandWrap"><button class="expand" data-kind="live">Expand</button></div></div>
+    <div id="liveBody">
+      <div class="chartwrap" id="cw_live"><canvas id="livechart"></canvas><div class="skel chart-skel"></div><div class="empty">Press Live to stream the market and the model's next-bar call.</div></div>
+      <div class="legend"><span class="leg"><i style="background:#fff"></i>actual price</span><span class="leg"><i style="background:#6aa6ff"></i>model picks</span></div>
+    </div>
+    <div class="note" id="livenote">Press Live to stream the market and watch the analytics model call the next bar in real time.</div>
   </div>
 
   <div class="honest" id="honest"></div>
@@ -211,8 +292,28 @@ const hue=(v,base=0.5,eps=0.005)=>(v==null||isNaN(v))?'':(v>base+eps?'pos':(v<ba
 const C={white:'#ffffff',pos:'#5d9c75',neg:'#ff5d5d',accent:'#6aa6ff',dim:'#6f7480',grid:'#161b27',soft:'#9aa4b5'};
 const MCOLORS=['#6aa6ff','#ffae5d','#b075ff','#5dc8ff','#f0d65a','#5d9c75'];
 const CH={hind:260,view:240,dollar:150,livechart:200,modalCanvas:460};
-const FEE=0.0010;
-let MODELS=[], STATE={primary:null,results:[],bench:null,sim:null,dollars:10000}, runTok=0;
+const FEE=0.0010;                                              // per-side cost; round trip = 2 x FEE = 20 bps
+const DEF_CONF=0.20;                                           // default trade-aggressiveness: min |p_up-0.5|*2 to trade
+const TRADE_UP='rgba(93,156,117,0.16)',TRADE_DN='rgba(255,93,93,0.15)';  // shaded long/short bars at threshold
+const EQ_UP='#5d9c75',EQ_DN='#ff5d5d';                         // primary equity trend coloring: rising green, falling red
+const EQ_REF='#2a3550';                                        // break-even baseline for the overlay equity axis
+const MARK_R=2.2;                                              // traded-bar dot radius
+const CONF_LO=0.05,CONF_HI=0.45;                              // boldness bands: <=LO every call, >=HI surest only
+const EQ_LINE=1.7,EQ_DIM=0.55;                                // per-model equity line width; non-analytics dim alpha
+const SIZE_FLOOR=0.25,SIZE_FULL=1.0;                          // conf-weighted sizing: position fraction at conf 0 -> 1
+const DAY=86400;
+const RES_SEC={'1m':60,'5m':300,'15m':900,'1h':3600,'1d':DAY};  // seconds per bar at each resolution
+// per-source control sets: crypto streams 1m+; stocks are daily bars only (no intraday, no live)
+const SRC={
+  crypto:{res:[['Per minute','1m'],['5 minutes','5m'],['15 minutes','15m'],['Hourly','1h']],defRes:'1m',defWin:'86400',defSym:'BTCUSDT',live:true,
+    windows:[['15 min',900],['1 hour',3600],['4 hours',14400],['6 hours',21600],['1 day',86400],['3 days',259200],
+      ['1 week',604800],['2 weeks',1209600],['1 month',2592000],['3 months',7776000],['1 year',31536000]]},
+  stocks:{res:[['Daily','1d']],defRes:'1d',defWin:String(252*DAY),defSym:'AAPL',live:false,
+    windows:[['1 week',7*DAY],['2 weeks',14*DAY],['1 month',30*DAY],['3 months',90*DAY],['6 months',180*DAY],['1 year',252*DAY],['2 years',504*DAY],['5 years',1260*DAY]]},
+};
+function srcCfg(){return SRC[$('source').value]||SRC.crypto;}
+const NMIN=300,NMAX=20000;                                     // bar-count clamp the backend enforces
+let MODELS=[], SELECTED=[], STATE={primary:null,results:[],bench:null,sim:null,dollars:10000,conf:DEF_CONF,sizing:false}, runTok=0;
 let liveTimer=null, liveBuf=[], livePred=[], liveLast=null;
 const LIVE_MAX=180;
 
@@ -246,24 +347,74 @@ async function cf(url,force){            // cached fetch, keyed by URL
 }
 function cacheAge(url){const c=cacheGet(url);return (c&&c.t)?Date.now()-c.t:null;}
 function ago(ms){if(ms==null)return'';const m=Math.round(ms/60000);if(m<1)return'just now';if(m<60)return m+'m ago';const h=Math.round(m/60);return h<24?h+'h ago':Math.round(h/24)+'d ago';}
-function saveControls(){cacheSet('controls',{source:$('source').value,symbol:$('symbol').value,model:$('model').value,dollars:$('dollars').value});}
+function saveControls(){cacheSet('controls',{source:$('source').value,res:$('res').value,window:$('window').value,symbol:$('symbol').value,dollars:$('dollars').value,conf:$('conf').value,sizing:$('sizeConf').checked});}
+function confThr(){return Math.max(0,Math.min(1,+$('conf').value||0));}
+function confLabel(thr){return thr<=CONF_LO?'Trades on every bar':(thr>=CONF_HI?'Only its surest calls':'Only its confident calls');}
+function confDescribe(thr,sim){                                // live plain-language line: what this boldness does
+  const lead=thr<=CONF_LO?'Trading on almost every call'
+            :(thr>=CONF_HI?'Acting only on its surest calls'
+            :'Trading only when fairly confident');
+  if(!sim)return lead+'.';
+  const net=(sim.pnl>=0?'+':'')+usd(sim.pnl);
+  return `${lead}: <b>${sim.trades.toLocaleString()}</b> trades, net <b class="${sim.pnl>=0?'pos':'neg'}">${net}</b>.`;
+}
+
+// ---- resolution + window ----
+function resSec(){return RES_SEC[$('res').value]||60;}
+function winSec(){return +$('window').value||86400;}
+function nBars(){return Math.min(NMAX,Math.max(NMIN,Math.round(winSec()/resSec())));}   // bars = window / bar-size, clamped
+function fmtDur(sec){if(sec<60)return sec+'s';if(sec<3600)return Math.round(sec/60)+'m';if(sec<DAY)return +(sec/3600).toFixed(sec%3600?1:0)+'h';if(sec<1209600)return +(sec/DAY).toFixed(sec%DAY?1:0)+'d';if(sec<31536000)return +(sec/604800).toFixed(sec%604800?1:0)+'w';return +(sec/31536000).toFixed(1)+'y';}
+function loadControlsForSource(keepRes,keepWin){
+  const c=srcCfg();
+  $('res').innerHTML=c.res.map(([l,v])=>`<option value="${v}">${l}</option>`).join('');
+  $('res').value=(keepRes&&c.res.some(r=>r[1]===keepRes))?keepRes:c.defRes;
+  $('window').innerHTML=c.windows.map(([l,s])=>`<option value="${s}">${l}</option>`).join('');
+  $('window').value=(keepWin&&c.windows.some(w=>String(w[1])===String(keepWin)))?keepWin:c.defWin;
+  $('livePanel').dataset.src=$('source').value;
+}
+function updateSpanBadge(){
+  const n=nBars(),span=n*resSec(),capped=n>=NMAX&&winSec()/resSec()>NMAX;
+  const b=$('spanBadge');b.style.display='';
+  b.innerHTML='evaluating <b>'+n.toLocaleString()+'</b> '+$('res').value+' bars &middot; <b>'+fmtDur(span)+'</b>'+(capped?' (capped)':'');
+}
+
+// ---- model multi-select (overlay set; remembered in localStorage) ----
+function renderPicker(){
+  const pop=$('msPop');
+  if(!MODELS.length){pop.innerHTML='<div class="empty">no trained models yet</div>';$('msBtn').textContent='none available';return;}
+  pop.innerHTML=MODELS.map(m=>`<label><input type="checkbox" value="${m}" ${SELECTED.includes(m)?'checked':''}>${m}</label>`).join('');
+  pop.querySelectorAll('input').forEach(c=>c.onchange=onPick);
+  updatePickerLabel();
+}
+function updatePickerLabel(){$('msBtn').textContent=SELECTED.length?(SELECTED.length+' selected'):'none selected';}
+function primaryModel(){return SELECTED[0]||'';}            // analytics/primary = first checked model
+function updatePrimaryLabel(){
+  const p=$('primaryLbl');
+  if(!SELECTED.length){p.className='primarylbl none';p.textContent='Primary (analytics) model: none selected';return;}
+  p.className='primarylbl';p.innerHTML='Primary (analytics) model: <b>'+primaryModel()+'</b>';
+}
+function onPick(){
+  SELECTED=Array.from($('msPop').querySelectorAll('input:checked')).map(c=>c.value);
+  cacheSet('selectedModels',SELECTED);
+  updatePickerLabel();updatePrimaryLabel();run(false);
+}
 
 // ---- loaders ----
 async function loadModels(){
   const j=await fetch('/market/veritate_models').then(r=>r.json()).catch(()=>({}));
-  MODELS=(j.models||[]).slice(0,6);
-  const m=$('model');m.innerHTML='';
-  MODELS.forEach(k=>{const o=document.createElement('option');o.value=k;o.textContent=k;m.appendChild(o);});
-  if(!MODELS.length)m.innerHTML='<option value="">no trained model yet</option>';
+  MODELS=j.models||[];
+  const savedSel=cacheGet('selectedModels');
+  SELECTED=(Array.isArray(savedSel)?savedSel:[]).filter(m=>MODELS.includes(m));
+  renderPicker();updatePrimaryLabel();
   return MODELS;
 }
 async function loadInstruments(keep){
   const j=await fetch('/market/instruments?source='+$('source').value).then(r=>r.json()).catch(()=>({}));
-  const list=j.instruments||[];
-  const want=$('source').value==='stocks'?'AAPL':'BTCUSDT';
-  const sel=$('symbol');sel.innerHTML=list.map(s=>`<option value="${s}">${s}</option>`).join('');
+  const list=j.instruments||[];                 // majors first, then alphabetical (server-ordered)
+  const want=srcCfg().defSym;
+  $('symbol').innerHTML=list.map(s=>`<option value="${s}">${s}</option>`).join('');
   const val=(keep&&list.includes(keep))?keep:(list.includes(want)?want:(list[0]||''));
-  sel.value=val;
+  $('symbol').value=val;
   return list;
 }
 
@@ -285,11 +436,44 @@ function drawOverlay(cv,prim,results,hOver){
   const actual=prim.price;let lo=Infinity,hi=-Infinity;
   const preds=results.map(r=>{const pp=predPath(r);for(const v of pp){if(v<lo)lo=v;if(v>hi)hi=v;}return pp;});
   for(const v of actual){if(v<lo)lo=v;if(v>hi)hi=v;}
-  const pad=64;const X=(i,len)=>pad+i/((len||actual.length)-1)*(w-pad-8),Y=v=>12+(hi-v)/(hi-lo||1)*(h-30);
-  gridY(x,w,h,lo,hi,v=>v.toPrecision(6),pad);
+  const padL=64,padR=64;const X=(i,len)=>padL+i/((len||actual.length)-1)*(w-padL-padR),Y=v=>12+(hi-v)/(hi-lo||1)*(h-30);
+  gridY(x,w,h,lo,hi,v=>v.toPrecision(6),padL);
+  drawTrades(x,prim,X,Y,w,h,padL,padR);                        // shaded traded bars + equity curve at current threshold
   results.forEach((r,k)=>poly(x,preds[k],X,Y,r.color,1.4));
   poly(x,actual,X,Y,C.white,2);
   return true;
+}
+// shade the bars the analytics model would TRADE at the current threshold, mark each entry, and draw
+// the resulting equity curve on a right-side $ axis. all off the cached hindcast, so the slider reshapes
+// this chart live without a model re-run.
+function drawTrades(x,prim,X,Y,w,h,padL,padR){
+  const sim=simulate(prim,STATE.dollars,STATE.conf),side=sim.side,eq=sim.eq;
+  if(!side||!side.length)return;
+  const len=prim.price.length;
+  for(let i=0;i<side.length;i++){
+    if(side[i]===0)continue;
+    const x0=X(i,len),x1=X(i+1,len);
+    x.fillStyle=side[i]>0?TRADE_UP:TRADE_DN;x.fillRect(x0,12,Math.max(1,x1-x0),h-30);
+  }
+  for(let i=1;i<side.length;i++){
+    if(Math.sign(side[i])===Math.sign(side[i-1])||side[i]===0)continue;   // mark each new entry (side change)
+    x.fillStyle=side[i]>0?C.pos:C.neg;x.beginPath();x.arc(X(i,len),Y(prim.price[i]),MARK_R,0,7);x.fill();
+  }
+  const eqLo=Math.min(...eq),eqHi=Math.max(...eq),base=STATE.dollars;
+  const ER=v=>12+(eqHi-v)/(eqHi-eqLo||1)*(h-30);
+  const xr=w-padR;
+  x.strokeStyle=EQ_REF;x.setLineDash([4,4]);x.beginPath();x.moveTo(padL,ER(base));x.lineTo(xr,ER(base));x.stroke();x.setLineDash([]);
+  drawEquityTrend(x,eq,i=>X(i,eq.length),ER,1.6);             // balance line colored by trend: up green, down red
+  x.fillStyle=C.soft;x.font='10px ui-monospace,monospace';x.textAlign='right';
+  x.fillText(usd(eqHi),w-4,12);x.fillText(usd(eqLo),w-4,h-4);x.textAlign='left';
+}
+// draw an equity polyline segment-by-segment, each segment colored by its slope: rising EQ_UP, falling EQ_DN.
+function drawEquityTrend(x,eq,X,Y,wd){
+  x.lineWidth=wd;
+  for(let i=1;i<eq.length;i++){
+    x.strokeStyle=eq[i]>=eq[i-1]?EQ_UP:EQ_DN;
+    x.beginPath();x.moveTo(X(i-1),Y(eq[i-1]));x.lineTo(X(i),Y(eq[i]));x.stroke();
+  }
 }
 
 // ---- analytics ----
@@ -343,39 +527,63 @@ function drawStrip(cv,a,p,conf,rc,hOver){
 }
 
 // ---- trading sim ----
-function simulate(g,dollars){
-  const eq=[dollars];let cash=dollars,pos=0,trades=0;
-  for(let i=0;i<g.price.length-1;i++){const want=g.p_up[i]>0.5?1:-1;
-    if(want!==pos){cash-=dollars*FEE*Math.abs(want-pos)/2;trades++;pos=want;}
+// thr = confidence threshold (0..1): only take a position when |p_up-0.5|*2 >= thr,
+// else flatten to cash. lower thr = more trades = more aggressive (more fees).
+// sizing on: scale exposure from SIZE_FLOOR to SIZE_FULL of dollars by that bar's confidence;
+// off: flat dollars per trade. side[] holds signed exposure fraction held over bar i -> i+1.
+function simulate(g,dollars,thr,sizing){
+  const sz=sizing==null?STATE.sizing:sizing;
+  const eq=[dollars],side=[];let cash=dollars,pos=0,trades=0;
+  for(let i=0;i<g.price.length-1;i++){
+    const conf=Math.abs(g.p_up[i]-0.5)*2;
+    const dir=conf>=thr?(g.p_up[i]>0.5?1:-1):0;
+    const frac=sz?(SIZE_FLOOR+(SIZE_FULL-SIZE_FLOOR)*conf):SIZE_FULL;
+    const want=dir*frac;
+    if(want!==pos){cash-=dollars*FEE*Math.abs(want-pos);if(dir!==0&&Math.sign(want)!==Math.sign(pos))trades++;pos=want;}
+    side.push(pos);                                            // signed exposure fraction over bar i -> i+1
     cash+=pos*dollars*(g.price[i+1]/g.price[i]-1);eq.push(cash);}
-  return {eq,final:cash,pnl:cash-dollars,trades};
+  return {eq,side,final:cash,pnl:cash-dollars,trades};
 }
-function drawDollar(cv,eq,dollars,hOver){
-  if(!eq||eq.length<2)return false;const[x,w,h]=dpr(cv,hOver);const lo=Math.min(...eq),hi=Math.max(...eq),pad=64;
-  const X=i=>pad+i/(eq.length-1)*(w-pad-8),Y=v=>12+(hi-v)/(hi-lo||1)*(h-30);
+// series: [{eq, color, analytics}]. one equity curve per checked model; the primary (analytics) line
+// is colored by trend (rising green, falling red), other models stay dimmed in their overlay color.
+function drawDollar(cv,series,dollars,hOver){
+  const lines=(series||[]).filter(s=>s.eq&&s.eq.length>1);
+  if(!lines.length)return false;const[x,w,h]=dpr(cv,hOver);const pad=64;
+  let lo=Infinity,hi=-Infinity;for(const s of lines)for(const v of s.eq){if(v<lo)lo=v;if(v>hi)hi=v;}
+  if(dollars<lo)lo=dollars;if(dollars>hi)hi=dollars;
+  const len=lines[0].eq.length,X=i=>pad+i/(len-1)*(w-pad-8),Y=v=>12+(hi-v)/(hi-lo||1)*(h-30);
   gridY(x,w,h,lo,hi,usd,pad);
   const yb=Y(dollars);x.strokeStyle='#2a3550';x.setLineDash([4,4]);x.beginPath();x.moveTo(pad,yb);x.lineTo(w-8,yb);x.stroke();x.setLineDash([]);
-  poly(x,eq,i=>X(i),Y,eq[eq.length-1]>=dollars?C.pos:C.neg,1.7);
+  for(const s of lines){
+    if(s.analytics){drawEquityTrend(x,s.eq,i=>X(i),Y,EQ_LINE);}
+    else{x.globalAlpha=EQ_DIM;poly(x,s.eq,i=>X(i),Y,s.color,EQ_LINE);x.globalAlpha=1;}
+  }
   return true;
+}
+// one equity series per checked model off its cached hindcast, analytics flagged + drawn last (on top)
+function equitySeries(){
+  const prim=STATE.primary;if(!prim)return [];
+  return STATE.results.map(r=>({eq:simulate(r,STATE.dollars,STATE.conf).eq,color:r.color,model:r.model,analytics:r.model===prim.model}))
+    .sort((a,b)=>a.analytics-b.analytics);
 }
 
 // ---- view router (small viewer + modal share this) ----
 const VIEW_META={
-  edge:{t:'Edge equity curve',n:'Cumulative of (direction it called) x (actual move), in return-bucket units. Rising means its calls leaned the right way. This is the raw directional edge, before fees.'},
-  acc:{t:'Cumulative directional accuracy',n:'Running share of moves it called right, against the dashed 50 percent coin flip.'},
-  calib:{t:'Confidence calibration',n:'Higher confidence should mean a higher hit rate. A rising line is well calibrated. Dashed is 50 percent.'},
-  pva:{t:'Predicted vs actual move',n:'White is the actual next-move bucket, blue is what the model predicted. The dashed line is flat (no move).'},
-  mag:{t:'Magnitude scatter',n:'Each minute is a point: predicted move size vs actual. A tight diagonal means it sizes moves right.'},
-  strip:{t:'Right or wrong per minute',n:'Each minute: green right, red wrong, gray flat. Brighter means the model was more confident.'},
-  data:{t:'Data inventory',n:'The instruments this model can be tested on, pulled full-history (real bars, not synthetic).'},
-  overlay:{t:'Market vs model',n:'White is the actual price. Each colored line is one model predicting its own path across the window.'},
-  dollar:{t:'If the model traded this for you',n:'Equity of trading the selected model after round-trip fees.'},
-  live:{t:'Live market and live model call',n:'Streaming the live market and the model next-minute call.'},
+  edge:{t:'Edge over time',n:'Each call stacked up as (direction it picked) times (what the price actually did). A line that climbs means its calls leaned the right way. This is the raw edge, before any fees.'},
+  acc:{t:'Accuracy over time',n:'Running share of moves it called correctly, against the dashed 50 percent line you would get from pure guessing.'},
+  calib:{t:'Does confidence mean anything',n:'When the model is more sure, it should be right more often. A line that rises left to right is well calibrated. The dashed line is a coin flip.'},
+  pva:{t:'Predicted vs actual move',n:'White is the move that actually happened, blue is the move the model expected. The closer they track, the better it read the next bar. The dashed line means no move.'},
+  mag:{t:'Did it size the move',n:'One dot per bar: how big the model thought the move would be versus how big it actually was. Dots near the diagonal mean it sizes moves well.'},
+  strip:{t:'Right or wrong per bar',n:'One stripe per bar across time: green it called right, red wrong, gray no move. Brighter stripes are calls it was more confident about.'},
+  data:{t:'Data inventory',n:'The instruments you can test this model on, and how much real history each one has on disk.'},
+  overlay:{t:'Market vs model',n:'White is the actual price. Each colored line is one model walking the same window using only its own up or down calls. Shaded bars are the ones the primary model trades at the current boldness (green long, red short); the balance line (right $ axis) is colored by trend, green where the account rises and red where it falls.'},
+  dollar:{t:'Trading the same calls',n:'Each checked model\'s calls turned into a running account balance, trading the dollar amount you set and paying a fee on every flip. The primary model is the green/red trend-colored line (green rising, red falling); other models stay in their overlay colors.'},
+  live:{t:'Live market and live model call',n:'Streaming the live market and the model\'s call for the next bar, updating every few seconds.'},
 };
 function renderChart(kind,cv,hOver){
   const B=STATE.bench;
   if(kind==='overlay')return drawOverlay(cv,STATE.primary,STATE.results,hOver);
-  if(kind==='dollar')return STATE.sim?drawDollar(cv,STATE.sim.eq,STATE.dollars,hOver):false;
+  if(kind==='dollar')return STATE.sim?drawDollar(cv,equitySeries(),STATE.dollars,hOver):false;
   if(kind==='live')return liveBuf.length>1?drawLive(cv,liveBuf,livePred,liveLast,hOver):false;
   if(!B)return false;
   const rc=B.ret_center,rb=B.ret_bins;
@@ -406,6 +614,46 @@ async function renderView(){
   cwState('cw_view',ok?'ready':'empty');
 }
 
+// ---- threshold-driven render (overlay trades+equity, dollar curve, sim cards). pure off cached
+//      hindcast in STATE, so dragging the aggressiveness slider reshapes the charts with no model re-run.
+function resim(){
+  const prim=STATE.primary;if(!prim)return;
+  const dollars=STATE.dollars,thr=STATE.conf,base=$('res').value;
+  const sim=simulate(prim,dollars,thr);STATE.sim=sim;
+  const pctChg=(sim.pnl/dollars*100),rt=FEE*1e4*2;
+  cwState('cw_hind',drawOverlay($('hind'),prim,STATE.results)?'ready':'empty');
+  $('pnlReadout').innerHTML=`Started <b>${usd(dollars)}</b> &rarr; ended <b class="${sim.final>=dollars?'pos':'neg'}">${usd(sim.final)}</b> `
+    +`(<b class="${sim.pnl>=0?'pos':'neg'}">${pctChg>=0?'+':''}${pctChg.toFixed(1)}%</b>) after ${rt} bps round-trip fees, <b>${sim.trades.toLocaleString()}</b> trades.`;
+  $('pnlcells').innerHTML=`
+    <div class="card"><div class="k">Starting</div><div class="v">${usd(dollars)}</div><div class="s">${prim.symbol}, last ${prim.n.toLocaleString()} ${base} bars</div></div>
+    <div class="card"><div class="k">Ending</div><div class="v ${sim.final>=dollars?'pos':'neg'}">${usd(sim.final)}</div><div class="s">after ${rt} bps round-trip fees</div></div>
+    <div class="card"><div class="k">Profit / loss</div><div class="v ${sim.pnl>=0?'pos':'neg'}">${sim.pnl>=0?'+':''}${usd(sim.pnl)}</div><div class="s">${pctChg.toFixed(1)}% on capital</div></div>
+    <div class="card"><div class="k">Trades taken</div><div class="v ${hue(prim.hit_rate)}">${sim.trades.toLocaleString()}</div><div class="s">at conf &ge; ${pct(thr)} &middot; dir right ${pct(prim.hit_rate)}</div></div>`;
+  const series=equitySeries();
+  cwState('cw_dollar',drawDollar($('dollar'),series,dollars)?'ready':'empty');
+  const trendLeg=`<span class="leg"><i style="background:${EQ_UP}"></i><i style="background:${EQ_DN}"></i>primary balance: green rising, red falling</span>`;
+  $('dollarLegend').innerHTML=series.length>1
+    ? trendLeg+series.filter(s=>!s.analytics).map(s=>`<span class="leg"><i style="background:${s.color}"></i>${s.model}</span>`).join('')
+    : trendLeg;
+  const multi=series.length>1;
+  const sizeNote=STATE.sizing
+    ? ` Confidence sizing is on: weaker calls take a small floor position and surest calls take the full Trade size. On a near coin-flip signal, bigger bets on louder calls mostly amplify the fee bleed, not the profit.`
+    : '';
+  $('dollarNote').innerHTML=(sim.pnl>=0
+    ? `On this stretch the primary model would have finished ahead. Stay skeptical: flipping in and out pays a fee every time, and a small edge rarely survives live.`
+    : `On this stretch the primary model would have <b>lost</b> money: a near coin-flip direction call cannot beat ${rt} bps of fees per round trip. This is the honest result of trading raw price direction.`)
+    +(multi?` Each line is one checked model trading the same money at the same boldness; the primary model is the green/red trend-colored line, the others stay in their overlay colors.`:'')
+    +sizeNote
+    +` Drag <b>How boldly it trades</b> down and watch the trade count rise: 1m direction is near a coin flip (dir-acc ~0.51), so more trades just pays more fees and loses faster. Each bar is one trade decision, so the <b>resolution</b> you pick sets how often it trades.`;
+  confReadout(sim);
+}
+function confReadout(sim){                                     // live continuum readout beside the slider
+  const thr=STATE.conf;
+  $('confLbl').textContent=confLabel(thr);
+  if(sim){$('confStat').innerHTML=`<b>${sim.trades.toLocaleString()}</b> trades &middot; net <b class="${sim.pnl>=0?'pos':'neg'}">${sim.pnl>=0?'+':''}${usd(sim.pnl)}</b>`;}
+  $('confDesc').innerHTML=confDescribe(thr,sim);
+}
+
 // ---- run ----
 function busy(on,text){
   const g=$('go');
@@ -414,24 +662,30 @@ function busy(on,text){
 }
 async function run(force){
   const tok=++runTok;
-  const src=$('source').value,sym=$('symbol').value,primary=$('model').value,dollars=Math.max(1,+$('dollars').value||10000);
-  STATE.dollars=dollars;$('dlbl').textContent=dollars.toLocaleString();
-  if(!primary){setStatus('No trained model yet. Train one on the market corpus, then reload.','err');return;}
-  if(!sym){setStatus('Pick an instrument.','err');return;}
-  const benchUrl=`/market/veritate_benchmark?source=${src}&symbol=${encodeURIComponent(sym)}&model=${primary}&n=1500`;
+  const src=$('source').value,sym=$('symbol').value,primary=primaryModel(),dollars=Math.max(1,+$('dollars').value||10000);
+  const base=$('res').value,n=nBars(),thr=confThr();
+  STATE.dollars=dollars;STATE.conf=thr;STATE.sizing=$('sizeConf').checked;$('dlbl').textContent=dollars.toLocaleString();
+  $('confLbl').textContent=confLabel(thr);
+  updateSpanBadge();
+  if(!SELECTED.length){clearOutputs();return;}
+  if(!sym){setStatus('Pick a symbol.','err');return;}
+  const q=`source=${src}&symbol=${encodeURIComponent(sym)}&base=${base}&n=${n}`;
+  const benchUrl=`/market/veritate_benchmark?${q}&model=${primary}`;
   const cached=!force&&cacheAge(benchUrl)!=null;
-  busy(true,cached?('Loading cached results for '+sym+'...'):('Scoring '+sym+' across '+MODELS.length+' model'+(MODELS.length>1?'s':'')+'...'));
+  busy(true,cached?('Loading cached results for '+sym+'...'):('Scoring '+sym+' at '+base+' across '+SELECTED.length+' model'+(SELECTED.length>1?'s':'')+'...'));
   ['cw_hind','cw_dollar','cw_view'].forEach(w=>cwState(w,'loading'));
   $('benchcards').innerHTML=skcards(8);$('pnlcells').innerHTML=skcards(4);
   try{
     const [hinds,bench]=await Promise.all([
-      Promise.all(MODELS.map(m=>cf(`/market/veritate_hindcast?source=${src}&symbol=${encodeURIComponent(sym)}&model=${m}&n=1500`,force).catch(()=>({ok:false})))),
+      Promise.all(SELECTED.map(m=>cf(`/market/veritate_hindcast?${q}&model=${m}`,force).catch(()=>({ok:false})))),
       cf(benchUrl,force).catch(()=>({ok:false})),
     ]);
     if(tok!==runTok)return;
     const results=hinds.map((g,i)=>g&&g.ok?Object.assign(g,{color:MCOLORS[i%MCOLORS.length]}):null).filter(Boolean);
     if(!results.length){
-      setStatus('No data for '+sym+' on '+src+'. Try another instrument.','err');
+      const why=src==='stocks'?'There may not be enough daily bars to run the model. Try another ticker or a longer window.':'The symbol may have no Binance history, or the feed is unreachable. Try another instrument or a shorter window.';
+      setStatus('No data for '+sym+'. '+why,'err');
+      setOverlayEmpty('No data for <b>'+sym+'</b>. Try another instrument, or a shorter window.');
       ['cw_hind','cw_dollar','cw_view'].forEach(w=>cwState(w,'empty'));
       $('benchcards').innerHTML='<div class="note">no data.</div>';$('pnlcells').innerHTML='';
       busy(false);return;
@@ -439,28 +693,18 @@ async function run(force){
     const prim=results.find(r=>r.model===primary)||results[0];
     STATE.primary=prim;STATE.results=results;STATE.bench=(bench&&bench.ok)?bench:null;
     setCkpt((bench&&bench.step!=null)?bench.step:prim.step);
-    // overlay
-    cwState('cw_hind',drawOverlay($('hind'),prim,results)?'ready':'empty');
     $('overlayLegend').innerHTML='<span class="leg"><i style="background:#fff"></i>actual price</span>'+
-      results.map(r=>`<span class="leg"><i style="background:${r.color}"></i>${r.model}${r.model===primary?' (selected)':''}${r.hit_rate!=null?' &middot; hit '+pct(r.hit_rate):''}</span>`).join('');
-    // trading sim
-    const sim=simulate(prim,dollars);STATE.sim=sim;
-    $('pnlcells').innerHTML=`
-      <div class="card"><div class="k">Starting</div><div class="v">${usd(dollars)}</div><div class="s">${prim.symbol}, last ${prim.n.toLocaleString()} min</div></div>
-      <div class="card"><div class="k">Ending</div><div class="v ${sim.final>=dollars?'pos':'neg'}">${usd(sim.final)}</div><div class="s">after ${FEE*1e4*2} bps round-trip fees</div></div>
-      <div class="card"><div class="k">Profit / loss</div><div class="v ${sim.pnl>=0?'pos':'neg'}">${sim.pnl>=0?'+':''}${usd(sim.pnl)}</div><div class="s">${(sim.pnl/dollars*100).toFixed(1)}% on capital</div></div>
-      <div class="card"><div class="k">Direction right</div><div class="v ${hue(prim.hit_rate)}">${pct(prim.hit_rate)}</div><div class="s">${sim.trades.toLocaleString()} position changes</div></div>`;
-    cwState('cw_dollar',drawDollar($('dollar'),sim.eq,dollars)?'ready':'empty');
-    $('dollarNote').innerHTML=sim.pnl>=0
-      ? `On this stretch the selected model would have finished ahead. Be skeptical: minute trading pays fees on every flip, and a small edge rarely survives live.`
-      : `On this stretch the selected model would have <b>lost</b> money: a near coin-flip direction call cannot beat ${FEE*1e4*2} bps fees at minute speed. This is the honest result of trading raw price direction.`;
+      results.map(r=>`<span class="leg"><i style="background:${r.color}"></i>${r.model}${r.model===primary?' (primary)':''}${r.hit_rate!=null?' &middot; hit '+pct(r.hit_rate):''}</span>`).join('')+
+      `<span class="leg"><i style="background:${EQ_UP}"></i><i style="background:${EQ_DN}"></i>balance (green up, red down)</span><span class="leg"><i class="dot" style="background:${TRADE_UP}"></i>shaded = bars traded</span>`;
+    resim();                                                   // overlay (incl. trades+equity), dollar curve, sim cards: all threshold-driven
     // metrics + analytics viewer
     if(STATE.bench){renderBench(STATE.bench,primary);renderCalls(STATE.bench);$('benchModel').textContent=primary+' @ step '+(bench.step||'');}
     else {$('benchcards').innerHTML='<div class="note">benchmark unavailable.</div>';$('callsPanel').style.display='none';}
     await renderView();
-    $('honest').innerHTML=`<b>What this is.</b> A test of whether a byte-level model trained on JUST market data (no news, no labels) can predict price. It sizes moves (volatility) better than a naive carry-forward, but direction at the minute scale is close to a coin flip for any model, so trading it after fees is hard. Use this page to compare, across instruments, what the market did against what each model predicted.`;
+    $('honest').innerHTML=`<b>What this is.</b> A test of whether a byte-level model trained on JUST market data (no news, no labels) can predict price. It guesses the size of moves better than a naive carry-forward, but calling direction at short time scales is close to a coin flip for any model, so trading it after fees is hard. Use this page to compare, across instruments, what the market did against what each model predicted.`;
     $('status').className='statusbar ok';
-    $('statusText').innerHTML=prim.symbol+': scored '+prim.n.toLocaleString()+' minutes across '+results.length+' model'+(results.length>1?'s':'')+'. Direction right <b class="'+hue(prim.hit_rate)+'">'+pct(prim.hit_rate)+'</b>.'
+    const span=(prim.t&&prim.t.length>1)?(' spanning '+fmtT(prim.t[0])+' to '+fmtT(prim.t[prim.t.length-1])):'';
+    $('statusText').innerHTML=prim.symbol+': scored '+prim.n.toLocaleString()+' '+base+' bars across '+results.length+' model'+(results.length>1?'s':'')+span+'. Direction right <b class="'+hue(prim.hit_rate)+'">'+pct(prim.hit_rate)+'</b>.'
       +(cached?' <span style="color:var(--dim)">cached '+ago(cacheAge(benchUrl))+', press Run to refresh</span>':'');
     busy(false);
     saveControls();
@@ -468,6 +712,24 @@ async function run(force){
   }catch(e){if(tok===runTok){setStatus('Error: '+e,'err');busy(false);}}
 }
 function skcards(n){return Array.from({length:n},()=>'<div class="skel skcard"></div>').join('');}
+function setOverlayEmpty(html){const e=$('cw_hind').querySelector('.empty');if(e)e.innerHTML='<div style="max-width:560px;line-height:1.65">'+html+'</div>';}
+function clearOutputs(){
+  ['cw_dollar','cw_view'].forEach(w=>cwState(w,'empty'));
+  $('benchcards').innerHTML='';$('pnlcells').innerHTML='';$('overlayLegend').innerHTML='';
+  $('dollarNote').innerHTML='';$('benchModel').textContent='';$('multi').innerHTML='';
+  $('callsPanel').style.display='none';STATE.primary=null;STATE.bench=null;busy(false);
+  const has=MODELS.length>0;
+  setOverlayEmpty(has
+    ? '<b>No models selected yet.</b><br><br>Open <b>Compare models</b> in the bar above and tick one or more. Each model you check is drawn here as a colored predicted-price line over the white actual price. The <b>first</b> model you check is the primary (analytics) model that drives the metrics, trading sim, and best / worst calls.<br><br>Choose a symbol, resolution, and window, then press <b>Run</b>. Your picks are remembered next time.'
+    : '<b>No trained market models found.</b><br><br>Train a byte model on the market corpus first (Training tab), then reload this page. Any model with a checkpoint shows up in the <b>Compare models</b> dropdown here.');
+  cwState('cw_hind','empty');
+  setStatus(has?'No models selected. Tick what to compare in the Compare models dropdown to begin.'
+               :'No trained Veritate market model yet. Train one on the market corpus, then reload.',
+            has?'':'err');
+  $('honest').innerHTML=has
+    ? '<b>How to start.</b> This page compares what the market actually did against what one or more byte-level Veritate models predicted. Pick crypto or stocks, tick the models to compare, choose a symbol, resolution, and window, then press <b>Run</b>. Crypto data is pulled automatically on first use; stock history is daily bars already on disk.'
+    : '<b>What this is.</b> A test of whether a byte-level model trained on JUST market data can predict price. No trained market model exists yet, so nothing can run. Train one on the market corpus, then come back.';
+}
 
 function renderBench(d,primary){
   const m=d.metrics,b=d.baseline;
@@ -487,6 +749,19 @@ function renderBench(d,primary){
     ['Final edge',d.equity&&d.equity.length?f2(d.equity[d.equity.length-1]):'n/a','cumulative bucket-units',d.equity&&d.equity.length&&d.equity[d.equity.length-1]>0?'good':(d.equity&&d.equity.length&&d.equity[d.equity.length-1]<0?'bad':'')],
     ['Move mix',pct(m.up_rate)+' / '+pct(m.down_rate),'up / down, flat '+pct(m.flat_rate),''],
   ];
+  const tr=d.trading;
+  if(tr){
+    const dd=v=>v==null?'n/a':((v>=0?'+':'')+(v*1e4).toFixed(0)+' bps');
+    cards.push(
+      ['Win rate',pct(tr.win_rate),tr.n_trades.toLocaleString()+' trades, before fees',tr.win_rate>0.5?'good':(tr.win_rate<0.5?'bad':'')],
+      ['Profit factor',f2(tr.profit_factor),'gross wins / gross losses, >1 is profitable',tr.profit_factor==null?'':(tr.profit_factor>1?'good':'bad')],
+      ['Expectancy',dd(tr.expectancy),'average result per trade, before fees',tr.expectancy>0?'good':(tr.expectancy<0?'bad':'')],
+      ['Sharpe per trade',f2(tr.sharpe),'return vs its own swings, higher is steadier',tr.sharpe==null?'':(tr.sharpe>0?'good':'bad')],
+      ['Max drawdown','-'+(tr.max_drawdown*1e4).toFixed(0)+' bps','worst peak-to-trough dip along the way','neg'],
+      ['Total return',dd(tr.total_return),'all trades stacked up, before fees',tr.total_return>0?'good':(tr.total_return<0?'bad':'')],
+      ['Net after fees',dd(tr.net_return),'total return minus 20 bps per trade',tr.net_return==null?'':(tr.net_return>0?'good':'bad')],
+    );
+  }
   $('benchcards').innerHTML=cards.map(([k,v,s,c])=>`<div class="card"><div class="k">${k}</div><div class="v ${cl(c)}">${v}</div><div class="s">${s}</div></div>`).join('');
 }
 function renderCalls(d){
@@ -500,14 +775,16 @@ function renderCalls(d){
 }
 
 // ---- multi-instrument ----
+const MULTI_SET={crypto:['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','DOGEUSDT','LINKUSDT'],
+  stocks:['AAPL','MSFT','NVDA','AMZN','GOOGL','TSLA']};
 async function loadMulti(src,model,dollars,force){
   if(!model)return;
-  const set=src==='stocks'?['AAPL','MSFT','NVDA','AMZN','TSLA','GOOGL']:['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','DOGEUSDT','LINKUSDT'];
+  const set=MULTI_SET[src]||MULTI_SET.crypto;
   $('multi').innerHTML=set.map(s=>`<div class="mini" data-sym="${s}"><div class="top"><span>${s.replace('USDT','')}</span><span class="skel" style="width:30px;height:12px;display:inline-block"></span></div><div class="chartwrap"><canvas id="mc_${s}"></canvas></div><div class="stat" id="ms_${s}"><span>hit -</span><span>P/L -</span></div></div>`).join('');
   document.querySelectorAll('.mini').forEach(el=>el.onclick=()=>{$('symbol').value=el.dataset.sym;run(false);});
   for(const s of set){
     try{
-      const g=await cf(`/market/veritate_hindcast?source=${src}&symbol=${s}&model=${model}&n=800`,force);
+      const g=await cf(`/market/veritate_hindcast?source=${src}&symbol=${s}&base=${$('res').value}&n=${Math.min(nBars(),800)}&model=${model}`,force);
       const top=document.querySelector(`.mini[data-sym="${s}"] .top span:last-child`);
       if(!g.ok){if(top){top.className='';top.textContent='n/a';}continue;}
       const cv=$('mc_'+s);const[x,w,h]=dpr(cv,56);const p=g.price,pp=predPath(g);
@@ -515,7 +792,7 @@ async function loadMulti(src,model,dollars,force){
         const X=(i,len)=>2+i/((len||p.length)-1)*(w-4),Y=v=>4+(hi-v)/(hi-lo||1)*(h-8);
         if(pp.length)poly(x,pp,X,Y,C.accent,1);
         poly(x,p,X,Y,C.white,1.2);}
-      const sim=simulate(g,dollars);
+      const sim=simulate(g,dollars,STATE.conf);
       if(top){top.className='';top.textContent='';}
       $('ms_'+s).innerHTML=`<span class="${hue(g.hit_rate)}">hit ${pct(g.hit_rate)}</span><span class="${sim.pnl>=0?'pos':'neg'}">${sim.pnl>=0?'+':''}${usd(sim.pnl)}</span>`;
     }catch(e){}
@@ -534,6 +811,14 @@ function openModal(kind){
 function closeModal(){$('modal').classList.add('hidden');}
 
 // ---- live ----
+function applyLive(){                              // stocks are daily bars: no live stream
+  const ok=srcCfg().live,btn=$('live'),lp=$('livePanel');
+  if(!ok&&liveTimer)setLive(false);
+  btn.disabled=!ok;btn.style.display=ok?'':'none';
+  $('liveExpandWrap').style.display=ok?'':'none';$('liveBody').style.display=ok?'':'none';
+  if(!ok){lp.style.display='';$('livenote').textContent='Stocks are daily bars, so there is no live intraday feed to stream. Run a model above to score the daily history.';}
+  else{$('livenote').textContent='Press Live to stream the market and watch the analytics model call the next bar in real time.';if(!liveTimer)lp.style.display='none';}
+}
 function setLive(on){
   const lp=$('livePanel'),wrap=document.querySelector('.wrap');
   if(on){$('live').style.background='#0d1a12';$('live').style.borderColor='var(--data-pos)';$('live').textContent='Stop live';
@@ -542,7 +827,7 @@ function setLive(on){
   else{clearInterval(liveTimer);liveTimer=null;$('live').style.background='#1a2030';$('live').style.borderColor='var(--line)';$('live').textContent='Live';lp.style.display='none';}
 }
 async function pollLive(){
-  const src=$('source').value,sym=$('symbol').value,model=$('model').value;
+  const src=$('source').value,sym=$('symbol').value,model=primaryModel();
   if(!model)return;
   try{
     const f=await fetch(`/market/veritate_live?source=${src}&symbol=${encodeURIComponent(sym)}&model=${model}`).then(r=>r.json());
@@ -553,7 +838,7 @@ async function pollLive(){
     if(f.step!=null)setCkpt(f.step);
     cwState('cw_live',drawLive($('livechart'),liveBuf,livePred,f)?'ready':'empty');
     const dir=f.p_up>0.5?'UP':'DOWN';
-    $('livenote').innerHTML=`LIVE ${sym} <b>${f.last_close.toPrecision(6)}</b>, model calls next minute <b class="${f.p_up>0.5?'pos':'neg'}">${dir} ${pct(f.p_up)}</b>, expected move ${f.expected_move_bps.toFixed(0)} bps, updated ${new Date().toLocaleTimeString()} (every 12s).`;
+    $('livenote').innerHTML=`LIVE ${sym} <b>${f.last_close.toPrecision(6)}</b>, model calls the next bar <b class="${f.p_up>0.5?'pos':'neg'}">${dir} ${pct(f.p_up)}</b>, expected move ${f.expected_move_bps.toFixed(0)} bps, updated ${new Date().toLocaleTimeString()} (every 12s).`;
   }catch(e){$('livenote').textContent='Live error: '+e;}
 }
 function drawLive(cv,buf,pred,f,hOver){
@@ -574,11 +859,17 @@ function drawLive(cv,buf,pred,f,hOver){
 // ---- wiring ----
 $('go').onclick=()=>run(true);                 // Run = force a fresh model run + refresh cache
 $('live').onclick=()=>setLive(!liveTimer);
-$('source').onchange=async()=>{await loadInstruments();run(false);};
-$('symbol').onchange=()=>run(false);           // cached per symbol; first view fetches, revisits are instant
-$('model').onchange=()=>run(false);
+$('source').onchange=async()=>{loadControlsForSource();applyLive();updateSpanBadge();await loadInstruments();run(false);};
+$('res').onchange=()=>{updateSpanBadge();run(false);};      // bar size: per minute up to hourly
+$('window').onchange=()=>{updateSpanBadge();run(false);};   // history length -> bar count + total span
+$('symbol').onchange=()=>{$('symbol').value=$('symbol').value.trim().toUpperCase();run(false);};  // cached per symbol; first view fetches, revisits are instant
 $('dollars').onchange=()=>run(false);          // dollars only re-sims; cached fetch makes it instant
+$('conf').oninput=()=>{STATE.conf=confThr();if(STATE.primary)resim();else confReadout(null);};  // live reshape of overlay+equity while dragging, off cache
+$('conf').onchange=()=>{STATE.conf=confThr();saveControls();if(primaryModel())loadMulti($('source').value,primaryModel(),STATE.dollars,false);};  // persist + refresh multi-grid P/L (off cache) at held threshold
+$('sizeConf').onchange=()=>{STATE.sizing=$('sizeConf').checked;saveControls();if(STATE.primary)resim();};  // confidence-weighted sizing toggle: re-sim live off cache
 $('viewSel').onchange=renderView;
+$('msBtn').onclick=e=>{e.stopPropagation();$('msPop').classList.toggle('open');};
+document.addEventListener('click',e=>{if(!$('msPop').contains(e.target)&&e.target!==$('msBtn'))$('msPop').classList.remove('open');});
 document.querySelectorAll('.expand').forEach(b=>b.onclick=()=>openModal(b.dataset.kind));
 $('modalClose').onclick=closeModal;
 $('modal').onclick=e=>{if(e.target.id==='modal')closeModal();};
@@ -587,13 +878,18 @@ window.addEventListener('resize',()=>{ if(STATE.primary){renderChart('overlay',$
 (async()=>{
   setStatus('Loading models...','busy');
   const saved=cacheGet('controls')||{};
-  const models=await loadModels();
-  if(saved.source==='crypto'||saved.source==='stocks')$('source').value=saved.source;
+  if(saved.source&&SRC[saved.source])$('source').value=saved.source;
+  loadControlsForSource(saved.res,saved.window);       // source-aware resolution + window sets
+  applyLive();
   if(saved.dollars)$('dollars').value=saved.dollars;
+  if(saved.conf!=null)$('conf').value=saved.conf;
+  if(saved.sizing!=null)$('sizeConf').checked=!!saved.sizing;
+  STATE.conf=confThr();STATE.sizing=$('sizeConf').checked;confReadout(null);
+  await loadModels();                                  // MODELS, SELECTED (from cache), picker; primary = first checked
   await loadInstruments(saved.symbol);                 // restore last symbol if still available
-  if(saved.model&&models.includes(saved.model))$('model').value=saved.model;
-  if(models.length){run(false);}                       // reload renders from cache, no re-run
-  else{setStatus('No trained Veritate model yet. Train one on the market corpus, then reload.','err');['cw_hind','cw_dollar','cw_view'].forEach(w=>cwState(w,'empty'));}
+  updateSpanBadge();
+  if(SELECTED.length){run(false);}                     // reload renders from cache, no re-run
+  else{clearOutputs();}
 })();
 </script>
 </body>

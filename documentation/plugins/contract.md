@@ -38,6 +38,15 @@ Optional per-trainer files (corpus builders, helpers used by only this trainer) 
 - `defaults` — every argparse arg the plugin accepts, with its default value. The dashboard generates form fields from this; missing keys mean missing form fields.
 - `bench` (optional) — `true` when the trainer implements the `--bench` flag ([bench.md](../platform/bench.md)). Gates the dashboard's Auto tune; without it the flag would be silently dropped by `parse_known_args` and a real run would start.
 
+**`model_type` is NOT a manifest field.** It is a REQUIRED per-RUN choice
+(`language`|`code`|`statistical`|`other`) set on the dashboard run form, not declared in any
+trainer manifest and never given a manifest default. The same trainer trains BOTH language
+and statistical models, so the type is per run, not per trainer. It rides to the trainer via
+the `VERITATE_MODEL_TYPE` env var (a CLI `--model_type` is dropped by `parse_known_args`) and
+is stamped into `config.training_args.model_type` by `save.py`. Absent => defaulted to
+`language` => the language probe suite runs on a non-text model. Full contract:
+[launching_runs.md](../training/launching_runs.md#model_type-is-mandatory-read-this-before-launching-anything-non-text).
+
 ## trainer.py contract
 
 The trainer is a standalone Python script. It must:

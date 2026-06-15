@@ -14,11 +14,33 @@ All paths relative to `models/<name>/hooks/step_<N>/`. Every artifact below is p
 | `lens_step_<N>.npz` | `dump_probe` | `lens_logits` int32 [layers, vocab], `residual_norms` fp32 [layers] |
 | `classroom_step_<N>.json` | `dump_classroom` | `step`, `precision`, `params`, `int8_bytes`, `int4_bytes`, `weight_delta_l2`, `alive_neurons_per_layer`, `time_s` |
 | `grades_step_<N>.json` | `dump_grades` | `step`, `precision`, `grades: {level: {ppl, n_bytes}}`, `estimated_reading_grade`, `time_s` |
+| `reading_comprehension_step_<N>.json` | `dump_reading_comprehension` | `step`, `precision`, `modes: {mode: {bands, overall_accuracy, n_items_total}}`, `bands`, `overall_accuracy`, `n_items_total`, `chance`, `n_candidates`, `time_s` |
+| `math_step_<N>.json` | `dump_math` | `step`, `precision`, `tiers` (per-tier argmax-match accuracy), `time_s` |
+| `grammar_step_<N>.json` | `dump_grammar` | `step`, `precision`, `types` (per-type preference accuracy), `time_s` |
+| `reasoning_step_<N>.json` | `dump_reasoning` | `step`, `precision`, `tiers` (per-tier argmax-match accuracy), `time_s` |
 | `concepts_step_<N>.json` | `dump_concepts` | `step`, `precision`, `concepts`, `top_k_per_layer`, `time_s` |
 | `surprise_step_<N>.json` | `dump_surprise` | `step`, `precision`, `prompt`, `tokens`, `surprise` (bits/byte per token), `time_s` |
 | `quant_kl_step_<N>.json` | `dump_quant_kl` | `step`, `precision`, `quant_kl_bits`, `n_levels`, `time_s` |
 | `writing_health_step_<N>.json` | `dump_writing_health` | `step`, `precision`, `samples[]: {prompt, generation, metrics}`, `aggregate`, `config`, `caveat`, `time_s`. Mathematical proxies for writing structure only (mode collapse, repetition, anaphora, off-corpus drift). Not a measure of narrative sense or factual correctness. |
 | `step_<N>.json` | `dump_generation` | `meta`, `frames[]` (each frame carries the full TFRM v7 field set below) |
+
+### model_type gates the language-only dumps
+
+`save.py` does NOT always emit every artifact above. The run's `model_type`
+(`language`|`code`|`statistical`|`other`, set on the dashboard run form, carried via the
+`VERITATE_MODEL_TYPE` env var, stamped into `config.training_args.model_type`) gates the
+language dumps. When `model_type` is anything other than `language`, `save()` skips
+`LANGUAGE_DUMPS` (`save.py:57-60`): `grades`, `reading_comprehension`, `math`,
+`grammar`, `reasoning`, `concepts`, `writing_health`, `generation`. The architecture probes
+(`probe`/`lens`, `classroom`, `surprise`, `quant_kl`) and the checkpoint itself always run,
+regardless of `model_type`. `lens.npz` (from `dump_probe`) feeds the confidence-evolution and
+lens-drift panels, which the dashboard renders for every model type, so `probe` is NOT gated.
+
+`model_type` ABSENT from a config defaults to `language` (`save.py:500`,
+`(mtype or "language").lower()`), so a market/statistical model trained without setting it
+accrues the full meaningless language suite. Set `model_type` per run; market/byte-series
+models = `statistical`. Full contract:
+[launching_runs.md](../training/launching_runs.md#model_type-is-mandatory-read-this-before-launching-anything-non-text).
 
 ## tfrm v7 frame fields (per generated token)
 
@@ -47,7 +69,7 @@ Emitted by both training-time `dump_generation` and inference-time chat. The das
 | `decisiveness` | `float [layers]` | per-layer max_abs / mean_abs of logit-delta projection |
 | `dla_picked` | `[{layer, neuron, act, w, contrib}]` | direct logit attribution for sampled byte |
 | `dla_argmax` | `[{layer, neuron, act, w, contrib}]` | direct logit attribution for argmax byte |
-| `dla_cand` | `[cands][{layer, neuron, act, w, contrib}]` | direct logit attribution per top-K candidate byte (v8). Length matches `cand`. Element i is the DLA for `cand[i].b`. Answers the question "why did it almost say X". |
+| `dla_cand` | `[{b, entries: [{layer, neuron, act, w, contrib}]}]` | direct logit attribution per top-K candidate byte (v8). One element per `cand`, each carrying its candidate byte `b` and its `entries` attribution list. Answers the question "why did it almost say X". |
 | `ablation` | `{layer, neuron}` or null | echo of any active ablation request for this token (v8). Null when no ablation. UI metadata only, not a derivation. |
 | `margin` | float | logit gap between top-1 and top-2 |
 | `entropy` | float | entropy of next-byte distribution (nats) |
@@ -63,15 +85,15 @@ Emitted by both training-time `dump_generation` and inference-time chat. The das
 |---|---|---|
 | active inference | live forward, TFRM frame stream | `GET /generate?prompt=...&backend=c\|pytorch` |
 | in-process training | TFRM frame dumped each checkpoint via `dump_generation` | `models/<name>/hooks/step_<N>/generation.json` |
-| past-checkpoint learning | all eight artifacts above per saved step | `models/<name>/hooks/step_<N>/{probe,lens,classroom,grades,concepts,surprise,quant_kl,generation}.{json,npz}` |
-| distillation | the same eight-artifact suite runs on teacher and student per checkpoint; quality comparison is field-level | `models/<teacher>/hooks/...` and `models/<student>/hooks/...` at the same step |
+| past-checkpoint learning | every artifact above per saved step | `models/<name>/hooks/step_<N>/{probe,lens,classroom,grades,reading_comprehension,math,grammar,reasoning,concepts,surprise,quant_kl,writing_health,generation}.{json,npz}` |
+| distillation | the same dump suite runs on teacher and student per checkpoint; quality comparison is field-level | `models/<teacher>/hooks/...` and `models/<student>/hooks/...` at the same step |
 | live training stream | per-step TFRM-lite (residual norms, top-K neurons, lens top-3) over SSE from `veritate_mri/app.py` | `GET /train_stream` (opt-in via trainer call to the streaming helper) |
 | ablation | inference forward with one FFN neuron zeroed at the kernel boundary | `GET /generate?...&ablate_layer=L&ablate_neuron=N` (engine + pytorch) |
 | ablation replay | same as ablation but loads a saved checkpoint instead of the latest bin | `GET /generate?...&checkpoint=step_<N>&ablate_layer=L&ablate_neuron=N` |
 
 ## interpretability endpoints
 
-Atlas endpoints aggregate frames from the in-memory ring (live) or `step_<N>.json` (past). Backed by one module (`veritate_mri/atlas.py`) that consumes a frame iterator + query and returns aggregated stats. No new TFRM fields, no new dump artifacts: pure derivations over Rule-4 data.
+Atlas endpoints aggregate frames from the in-memory ring (live) or `step_<N>.json` (past). Backed by one module (`veritate_mri/training/atlas.py`) that consumes a frame iterator + query and returns aggregated stats. No new TFRM fields, no new dump artifacts: pure derivations over Rule-4 data.
 
 | endpoint | input | output |
 |---|---|---|
@@ -108,7 +130,7 @@ Example: an MoE model whose per-block FFN has `n_experts` up/down projections pl
 
 Adding, removing, or renaming any field above requires:
 
-1. The producer in `veritate_mri/checkpoint_probe.py` is updated.
+1. The producer in `veritate_mri/training/checkpoint_probe.py` is updated.
 2. This file's table is updated in the same commit.
 3. If a TFRM frame field is added, both the C engine emit and `dump_generation` are updated in the same commit.
 4. The MRI dashboard render function gates on field presence so old runs do not break.

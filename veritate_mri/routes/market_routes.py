@@ -36,14 +36,15 @@ def register(app):
             model_name = request.args.get("model")
             source = request.args.get("source", "crypto")
             symbol = request.args.get("symbol", "BTCUSDT")
+            base = request.args.get("base", "1m")
             n = min(20000, max(300, int(request.args.get("n", 1500))))
             if not model_name or model_name not in vz.list_models():
                 return ({"ok": False, "error": "pick a trained Veritate model."}, 400)
-            df = md.load_tail(symbol, n_bars=n, base="1m", source=source)
+            df = md.load_tail(symbol, n_bars=n, base=base, source=source)
             if df is None:
                 return ({"ok": False, "error": f"no data for {symbol}."}, 404)
-            model, seq, step = vz.load_model(model_name)
-            g = vz.hindcast(model, seq, df)
+            model, seq, step, stride = vz.load_model(model_name)
+            g = vz.hindcast(model, seq, df, base=base, stride=stride)
             if g is None:
                 return ({"ok": False, "error": "not enough bars to run the model."}, 404)
             g.update({"ok": True, "symbol": symbol, "model": model_name, "step": step})
@@ -58,14 +59,15 @@ def register(app):
             model_name = request.args.get("model")
             source = request.args.get("source", "crypto")
             symbol = request.args.get("symbol", "BTCUSDT")
+            base = request.args.get("base", "1m")
             n = min(20000, max(300, int(request.args.get("n", 1500))))
             if not model_name or model_name not in vz.list_models():
                 return ({"ok": False, "error": "pick a trained Veritate model."}, 400)
-            df = md.load_tail(symbol, n_bars=n, base="1m", source=source)
+            df = md.load_tail(symbol, n_bars=n, base=base, source=source)
             if df is None:
                 return ({"ok": False, "error": f"no data for {symbol}."}, 404)
-            model, seq, step = vz.load_model(model_name)
-            g = vz.benchmark(model, seq, df)
+            model, seq, step, stride = vz.load_model(model_name)
+            g = vz.benchmark(model, seq, df, base=base, stride=stride)
             if g is None:
                 return ({"ok": False, "error": "not enough bars to benchmark."}, 404)
             g.update({"ok": True, "symbol": symbol, "model": model_name, "step": step})
@@ -94,7 +96,7 @@ def register(app):
             source = request.args.get("source", "crypto")
             if not model_name or model_name not in vz.list_models():
                 return ({"ok": False, "error": "pick a trained Veritate model."}, 400)
-            model, seq, step = vz.load_model(model_name)
+            model, seq, step, stride = vz.load_model(model_name)
             if source == "crypto":
                 try:
                     df, _ = lv.fetch(symbol, base="1m", limit=400)
@@ -107,7 +109,7 @@ def register(app):
                 closed = md.load_tail(symbol, n_bars=400, base="1d", source=source)
                 if closed is None:
                     return ({"ok": False, "error": "no data."}, 404)
-            pred = vz.predict_next(model, seq, closed)
+            pred = vz.predict_next(model, seq, closed, stride)
             if pred is None:
                 return ({"ok": False, "error": "prediction failed."}, 500)
             last_close = float(closed["close"].iloc[-1])
@@ -123,4 +125,25 @@ def register(app):
             from market import data as md
             source = request.args.get("source", "crypto")
             return {"ok": True, "source": source, "instruments": md.list_instruments(source)}
+        return _safe("market", _do)
+
+    @app.route("/market/extensions/catalog")
+    def market_extensions_catalog():
+        def _do():
+            from market import extensions as ex
+            return ex.catalog()
+        return _safe("market", _do)
+
+    @app.route("/market/extensions/download", methods=["POST"])
+    def market_extensions_download():
+        def _do():
+            from market import extensions as ex
+            return ex.download((request.get_json(silent=True) or {}).get("source"))
+        return _safe("market", _do)
+
+    @app.route("/market/extensions/delete", methods=["POST"])
+    def market_extensions_delete():
+        def _do():
+            from market import extensions as ex
+            return ex.delete((request.get_json(silent=True) or {}).get("source"))
         return _safe("market", _do)

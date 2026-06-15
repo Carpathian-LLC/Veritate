@@ -27,6 +27,7 @@ Validation lives inline: e.g., `device_name` capped at 15 characters at [setting
 | `device_preference`              | `auto` / `cpu` / `mps` / `cuda` for trainers                   |
 | `device_name`                    | Display name (max 15 chars) shown on Carpathian dashboard      |
 | `update_channel`                 | `development` / `stable` for self-update                       |
+| `experimental`                   | Reveals in-progress tools (the Market LLM nav link); gates UI visibility only, not isolation |
 | `mesh_role`                      | `off` / `hub` / `node` / `both`                                |
 | `teacher_provider`, `teacher_*`  | Ollama / API teacher endpoint (active config)                  |
 | `teacher_configs`                | Per-provider remembered `{api_key, model, base_url}`; `/teacher` POST swaps the matching entry into the active `teacher_*` slots on provider switch |

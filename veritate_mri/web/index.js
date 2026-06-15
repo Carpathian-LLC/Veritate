@@ -10959,8 +10959,8 @@ const CORPUS_MODE_CATEGORY = { chat: "chatting", agent: "autocomplete", autocomp
 const CORPUS_MARKET_PLACEHOLDERS = [
   { stem: "crypto", label: "Crypto byte corpus", category: "statistics", coming_soon: true,
     description: "1m crypto OHLCV as a byte stream (trainers/corpus/crypto_{train,val}.bin), plus its training set and raw data." },
-  { stem: "stocks", label: "Stocks byte corpus", category: "statistics", coming_soon: true,
-    description: "1m equities OHLCV as a byte stream (trainers/corpus/stocks_{train,val}.bin), plus its training set and raw data." },
+  { stem: "stocks", label: "Stocks (daily OHLCV, 503 S&P tickers) - market time-series", category: "statistics", coming_soon: true,
+    description: "503 S&P daily-OHLCV tickers as a byte stream (trainers/corpus/stocks_{train,val}.bin), plus its built training set and raw per-ticker CSVs. Hosted on S3 soon." },
 ];
 
 function _corpusCategoryOf(c) {
@@ -11392,6 +11392,118 @@ function _corpusOpenLibraryModal() {
 
 function _corpusCloseLibraryModal() {
   const m = $("corpusLibraryModal");
+  if (m) m.classList.add("hidden");
+  document.body.classList.remove("no-scroll");
+}
+
+// ---- Extensions (downloadable market datasets, mirrors the corpus library) ----
+const extState = { catalog: null, busy: new Set(), inflight: false };
+
+function _extFmtGb(gb) {
+  if (gb == null) return "";
+  if (gb >= 1) return gb.toFixed(gb >= 10 ? 0 : 1) + " GB";
+  return Math.round(gb * 1000) + " MB";
+}
+
+function _extEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+}
+
+function _extRowHtml(e) {
+  const present = !!e.present;
+  const busy = extState.busy.has(e.source);
+  const tags = [];
+  if (e.approx_gb != null) tags.push(`<span class="corpus-tag t-dim" title="approximate size">~${_extFmtGb(e.approx_gb)}</span>`);
+  if (present) tags.push(`<span class="corpus-tag t-good">downloaded${e.size_gb ? " (" + _extFmtGb(e.size_gb) + ")" : ""}</span>`);
+  else if (!e.downloadable) tags.push(`<span class="corpus-tag t-warm" title="not hosted yet">coming soon</span>`);
+  const dot = present ? "var(--data-pos)" : (e.downloadable ? "var(--dim)" : "var(--warm)");
+  const leading = busy
+    ? `<span class="spinner" style="flex-shrink:0"></span>`
+    : `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>`;
+  let actions;
+  if (busy) actions = `<button class="action" type="button" disabled>working...</button>`;
+  else if (present) actions = `<button class="action" type="button" data-ext-delete="${_extEsc(e.source)}" title="reclaim disk; re-downloadable from catalog">delete</button>`;
+  else if (e.downloadable) actions = `<button class="action" type="button" data-ext-download="${_extEsc(e.source)}" style="border-color:var(--accent);color:var(--accent)">download</button>`;
+  else actions = `<button class="action" type="button" disabled title="not hosted yet">download</button>`;
+  const desc = e.description ? `<div style="padding:1px 8px 0 26px;font-size:10.5px;color:var(--dim);line-height:1.55">${_extEsc(e.description)}</div>` : "";
+  return `
+    <div style="border-bottom:1px solid #131722;padding:6px 0">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 8px">
+        <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:240px">
+          ${leading}
+          <span style="color:var(--text);font-weight:500;font-size:11.5px">${_extEsc(e.label)}</span>
+          <span style="color:var(--dim);font-size:10.5px">(${_extEsc(e.source)})</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">${tags.join("")}</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">${actions}</div>
+      </div>
+      ${desc}
+    </div>`;
+}
+
+function _extRender(data) {
+  extState.catalog = data;
+  const list = $("extList");
+  const exts = (data && data.extensions) || [];
+  if (list) list.innerHTML = exts.map(_extRowHtml).join("") || `<div class="meta" style="padding:8px">no extensions in catalog.</div>`;
+  const badge = exts.length ? `${exts.filter(e => e.present).length}/${exts.length} downloaded` : "";
+  const cb = $("extCountBadge"); if (cb) cb.textContent = badge;
+  const mc = $("extModalCount"); if (mc) mc.textContent = badge;
+  if (list) {
+    list.querySelectorAll("[data-ext-download]").forEach(b => b.addEventListener("click", () => _extDownload(b.getAttribute("data-ext-download"))));
+    list.querySelectorAll("[data-ext-delete]").forEach(b => b.addEventListener("click", () => _extDelete(b.getAttribute("data-ext-delete"))));
+  }
+}
+
+function _extRefresh() {
+  if (extState.inflight) return;
+  extState.inflight = true;
+  if (!extState.catalog && $("extList")) showSkeleton("extList", "blocks", 4);
+  fetch("/market/extensions/catalog").then(r => r.json()).then(_extRender)
+    .catch(e => { const s = $("extActionStatus"); if (s) { s.textContent = `catalog failed: ${e}`; s.style.color = "var(--hot)"; } })
+    .finally(() => { extState.inflight = false; });
+}
+
+function _extDownload(source) {
+  if (!source || extState.busy.has(source)) return;
+  extState.busy.add(source); _extRender(extState.catalog);
+  fetch("/market/extensions/download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })
+    .then(r => r.json()).then(res => {
+      const s = $("extActionStatus");
+      if (s) { s.textContent = res.ok ? `${source}: downloaded` : (res.error || "download failed"); s.style.color = res.ok ? "var(--data-pos)" : "var(--warm)"; }
+    })
+    .catch(e => { const s = $("extActionStatus"); if (s) { s.textContent = _backendErrMsg(e); s.style.color = "var(--hot)"; } })
+    .finally(() => { extState.busy.delete(source); _extRefresh(); });
+}
+
+function _extDelete(source) {
+  if (!source || extState.busy.has(source)) return;
+  const e = ((extState.catalog && extState.catalog.extensions) || []).find(x => x.source === source) || {};
+  const warn = e.downloadable ? "" : "\n\nThis dataset is not hosted yet, so deleting is PERMANENT (no re-download).";
+  if (!confirm(`Delete extension "${e.label || source}"?` + warn)) return;
+  extState.busy.add(source); _extRender(extState.catalog);
+  fetch("/market/extensions/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })
+    .then(r => r.json()).then(res => {
+      const s = $("extActionStatus");
+      if (s) {
+        s.textContent = res.ok ? (res.note || `${source}: deleted${res.reclaimed_gb ? " (" + _extFmtGb(res.reclaimed_gb) + " freed)" : ""}`) : (res.error || "delete failed");
+        s.style.color = res.ok ? "var(--data-pos)" : "var(--hot)";
+      }
+    })
+    .catch(e2 => { const s = $("extActionStatus"); if (s) { s.textContent = _backendErrMsg(e2); s.style.color = "var(--hot)"; } })
+    .finally(() => { extState.busy.delete(source); _extRefresh(); });
+}
+
+function _extOpenModal() {
+  const m = $("extensionsModal");
+  if (!m) return;
+  m.classList.remove("hidden");
+  document.body.classList.add("no-scroll");
+  _extRefresh();
+}
+
+function _extCloseModal() {
+  const m = $("extensionsModal");
   if (m) m.classList.add("hidden");
   document.body.classList.remove("no-scroll");
 }
@@ -12148,6 +12260,13 @@ document.addEventListener("DOMContentLoaded", () => {
   if (casm) casm.addEventListener("click", (e) => { if (e.target === casm) _corpusCloseAddSourceModal(); });
   _corpusRefreshCatalog();
   setInterval(() => { if (_isTabActive("settings")) _corpusRefreshCatalog(); }, 15000);
+
+  // ---- Extensions wiring ----
+  const ebb = $("extBrowseBtn");  if (ebb) ebb.addEventListener("click", _extOpenModal);
+  const erb = $("extRefreshBtn"); if (erb) erb.addEventListener("click", _extRefresh);
+  const emc = $("extModalClose"); if (emc) emc.addEventListener("click", _extCloseModal);
+  const emm = $("extensionsModal"); if (emm) emm.addEventListener("click", (e) => { if (e.target === emm) _extCloseModal(); });
+  _extRefresh();
 
   const srb = $("softReloadBtn");
   if (srb) srb.addEventListener("click", _lifecycleSoftReload);

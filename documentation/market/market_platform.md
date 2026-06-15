@@ -16,8 +16,18 @@ only the dashboard nav link is hidden unless the experimental settings toggle is
   `readers.models`, `veritate_core.load.load_from_state_dict`). It never mutates canonical
   training, chat, or RAG state and never writes into their directories. `list_models()`
   surfaces canonical byte models that have at least one checkpoint.
-- **Data layer** (`data.py`): reads `external_data/<source>/*.csv` (read-only, byte-tail for
-  large files) and resamples with no lookahead. The package writes no model artifacts.
+- **Data layer** (`data.py`): reads `external_data/<source>/*.csv` (byte-tail for large files)
+  and resamples with no lookahead. On a cache miss for a crypto symbol it backfills on demand
+  via `fetch.py` (Binance 1m klines, cached to `external_data/crypto/`), so a fresh install needs
+  no manual data. Writes raw OHLCV CSVs only, never model artifacts. `source_dir(source)`
+  resolves a source under `external_data/<source>` or, for downloadable add-ons,
+  `external_data/extension_data/<source>` (see [market_extensions.md](../architecture/backend/market_extensions.md)),
+  so moving a dataset into the extension cache is transparent. For crypto sources
+  (`CRYPTO_SOURCES`) `join_context` forward-fills two external context channels onto each bar:
+  perp funding (`external_data/funding/<SYM>.csv`) and the fear-greed index
+  (`external_data/sentiment/fng.csv`), no lookahead. The serving page is
+  crypto-only (per-second and stocks dropped from the UI); the corpus builder still uses all
+  sources for training.
 
 ## Byte model (the page engine)
 
@@ -37,17 +47,21 @@ it loses money.
 ## Byte corpus
 
 Built by `veritate_mri/tools/build_series_corpus.py` from `external_data/<source>/*.csv` into
-`trainers/corpus/{crypto,stocks}_{train,val}.bin`. One corpus per asset class; instruments
-are anonymous (no ticker label) so the model learns one instrument-agnostic tape dynamic.
-Per-instrument time split (oldest `1-val_ratio` train, newest val). No pair or bar caps.
+`trainers/corpus/<source>_{train,val}.bin`. Three sources, one corpus each
+(`build_series_corpus.py:LOADERS`): `stocks` (daily), `crypto` (1-minute),
+`crypto_1s` (1-second tape, the largest). Instruments are anonymous (no ticker label)
+so the model learns one instrument-agnostic tape dynamic. Per-instrument time split
+(oldest `1-val_ratio` train, newest val). No pair or bar caps.
 
 ```
 python veritate_mri/tools/build_series_corpus.py --source crypto
 python veritate_mri/tools/build_series_corpus.py --source stocks
+python veritate_mri/tools/build_series_corpus.py --source crypto_1s
 ```
 
-Current build: crypto ~1.31B tokens across 200 pairs; stocks ~0.012B tokens across ~500
-tickers. Bytes are the tokens. These are experimental corpuses: they appear in the Corpus
+Current build: crypto (1m) ~1.31B tokens across 200 pairs; stocks ~0.012B tokens
+across ~500 tickers; crypto_1s the 1-second tape (multi-GB, the high-frequency set).
+Bytes are the tokens. These are experimental corpuses: they appear in the Corpus
 library only when the experimental toggle is on. Large bins host on Carpathian S3 and are
 pulled to local paths by hand; there is no in-dashboard S3 URL feature. All data-artifact
 paths live in the root doc `market_llm_data_manifest.md`; `corpus_manifest.py` is a

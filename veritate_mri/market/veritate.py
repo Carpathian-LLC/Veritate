@@ -43,6 +43,8 @@ except ModuleNotFoundError:                       # standalone (tests) — tools
 RET_BYTES = [ord(c) for c in sc.ALPHABET[:sc.RET_BINS]]
 Z_CENTERS = (np.arange(sc.RET_BINS) - sc.RET_CENTER) * (sc.RET_Z_CLIP / sc.RET_CENTER)
 BENCH_THREADS = 4
+LEGACY_STRIDE = 5                                  # codec stride for models saved before bar_stride was stamped
+ROUND_TRIP_FEE = 0.0020                            # 20 bps per trade (10 bps/side); matches market.html FEE
 BYTE2RET = np.full(256, -1, dtype=np.int64)        # ascii byte -> return bucket index
 for _i, _b in enumerate(RET_BYTES):
     BYTE2RET[_b] = _i
@@ -82,16 +84,28 @@ def list_models():
     return [n for n in rmodels.list_models() if checkpoints.list_steps(n)]
 
 
-def predict_next(model, seq_len, df):
-    """Live next-bar forecast from the byte model: P(up), expected move, lean."""
-    import torch
+def _encode_df(df, stride):
+    """OHLCV(+taker-buy, +trade-count, +time) df -> (ascii byte ids, n_valid_bars) at the
+    model's codec `stride` (older models emit fewer channels, so they need no retrain)."""
     o = df["open"].to_numpy(np.float64); h = df["high"].to_numpy(np.float64)
     l = df["low"].to_numpy(np.float64); c = df["close"].to_numpy(np.float64)
-    v = df["volume"].to_numpy(np.float64)
-    rz, gr, vr = sc.compute_features(o, h, l, c, v, c.copy())
-    if len(rz) < 30:
+    v = df["volume"].to_numpy(np.float64); ts = md.index_ns(df.index)
+    tb = df["taker_buy"].to_numpy(np.float64) if "taker_buy" in df.columns else None
+    ntr = df["trades"].to_numpy(np.float64) if "trades" in df.columns else None
+    fund = df["funding"].to_numpy(np.float64) if "funding" in df.columns else None
+    fng = df["fng"].to_numpy(np.float64) if "fng" in df.columns else None
+    feats = sc.compute_features(o, h, l, c, v, c.copy(), ts, tb, ntr, fund, fng)
+    arr = np.frombuffer(sc.encode_sequence(*feats, stride=stride).encode("ascii"), dtype=np.uint8)
+    return arr, len(feats[0])
+
+
+def predict_next(model, seq_len, df, stride=sc.BAR_STRIDE):
+    """Live next-bar forecast from the byte model: P(up), expected move, lean."""
+    import torch
+    c = df["close"].to_numpy(np.float64)
+    arr, nb = _encode_df(df, stride)
+    if nb < 30:
         return None
-    arr = np.frombuffer(sc.encode_sequence(rz, gr, vr).encode("ascii"), dtype=np.uint8)
     chunk = arr[-seq_len:]
     with torch.no_grad():
         probs = torch.softmax(model(torch.from_numpy(chunk.astype(np.int64))[None])[0][0], dim=-1)
@@ -107,20 +121,24 @@ def predict_next(model, seq_len, df):
 
 
 def load_model(name):
-    """Latest checkpoint of byte model `name` on CPU. Returns (model, seq_len, step)."""
+    """Latest checkpoint of byte model `name` on CPU. Returns (model, seq_len, step, bar_stride).
+    bar_stride is the codec stride the model was trained against; models saved before it was
+    stamped default to LEGACY_STRIDE so they keep serving when the codec grows channels."""
     from readers import checkpoints
     import torch
     from veritate_core.load import load_from_state_dict
     steps = checkpoints.list_steps(name)
     if not steps:
-        return None, None, None
+        return None, None, None, None
     step = max(steps)
     torch.set_num_threads(BENCH_THREADS)
     s = torch.load(checkpoints.path_for(name, step), map_location="cpu", weights_only=True)
     cfg = {**(s.get("args") or {}), **(s.get("config") or {})}
+    ta = cfg.get("training_args") or {}
+    stride = int(cfg.get("bar_stride", ta.get("bar_stride", LEGACY_STRIDE)))
     model = load_from_state_dict(s["model"], cfg)
     model.eval()
-    return model, int(cfg.get("seq", 256)), step
+    return model, int(cfg.get("seq", 256)), step, stride
 
 # ------------------------------------------------------------------------------------
 # Hindcast in price space
@@ -130,18 +148,14 @@ def _downsample(a, n):
     return a if len(a) <= n else a[:: int(np.ceil(len(a) / n))]
 
 
-def hindcast(model, seq_len, df, max_points=320):
+def hindcast(model, seq_len, df, base="1m", stride=sc.BAR_STRIDE, max_points=320):
     """Walk df with the byte model; per bar record its predicted next-bar move band +
     direction guess vs reality. Returns the same shape as backtest.hindcast."""
-    o = df["open"].to_numpy(np.float64); h = df["high"].to_numpy(np.float64)
-    l = df["low"].to_numpy(np.float64); c = df["close"].to_numpy(np.float64)
-    v = df["volume"].to_numpy(np.float64)
-    rz, gr, vr = sc.compute_features(o, h, l, c, v, c.copy())
-    nb = len(rz)
+    c = df["close"].to_numpy(np.float64)
+    arr, nb = _encode_df(df, stride)
     if nb < 60:
         return None
     off = len(c) - nb                                  # features trim the warmup
-    arr = np.frombuffer(sc.encode_sequence(rz, gr, vr).encode("ascii"), dtype=np.uint8)
     probpos = _score_bytes(model, seq_len, arr)
 
     lr = np.diff(np.log(np.clip(c, 1e-12, None)), prepend=np.log(max(c[0], 1e-12)))
@@ -149,7 +163,7 @@ def hindcast(model, seq_len, df, max_points=320):
 
     t = []; price = []; band = []; p_up = []; mark = []
     for k in range(1, nb):
-        pr = probpos.get(k * sc.BAR_STRIDE)
+        pr = probpos.get(k * stride)
         if pr is None:
             continue
         ci = k + off                                   # raw index of this bar
@@ -178,7 +192,7 @@ def hindcast(model, seq_len, df, max_points=320):
     judged = mk != 0
     hit = float((mk[judged] == 1).mean()) if judged.any() else None
     return {
-        "engine": "veritate", "horizon": 1, "base": "1m", "n": int(len(price)),
+        "engine": "veritate", "horizon": 1, "base": base, "n": int(len(price)),
         "hit_rate": hit, "coverage": None, "cone_cov": 0.0,
         "t": _downsample(np.array(t), max_points).tolist(),
         "price": _downsample(price, max_points).round(6).tolist(),
@@ -191,13 +205,16 @@ def hindcast(model, seq_len, df, max_points=320):
 # ------------------------------------------------------------------------------------
 # Benchmark in return-bucket space (predict-page metrics, driven by the byte model)
 
-def _bench_metrics(pred, actual, conf):
+def _bench_metrics(pred, actual, conf, psign):
     """All directional/calibration/magnitude metrics, computed on the FULL series.
-    pred/actual are return-bucket indices (0..RET_BINS-1, center=RET_CENTER)."""
+    pred/actual are return-bucket indices (0..RET_BINS-1, center=RET_CENTER); magnitude uses
+    the bucket offsets. psign is the per-bar directional sign from prob mass up-vs-down (same
+    signal hindcast scores): the argmax bucket sits on the flat center ~90% of 1m bars, so it
+    is useless as a direction; prob mass is the real directional call."""
     rc = sc.RET_CENTER
     pred = np.asarray(pred); actual = np.asarray(actual); conf = np.asarray(conf, dtype=float)
     n = len(pred)
-    ps = np.sign(pred - rc); a_s = np.sign(actual - rc)
+    ps = np.sign(np.asarray(psign)); a_s = np.sign(actual - rc)
     dec = ps != 0
     jdir = a_s != 0
     mdec = dec & jdir
@@ -245,24 +262,42 @@ def _bench_metrics(pred, actual, conf):
     }
 
 
-def benchmark(model, seq_len, df, max_points=360):
+def _trade_metrics(calls):
+    """Trader-facing stats from the per-bar directional calls. Most fields are gross
+    (before fees); net_return subtracts ROUND_TRIP_FEE per trade so the after-fee result
+    is honest. Each call's realized return = sign(direction) x actual log-return that bar."""
+    if not calls:
+        return None
+    r = np.array([(1.0 if c["dir"] == "UP" else -1.0) * c["move"] for c in calls], dtype=np.float64)
+    gp = float(r[r > 0].sum()); gl = float(-r[r < 0].sum())
+    cum = np.cumsum(r); peak = np.maximum.accumulate(cum)
+    sd = float(r.std())
+    return {
+        "n_trades": int(r.size),
+        "win_rate": float((r > 0).mean()),
+        "profit_factor": (gp / gl) if gl > 0 else None,
+        "expectancy": float(r.mean()),
+        "sharpe": (float(r.mean()) / sd) if sd > 0 else None,
+        "max_drawdown": float((peak - cum).max()),
+        "total_return": float(r.sum()),
+        "net_return": float(r.sum() - ROUND_TRIP_FEE * r.size),
+    }
+
+
+def benchmark(model, seq_len, df, base="1m", stride=sc.BAR_STRIDE, max_points=360):
     """Walk df with the byte model; per bar capture the predicted vs actual return
     bucket and a directional confidence, then score the full predict-page metric set.
     Chart arrays are downsampled; metrics are computed on every scored bar."""
-    o = df["open"].to_numpy(np.float64); h = df["high"].to_numpy(np.float64)
-    l = df["low"].to_numpy(np.float64); c = df["close"].to_numpy(np.float64)
-    v = df["volume"].to_numpy(np.float64)
-    rz, gr, vr = sc.compute_features(o, h, l, c, v, c.copy())
-    nb = len(rz)
+    c = df["close"].to_numpy(np.float64)
+    arr, nb = _encode_df(df, stride)
     if nb < 60:
         return None
     off = len(c) - nb
-    arr = np.frombuffer(sc.encode_sequence(rz, gr, vr).encode("ascii"), dtype=np.uint8)
     probpos = _score_bytes(model, seq_len, arr)
 
-    pred = []; actual = []; conf = []; price = []; t = []; calls = []
+    pred = []; actual = []; conf = []; price = []; t = []; calls = []; psign = []
     for k in range(1, nb):
-        gp = k * sc.BAR_STRIDE
+        gp = k * stride
         pr = probpos.get(gp)
         if pr is None:
             continue
@@ -282,6 +317,7 @@ def benchmark(model, seq_len, df, max_points=360):
         pred.append(int(np.argmax(pr)))
         actual.append(ab)
         conf.append(cf)
+        psign.append(1 if up >= dn else -1)    # prob-mass direction, same call hindcast scores
         px = float(c[ci]); ts = int(df.index[ci].value // 1_000_000_000)
         price.append(px); t.append(ts)
         ret = float(np.log(c[ci] / c[ci - 1])) if c[ci - 1] > 0 else 0.0
@@ -294,9 +330,9 @@ def benchmark(model, seq_len, df, max_points=360):
     if len(pred) < 30:
         return None
     pa = np.asarray(pred); aa = np.asarray(actual)
-    m = _bench_metrics(pa, aa, conf)
+    m = _bench_metrics(pa, aa, conf, psign)
     rc = sc.RET_CENTER
-    edge = np.sign(pa - rc) * (aa - rc).astype(float)
+    edge = np.asarray(psign) * (aa - rc).astype(float)
     equity = np.cumsum(edge)
     ao = (aa - rc).astype(float)
     base_mae = float(np.abs(ao[1:] - ao[:-1]).mean()) if len(ao) > 1 else None
@@ -305,9 +341,10 @@ def benchmark(model, seq_len, df, max_points=360):
     for r in best + worst:
         r.pop("score", None)
     return {
-        "engine": "veritate", "n": int(len(pred)),
+        "engine": "veritate", "n": int(len(pred)), "base": base,
         "ret_center": rc, "ret_bins": sc.RET_BINS,
         "metrics": m,
+        "trading": _trade_metrics(calls),
         "baseline": {"magnitude_mae_buckets": base_mae},
         "best": best, "worst": worst,
         "equity": _downsample(equity, max_points).round(3).tolist(),

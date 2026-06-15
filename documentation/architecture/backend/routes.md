@@ -2,7 +2,7 @@
 
 ## What it is
 
-The Flask routing layer lives under [veritate_mri/routes/](../../../veritate_mri/routes/). Each module owns one concern, exports a single `register(app)` function, and is registered from [app.py:140](../../../veritate_mri/app.py#L140). `auth_routes.register` runs first so its `before_request` guard precedes every other route. The page routes `/`, `/app`, `/chat`, `/predict` are defined directly on the app at [app.py:70](../../../veritate_mri/app.py#L70).
+The Flask routing layer lives under [veritate_mri/routes/](../../../veritate_mri/routes/). Each module owns one concern, exports a single `register(app)` function, and is registered from [app.py:140](../../../veritate_mri/app.py#L140). `auth_routes.register` runs first so its `before_request` guard precedes every other route. The page routes `/`, `/chat`, `/app`, `/market` are defined directly on the app at [app.py:70](../../../veritate_mri/app.py#L70).
 
 ## The pattern
 
@@ -32,7 +32,7 @@ Decorating happens inside `register` so the same module can be loaded but not re
 | [logs_routes.py](../../../veritate_mri/routes/logs_routes.py)            | `/logs/snapshot` and `/logs/stream` SSE                                 |
 | [mesh_routes.py](../../../veritate_mri/routes/mesh_routes.py)            | Federation peer discovery                                               |
 | [models_routes.py](../../../veritate_mri/routes/models_routes.py)        | Model listing, config, checkpoints                                      |
-| [predict_routes.py](../../../veritate_mri/routes/predict_routes.py)      | Price-series predictive-accuracy: `/predict/corpora`, `/predict/eval`. See [predict_routes.md](predict_routes.md) |
+| [market_routes.py](../../../veritate_mri/routes/market_routes.py)        | Market LLM byte-model serving: `/market/veritate_*`, `/market/instruments`. See [market_routes.md](market_routes.md) |
 | [pruning_routes.py](../../../veritate_mri/routes/pruning_routes.py)      | Structured neuron-pruning analysis + plugin generation                  |
 | [runs_routes.py](../../../veritate_mri/routes/runs_routes.py)            | `/runs`, `/run/<name>/csv`, timeline endpoints                          |
 | [settings_routes.py](../../../veritate_mri/routes/settings_routes.py)    | `/settings` GET/POST against `mri_settings.json`                        |
