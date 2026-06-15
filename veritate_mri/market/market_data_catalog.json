@@ -1,5 +1,0 @@
-{
-  "_comment": "Hosted-CSV fallback for the market page. The platform first backfills crypto from Binance on demand (fetch.py); this catalog is the fallback used only when the public Binance API is unreachable, and the only path for any non-crypto data. Each entry maps a SYMBOL to a direct URL of a raw OHLCV CSV in the same schema data.py reads (header: time,open,high,low,close,volume; time = epoch ms/us/s). The file is downloaded whole into external_data/<source>/<symbol>.csv on first request and cached. Leave a map empty to disable that source. To host: drop CSVs anywhere public (S3, a CDN, a GitHub release) and list their URLs here.",
-  "crypto": {},
-  "stocks": {}
-}

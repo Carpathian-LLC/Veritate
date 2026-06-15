@@ -2,9 +2,11 @@
 
 Vanilla-JS + canvas comparison ground served at `/market`. No build step, no chart library,
 no framework: it only calls `/market/*` on the canonical server. The `/market` route is
-served unconditionally; the experimental settings toggle only reveals the Market LLM link in
-the main dashboard nav (`#navMarket`, hidden by default). The page is reachable regardless of
-the toggle. 100 percent ASCII copy (no emojis, no emdashes).
+served unconditionally. The dashboard nav link to it is no longer a static anchor: the
+extensions gate in `index.html` renders one nav entry per installed extension from
+`GET /extensions` (Market's registry entry supplies route `/market`, label "Market LLM"),
+gated by the `extensions` settings flag. The page is reachable regardless of the flag.
+100 percent ASCII copy (no emojis, no emdashes).
 
 The page is driven by the **Veritate byte-level model** (the on-mission engine), not the GBDT
 baseline. The whole point is to test whether a model trained on JUST market data (no news, no
@@ -71,7 +73,7 @@ persists via `saveControls()` and restores on load.
 The backend already threads `source` end to end: `/market/instruments`, `/market/veritate_hindcast`,
 `/market/veritate_benchmark`, `/market/veritate_data_report`, and `/market/veritate_live` all take
 a `source` arg and pass it to `data.list_instruments(source)` / `data.load_tail(..., source=...)`
-(`market/data.py`). Stock CSVs live at `external_data/stocks/` (503 daily-OHLCV tickers, schema
+(`market/data.py`). Stock CSVs live at `extensions/installed/market/data/extension_data/stocks/` (503 daily-OHLCV tickers, schema
 `date,open,high,low,adjclose,volume`); the schema-flexible `load_1m()` reads the `date` string
 column and the OHLCV subset directly.
 The compare picker is the overlay set; the primary (first-checked) model is the one model that drives

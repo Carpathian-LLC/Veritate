@@ -14,7 +14,7 @@ work into the version number.
 
 ## Manifest
 
-`veritate_engine/engine_versions.json` is the source of truth. Each entry maps an
+`veritate_engine/v1/engine_versions.json` is the source of truth. Each entry maps an
 engine binary filename under `veritate_engine/bin/<os>/<arch>/` to a semver string
 and a human-readable label.
 
@@ -44,7 +44,7 @@ breaks compatibility with older `.bin` files or older trace formats).
 2. If you want to keep the previous build for A/B comparison, copy the
    old `veritate.exe` out to `veritate_v<old>.exe` BEFORE rebuilding.
 3. Bump the `version` of the `veritate.exe` entry in
-   `veritate_engine/engine_versions.json` and add a new entry for the archived exe.
+   `veritate_engine/v1/engine_versions.json` and add a new entry for the archived exe.
 4. Restart the MRI server. The dropdown auto-defaults to the new version.
 
 The user-facing UI does not expose engine selection. The engine is

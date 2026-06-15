@@ -117,6 +117,6 @@ Per claude_preflight rule 23: every kernel produces bitwise-identical output to 
 # ------------------------------------------------------------------------------------
 
 - INT4 path (see `kernels/int4.md` -- not yet written; current source of truth is `veritate.h`'s `prepped_b_int4_t` block).
-- MoE routing and per-expert dispatch (see `documentation/kernels/moe.md` -- to be written in phase C).
+- MoE routing and per-expert dispatch (see `developer_documentation/kernels/moe.md` -- to be written in phase C).
 - Model format change to record `quant_mode` and `n_experts` (phase D, requires a build note).
 - Confidence head, decision tracing, ablation: orthogonal, unaffected by this kernel.

@@ -38,7 +38,7 @@ This is the engine `.bin` format mismatch case. The Veritate C engine bumps its 
 The fix is to re-export the engine `.bin` from your `.pt` checkpoint. From a Python shell at the repo root:
 
 ```python
-from veritate_mri import export
+from veritate_mri.training import export
 
 # ternary / MoE models:
 export.export_checkpoint_ternary("<model_name>", <step>)

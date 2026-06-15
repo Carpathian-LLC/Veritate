@@ -8,7 +8,7 @@ Graceful Flask restart at [veritate_mri/runtime/lifecycle.py](../../../veritate_
 
 `restart(config)` re-execs the Python process with the original command line captured at startup (`app.config["LAUNCH_CMD"]`). The new process re-runs `veritate.py`, which re-installs the venv if needed and re-launches the Flask app.
 
-The app-sync daemon (`training/sync/app_sync.py`) calls `lifecycle.set_reload_hook(_app_sync_reload)` from [app.py](../../../veritate_mri/app.py) so that detected updates trigger a restart automatically.
+The app-sync daemon (`veritate_mri/training/sync/app_sync.py`) calls `lifecycle.set_reload_hook(_app_sync_reload)` from [app.py](../../../veritate_mri/app.py) so that detected updates trigger a restart automatically.
 
 ## Dependencies
 

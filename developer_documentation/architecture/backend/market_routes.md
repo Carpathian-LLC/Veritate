@@ -1,18 +1,23 @@
-# market_routes.py: experimental market dashboard API
+# market register.py: market extension dashboard API
 
-Backend for the `/market` Market LLM page. Registered in `app.py`
-(`market_routes.register(app)`); the page itself is served at `/market`
-(`market_page()` -> `web/market.html`). The route is served unconditionally; only the
-dashboard nav link is hidden unless the experimental toggle is on, so `/market` and its
-endpoints stay reachable regardless of the toggle. Routes import the `market/` package
-lazily, so a missing sklearn never breaks startup. The byte-model endpoints read the
-canonical Veritate model registry and checkpoints **read-only** to run trained models
-(`veritate.list_models`/`load_model`); they never mutate canonical training/chat/RAG state.
-The former `/predict` benchmark page and its routes were folded into the `veritate_*`
-endpoints here, and the offline GBDT baseline routes were removed, so the page is byte-model-only.
+Market LLM is a **canonical extension** at `extensions/canonical/market/`
+(self-contained: `manifest.json`, `register.py`, `page/index.html`, `server/`). The
+extension registry (`extensions/registry.py`) auto-discovers it, inserts `server/` onto
+`sys.path`, imports `register.py`, calls `register(app)` to add the `/market/*` API
+routes, and mounts the page at `/market` from `manifest.page` (`page/index.html`). The
+nav link (`nav_label: "Market LLM"`) is hidden unless the experimental toggle is on, so
+`/market` and its endpoints stay reachable regardless of the toggle. Server modules import
+each other by bare name (`import veritate`, `import data`, `import live`) because `server/`
+is on `sys.path` at register time; the route bodies import lazily, so a missing dep never
+breaks startup. The byte-model endpoints read the canonical Veritate model registry and
+checkpoints **read-only** to run trained models (`veritate.list_models`/`load_model`); they
+never mutate canonical training/chat/RAG state. The former `/predict` benchmark page and its
+routes were folded into the `veritate_*` endpoints here, and the offline GBDT baseline routes
+were removed, so the page is byte-model-only.
 
-All handlers wrap their body in `_safe("market", fn)` for the JSON-error contract, which
-also guards against `NaN`/`Infinity` reaching `jsonify` (invalid JSON breaks the browser
+All handlers wrap their body in a local `_safe("market", fn)` helper in `register.py` for the
+JSON-error contract (try/except, log via `runtime.logs`, return a JSON error body + 500),
+which also keeps `NaN`/`Infinity` from reaching `jsonify` (invalid JSON breaks the browser
 `r.json()`). The `veritate.*` functions return `None`, never `float("nan")`.
 
 ## Veritate endpoints (the byte model, on-mission engine)
@@ -48,15 +53,15 @@ also guards against `NaN`/`Infinity` reaching `jsonify` (invalid JSON breaks the
   equity uses the same prob-mass directional sign as the metrics.
 
 - **Resolution (`base`).** `base` selects bar size: `1m, 5m, 15m, 1h` (default `1m`). All read the
-  1m-native `external_data/crypto/<symbol>.csv` and resample to coarser bars. The page is
+  1m-native `extensions/installed/market/data/crypto/<symbol>.csv` and resample to coarser bars. The page is
   crypto-only; per-second and stocks were dropped from the UI.
 
-- **On-demand backfill (no manual data).** A fresh install ships no `external_data/`. When
-  `data.load_tail` finds no local CSV for a crypto symbol it backfills via `market/fetch.py`:
+- **On-demand backfill (no manual data).** A fresh install ships no data dir. When
+  `data.load_tail` finds no local CSV for a crypto symbol it backfills via `server/fetch.py`:
   pages 1m klines from Binance (`api.binance.com` global, `api.binance.us` US fallback), writes
-  them in `data.py`'s schema, and caches to `external_data/crypto/<symbol>.csv` (later loads are
+  them in `data.py`'s schema, and caches to `extensions/installed/market/data/crypto/<symbol>.csv` (later loads are
   local). When the API is unreachable it falls back to a hosted CSV URL listed in
-  `market/market_data_catalog.json` (ships empty; operator fills it to enable the fallback).
+  `server/market_data_catalog.json` (ships empty; operator fills it to enable the fallback).
   `data.list_instruments("crypto")` unions local symbols with `fetch.MAJORS` so the picker is
   populated before anything is cached.
 
@@ -72,28 +77,27 @@ also guards against `NaN`/`Infinity` reaching `jsonify` (invalid JSON breaks the
 ## Other endpoints
 
 - **GET `/market/instruments?source=crypto`** -> `{ok, source, instruments:[...]}`: local raw 1m
-  CSVs under `external_data/crypto/` unioned with `fetch.MAJORS` (`data.list_instruments`), so the
+  CSVs under `extensions/installed/market/data/crypto/` unioned with `fetch.MAJORS` (`data.list_instruments`), so the
   symbol selector is populated even on a fresh install with no cached data.
-- **GET `/market/extensions/catalog`** -> `{ok, extensions:[...]}`: downloadable add-on datasets
-  with live local status (`present`, `files`, `size_gb`, `downloadable`). See
-  [market_extensions.md](market_extensions.md).
-- **POST `/market/extensions/download`** `{source}` -> pulls a hosted dataset into
-  `external_data/extension_data/<source>` (placeholder until the catalog url + S3 host land).
-- **POST `/market/extensions/delete`** `{source}` -> reclaims a dataset's disk; symlinked
-  (externally-parked) datasets only lose the link, never the archive.
 
-The data-artifact paths (raw OHLCV, built byte corpuses, trained models) are listed in the root
-doc `market_llm_data_manifest.md`. There is no dashboard route or S3-URL setting for the corpus;
-`market/corpus_manifest.py` is a standalone CLI for the same listing.
+Downloadable add-on datasets (stocks, forex, the broader crypto archives, ...) are now served by
+the **generic per-extension data routes** over the extension's `data_catalog.json`, not by
+market-specific routes; the old `/market/extensions/{catalog,download,delete}` endpoints were
+removed. See [documentation/extensions/authoring.md](../../../documentation/extensions/authoring.md).
+
+There is no dashboard route or S3-URL setting for the byte corpus;
+`server/corpus_manifest.py` is a standalone CLI that lists the data artifacts (raw OHLCV, built
+byte corpuses, trained models).
 
 ## Notes
-- **Per-model codec stride.** `veritate.load_model` returns the model's `bar_stride` (stamped at
-  train time by `training/save.py`; default `LEGACY_STRIDE=5` for models saved before it existed).
-  `hindcast` / `benchmark` / `predict_next` encode at that stride, so adding codec channels never
-  breaks an older model on the page: it is served the exact byte format it trained on (the newer
-  channels are simply not emitted for it).
+- **Per-model codec stride.** `veritate.load_model` returns the model's `bar_stride`. `save.py` no
+  longer stamps `bar_stride`, so unstamped models default to the current codec stride
+  (`series_codec.BAR_STRIDE`), the stride they were trained with. `hindcast` / `benchmark` /
+  `predict_next` encode at that stride, so adding codec channels never breaks an older model that
+  did stamp a smaller stride: it is served the exact byte format it trained on (the newer channels
+  are simply not emitted for it).
 - No API key is needed anywhere. Binance.US market data is public; api.binance.com is geo-blocked
   (451) in the US, so the crypto path of `veritate_live` calls only api.binance.us.
-- The page is byte-model-only. The old GBDT baseline (`market/models.py`, `backtest.py`,
-  `features.py`, `dataset.py`, `evaluate.py`, `horizon_study.py`) has been deleted, not just
-  unrouted, so the `market/` package is now data + byte-model serving + live feed only.
+- The page is byte-model-only. The old GBDT baseline (`models.py`, `backtest.py`, `features.py`,
+  `dataset.py`, `evaluate.py`, `horizon_study.py`) was deleted, so `server/` is now data +
+  byte-model serving + live feed + codec/builder + capture CLIs only.

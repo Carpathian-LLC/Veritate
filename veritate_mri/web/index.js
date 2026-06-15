@@ -2758,7 +2758,7 @@ async function ensureLearningLoaded() {
     // not "hookless" — those panels will still render.
     const noHooksWarn = (tlEntry.has_hooks === false)
       ? `<div class="meta" style="margin-top:8px;padding:8px 10px;border:1px solid var(--warm);border-radius:3px;color:var(--warm);font-size:11.5px;line-height:1.45">
-          <b>No hook artifacts for this model yet.</b> Checkpoints (.pt) are present but the per-step probe / lens / classroom / generation dumps were not written. Either training has not reached its first save_checkpoint yet, or this trainer has not been ported to the <code>hook_spec()</code> contract (see documentation/hooks/contract.md). Outputs / quant-KL / classroom panels will stay empty until hooks land.
+          <b>No hook artifacts for this model yet.</b> Checkpoints (.pt) are present but the per-step probe / lens / classroom / generation dumps were not written. Either training has not reached its first save_checkpoint yet, or this trainer has not been ported to the <code>hook_spec()</code> contract (see developer_documentation/hooks/contract.md). Outputs / quant-KL / classroom panels will stay empty until hooks land.
         </div>`
       : "";
     $("learningStatus").innerHTML = `
@@ -11396,124 +11396,115 @@ function _corpusCloseLibraryModal() {
   document.body.classList.remove("no-scroll");
 }
 
-// ---- Extensions (downloadable market datasets, mirrors the corpus library) ----
-const extState = { catalog: null, busy: new Set(), inflight: false };
+function _extEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+}
 
-function _extFmtGb(gb) {
+// ---- Extension library (downloadable extensions; namespaced mkt*) ----
+const mktState = { catalog: null, busy: new Set(), inflight: false };
+const mktDataState = { datasets: {}, busy: new Set(), open: new Set() };
+
+function _mktNote(msg, color) {
+  const s = $("mktActionStatus");
+  if (s) { s.textContent = msg || ""; s.style.color = color || "var(--dim)"; }
+}
+
+function _mktFmtGb(gb) {
   if (gb == null) return "";
   if (gb >= 1) return gb.toFixed(gb >= 10 ? 0 : 1) + " GB";
   return Math.round(gb * 1000) + " MB";
 }
 
-function _extEsc(s) {
-  return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
-}
+function _mktDataKey(id, source) { return id + "::" + source; }
 
-function _extRowHtml(e) {
-  const present = !!e.present;
-  const busy = extState.busy.has(e.source);
+function _mktDataRowHtml(id, d) {
+  const present = !!d.present;
+  const busy = mktDataState.busy.has(_mktDataKey(id, d.source));
+  const size = d.size_gb != null && present ? d.size_gb : d.approx_gb;
   const tags = [];
-  if (e.approx_gb != null) tags.push(`<span class="corpus-tag t-dim" title="approximate size">~${_extFmtGb(e.approx_gb)}</span>`);
-  if (present) tags.push(`<span class="corpus-tag t-good">downloaded${e.size_gb ? " (" + _extFmtGb(e.size_gb) + ")" : ""}</span>`);
-  else if (!e.downloadable) tags.push(`<span class="corpus-tag t-warm" title="not hosted yet">coming soon</span>`);
-  const dot = present ? "var(--data-pos)" : (e.downloadable ? "var(--dim)" : "var(--warm)");
-  const leading = busy
-    ? `<span class="spinner" style="flex-shrink:0"></span>`
-    : `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>`;
-  let actions;
-  if (busy) actions = `<button class="action" type="button" disabled>working...</button>`;
-  else if (present) actions = `<button class="action" type="button" data-ext-delete="${_extEsc(e.source)}" title="reclaim disk; re-downloadable from catalog">delete</button>`;
-  else if (e.downloadable) actions = `<button class="action" type="button" data-ext-download="${_extEsc(e.source)}" style="border-color:var(--accent);color:var(--accent)">download</button>`;
-  else actions = `<button class="action" type="button" disabled title="not hosted yet">download</button>`;
-  const desc = e.description ? `<div style="padding:1px 8px 0 26px;font-size:10.5px;color:var(--dim);line-height:1.55">${_extEsc(e.description)}</div>` : "";
+  if (d.approx_gb != null && !present) tags.push(`<span class="corpus-tag t-dim" title="approximate size">~${_mktFmtGb(d.approx_gb)}</span>`);
+  if (present) tags.push(`<span class="corpus-tag t-good">downloaded${size ? " (" + _mktFmtGb(size) + ")" : ""}</span>`);
+  else if (!d.downloadable) tags.push(`<span class="corpus-tag t-warm" title="not hosted yet">coming soon</span>`);
+  let action;
+  if (busy) action = `<button class="action" type="button" disabled>working...</button>`;
+  else if (present) action = `<button class="action" type="button" data-mkt-data-delete="${_extEsc(d.source)}" data-mkt-data-id="${_extEsc(id)}" title="reclaim disk; re-downloadable from catalog">delete</button>`;
+  else if (d.downloadable) action = `<button class="action" type="button" data-mkt-data-download="${_extEsc(d.source)}" data-mkt-data-id="${_extEsc(id)}" style="border-color:var(--accent);color:var(--accent)">download</button>`;
+  else action = `<button class="action" type="button" disabled title="not hosted yet">coming soon</button>`;
+  const desc = d.description ? `<div style="padding:1px 8px 0 8px;font-size:10px;color:var(--dim);line-height:1.5">${_extEsc(d.description)}</div>` : "";
   return `
-    <div style="border-bottom:1px solid #131722;padding:6px 0">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 8px">
-        <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:240px">
-          ${leading}
-          <span style="color:var(--text);font-weight:500;font-size:11.5px">${_extEsc(e.label)}</span>
-          <span style="color:var(--dim);font-size:10.5px">(${_extEsc(e.source)})</span>
-        </div>
+    <div style="padding:4px 0">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 8px">
+        <span style="color:var(--text);font-size:11px;flex:1;min-width:180px">${_extEsc(d.label || d.source)}</span>
         <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">${tags.join("")}</div>
-        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">${actions}</div>
+        <div style="flex-shrink:0">${action}</div>
       </div>
       ${desc}
     </div>`;
 }
 
-function _extRender(data) {
-  extState.catalog = data;
-  const list = $("extList");
-  const exts = (data && data.extensions) || [];
-  if (list) list.innerHTML = exts.map(_extRowHtml).join("") || `<div class="meta" style="padding:8px">no extensions in catalog.</div>`;
-  const badge = exts.length ? `${exts.filter(e => e.present).length}/${exts.length} downloaded` : "";
-  const cb = $("extCountBadge"); if (cb) cb.textContent = badge;
-  const mc = $("extModalCount"); if (mc) mc.textContent = badge;
-  if (list) {
-    list.querySelectorAll("[data-ext-download]").forEach(b => b.addEventListener("click", () => _extDownload(b.getAttribute("data-ext-download"))));
-    list.querySelectorAll("[data-ext-delete]").forEach(b => b.addEventListener("click", () => _extDelete(b.getAttribute("data-ext-delete"))));
-  }
+function _mktDataRender(id) {
+  const box = document.querySelector(`[data-mkt-data="${id}"]`);
+  if (!box) return;
+  const datasets = mktDataState.datasets[id] || [];
+  if (!datasets.length) { box.innerHTML = ""; return; }
+  const open = mktDataState.open.has(id);
+  const downloaded = datasets.filter(d => d.present).length;
+  const summary = `${datasets.length} dataset${datasets.length === 1 ? "" : "s"}${downloaded ? " · " + downloaded + " downloaded" : ""}`;
+  const rows = open ? datasets.map(d => _mktDataRowHtml(id, d)).join("") : "";
+  box.innerHTML = `
+    <div style="margin:4px 8px 0;padding-top:6px;border-top:1px solid #131722">
+      <div data-mkt-data-toggle="${_extEsc(id)}" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;padding:0 8px 2px">
+        <span style="font-size:9px;color:var(--accent);width:8px">${open ? "▾" : "▸"}</span>
+        <span style="font-size:10px;color:var(--accent);letter-spacing:.04em;text-transform:uppercase">Data</span>
+        <span style="font-size:10px;color:var(--dim)">${summary}</span>
+      </div>
+      ${rows}
+    </div>`;
+  box.querySelector("[data-mkt-data-toggle]").addEventListener("click", () => {
+    if (mktDataState.open.has(id)) mktDataState.open.delete(id); else mktDataState.open.add(id);
+    _mktDataRender(id);
+  });
+  box.querySelectorAll("[data-mkt-data-download]").forEach(b =>
+    b.addEventListener("click", () => _mktDataDownload(b.getAttribute("data-mkt-data-id"), b.getAttribute("data-mkt-data-download"))));
+  box.querySelectorAll("[data-mkt-data-delete]").forEach(b =>
+    b.addEventListener("click", () => _mktDataDelete(b.getAttribute("data-mkt-data-id"), b.getAttribute("data-mkt-data-delete"))));
 }
 
-function _extRefresh() {
-  if (extState.inflight) return;
-  extState.inflight = true;
-  if (!extState.catalog && $("extList")) showSkeleton("extList", "blocks", 4);
-  fetch("/market/extensions/catalog").then(r => r.json()).then(_extRender)
-    .catch(e => { const s = $("extActionStatus"); if (s) { s.textContent = `catalog failed: ${e}`; s.style.color = "var(--hot)"; } })
-    .finally(() => { extState.inflight = false; });
+function _mktDataLoad(id) {
+  fetch(`/extensions/${encodeURIComponent(id)}/data`).then(r => r.json()).then(res => {
+    mktDataState.datasets[id] = (res && res.datasets) || [];
+    _mktDataRender(id);
+  }).catch(() => {});
 }
 
-function _extDownload(source) {
-  if (!source || extState.busy.has(source)) return;
-  extState.busy.add(source); _extRender(extState.catalog);
-  fetch("/market/extensions/download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })
+function _mktDataDownload(id, source) {
+  const key = _mktDataKey(id, source);
+  if (!id || !source || mktDataState.busy.has(key)) return;
+  mktDataState.busy.add(key); _mktDataRender(id);
+  fetch(`/extensions/${encodeURIComponent(id)}/data/download`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })
     .then(r => r.json()).then(res => {
-      const s = $("extActionStatus");
-      if (s) { s.textContent = res.ok ? `${source}: downloaded` : (res.error || "download failed"); s.style.color = res.ok ? "var(--data-pos)" : "var(--warm)"; }
+      _mktNote(res.ok ? (res.note || `${source}: downloaded`) : (res.error || "download failed"), res.ok ? "var(--data-pos)" : "var(--warm)");
     })
-    .catch(e => { const s = $("extActionStatus"); if (s) { s.textContent = _backendErrMsg(e); s.style.color = "var(--hot)"; } })
-    .finally(() => { extState.busy.delete(source); _extRefresh(); });
+    .catch(() => _mktNote("Download failed. Try again.", "var(--hot)"))
+    .finally(() => { mktDataState.busy.delete(key); _mktDataLoad(id); });
 }
 
-function _extDelete(source) {
-  if (!source || extState.busy.has(source)) return;
-  const e = ((extState.catalog && extState.catalog.extensions) || []).find(x => x.source === source) || {};
-  const warn = e.downloadable ? "" : "\n\nThis dataset is not hosted yet, so deleting is PERMANENT (no re-download).";
-  if (!confirm(`Delete extension "${e.label || source}"?` + warn)) return;
-  extState.busy.add(source); _extRender(extState.catalog);
-  fetch("/market/extensions/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })
+function _mktDataDelete(id, source) {
+  const key = _mktDataKey(id, source);
+  if (!id || !source || mktDataState.busy.has(key)) return;
+  const d = (mktDataState.datasets[id] || []).find(x => x.source === source) || {};
+  const warn = d.downloadable ? "" : "\n\nThis dataset is not hosted yet, so deleting is PERMANENT (no re-download).";
+  if (!confirm(`Delete dataset "${d.label || source}"?` + warn)) return;
+  mktDataState.busy.add(key); _mktDataRender(id);
+  fetch(`/extensions/${encodeURIComponent(id)}/data/delete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })
     .then(r => r.json()).then(res => {
-      const s = $("extActionStatus");
-      if (s) {
-        s.textContent = res.ok ? (res.note || `${source}: deleted${res.reclaimed_gb ? " (" + _extFmtGb(res.reclaimed_gb) + " freed)" : ""}`) : (res.error || "delete failed");
-        s.style.color = res.ok ? "var(--data-pos)" : "var(--hot)";
-      }
+      let msg;
+      if (res.ok) msg = res.note || `${source}: deleted${res.reclaimed_gb ? " (" + _mktFmtGb(res.reclaimed_gb) + " freed)" : (res.unlinked ? " (link removed)" : "")}`;
+      else msg = res.error || "delete failed";
+      _mktNote(msg, res.ok ? "var(--data-pos)" : "var(--warm)");
     })
-    .catch(e2 => { const s = $("extActionStatus"); if (s) { s.textContent = _backendErrMsg(e2); s.style.color = "var(--hot)"; } })
-    .finally(() => { extState.busy.delete(source); _extRefresh(); });
-}
-
-function _extOpenModal() {
-  const m = $("extensionsModal");
-  if (!m) return;
-  m.classList.remove("hidden");
-  document.body.classList.add("no-scroll");
-  _extRefresh();
-}
-
-function _extCloseModal() {
-  const m = $("extensionsModal");
-  if (m) m.classList.add("hidden");
-  document.body.classList.remove("no-scroll");
-}
-
-// ---- Marketplace (downloadable extensions; namespaced mkt*) ----
-const mktState = { catalog: null, busy: new Set(), inflight: false };
-
-function _mktNote(msg, color) {
-  const s = $("mktActionStatus");
-  if (s) { s.textContent = msg || ""; s.style.color = color || "var(--dim)"; }
+    .catch(() => _mktNote("Delete failed. Try again.", "var(--hot)"))
+    .finally(() => { mktDataState.busy.delete(key); _mktDataLoad(id); });
 }
 
 function _mktRowHtml(e) {
@@ -11521,7 +11512,6 @@ function _mktRowHtml(e) {
   const meta = [e.version ? "v" + _extEsc(e.version) : "", e.author ? "by " + _extEsc(e.author) : ""].filter(Boolean).join(" · ");
   const tags = [];
   if (e.installed) tags.push(`<span class="corpus-tag t-good">installed</span>`);
-  if (e.experimental) tags.push(`<span class="corpus-tag t-warm" title="in development">experimental</span>`);
   let action;
   if (busy) action = `<button class="action" type="button" disabled>working...</button>`;
   else if (e.installed) action = `<button class="action" type="button" data-mkt-uninstall="${_extEsc(e.id)}">uninstall</button>`;
@@ -11531,13 +11521,14 @@ function _mktRowHtml(e) {
     <div style="border-bottom:1px solid #131722;padding:6px 0">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 8px">
         <div style="display:flex;align-items:baseline;gap:6px;flex:1;min-width:240px">
-          <span style="color:var(--text);font-weight:500;font-size:11.5px">${_extEsc(e.name || e.id)}</span>
+          <span style="color:var(--accent);font-weight:500;font-size:11.5px">${_extEsc(e.name || e.id)}</span>
           <span style="color:var(--dim);font-size:10.5px">${meta}</span>
         </div>
         <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">${tags.join("")}</div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">${action}</div>
       </div>
       ${desc}
+      <div data-mkt-data="${_extEsc(e.id)}"></div>
     </div>`;
 }
 
@@ -11547,13 +11538,14 @@ function _mktRender(data) {
   const items = (data && data.catalog) || [];
   if (list) list.innerHTML = items.length
     ? items.map(_mktRowHtml).join("")
-    : `<div class="meta" style="padding:12px 8px;color:var(--dim)">No extensions available yet.</div>`;
+    : `<div class="meta" style="padding:12px 8px;color:var(--dim)">Nothing in the library right now.</div>`;
   const cb = $("mktModalCount");
   if (cb) cb.textContent = items.length ? `${items.filter(e => e.installed).length}/${items.length} installed` : "";
   if (list) {
     list.querySelectorAll("[data-mkt-install]").forEach(b => b.addEventListener("click", () => _mktInstall(b.getAttribute("data-mkt-install"))));
     list.querySelectorAll("[data-mkt-uninstall]").forEach(b => b.addEventListener("click", () => _mktUninstall(b.getAttribute("data-mkt-uninstall"))));
   }
+  items.forEach(e => { if (e.id) { _mktDataRender(e.id); _mktDataLoad(e.id); } });
 }
 
 function _mktRefresh() {
@@ -12359,14 +12351,7 @@ document.addEventListener("DOMContentLoaded", () => {
   _corpusRefreshCatalog();
   setInterval(() => { if (_isTabActive("settings")) _corpusRefreshCatalog(); }, 15000);
 
-  // ---- Extensions wiring ----
-  const ebb = $("extBrowseBtn");  if (ebb) ebb.addEventListener("click", _extOpenModal);
-  const erb = $("extRefreshBtn"); if (erb) erb.addEventListener("click", _extRefresh);
-  const emc = $("extModalClose"); if (emc) emc.addEventListener("click", _extCloseModal);
-  const emm = $("extensionsModal"); if (emm) emm.addEventListener("click", (e) => { if (e.target === emm) _extCloseModal(); });
-  _extRefresh();
-
-  // ---- Marketplace wiring ----
+  // ---- Extension library wiring ----
   const mkc = $("mktModalClose"); if (mkc) mkc.addEventListener("click", _mktCloseMarketplace);
   const mkm = $("mktMarketplaceModal"); if (mkm) mkm.addEventListener("click", (e) => { if (e.target === mkm) _mktCloseMarketplace(); });
 

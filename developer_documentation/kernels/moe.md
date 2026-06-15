@@ -7,7 +7,7 @@ This is a versioned contract. Adding, removing, or changing the signature of any
 # ------------------------------------------------------------------------------------
 # Rationale
 
-Total parameters scale linearly with `n_experts` while active parameters per byte stay near a single expert's footprint. Combined with ternary weights ([documentation/kernels/ternary.md](ternary.md)), an 8-expert 1B-class model has a per-byte active footprint that fits the 96 MB L3 of the 9800X3D. Without MoE, the same accuracy band requires a dense 1B model that misses cache catastrophically.
+Total parameters scale linearly with `n_experts` while active parameters per byte stay near a single expert's footprint. Combined with ternary weights ([developer_documentation/kernels/ternary.md](ternary.md)), an 8-expert 1B-class model has a per-byte active footprint that fits the 96 MB L3 of the 9800X3D. Without MoE, the same accuracy band requires a dense 1B model that misses cache catastrophically.
 
 MEGA is the canonical MoE trainer (`trainers/veritate_mega/`). It produces top-1 8-expert checkpoints. The engine reads those.
 
@@ -84,7 +84,7 @@ Validation is gated on the export pipeline writing a v11 binary from a QAT'd MEG
 # what this contract does NOT cover
 
 - Top-K > 1 weighted combine. Reserved for a follow-up; the loader refuses any v11 with `router_topk > 1`.
-- Ternary expert weights. The kernel exists ([documentation/kernels/ternary.md](ternary.md)) and is wired for the non-MoE FFN path (`load_b_ternary`), but the forward path that calls it inside an MoE block is not yet wired. The loader refuses any v11 MoE binary with `quant_mode != INT8`.
+- Ternary expert weights. The kernel exists ([developer_documentation/kernels/ternary.md](ternary.md)) and is wired for the non-MoE FFN path (`load_b_ternary`), but the forward path that calls it inside an MoE block is not yet wired. The loader refuses any v11 MoE binary with `quant_mode != INT8`.
 - Batched MoE prefill (per-expert grouped matmul over the prefill rows that route to the same expert). Falls back to per-token decode today.
 - Per-expert load-balance auxiliary loss. Trainer-side concern; the engine does not see it.
 - Router weight per-row scales. v11 uses uniform per-tensor scale only.
@@ -96,6 +96,6 @@ Adding, removing, or renaming any field above requires:
 
 1. The implementation in `veritate_engine/v1/src/model.c` (`route_token_top1`, the FFN dispatch in `forward_decode`, and the v11 load path) is updated.
 2. The block_t / model_t fields in `veritate_engine/v1/src/veritate.h` are updated.
-3. The export pipeline in `veritate_mri/export.py` is updated to match the on-disk layout.
+3. The export pipeline in `veritate_mri/training/export.py` is updated to match the on-disk layout.
 4. This file's tables and code samples are updated in the same commit.
 5. A build note ships the format change per claude_preflight rule 43.

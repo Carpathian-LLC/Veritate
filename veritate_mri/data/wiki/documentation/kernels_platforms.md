@@ -5,7 +5,7 @@ tags: [kernels, platforms, x86_64, arm64, avx512, neon]
 summary: Which CPUs Veritate runs on, why, and what each tier hits in ms/byte.
 ---
 
-> Friendly summary. The canonical contract is `documentation/kernels/platforms.md`.
+> Friendly summary. The canonical contract is `developer_documentation/kernels/platforms.md`.
 
 ## the bet
 
@@ -61,9 +61,9 @@ The strategic angle: Veritate doesn't need users to upgrade. The market for "AI 
 
 Three tiny edits, ~30 seconds of wiring.
 
-1. **`engine/src/veritate.h`** — add the function-pointer typedef and `extern` next to the matmul block; forward-declare each implementation.
-2. **`engine/src/dispatch.c`** — add the global default and the runtime selection (`if feat->avx512_vnni: use _avx512; else if feat->neon: use _neon`).
-3. **`engine/src/model.c`** — swap call sites from the direct name (`score_dot_v_avx512`) to the dispatch name (`score_dot_v`).
+1. **`veritate_engine/v1/src/veritate.h`** — add the function-pointer typedef and `extern` next to the matmul block; forward-declare each implementation.
+2. **`veritate_engine/v1/src/dispatch.c`** — add the global default and the runtime selection (`if feat->avx512_vnni: use _avx512; else if feat->neon: use _neon`).
+3. **`veritate_engine/v1/src/model.c`** — swap call sites from the direct name (`score_dot_v_avx512`) to the dispatch name (`score_dot_v`).
 
 Until a second arch lands, the x86_64 build calls `_avx512` versions directly to avoid wrapping a single impl. Five hot-path primitives have the dispatch hooks ready: `attn_dot_inline` and `attn_hsum_inline` stay inlined per-arch (function-pointer overhead exceeds their bodies); `score_dot_v`, `softmax_rows`, `layernorm_i16_to_i8` go through pointers.
 
@@ -95,9 +95,9 @@ Every kernel implementation must satisfy:
 2. Extract from `model.c` into `kernels/x86_64/` as standalone TUs exposing the signatures. Add scalar references for each.
 3. Wire dispatch for attention / softmax / layernorm in addition to matmul.
 4. Verify zero regression on the 9800X3D.
-5. AVX2 port (`kernels/x86_64/avx2.c`). Old Mac mini Intel + old PC.
-6. NEON SDOT port (`kernels/arm64/sdot.c`). Apple Silicon, M4 Studio, modern Android.
-7. NEON-only port (`kernels/arm64/neon.c`). Pi 4 baseline.
-8. AMX stretch (`kernels/arm64/amx.c`). M-series stretch goal.
+5. AVX2 port (`veritate_engine/v1/kernels/x86_64/matmul_avx2.c`). Old Mac mini Intel + old PC.
+6. NEON SDOT port (`veritate_engine/v1/kernels/arm64/matmul_neon_sdot.c`). Apple Silicon, M4 Studio, modern Android.
+7. NEON-only port (`veritate_engine/v1/kernels/arm64/transformer_neon.c`). Pi 4 baseline.
+8. AMX stretch. M-series stretch goal, no kernel yet.
 
 After step 4, every subsequent platform is contained work. Separate translation units mean no platform port can regress another.

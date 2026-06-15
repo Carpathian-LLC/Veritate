@@ -17,7 +17,7 @@ adding a channel never breaks an older model (it reads fewer chars). The format
 has grown 3 -> 5 -> 7 -> 9 channels; current `BAR_STRIDE=9`.
 
 Corpora share the identical format, one per `--source` in the builder's
-`LOADERS` table ([build_series_corpus.py](../../veritate_mri/tools/build_series_corpus.py)).
+`LOADERS` table ([build_series_corpus.py](../../extensions/canonical/market/server/build_series_corpus.py)).
 Two loaders back every source: `load_stock_csv` (schema
 `date,open,high,low,close,adjclose,volume`) and `load_crypto_csv` (schema
 `time,open,high,low,close,volume`, time as numeric epoch).
@@ -25,27 +25,27 @@ Two loaders back every source: `load_stock_csv` (schema
 - `stocks_1m` — intraday 1-minute stock bars (stock schema). Free 1m stock history
   is not available; this source is reserved for a paid feed.
 - `indices` — daily cash index levels (^GSPC, ^NDX, ...) from the Yahoo v8 chart
-  feed; `adjclose` mirrors `close`. Puller: `external_data/pull_yahoo.py indices`.
+  feed; `adjclose` mirrors `close`. Puller: `extensions/canonical/market/server/pull_yahoo.py indices`.
 - `futures` — daily Yahoo continuous front-month contracts (ES=F, CL=F, ...), the
   only free continuous series; `adjclose` mirrors `close`. Puller:
-  `external_data/pull_yahoo.py futures`.
+  `extensions/canonical/market/server/pull_yahoo.py futures`.
 - `crypto` — major Binance USDT pairs at 1-minute resolution.
 - `crypto_extra` — every other Binance Vision USDT pair (full archive minus the
-  ~200 already in `crypto`). Puller: `external_data/pull_binance.py --full`.
+  ~200 already in `crypto`). Puller: `extensions/canonical/market/server/pull_binance.py --full`.
 - `crypto_1s` — the same pairs at 1-second resolution (the high-frequency tape).
-  Reads `external_data/crypto_1s/*.csv`; shares the crypto loader. The serving
+  Reads `extensions/installed/market/data/crypto_1s/*.csv`; shares the crypto loader. The serving
   layer routes a `base=1s` request to this `_1s` tape and reads it raw with no
-  resample ([data.py:42](../../veritate_mri/market/data.py#L42)).
+  resample ([data.py:42](../../extensions/canonical/market/server/data.py#L42)).
 - `forex` — 1-minute major-pair bars resampled from Dukascopy ticks (crypto
-  schema; volume is tick count). Puller: `external_data/pull_forex.py`. Writes
+  schema; volume is tick count). Puller: `extensions/canonical/market/server/pull_forex.py`. Writes
   per pair incrementally, flushed per completed month; `<pair>_done.json` tracks
   finished months so a killed run resumes mid-pair. Defaults to the last 3 years
   (~1h/pair/year sequential at ~0.53s/hourly fetch); `--start`/`--end` widen it.
 
 ## how it works
 
-Codec and feature math: [series_codec.py](../../veritate_mri/tools/series_codec.py).
-Builder: [build_series_corpus.py](../../veritate_mri/tools/build_series_corpus.py).
+Codec and feature math: [series_codec.py](../../extensions/canonical/market/server/series_codec.py).
+Builder: [build_series_corpus.py](../../extensions/canonical/market/server/build_series_corpus.py).
 
 **Features per bar (9). The scale-free ones are comparable across eras; the rest
 are categorical:**
@@ -87,10 +87,10 @@ Any absent input encodes its fallback bin for every bar.
 
 **Context channels (funding, sentiment).** These two are not in the OHLCV CSV; they
 are joined from separate sources by `market.data.join_context(df, symbol)`
-([data.py](../../veritate_mri/market/data.py)), shared by the builder and the serving
+([data.py](../../extensions/canonical/market/server/data.py)), shared by the builder and the serving
 path so the on-disk and live formats never diverge. Funding is per-symbol
-(`external_data/funding/<SYM>.csv`, columns `time,funding`); sentiment is global
-(`external_data/sentiment/fng.csv`, columns `time,value`). The join is
+(`extensions/installed/market/data/funding/<SYM>.csv`, columns `time,funding`); sentiment is global
+(`extensions/installed/market/data/sentiment/fng.csv`, columns `time,value`). The join is
 `reindex(df.index, method="ffill")`: each bar carries the last context value at or
 before its timestamp (no lookahead; never `bfill`). The join is gated to crypto
 sources (`market.data.CRYPTO_SOURCES`) since funding is a perp rate and the index is
@@ -100,12 +100,12 @@ pre-coverage bars carry the absent bin.
 
 **No lookahead.** Normalization at bar `t` uses strictly trailing windows
 (`FEAT_WINDOW` / `RV_WINDOW` / `RV_REF_WINDOW`, bars before `t` only) —
-[series_codec.py compute_features](../../veritate_mri/tools/series_codec.py).
+[series_codec.py compute_features](../../extensions/canonical/market/server/series_codec.py).
 The session and buy-pressure bytes are derived only from bar `t`'s own input; trade
 activity uses a strictly trailing `FEAT_WINDOW` mean. Guaranteed by
 `test_no_lookahead` (which threads the taker inputs) and
 `test_realized_vol_channel_no_lookahead` in
-[test_series_codec.py](../../tests/mri/test_series_codec.py).
+[test_series_codec.py](../../extensions/canonical/market/tests/test_series_codec.py).
 
 **Quantization.** Each numeric feature maps to a bucket over a fixed clip range
 (`RET_BINS=33` centered, `RNG_BINS=16`, `VOL_BINS=16`, `RV_BINS=16`,
@@ -127,12 +127,12 @@ model's continuation through the same functions.
 
 ## build
 
-Raw data lives in the gitignored `external_data/{stocks,crypto,crypto_1s}/`. Then:
+Raw data lives in the gitignored `extensions/installed/market/data/{stocks,crypto,crypto_1s}/`. Then:
 
 ```
-python veritate_mri/tools/build_series_corpus.py --source stocks
-python veritate_mri/tools/build_series_corpus.py --source crypto
-python veritate_mri/tools/build_series_corpus.py --source crypto_1s
+python extensions/canonical/market/server/build_series_corpus.py --source stocks
+python extensions/canonical/market/server/build_series_corpus.py --source crypto
+python extensions/canonical/market/server/build_series_corpus.py --source crypto_1s
 ```
 
 Output: `trainers/corpus/<source>_train.bin` + `_val.bin`
@@ -145,31 +145,31 @@ Output: `trainers/corpus/<source>_train.bin` + `_val.bin`
 magnitude/funding signal per bar; mix horizons to recover volume:
 
 ```
-python veritate_mri/tools/build_series_corpus.py --source crypto_of --horizon 15m
-python veritate_mri/tools/build_series_corpus.py --source crypto_of --horizon 5m
-python veritate_mri/tools/build_series_corpus.py --source crypto_of --horizon 1h
+python extensions/canonical/market/server/build_series_corpus.py --source crypto_of --horizon 15m
+python extensions/canonical/market/server/build_series_corpus.py --source crypto_of --horizon 5m
+python extensions/canonical/market/server/build_series_corpus.py --source crypto_of --horizon 1h
 ```
 
 Train on the mix with explicit weights (val = first stem): e.g. `--corpus
 "crypto_of_15m:0.45,crypto_of_5m:0.35,crypto_of_1h:0.20"`.
 
 **Order-flow corpus (real buy-pressure + trade-activity channels).** Legacy
-`external_data/crypto/` CSVs are OHLCV-only, so those two channels encode the
+`extensions/installed/market/data/crypto/` CSVs are OHLCV-only, so those two channels encode the
 absent-fallback byte. To build a corpus where they carry real signal, first pull
 Binance 1m bars *with* the `taker_buy` / `trades` fields, then build that source:
 
 ```
-python -m market.fetch BTCUSDT ETHUSDT SOLUSDT --bars 400000 --source crypto_extra
-python veritate_mri/tools/build_series_corpus.py --source crypto_extra
+python extensions/canonical/market/server/fetch.py BTCUSDT ETHUSDT SOLUSDT --bars 400000 --source crypto_extra
+python extensions/canonical/market/server/build_series_corpus.py --source crypto_extra
 ```
 
 A before/after on whether order flow helps is two corpora, identical except
 for those channels: `crypto` (fallback bytes) vs `crypto_extra` (real values).
 
-**Context-channel corpus (funding + sentiment).** `external_data/crypto_of/` carries
+**Context-channel corpus (funding + sentiment).** `extensions/installed/market/data/crypto_of/` carries
 the 40 majors with order-flow columns; pulling funding
-(`external_data/funding/<SYM>.csv`, Binance Vision monthly dumps 2020+) and the
-fear-greed index (`external_data/sentiment/fng.csv`, alternative.me, 2018+) lets the
+(`extensions/installed/market/data/funding/<SYM>.csv`, Binance Vision monthly dumps 2020+) and the
+fear-greed index (`extensions/installed/market/data/sentiment/fng.csv`, alternative.me, 2018+) lets the
 builder populate channels 7-8 for those pairs. Any crypto build then auto-joins them
 via `join_context`; pairs/eras without data encode the absent bin.
 
@@ -210,7 +210,7 @@ silently leaks the future. Build only with the truncation gate in place.
 
 ## dependencies
 
-- `external_data/` raw CSVs (gitignored, local only).
+- `extensions/installed/market/data/` raw CSVs (gitignored, local only).
 - `numpy` for feature math.
 - `market.data.normalize_time` / `index_ns` for timestamp conversion (session
   channel).
@@ -228,7 +228,7 @@ silently leaks the future. Build only with the truncation gate in place.
 - **Stamp = codec stride at save time.** Build the corpus and train in the same checkout
   (the standard rebuild-then-train workflow); training on a stale lower-stride `.bin`
   would mis-stamp the model. To train a model that USES the funding/sentiment channels,
-  build a crypto corpus after pulling `external_data/funding/` + `external_data/sentiment/`
+  build a crypto corpus after pulling `extensions/installed/market/data/funding/` + `extensions/installed/market/data/sentiment/`
   (the context recipe above); pairs/eras without that data encode the absent bin.
 - These corpora are built from local gitignored data; they are NOT in the shared
   `corpus_catalog.json` and other machines will not have them.

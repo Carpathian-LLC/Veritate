@@ -19,7 +19,7 @@ Scrubbing the timeline re-renders all telemetry panels for the selected frame. T
 ## Dependencies
 
 - `/generate` route at [backends_routes.py](../../../veritate_mri/routes/backends_routes.py).
-- PyTorch inference brain at [veritate_mri/inference/brain.py](../../../veritate_mri/inference/brain.py) — see [../backend/inference_brain.md](../backend/inference_brain.md).
+- PyTorch inference brain at [veritate_mri/inference/backends/pytorch.py](../../../veritate_mri/inference/backends/pytorch.py) — see [../backend/inference_brain.md](../backend/inference_brain.md).
 - `/meta` for the current model's layers and hidden size (drives canvas dimensions).
 - Canvas helpers in [canvas_rendering.md](canvas_rendering.md).
 

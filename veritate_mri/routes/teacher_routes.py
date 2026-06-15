@@ -33,7 +33,6 @@ from tools.jsonl_to_bin import jsonl_to_bin
 
 LOG_SOURCE = "teacher"
 JOB_ID_LEN = 12
-SYNTH_JOBS_DIR = "synth_jobs"
 TEACHER_API_KEY_ENV = "VERITATE_TEACHER_API_KEY"
 SAMPLES_FILE = "samples.jsonl"
 STATE_FILE = "state.json"
@@ -315,10 +314,10 @@ def register(app):
             if entry is not None and entry["thread"].is_alive():
                 return {"error": "job still running"}, 409
             job_id = existing_id
-            out_root = os.path.join(REPO_ROOT, SYNTH_JOBS_DIR, job_id)
+            out_root = paths_mod.synth_job_dir(job_id)
         else:
             job_id = uuid.uuid4().hex[:JOB_ID_LEN]
-            out_root = body.get("output_dir") or os.path.join(REPO_ROOT, SYNTH_JOBS_DIR, job_id)
+            out_root = body.get("output_dir") or paths_mod.synth_job_dir(job_id)
         os.makedirs(out_root, exist_ok=True)
         _write_job_meta(out_root, seed_ids, categories)
         api_key = os.environ.get(TEACHER_API_KEY_ENV) or s.get("teacher_api_key") or None
@@ -341,7 +340,7 @@ def register(app):
 
     @app.route("/teacher/synth/jobs", methods=["GET"])
     def teacher_synth_jobs_route():
-        root = os.path.join(REPO_ROOT, SYNTH_JOBS_DIR)
+        root = paths_mod.synth_jobs_root()
         out = []
         if os.path.isdir(root):
             with _JOBS_LOCK:
@@ -368,7 +367,7 @@ def register(app):
             entry = _JOBS.get(job_id)
             if entry is not None and entry["thread"].is_alive():
                 return {"error": "job still running"}, 409
-        root = os.path.realpath(os.path.join(REPO_ROOT, SYNTH_JOBS_DIR))
+        root = os.path.realpath(paths_mod.synth_jobs_root())
         target = os.path.realpath(os.path.join(root, job_id))
         if os.path.dirname(target) != root or not os.path.isdir(target):
             return {"error": "unknown job"}, 404
@@ -387,7 +386,7 @@ def register(app):
             return {"error": "stem must be lowercase letters, digits, underscores"}, 400
         with _JOBS_LOCK:
             entry = _JOBS.get(job_id)
-        output_dir = entry["output_dir"] if entry else os.path.join(REPO_ROOT, SYNTH_JOBS_DIR, job_id)
+        output_dir = entry["output_dir"] if entry else paths_mod.synth_job_dir(job_id)
         samples = os.path.join(output_dir, SAMPLES_FILE)
         if not os.path.isfile(samples):
             return {"error": "no samples for job"}, 404
@@ -439,7 +438,7 @@ def register(app):
         limit = max(1, min(limit, SAMPLES_PREVIEW_MAX))
         with _JOBS_LOCK:
             entry = _JOBS.get(job_id)
-        output_dir = entry["output_dir"] if entry else os.path.join(REPO_ROOT, SYNTH_JOBS_DIR, job_id)
+        output_dir = entry["output_dir"] if entry else paths_mod.synth_job_dir(job_id)
         if not job_id or not os.path.isdir(output_dir):
             return {"error": "unknown job"}, 404
         return {"job_id": job_id, "samples": _read_recent_samples(output_dir, limit)}
@@ -453,7 +452,7 @@ def register(app):
             output_dir = entry["output_dir"]
             running = entry["thread"].is_alive()
         else:
-            output_dir = os.path.join(REPO_ROOT, SYNTH_JOBS_DIR, job_id)
+            output_dir = paths_mod.synth_job_dir(job_id)
             if not job_id or not os.path.isdir(output_dir):
                 return {"error": "unknown job"}, 404
             running = False

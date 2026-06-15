@@ -26,7 +26,7 @@ Compiled C inference engine at [veritate_engine/v1/](../../../veritate_engine/v1
 | v11     | QAT mode flag, MoE (top-1 routing only)               |
 | v12     | MTP byte-0 transform, RMSNorm scale-64, untied lm_head|
 
-Subprocess spawned via `app.config["C_SUBPROCESS"]` on demand. Routes control it via [engine_routes.py](../../../veritate_mri/routes/engine_versions.json).
+Subprocess spawned via `app.config["C_SUBPROCESS"]` on demand. Routes control it via [engine_routes.py](../../../veritate_mri/routes/engine_routes.py). Format versions are declared in [engine_versions.json](../../../veritate_engine/v1/engine_versions.json).
 
 The `v2/` sibling directory is an empty scratchpad reserved for future hot-path-changing experiments; v1 is the sole production engine.
 

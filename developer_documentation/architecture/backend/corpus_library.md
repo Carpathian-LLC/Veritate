@@ -30,7 +30,6 @@ Four install formats (`install()`, [corpus_sync.py:736](../../../veritate_mri/tr
 - [readers/paths.py](../../../veritate_mri/readers/paths.py): `CORPUS_ROOT`, `NATIVE_CORPUS_ROOT`, suffix constants.
 - [runtime/settings.py](../../../veritate_mri/runtime/settings.py): catalog URL + user sources.
 - Frontend: `_corpusRenderCatalog` / `_corpusInstallTrigger` in [index.js](../../../veritate_mri/web/index.js) (Settings card `#corpusLibraryRow` and modal `#corpusLibraryModal`).
-- Tests: [tests/mri/test_corpus_native.py](../../../tests/mri/test_corpus_native.py), [tests/selftest/checks/check_corpus_catalog.py](../../../tests/selftest/checks/check_corpus_catalog.py).
 
 ## Pitfalls
 

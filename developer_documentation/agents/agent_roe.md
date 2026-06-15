@@ -11,9 +11,9 @@ Byte-level, energy-efficient LLM on consumer hardware ($300-1000 box; Apple Sili
 1. No git commit / push to the Veritate repo without explicit user permission. Local edits free; pushes only when authorized.
 2. Do not touch a live training run (PID, ckpt dir, MPS device). Inference smokes default to CPU.
 3. Read `claude_preflight.md` every session before significant work. ROE compliance is gating.
-4. Read `ideas.md` falsified / dead-end section before designing an experiment in that space.
+4. Check prior findings in the relevant `developer_documentation/<domain>/` doc before designing an experiment in that space.
 5. No version bumps, no build-note edits, no merges, no model exports without explicit instruction.
-6. Concise outputs: bullets over paragraphs, lines under 200 chars, three-line FAILURES format for any negative result.
+6. Concise outputs: bullets over paragraphs, lines under 200 chars.
 7. Field-symmetry mandate: every per-token frame the dashboard renders is emitted by both training-time and inference-time. Adding a field touches both in the same commit.
 8. No new files / folders / agents / scripts / worktrees without explicit instruction (preflight rule 3).
 9. Lead with the verdict, not the process. Honest losses are real deliverables; no sandbagging.
@@ -31,9 +31,9 @@ Byte-level, energy-efficient LLM on consumer hardware ($300-1000 box; Apple Sili
 | Tool-SFT bins | `trainers/corpus/tool_sft_{train,val}.bin` |
 | Canonical model class | `veritate.model.Veritate` (h=768 L=12 GELU absolute-pos) |
 | 800M model class | `trainers/veritate_800m/trainer.py::Veritate800M` (RoPE + MTP) |
-| Brain (inference) | `veritate_mri/backends/pytorch.py::Brain` |
+| Brain (inference) | `veritate_mri/inference/backends/pytorch.py::Brain` |
 | Agent loop / eval | `veritate_mri/agent/{loop,eval}.py` |
-| Smoke output dir | `Agent-Documents/Veritate/SMOKE_RESULTS/` |
+| Smoke output dir | `SMOKE_RESULTS/` |
 | Versions ledger | `versions.json` at repo root |
 
 ## model invariants (preflight rule 11a)
@@ -99,7 +99,7 @@ Header for every smoke:
 ```
 
 Checklist before starting:
-- Grep `ideas.md` (dead-ends section) for your topic.
+- Check prior findings in `developer_documentation/<domain>/` for your topic.
 - State the falsifier in one sentence.
 - Wall-clock < 4 hours (else split the smoke).
 - Device = CPU unless specifically needing MPS and 800M is done.
@@ -116,13 +116,13 @@ Active agents (table; keep current as new boxes join):
 | agent-malkaisan | x86 dev box | Ryzen 7 9800X3D, 96 MB L3, 32 GB RAM, 12 GB VRAM | engine/MRI dev (x86 + AVX-512 VNNI) |
 
 When you take a new task:
-1. Read this file's last entries + the dispatch in `ideas.md` end-to-end.
+1. Read this file's last entries end-to-end.
 2. Write a "starting W<N>" handoff note (in your local working log).
 3. Estimate wall-clock + restate the falsifier.
 
 When you complete a task:
-1. Update `ideas.md` (resolve / falsify / partial) with one-line pointer to the smoke.
-2. Push smoke code + stats JSON to `Agent-Documents/Veritate/SMOKE_RESULTS/`.
+1. Record the outcome (resolve / falsify / partial) in the relevant `developer_documentation/<domain>/` doc with a one-line pointer to the smoke.
+2. Push smoke code + stats JSON to `SMOKE_RESULTS/`.
 3. Tag the next agent if applicable.
 
 Standing requests:
@@ -140,12 +140,12 @@ Hardware budget classes:
 No dispatch requires GPU access to a frontier cloud model unless explicitly marked "teacher needed."
 
 Every dispatch prompt MUST include:
-1. "Read `Agent-Documents/Veritate/claude_preflight.md` first" + "Read `Agent-Documents/Veritate/agent_roe.md` second" + "Read `ideas.md` falsified section third."
-2. The success criterion and the falsifier, verbatim from `ideas.md`.
+1. "Read `./claude_preflight.md` (repo root) first" + "Read `developer_documentation/agents/agent_roe.md` second."
+2. The success criterion and the falsifier, stated explicitly.
 3. Hardware budget + wall-clock cap. Subagent bails and reports if cap exceeded.
 4. Outcome contract — one of:
-   - SUCCESS — append entry to `ideas.md` resolved/successes section, propose code changes if applicable, ping operator.
-   - FAILURE — append entry to `ideas.md` falsified section with retry condition.
+   - SUCCESS — propose code changes if applicable, ping operator.
+   - FAILURE — report the negative result with its retry condition.
    - INCONCLUSIVE — return a tight blocker description; no doc edits.
 5. "No commits, no pushes, no model exports. Operator decides."
 

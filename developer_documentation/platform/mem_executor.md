@@ -20,7 +20,7 @@ Both optimizer-offload tiers (`checkpoint+bf16_optimizer`, `checkpoint+page_opti
 
 ## correctness
 
-Activation checkpointing is numerically transparent: it recomputes the forward during backward instead of storing it, so logits, loss, and gradients are identical to a non-checkpointed run within fp tolerance. The paged optimizer is bitwise the standard decoupled-AdamW update (its state just lives on disk). [tests/plugin_contract/test_mem_executor.py](../../tests/plugin_contract/test_mem_executor.py) pins the tier→intervention mapping and that `make_optimizer` returns a paged optimizer only for offload tiers; [test_paged_optimizer.py](../../tests/plugin_contract/test_paged_optimizer.py) pins optimizer parity vs `torch.optim.AdamW`.
+Activation checkpointing is numerically transparent: it recomputes the forward during backward instead of storing it, so logits, loss, and gradients are identical to a non-checkpointed run within fp tolerance. The paged optimizer is bitwise the standard decoupled-AdamW update (its state just lives on disk).
 
 ## dependencies
 

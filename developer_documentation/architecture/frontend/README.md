@@ -20,6 +20,7 @@ Page routing: `/` and `/chat` both serve the chat front door (`hybrid.html`), `/
 - [standalone_modules.md](standalone_modules.md) — the IIFE pattern (prune, tutorial)
 - [canvas_rendering.md](canvas_rendering.md) — fitCanvas, drawSeries, palette
 - [state_persistence.md](state_persistence.md) — what's in localStorage, what comes from server
+- [dropdowns.md](dropdowns.md) — alignment convention for trigger-anchored dropdown/popover menus
 
 ## Panels and overlays
 

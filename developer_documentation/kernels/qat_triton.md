@@ -18,9 +18,7 @@ throughput-bound.
 
 ## numerics
 
-All math runs in fp32 inside the kernel and inside the unfused reference. Bit
-parity with the reference is verified by
-`veritate_mri/tests/test_qat_triton_parity.py`.
+All math runs in fp32 inside the kernel and inside the unfused reference.
 
 The clamp mask in backward is computed on the post-round integer level, not the
 pre-round float. This matches PyTorch's `clamp` autograd which sees the rounded
@@ -56,4 +54,3 @@ that work is tracked under "fused INT8 linear" in ideas.
 |---------------------------------------|--------------------------------------|
 | `veritate_core/qat.py`                | reference + Triton dispatch          |
 | `veritate_core/qat_triton.py`         | Triton kernels + autograd Functions  |
-| `veritate_mri/tests/test_qat_triton_parity.py` | bit-parity verification     |

@@ -5,7 +5,7 @@ tags: [hooks, contract, tfrm, dump]
 summary: What the dashboard, MRI server, and external tools can pull from a training run or a live forward.
 ---
 
-> Friendly summary. The canonical, field-level contract is `documentation/hooks/contract.md`.
+> Friendly summary. The canonical, field-level contract is `developer_documentation/hooks/contract.md`.
 
 ## the thirteen per-checkpoint artifacts
 
@@ -68,7 +68,7 @@ One frame per generated token. Same shape from training-time `dump_generation` a
 
 ## interpretability endpoints
 
-Atlas endpoints aggregate frames from the in-memory ring (live) or `step_<N>.json` (past). Backed by one module (`veritate_mri/atlas.py`) that consumes a frame iterator + query and returns aggregated stats. No new TFRM fields, no new dump artifacts: pure derivations.
+Atlas endpoints aggregate frames from the in-memory ring (live) or `step_<N>.json` (past). Backed by one module (`veritate_mri/training/atlas.py`) that consumes a frame iterator + query and returns aggregated stats. No new TFRM fields, no new dump artifacts: pure derivations.
 
 | endpoint | input | output |
 |---|---|---|
@@ -82,7 +82,7 @@ Atlas endpoints aggregate frames from the in-memory ring (live) or `step_<N>.jso
 
 Adding, removing, or renaming any TFRM field above requires:
 
-1. The producer in `veritate_mri/checkpoint_probe.py` is updated.
+1. The producer in `veritate_mri/training/checkpoint_probe.py` is updated.
 2. The canonical contract table is updated in the same commit.
 3. If a TFRM frame field is added, both the C engine emit and `dump_generation` are updated in the same commit.
 4. The MRI dashboard render function gates on field presence so old runs do not break.

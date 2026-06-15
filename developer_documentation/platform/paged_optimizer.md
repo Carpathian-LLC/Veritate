@@ -14,10 +14,6 @@ Decoupled-AdamW whose optimizer state (`exp_avg`, `exp_avg_sq`) lives in mmap-ba
 - `_file_backed` zeroes only newly-created files; an existing correctly-sized file is mapped as-is, so resume preserves the moments.
 - `state_dict()` carries only the per-param step counts plus `state_dir` — never the moment buffers — so checkpoints stay tiny. `load_state_dict()` restores the steps and rebinds the on-disk files in place.
 
-## correctness
-
-[tests/plugin_contract/test_paged_optimizer.py](../../tests/plugin_contract/test_paged_optimizer.py) pins: param-for-param parity with `torch.optim.AdamW` over many steps (`test_parity_with_torch_adamw`, tol 1e-6), the tiny state_dict contract, resume-from-disk matching a straight run, and temp-dir cleanup on close.
-
 ## dependencies
 
 - `torch` (`torch.from_file` for the mmap, standard tensor ops for the update).

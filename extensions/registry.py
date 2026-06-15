@@ -40,23 +40,32 @@ REGISTER_FN = "register"
 # Functions
 
 def discover():
-    if not os.path.isdir(INSTALLED_ROOT):
-        return []
-    out = []
-    for ext_id in sorted(os.listdir(INSTALLED_ROOT)):
-        ext_dir = os.path.join(INSTALLED_ROOT, ext_id)
-        manifest_path = os.path.join(ext_dir, MANIFEST)
-        if not os.path.isfile(manifest_path):
+    """Installed extensions, from both roots. Canonical (first-party, shipped, trusted)
+    is always active; installed/ holds downloaded third-party ones and overrides a
+    canonical of the same id. One unreadable manifest is logged and skipped."""
+    found = {}
+    for root, source in ((CANONICAL_ROOT, "canonical"), (INSTALLED_ROOT, "installed")):
+        if not os.path.isdir(root):
             continue
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-        except (OSError, ValueError) as e:
-            logmod.error(LOG_SOURCE, f"manifest read failed for {ext_id}: {e}")
-            continue
-        manifest["_dir"] = ext_dir
-        out.append(manifest)
-    return out
+        for ext_id in sorted(os.listdir(root)):
+            ext_dir = os.path.join(root, ext_id)
+            manifest_path = os.path.join(ext_dir, MANIFEST)
+            if not os.path.isfile(manifest_path):
+                continue
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+            except (OSError, ValueError) as e:
+                logmod.error(LOG_SOURCE, f"manifest read failed for {ext_id}: {e}")
+                continue
+            manifest["_dir"] = ext_dir
+            manifest["_source"] = source
+            found[manifest.get("id", ext_id)] = manifest
+    return list(found.values())
+
+
+def manifest_for(ext_id):
+    return next((m for m in discover() if m.get("id") == ext_id), None)
 
 
 def _register_one(app, manifest):
@@ -112,16 +121,13 @@ def list_installed():
     return out
 
 
-def _is_installed(ext_id):
-    return os.path.isdir(os.path.join(INSTALLED_ROOT, ext_id))
-
-
 def load_catalog():
+    active = {m.get("id") for m in discover()}
     with open(CATALOG_PATH, "r", encoding="utf-8") as f:
         catalog = json.load(f)
     entries = catalog.get("extensions") or []
     for entry in entries:
-        entry["installed"] = _is_installed(entry.get("id"))
+        entry["installed"] = entry.get("id") in active
     return entries
 
 
@@ -137,7 +143,19 @@ def install(ext_id):
 
 
 def uninstall(ext_id):
+    """Remove the extension's code but preserve its data/ cache (downloaded datasets,
+    recorded history). A reinstall re-adds the code beside the kept data."""
     dst = os.path.join(INSTALLED_ROOT, ext_id)
-    shutil.rmtree(dst, ignore_errors=True)
+    if os.path.isdir(os.path.join(dst, "data")):
+        for name in os.listdir(dst):
+            if name == "data":
+                continue
+            p = os.path.join(dst, name)
+            if os.path.isdir(p) and not os.path.islink(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.remove(p)
+    else:
+        shutil.rmtree(dst, ignore_errors=True)
     logmod.ok(LOG_SOURCE, f"uninstalled {ext_id}")
     return {"id": ext_id, "installed": False}

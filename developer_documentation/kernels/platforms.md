@@ -60,16 +60,16 @@ Skipped intentionally:
 # Refactor status — extracted from model.c
 #
 
-Five hot-path primitives split out of `engine/src/model.c` into
-`engine/kernels/<arch>/`:
+Five hot-path primitives split out of `veritate_engine/v1/src/model.c` into
+`veritate_engine/v1/kernels/<arch>/`:
 
 | Function                | Binding         | x86_64 location                          |
 |-------------------------|-----------------|------------------------------------------|
 | `attn_dot_inline`       | inline-per-arch | `model.c` (avx-512 + vnni)               |
 | `attn_hsum_inline`      | inline-per-arch | `model.c` (avx-512 + vnni)               |
-| `score_dot_v_avx512`    | direct call     | `kernels/x86_64/transformer_avx512.c`    |
-| `softmax_rows_avx512`   | direct call     | `kernels/x86_64/transformer_avx512.c`    |
-| `layernorm_i16_to_i8_avx512` | direct call | `kernels/x86_64/transformer_avx512.c`    |
+| `score_dot_v_avx512`    | direct call     | `veritate_engine/v1/kernels/x86_64/transformer_avx512.c` |
+| `softmax_rows_avx512`   | direct call     | `veritate_engine/v1/kernels/x86_64/transformer_avx512.c` |
+| `layernorm_i16_to_i8_avx512` | direct call | `veritate_engine/v1/kernels/x86_64/transformer_avx512.c` |
 
 `attn_dot` and `attn_hsum` stay inlined: 64-element int8 helpers
 called millions of times per prefill. Function-pointer dispatch
@@ -130,7 +130,7 @@ When a second arch ships its first kernel (NEON, SDOT, AVX2, etc.),
 introduce runtime dispatch in one commit. Until then the x86_64 build
 calls the `_avx512` versions directly to avoid wrapping a single impl.
 
-**Step 1 — `engine/src/veritate.h`:** add the typedef and extern next
+**Step 1 — `veritate_engine/v1/src/veritate.h`:** add the typedef and extern next
 to the matmul block.
 
 ```c
@@ -148,7 +148,7 @@ void score_dot_v_neon  (const int16_t* scores, const int8_t* v_base,
 arch lands those too. Same shape: `_fn` typedef, extern, forward decls
 for each implementation.)
 
-**Step 2 — `engine/src/dispatch.c`:** add the global default and the
+**Step 2 — `veritate_engine/v1/src/dispatch.c`:** add the global default and the
 runtime selection.
 
 ```c
@@ -162,7 +162,7 @@ void dispatch_init(const cpu_features_t* feat, dispatch_info_t* out) {
 }
 ```
 
-**Step 3 — `engine/src/model.c`:** swap call sites from the direct
+**Step 3 — `veritate_engine/v1/src/model.c`:** swap call sites from the direct
 name to the dispatch name.
 
 ```c
@@ -172,11 +172,11 @@ score_dot_v_avx512(row_q, v_base, qkv_stride, i + 1, out_row);
 score_dot_v(row_q, v_base, qkv_stride, i + 1, out_row);
 ```
 
-`grep -n score_dot_v_avx512 engine/src/model.c` finds them; same drill
+`grep -n score_dot_v_avx512 veritate_engine/v1/src/model.c` finds them; same drill
 for `softmax_rows_avx512` and `layernorm_i16_to_i8_avx512`.
 
 That's the whole wiring. About 30 seconds of editing. The AVX-512
-implementations stay where they are — `engine/kernels/x86_64/transformer_avx512.c`
+implementations stay where they are — `veritate_engine/v1/kernels/x86_64/transformer_avx512.c`
 — and become one of two (or more) backends behind the dispatch.
 
 # ------------------------------------------------------------------------------------
@@ -248,9 +248,9 @@ x86_64). Output: `bin/<os>/<arch>/veritate`.
 # ------------------------------------------------------------------------------------
 
 1. **Lock function-pointer signatures.** Done above in this doc.
-2. **Extract from `model.c` to `kernels/x86_64/`** — keep current
+2. **Extract from `model.c` to `veritate_engine/v1/kernels/x86_64/`** — keep current
    AVX-512 work, refactor as standalone `.c` files exposing the
-   function-pointer signatures. Add `kernels/scalar/` references for
+   function-pointer signatures. Add `veritate_engine/v1/kernels/scalar/` references for
    each (correctness oracle).
 3. **Wire dispatch.** Extend `dispatch.c` to pick attention / softmax /
    layernorm kernels in addition to matmul. CPU-feature detection
@@ -258,11 +258,11 @@ x86_64). Output: `bin/<os>/<arch>/veritate`.
 4. **Verify zero regression** on the 9800X3D. Bench numbers in
    workbook should be identical (within noise) to pre-refactor.
 5. **AVX2 port** — implement the same five functions in
-   `kernels/x86_64/avx2.c` style. Old Mac mini Intel + old PC.
-6. **NEON SDOT port** — `kernels/arm64/sdot.c`. Apple Silicon mini, M4
+   `veritate_engine/v1/kernels/x86_64/matmul_avx2.c` style. Old Mac mini Intel + old PC.
+6. **NEON SDOT port** — `veritate_engine/v1/kernels/arm64/matmul_neon_sdot.c`. Apple Silicon mini, M4
    Studio, modern Android.
-7. **NEON-only port** — `kernels/arm64/neon.c`. Pi 4 baseline.
-8. **AMX port (stretch)** — `kernels/arm64/amx.c`. M-series stretch goal.
+7. **NEON-only port** — `veritate_engine/v1/kernels/arm64/transformer_neon.c`. Pi 4 baseline.
+8. **AMX port (stretch)** — M-series stretch goal.
 
 After step 4, every subsequent platform is contained work — same
 skeleton, different intrinsics. No platform port can regress another

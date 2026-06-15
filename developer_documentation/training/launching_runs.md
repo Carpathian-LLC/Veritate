@@ -98,5 +98,5 @@ Plus every key in the plugin's `manifest.json` `defaults` becomes a `--<key>` fl
 - `total_steps` sets the WSD/cosine LR horizon. Set it to the intended run length; stopping
   early leaves the LR un-annealed (checkpoints still usable).
 - `save()` dumps the full hook suite into `models/<name>/hooks/step_<N>/` every `ckpt_every`
-  (hooks contract: `documentation/hooks/contract.md`). Frequent checkpoints (every 500)
+  (hooks contract: `developer_documentation/hooks/contract.md`). Frequent checkpoints (every 500)
   produce many large dirs: watch disk.

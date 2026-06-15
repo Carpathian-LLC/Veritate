@@ -2,8 +2,8 @@
 
 The HUD's live counters come from one HTTP poll.
 
-- **Endpoint:** `GET /sys_metrics` → returns `sys_metrics.snapshot()` from [veritate_mri/runtime/sys_metrics.py](../../veritate_mri/runtime/sys_metrics.py).
-- **Frontend:** `index.js` polls `/sys_metrics` on tick; render code near `cpu_temp_c` / `temp_c` references in [veritate_mri/web/index.js](../../veritate_mri/web/index.js).
+- **Endpoint:** `GET /sys_metrics` → returns `sys_metrics.snapshot()` from [veritate_mri/runtime/sys_metrics.py](../../../veritate_mri/runtime/sys_metrics.py).
+- **Frontend:** `index.js` polls `/sys_metrics` on tick; render code near `cpu_temp_c` / `temp_c` references in [veritate_mri/web/index.js](../../../veritate_mri/web/index.js).
 
 ## Snapshot shape
 

@@ -5,7 +5,7 @@ tags: [trainers, contract, save, paths, model, qat, manifest]
 summary: What a trainer plugin is, what the platform gives it, and what its manifest looks like.
 ---
 
-> Friendly summary. The canonical, signature-level contract is `documentation/trainers/contract.md`.
+> Friendly summary. The canonical, signature-level contract is `developer_documentation/trainers/contract.md`.
 
 ## what a trainer is
 
@@ -48,7 +48,7 @@ Anything else in the parent repo is internal and may move without notice.
 
 `probe`, `lens`, `classroom`, `grades`, `math`, `grammar`, `reasoning`, `concepts`, `surprise`, `quant_kl`, `writing_health`, `reading_comprehension`, `generation`.
 
-Field schemas for every artifact live in [hooks/contract.md](../hooks/contract.md).
+Field schemas for every artifact live in [hooks contract](hooks_contract.md).
 
 ## model
 

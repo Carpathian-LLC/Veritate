@@ -1,0 +1,16 @@
+{
+  "id": "market",
+  "name": "Market LLM",
+  "version": "1.0.0",
+  "author": "veritate",
+  "kind": "extension",
+  "description": "Byte-LLM market forecasting: hindcast, benchmark, and live decision support over price-series corpora.",
+  "experimental": true,
+  "page": {
+    "route": "/market",
+    "file": "page/index.html",
+    "nav_label": "Market LLM"
+  },
+  "api_prefix": "/market",
+  "register": "register.py"
+}

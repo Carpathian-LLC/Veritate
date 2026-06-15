@@ -68,7 +68,7 @@ Rules:
 
 ## capabilities flag
 
-`models/<name>/config.json` declares trained tiers under `capabilities` (see [documentation/training/pipeline.md](../training/pipeline.md)). The dashboard and the agent loop read it to decide which modes are exposed.
+`models/<name>/config.json` declares trained tiers under `capabilities`. The dashboard and the agent loop read it to decide which modes are exposed.
 
 ## why bytes, not tokens
 

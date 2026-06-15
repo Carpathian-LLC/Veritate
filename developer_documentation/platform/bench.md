@@ -52,7 +52,3 @@ Bench plans at batch 1 (the ramp explores batch); a real run plans at its config
 - Measured values are machine-specific. A tuned manifest must never be pushed upstream; the trainers sync marks it `modified` and protects it locally.
 - Checkpointing in the bench is plan-driven: the trainer calls `enable_grad_checkpoint` when the plan's tier checkpoints, so the ramp measures the regime the size actually needs.
 - Throughput is not monotonic in batch size on MPS; the largest batch that fits is often not the fastest. With a paged optimizer, larger batches amortize the fixed per-step disk traffic, so the sweet spot trends larger. Use `ramp` for the full curve.
-
-## tests
-
-[tests/plugin_contract/test_bench.py](../../tests/plugin_contract/test_bench.py): CPU full-ramp contract, positive throughput, saves-nothing, the memory-budget stop, the backend size-limit stop (MPS INT_MAX), and the MPS OOM-ceiling path (slow).

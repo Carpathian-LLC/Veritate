@@ -67,12 +67,12 @@ Polling stops on tab switch.
   circuit breaker reports `ABORTED` in hot color. Per-failure detail is persisted to `errors.jsonl`
   in the job dir; the breaker config lives in [synth.py](../../../veritate_mri/teacher/synth.py).
 - Training files panel (`#trainFilesPanel`, below the main train panel): shown/hidden with the synth panel
-  by `_trShowSynthPanel` (synth flow only; `display:none` otherwise). Lists every `synth_jobs/<job_id>/` dir,
+  by `_trShowSynthPanel` (synth flow only; `display:none` otherwise). Lists every `veritate_mri/data/synth_jobs/<job_id>/` dir,
   rendered by `_trFilesRender` from the same `synthState.jobs` that `_synthLoadJobs` fetches (`GET /teacher/synth/jobs`),
   so it populates when the flow opens and on the panel's `refresh` button. Deleting (`_trFilesDelete`, behind a
   `confirm`) calls `POST /teacher/synth/delete` then `_synthLoadJobs()` — a light refresh that drops the job from
   both this list and the `#synthJobSelect` destination dropdown. A running job's delete button is disabled; the
-  route refuses a live job (409) and rejects any id that does not resolve to a direct child of `synth_jobs/` (404).
+  route refuses a live job (409) and rejects any id that does not resolve to a direct child of `veritate_mri/data/synth_jobs/` (404).
   Built corpora and trained models are not touched.
 
 ## Dependencies

@@ -287,13 +287,12 @@ def _sync_capabilities(name, step, args):
 
 
 def _sync_model_meta(name, args):
-    """Promote model_type (from the launch env) and bar_stride (current series codec)
-    into config.json's training_args. The trainer drops --model_type (not a manifest
-    key, so parse_known_args discards it) and never sees the codec stride, so neither
-    lands in config.json on its own — leaving the dashboard, the eval-deep gate, and
-    resumed runs reading a stale "language" default. The checkpoint carries both already
-    (stamped onto the saved args); this keeps the on-disk config consistent with it.
-    No-op when already synced."""
+    """Promote model_type (from the launch env) into config.json's training_args. The
+    trainer drops --model_type (not a manifest key, so parse_known_args discards it),
+    so it never lands in config.json on its own, leaving the dashboard, the eval-deep
+    gate, and resumed runs reading a stale "language" default. No-op when already
+    synced. Codec-specific metadata (e.g. the market series stride) is owned by the
+    extension that consumes it, not stamped here."""
     cfg_path = paths.config_path(name)
     if not os.path.isfile(cfg_path):
         return
@@ -305,14 +304,11 @@ def _sync_model_meta(name, args):
     if not isinstance(data.get("training_args"), dict):
         return
     ta = data["training_args"]
-    from tools import series_codec as _series_codec
-    stride = int(_series_codec.BAR_STRIDE)
     mt = os.environ.get(MODEL_TYPE_ENV) or ta.get("model_type")
-    if ta.get("model_type") == mt and ta.get("bar_stride") == stride:
+    if ta.get("model_type") == mt:
         return
     if mt:
         ta["model_type"] = mt
-    ta["bar_stride"] = stride
     tmp = cfg_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -467,12 +463,6 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
             ta.setdefault("model_type", _env_mt)
         else:
             args.setdefault("model_type", _env_mt)
-    # Stamp the series-codec stride this model trains against, so the Market LLM page can
-    # encode each model at its own stride and never break when the codec adds channels.
-    if isinstance(args, dict):
-        from tools import series_codec as _series_codec
-        ta = args.get("training_args")
-        (ta if isinstance(ta, dict) else args).setdefault("bar_stride", int(_series_codec.BAR_STRIDE))
     _ensure_config(name, args)
     _sync_model_meta(name, args)
     _validate_description(name, args)

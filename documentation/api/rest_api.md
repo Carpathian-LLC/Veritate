@@ -11,7 +11,7 @@ Complete HTTP contract for the Veritate platform server (`veritate_mri/app.py`).
 
 ## endpoints an extension will typically use
 
-The market reference extension (`veritate_mri/routes/market_routes.py`) demonstrates the pattern. Most extensions need only this subset:
+The canonical Market extension (`extensions/canonical/market/`) demonstrates the pattern. Most extensions need only this subset:
 
 | purpose | endpoint |
 |---|---|
@@ -25,9 +25,9 @@ The market reference extension (`veritate_mri/routes/market_routes.py`) demonstr
 | read/write user settings | `GET /settings`, `POST /settings` |
 | read version ledger | `GET /versions` |
 | list trained runs | `GET /runs`, `GET /run/<name>/csv` |
-| extension catalog / install / remove | `GET /market/extensions/catalog`, `POST /market/extensions/download`, `POST /market/extensions/delete` |
+| extension catalog / install / remove | `GET /extensions/catalog`, `POST /extensions/install`, `POST /extensions/uninstall` |
 
-Read-only endpoints (`GET` on `/pytorch-models`, `/meta`, `/runs`, `/run/*`, `/settings`, `/versions`, `/backends`, the `/atlas/*` family, `/wiki*`, `/market/*` reads) are safe to poll. Mutating endpoints (`/backends/pytorch`, `/trainers/run`, `/export/*`, `/settings` POST, `/lifecycle/*`, the git-sync routes) change server or disk state. The `/lifecycle/*`, git-sync, `/engine/build`, and trainer-launch routes are platform-internal; an extension should not drive them.
+Read-only endpoints (`GET` on `/pytorch-models`, `/meta`, `/runs`, `/run/*`, `/settings`, `/versions`, `/backends`, the `/atlas/*` family, `/wiki*`, `/extensions`, `/extensions/catalog`) are safe to poll. Mutating endpoints (`/backends/pytorch`, `/trainers/run`, `/export/*`, `/settings` POST, `/lifecycle/*`, the git-sync routes) change server or disk state. The `/lifecycle/*`, git-sync, `/engine/build`, and trainer-launch routes are platform-internal; an extension should not drive them.
 
 ## models and runs
 
@@ -220,21 +220,23 @@ C-engine build/config and model export (used to produce the `.bin` an extension 
 | `POST /lifecycle/kill` | `lifecycle_routes.py:28` | none | kill-result dict | kill the server process |
 | `POST /lifecycle/soft_reload` | `lifecycle_routes.py:32` | none | soft-reload-result dict | soft-reload the server |
 
-## market (reference extension)
+## extensions
 
-The market page (`/market` serves `market.html`) is the canonical downloadable-extension reference. It is fully isolated: it reads only external-data CSVs and Veritate checkpoints (`veritate_mri/routes/market_routes.py:6`). All routes are wrapped in `safe_route`, so failures return `{ok:false, error}` with `500` unless a route sets a narrower status. The page is surfaced under the `extensions` settings flag, but the routes register unconditionally.
+The downloadable-extensions system. These platform routes list installed extensions, read the marketplace catalog, install from the bundled canonical source, uninstall, and manage each extension's optional supplemental datasets. All disk work is owned by the `extensions` package; the routes are a thin wrapper (`veritate_mri/routes/extensions_routes.py:22`). Registered unconditionally at `veritate_mri/app.py:155`; the `extensions` settings flag gates only the dashboard UI surface, not the routes.
+
+Authoring detail in [../extensions/marketplace.md](../extensions/marketplace.md), [../extensions/manifest.md](../extensions/manifest.md).
 
 | method + path | def | params | response | purpose |
 |---|---|---|---|---|
-| `GET /market/veritate_models` | `market_routes.py:24` | none | `{ok, models:[...]}` | list market-capable Veritate models |
-| `GET /market/veritate_hindcast` | `market_routes.py:31` | `model` (required), `source=crypto`, `symbol=BTCUSDT`, `base=1m`, `n=1500` (300-20000) | hindcast result `+ {ok, symbol, model, step}`; `400` bad model, `404` no data / too few bars | backtest a model over historical bars |
-| `GET /market/veritate_benchmark` | `market_routes.py:54` | same as hindcast | benchmark result `+ {ok, symbol, model, step}`; `400`/`404` | scored benchmark over historical bars |
-| `GET /market/veritate_data_report` | `market_routes.py:77` | `source=crypto` | report dict `+ {ok, source}` | data-availability report |
-| `GET /market/veritate_live` | `market_routes.py:88` | `model` (required), `symbol=BTCUSDT`, `source=crypto` | prediction `+ {ok, symbol, model, last_close, last_t, expected_move_bps}`; `400` bad model, `404` no data, `500` predict fail, `502` live-feed error | next-bar prediction on live/recent data |
-| `GET /market/instruments` | `market_routes.py:122` | `source=crypto` | `{ok, source, instruments:[...]}` | list instruments for a source |
-| `GET /market/extensions/catalog` | `market_routes.py:130` | none | catalog dict | downloadable-extension catalog |
-| `POST /market/extensions/download` | `market_routes.py:137` | body `source:str` | download-result dict | install an extension by source id |
-| `POST /market/extensions/delete` | `market_routes.py:144` | body `source:str` | delete-result dict | remove an installed extension |
+| `GET /extensions` | `extensions_routes.py:23` | none | `{ok, extensions:[{id, name, version, nav_label, route, experimental}]}` | list installed extensions (canonical + `installed/`) |
+| `GET /extensions/catalog` | `extensions_routes.py:27` | none | `{ok, catalog:[{id, name, version, author, description, installed:bool, ...}]}` | marketplace catalog, each entry annotated with `installed` |
+| `POST /extensions/install` | `extensions_routes.py:31` | body `id:str` (required) | `{ok, extension:{id, installed:true}}`; `400` `id` missing, `404` no canonical source | copy `canonical/<id>` → `installed/<id>` |
+| `POST /extensions/uninstall` | `extensions_routes.py:42` | body `id:str` (required) | `{ok}`; `400` `id` missing | remove `installed/<id>` |
+| `GET /extensions/<id>/data` | `extensions_routes.py:50` | none | `{ok, datasets:[{source, label, description, url, approx_gb, schema, present:bool, files:int, size_gb:float, downloadable:bool}]}` | the extension's supplemental-dataset catalog, annotated with local presence |
+| `POST /extensions/<id>/data/download` | `extensions_routes.py:54` | body `source:str` (required) | `{ok, ...}` or `{ok:false, error}` (`source` required → `400`; unknown source, unhosted placeholder, or pending wiring → `ok:false`) | fetch a dataset archive into `extensions/installed/<id>/data/extension_data/<source>` |
+| `POST /extensions/<id>/data/delete` | `extensions_routes.py:61` | body `source:str` (required) | `{ok, source, deleted:true, reclaimed_gb\|unlinked, note?}` or `{ok:false, error}` (`source` required → `400`; unknown / not-downloaded → `ok:false`) | delete a downloaded dataset to reclaim disk; a symlinked dataset is unlinked, leaving the external archive intact |
+
+An installed extension also contributes its own routes under the `api_prefix` from its manifest, registered at startup by `extensions/registry.py::register_all` (`veritate_mri/app.py:158`). These appear at runtime, not in this static reference. The canonical Market extension serves `/market` (its page) plus `/market/*` (its API, e.g. `/market/veritate_hindcast`, `/market/veritate_benchmark`, `/market/veritate_live`, `/market/instruments`); see `extensions/canonical/market/register.py`.
 
 ## static and auth
 
@@ -242,7 +244,6 @@ The market page (`/market` serves `market.html`) is the canonical downloadable-e
 |---|---|---|---|
 | `GET /`, `GET /chat` | `app.py:70` | `hybrid.html` | public chat page |
 | `GET /app` | `app.py:76` | `index.html` | the dashboard |
-| `GET /market` | `app.py:81` | `market.html` | market extension page |
 | `GET /static/<path>` | Flask static (`app.py:53`) | static asset | dashboard + page assets, served from `veritate_mri/web/` at `/static` |
 | `GET, POST /login` | `auth_routes.py:57` | GET `login.html`; POST form field `password`, redirects to `/app` on match else `/login?e=1` | password login (only meaningful when auth is enabled) |
 | `GET /logout` | `auth_routes.py:67` | redirect `/` | clear the session |

@@ -1,6 +1,6 @@
 # addons contract
 
-Inference-time addons biases the model's next-byte logits without touching the model. Every addon ships as a self-contained directory under `veritate_mri/addons/<id>/` with a `manifest.json` and an `addon.py`. The platform discovers them at runtime, the dashboard lists them on the Generation tab, and the PyTorch backend pipes the chosen ones through the sampler before each byte is drawn.
+Inference-time addons biases the model's next-byte logits without touching the model. Every addon ships as a self-contained directory under `veritate_mri/inference/addons/<id>/` with a `manifest.json` and an `addon.py`. The platform discovers them at runtime, the dashboard lists them on the Generation tab, and the PyTorch backend pipes the chosen ones through the sampler before each byte is drawn.
 
 This is a versioned contract. Adding, removing, or changing the signature of any function or field below requires updating this file in the same commit. Same rule as [trainers/contract.md](../trainers/contract.md) and [hooks/contract.md](../hooks/contract.md).
 
@@ -13,7 +13,7 @@ The slot table addon is the canonical example. It tracks recent named entities, 
 ## file layout
 
 ```
-veritate_mri/addons/<id>/
+veritate_mri/inference/addons/<id>/
   manifest.json
   addon.py
 ```
@@ -81,10 +81,10 @@ The dashboard treats undeclared params as forbidden. To add a new constructor kw
 
 ## chain composition
 
-The platform composes selected addons in `Chain` (`veritate_mri/addons/__init__.py`):
+The platform composes selected addons in `Chain` (`veritate_mri/inference/addons/__init__.py`):
 
 ```python
-from veritate_mri import addons
+from veritate_mri.inference import addons
 chain = addons.build_chain(["slot_table", {"id": "other", "params": {"foo": 0.3}}])
 chain.reset()
 chain.observe_bytes(prompt_bytes)
@@ -103,8 +103,7 @@ Addons currently apply to:
 
 | backend | path | wiring |
 |---|---|---|
-| PyTorch | `veritate_mri/backends/pytorch.py::Brain.stream` | `addons_chain` kwarg. The dashboard's `/generate?addons=<csv>` builds a chain from the registry and passes it through. |
-| Diagnostic sampler | `veritate_mri/tools/sample_diverse.py` | `--addons <csv>` and `--list_addons`. Same chain, no streaming. |
+| PyTorch | `veritate_mri/inference/backends/pytorch.py::Brain.stream` | `addons_chain` kwarg. The dashboard's `/generate?addons=<csv>` builds a chain from the registry and passes it through. |
 
 The C engine path does not yet support addons. Addon checkboxes have no effect when `backend=c`. Porting an addon to the engine is a separate workstream: the same three-method contract is mirrored as a C function-pointer table.
 
@@ -140,9 +139,8 @@ Method names, signatures, manifest fields, and registry behavior are stable acro
 
 Adding, removing, or renaming any field or function above requires:
 
-1. The implementation in `veritate_mri/addons/__init__.py` is updated.
-2. The PyTorch backend integration in `veritate_mri/backends/pytorch.py::Brain.stream` is updated.
-3. The diagnostic sampler in `veritate_mri/tools/sample_diverse.py` is updated.
-4. The dashboard wire-up (`/addons` endpoint in `veritate_mri/app.py`, the addons panel in `veritate_mri/static/index.html` and `index.js`) is updated.
-5. This file's tables and examples are updated in the same commit.
-6. Any addon shipped with the platform (`veritate_mri/addons/slot_table/`, etc.) is updated and verified in the same commit.
+1. The implementation in `veritate_mri/inference/addons/__init__.py` is updated.
+2. The PyTorch backend integration in `veritate_mri/inference/backends/pytorch.py::Brain.stream` is updated.
+3. The dashboard wire-up (`/addons` endpoint in `veritate_mri/app.py`, the addons panel in `veritate_mri/web/index.html` and `index.js`) is updated.
+4. This file's tables and examples are updated in the same commit.
+5. Any addon shipped with the platform (`veritate_mri/inference/addons/slot_table/`, etc.) is updated and verified in the same commit.

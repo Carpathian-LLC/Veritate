@@ -1,3 +1,5 @@
 {
-  "extensions": []
+  "extensions": [
+    {"id": "market", "name": "Market LLM", "version": "1.0.0", "author": "veritate", "description": "Byte-LLM market forecasting: hindcast, benchmark, and live decision support over price-series corpora.", "experimental": true, "builtin": true}
+  ]
 }

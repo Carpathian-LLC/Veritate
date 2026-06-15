@@ -14,6 +14,7 @@
 from flask import request
 
 from extensions import registry
+from extensions import data as ext_data
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -45,3 +46,21 @@ def register(app):
             return ({"ok": False, "error": "id required"}, 400)
         registry.uninstall(ext_id)
         return {"ok": True}
+
+    @app.route("/extensions/<ext_id>/data")
+    def extensions_data_catalog(ext_id):
+        return {"ok": True, "datasets": ext_data.catalog(ext_id)}
+
+    @app.route("/extensions/<ext_id>/data/download", methods=["POST"])
+    def extensions_data_download(ext_id):
+        source = (request.get_json(silent=True) or {}).get("source")
+        if not source:
+            return ({"ok": False, "error": "source required"}, 400)
+        return ext_data.download(ext_id, source)
+
+    @app.route("/extensions/<ext_id>/data/delete", methods=["POST"])
+    def extensions_data_delete(ext_id):
+        source = (request.get_json(silent=True) or {}).get("source")
+        if not source:
+            return ({"ok": False, "error": "source required"}, 400)
+        return ext_data.delete(ext_id, source)

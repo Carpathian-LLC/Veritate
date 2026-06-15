@@ -78,11 +78,6 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
-@app.route("/market")
-def market_page():
-    return send_from_directory(STATIC_DIR, "market.html")
-
-
 @app.errorhandler(Exception)
 def _route_exception_to_log(e):
     """Catch any uncaught exception in any route. Logs to the dashboard ring
@@ -136,7 +131,7 @@ from routes import (
     lifecycle_routes, logs_routes, mesh_routes, models_routes,
     trainers_routes, pruning_routes, runs_routes, settings_routes, sys_routes,
     teacher_routes, train_routes, wiki_routes, hybrid_routes, rag_routes,
-    auth_routes, market_routes, extensions_routes,
+    auth_routes, extensions_routes,
 )
 auth_routes.register(app)
 atlas_routes.register(app)
@@ -157,7 +152,6 @@ train_routes.register(app)
 wiki_routes.register(app)
 hybrid_routes.register(app)
 rag_routes.register(app)
-market_routes.register(app)
 extensions_routes.register(app)
 
 from extensions import registry as extensions_registry

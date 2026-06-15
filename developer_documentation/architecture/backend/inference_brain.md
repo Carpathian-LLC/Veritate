@@ -6,7 +6,7 @@ The PyTorch inference path used by the Generation tab. Lives under [veritate_mri
 
 ## How it works
 
-- [brain.py](../../../veritate_mri/inference/brain.py) — loads a `.pt` checkpoint, holds the model in memory with a lock for thread safety. Reloaded on model switch or idle-unload.
+- [pytorch.py](../../../veritate_mri/inference/backends/pytorch.py) — loads a `.pt` checkpoint, holds the model in memory with a lock for thread safety. Reloaded on model switch or idle-unload.
 - [decode/](../../../veritate_mri/inference/decode/) — decoding strategies: greedy, nucleus sampling, temperature schedule. Per-token telemetry emission for the dashboard.
 - [agent/](../../../veritate_mri/inference/agent/) — multi-step reasoning (chain-of-thought, tool use).
 - [addons/](../../../veritate_mri/inference/addons/) — pluggable behaviors (embeddings, classification heads).

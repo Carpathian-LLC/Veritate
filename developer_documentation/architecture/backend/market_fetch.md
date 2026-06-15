@@ -1,8 +1,10 @@
 # fetch.py: on-demand crypto backfill for the market page
 
-Makes the `/market` page work on a fresh install with no manual data. `external_data/` is
-gitignored and ships empty; when the data layer needs a crypto symbol that is not cached,
-`fetch.py` pulls it from Binance and writes it in the schema `data.py` reads.
+Server module of the **market canonical extension**
+(`extensions/canonical/market/server/fetch.py`). Makes the `/market` page work on a fresh
+install with no manual data. `extensions/installed/market/data/` is gitignored and ships empty; when the data
+layer needs a crypto symbol that is not cached, `fetch.py` pulls it from Binance and writes
+it in the schema `data.py` reads.
 
 ## How it works
 - `ensure(symbol, source, need_1m, path)` is the entry point, called by `data.load_tail` when the
@@ -28,7 +30,7 @@ gitignored and ships empty; when the data layer needs a crypto symbol that is no
 
 ## Hosted fallback
 When the Binance API is unreachable, `ensure` falls back to `_hosted`, which downloads a full CSV
-from a URL listed in `market/market_data_catalog.json` (`{source: {SYMBOL: url}}`). The catalog
+from a URL listed in `server/market_data_catalog.json` (`{source: {SYMBOL: url}}`). The catalog
 ships empty: the operator fills it (S3, CDN, GitHub release) to enable the fallback or to serve any
 non-crypto data. URLs must point at the same schema (`time,open,high,low,close,volume`, epoch time).
 
