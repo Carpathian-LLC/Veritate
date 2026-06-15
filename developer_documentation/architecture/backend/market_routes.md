@@ -74,6 +74,13 @@ also guards against `NaN`/`Infinity` reaching `jsonify` (invalid JSON breaks the
 - **GET `/market/instruments?source=crypto`** -> `{ok, source, instruments:[...]}`: local raw 1m
   CSVs under `external_data/crypto/` unioned with `fetch.MAJORS` (`data.list_instruments`), so the
   symbol selector is populated even on a fresh install with no cached data.
+- **GET `/market/extensions/catalog`** -> `{ok, extensions:[...]}`: downloadable add-on datasets
+  with live local status (`present`, `files`, `size_gb`, `downloadable`). See
+  [market_extensions.md](market_extensions.md).
+- **POST `/market/extensions/download`** `{source}` -> pulls a hosted dataset into
+  `external_data/extension_data/<source>` (placeholder until the catalog url + S3 host land).
+- **POST `/market/extensions/delete`** `{source}` -> reclaims a dataset's disk; symlinked
+  (externally-parked) datasets only lose the link, never the archive.
 
 The data-artifact paths (raw OHLCV, built byte corpuses, trained models) are listed in the root
 doc `market_llm_data_manifest.md`. There is no dashboard route or S3-URL setting for the corpus;

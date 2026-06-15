@@ -136,7 +136,7 @@ from routes import (
     lifecycle_routes, logs_routes, mesh_routes, models_routes,
     trainers_routes, pruning_routes, runs_routes, settings_routes, sys_routes,
     teacher_routes, train_routes, wiki_routes, hybrid_routes, rag_routes,
-    auth_routes, market_routes,
+    auth_routes, market_routes, extensions_routes,
 )
 auth_routes.register(app)
 atlas_routes.register(app)
@@ -158,6 +158,10 @@ wiki_routes.register(app)
 hybrid_routes.register(app)
 rag_routes.register(app)
 market_routes.register(app)
+extensions_routes.register(app)
+
+from extensions import registry as extensions_registry
+extensions_registry.register_all(app)
 
 _mesh_role = (settings_mod.get().get("mesh_role") or "off").lower()
 if _mesh_role in ("hub", "both"):

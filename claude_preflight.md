@@ -17,7 +17,7 @@ Contract for how Claude operates on this project. Wins over any conflicting doc.
 9. Engage as a peer: no sycophancy, patronizing, or harshness. Don't agree to make the user feel good; state the technical case honestly even against the user's framing.
 9a. **Substantive pushback is required, not optional.** When a user plan has a credible failure mode (data loss, OOM, lost training hours, irreversible state, wasted compute, broken invariant), name the failure mode and its specific cost before executing, quantified when possible ("9 hours of training at risk"). Don't soften or hedge it: friction that costs seconds beats agreement that costs hours. This applies to the *plan*; rule 4 (don't interrogate the *question*) still holds.
 9b. No filler praise of feedback or instructions ("great point", "good question", "I appreciate that"). One short acknowledgement at most, then proceed.
-9c. **Read this file and `documentation/agents/coding_roe.md` at the start of every session before any non-trivial work. Always, no exceptions.** Prior-context memory does not substitute. Before editing code, dispatching an agent, running a smoke, or changing config, confirm you've re-read both in this context. Cite rule numbers in your reasoning so it's visible you did.
+9c. **Read this file and `developer_documentation/agents/coding_roe.md` at the start of every session before any non-trivial work. Always, no exceptions.** Prior-context memory does not substitute. Before editing code, dispatching an agent, running a smoke, or changing config, confirm you've re-read both in this context. Cite rule numbers in your reasoning so it's visible you did.
 
 ## code
 
@@ -52,7 +52,7 @@ Contract for how Claude operates on this project. Wins over any conflicting doc.
 18. Match the existing style of any file edited. Default to the leanest version that compiles.
 19. Anti-overengineering is gating. If a feature can be removed without breaking the goal, remove it. Two layers of abstraction is one too many.
 20. No ad-hoc code anywhere. One module owns each concern; callers consume parsed results, they don't build paths, glob, parse, or duplicate logic. New capability extends the owning module.
-20a. **Coding ROE is gating.** Any agent writing/editing code reads `documentation/agents/coding_roe.md` (rules 100-128) before producing the diff: lean code, no bloat, measure before optimizing, no defensive code for impossible states. Cite by number when rejecting a change.
+20a. **Coding ROE is gating.** Any agent writing/editing code reads `developer_documentation/agents/coding_roe.md` (rules 100-128) before producing the diff: lean code, no bloat, measure before optimizing, no defensive code for impossible states. Cite by number when rejecting a change.
 
 ## training pipeline
 
@@ -63,18 +63,18 @@ Contract for how Claude operates on this project. Wins over any conflicting doc.
 
 ## docs
 
-25. All documentation lives under `documentation/` (current platform contracts, in repo) and `docs/` (papers, plans, results, notes; gitignored scratch). Lowercase, snake_case. Layout under `documentation/`:
+25. Documentation lives in three places: `documentation/` (public, extension-author facing: `api/` REST reference, `extensions/` authoring), `developer_documentation/` (internal platform + component contracts, in repo), and `docs/` (papers, plans, results, notes; gitignored scratch). Lowercase, snake_case. Layout under `developer_documentation/`:
     - `architecture/frontend/` — one file per dashboard tab, panel, or standalone module.
     - `architecture/backend/` — one file per Flask app, runtime, training, engine, or inference component.
     - `agents/` — agent rule files (coding_roe, claude_merge, agent_roe).
-    - `addons/`, `corpus/`, `engine/`, `hooks/`, `kernels/`, `multimind/`, `platform/`, `plugins/`, `trainers/`, `training/` — domain references.
-25a. **Voice for shipped artifact docs.** Anything under `documentation/` (READMEs, contract/engine/format specs, anything alongside source) is written developer-to-developer about the artifact: no "the user", no "I/we/my", no narrative of how it came to be. State what it is, how to use it, what it guarantees. Past-tense decision narration and "the user wanted X" are forbidden. Ledger entries, ROE files, design diaries, and `docs/` scratch are exempt.
-25b. **Per-component docs are mandatory.** Every component (frontend tab/panel, backend module, trainer plugin, kernel, engine subsystem) has one file under `documentation/`, never a multi-component monolith. Sections: what it is, how it works (with file:line refs), dependencies, pitfalls. Keep each short.
+    - `addons/`, `corpus/`, `engine/`, `hooks/`, `kernels/`, `market/`, `multimind/`, `platform/`, `plugins/`, `trainers/`, `training/` — domain references.
+25a. **Voice for shipped artifact docs.** Anything under `documentation/` or `developer_documentation/` (READMEs, contract/engine/format specs, anything alongside source) is written developer-to-developer about the artifact: no "the user", no "I/we/my", no narrative of how it came to be. State what it is, how to use it, what it guarantees. Past-tense decision narration and "the user wanted X" are forbidden. Ledger entries, ROE files, design diaries, and `docs/` scratch are exempt.
+25b. **Per-component docs are mandatory.** Every component (frontend tab/panel, backend module, trainer plugin, kernel, engine subsystem) has one file under `developer_documentation/`, never a multi-component monolith. Sections: what it is, how it works (with file:line refs), dependencies, pitfalls. Keep each short.
 25c. **Update a component's doc in the same change.** New component → new file; removed → delete the file. Docs reflect current state, not history (git carries history). If a component you touch has no doc, write one before finishing.
-25d. **No new top-level documentation hierarchies.** New per-component docs go in the existing `architecture/frontend/`, `architecture/backend/`, or appropriate domain folder, not a new top-level folder (`dev_documentation/`, `docs2/`).
-25e. **Keep the external extension docs current.** When platform code the external API surface or extension contract depends on changes (a route an extension calls, the model-loading path, the experimental gate, the isolation boundary), update `documentation/extensions/authoring.md` in the same change (as 25c). The external "extension" is distinct from the internal trainer "plugin"; never relabel one as the other.
-26. `documentation/hooks/contract.md` is the API reference for dump artifacts. Update it whenever a hook changes.
-27. Run output goes to `models/<model_name>/` (gitignored). Layout is fixed and documented at `documentation/training/storage.md`.
+25d. **The two canonical doc trees are `documentation/` (public) and `developer_documentation/` (internal); no others.** New per-component docs go in the existing `developer_documentation/architecture/frontend/`, `architecture/backend/`, or appropriate domain folder, not a new top-level folder (`docs2/`, etc.).
+25e. **Keep the external extension docs current.** When platform code the external API surface or extension contract depends on changes (a route an extension calls, the model-loading path, the experimental gate, the isolation boundary), update `documentation/extensions/authoring.md` and the affected endpoints in `documentation/api/rest_api.md` in the same change (as 25c). The external "extension" is distinct from the internal trainer "plugin"; never relabel one as the other.
+26. `developer_documentation/hooks/contract.md` is the API reference for dump artifacts. Update it whenever a hook changes.
+27. Run output goes to `models/<model_name>/` (gitignored). Layout is fixed and documented at `developer_documentation/training/storage.md`.
 28. No CSVs in `documentation/` or `docs/`. CSVs live in the model dir.
 29. Active work tracking lives in `docs/` files marked `*_tracking.md`. Check these first when resuming. They record what's done, works, is broken, and who did what. Maintain the canonical tracking doc (one entry per completed task); no parallel tracking.
 30. Agents: read any active `*_tracking.md` at session start. One task at a time. Test before declaring done. Document blockers, don't work around them. Keep implementations lean (rule 19).
@@ -99,7 +99,7 @@ Contract for how Claude operates on this project. Wins over any conflicting doc.
 36. `trainers/common/` is the only escape hatch for shared helpers. A file moves there only when two or more trainers genuinely need it; until then it stays local to its single trainer.
 37. `trainers/corpus/` holds training data only (`.bin` files). No code, build scripts, config, or JSON manifests describing what the bins are.
 38. Build scripts live with their consumer: a one-trainer builder in that trainer, a many-trainer builder in `trainers/common/`. Output `.bin` files always land in `trainers/corpus/` (shared) or `trainers/<trainer>/corpus/` (bundled).
-39. Trainers do not import from `veritate_mri/` or `veritate_engine/` directly. Their only platform surface is `veritate_core.plugin` (specified in `documentation/plugins/contract.md`). `sys.path` injection into platform internals is forbidden.
+39. Trainers do not import from `veritate_mri/` or `veritate_engine/` directly. Their only platform surface is `veritate_core.plugin` (specified in `developer_documentation/plugins/contract.md`). `sys.path` injection into platform internals is forbidden.
 40. Every code file lives in exactly one of: a trainer folder, `trainers/common/`, `veritate_core/`, `veritate_mri/`, `veritate_engine/`. No file fits two; no file fits none. If one fits none, the rule or the file is wrong — stop and ask.
 40a. **SUCCESSES / FAILURES / IDEAS are research logs, not changelogs.** Only validated findings and PoCs go there (with numbers + falsifier). Bug fixes, refactors, plumbing, infra wiring, and routine engineering live in git history. A fix implying a durable invariant adds the invariant to this preflight or `NOTES.md`; the fix itself is not an entry. Default to no entry; justify why it isn't just a commit.
 40b. **Export format invariant (v9/v11).** The `.bin` engine format expects a canonical Veritate trunk: learned `pos_emb`, single `lm_head`, no MTP. RoPE-based models (Veritate800M, anything with `rope_*` buffers or no `pos_emb`), MTP-head models, and other variants are not exportable until a v12 engine format ships. The exporter raises `ValueError` early with the variant name, in both `export_checkpoint` and `export_checkpoint_ternary`.
@@ -114,7 +114,7 @@ Contract for how Claude operates on this project. Wins over any conflicting doc.
 
 ## merging
 
-45. Branch merges are governed by `documentation/agents/claude_merge.md` — read it before any merge. Its rule 1 is absolute: no merge without explicit user permission for that specific merge.
+45. Branch merges are governed by `developer_documentation/agents/claude_merge.md` — read it before any merge. Its rule 1 is absolute: no merge without explicit user permission for that specific merge.
 
 ## tests
 

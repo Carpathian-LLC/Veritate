@@ -11508,6 +11508,104 @@ function _extCloseModal() {
   document.body.classList.remove("no-scroll");
 }
 
+// ---- Marketplace (downloadable extensions; namespaced mkt*) ----
+const mktState = { catalog: null, busy: new Set(), inflight: false };
+
+function _mktNote(msg, color) {
+  const s = $("mktActionStatus");
+  if (s) { s.textContent = msg || ""; s.style.color = color || "var(--dim)"; }
+}
+
+function _mktRowHtml(e) {
+  const busy = mktState.busy.has(e.id);
+  const meta = [e.version ? "v" + _extEsc(e.version) : "", e.author ? "by " + _extEsc(e.author) : ""].filter(Boolean).join(" · ");
+  const tags = [];
+  if (e.installed) tags.push(`<span class="corpus-tag t-good">installed</span>`);
+  if (e.experimental) tags.push(`<span class="corpus-tag t-warm" title="in development">experimental</span>`);
+  let action;
+  if (busy) action = `<button class="action" type="button" disabled>working...</button>`;
+  else if (e.installed) action = `<button class="action" type="button" data-mkt-uninstall="${_extEsc(e.id)}">uninstall</button>`;
+  else action = `<button class="action" type="button" data-mkt-install="${_extEsc(e.id)}" style="border-color:var(--accent);color:var(--accent)">install</button>`;
+  const desc = e.description ? `<div style="padding:1px 8px 0 8px;font-size:10.5px;color:var(--dim);line-height:1.55">${_extEsc(e.description)}</div>` : "";
+  return `
+    <div style="border-bottom:1px solid #131722;padding:6px 0">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 8px">
+        <div style="display:flex;align-items:baseline;gap:6px;flex:1;min-width:240px">
+          <span style="color:var(--text);font-weight:500;font-size:11.5px">${_extEsc(e.name || e.id)}</span>
+          <span style="color:var(--dim);font-size:10.5px">${meta}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">${tags.join("")}</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">${action}</div>
+      </div>
+      ${desc}
+    </div>`;
+}
+
+function _mktRender(data) {
+  mktState.catalog = data;
+  const list = $("mktList");
+  const items = (data && data.catalog) || [];
+  if (list) list.innerHTML = items.length
+    ? items.map(_mktRowHtml).join("")
+    : `<div class="meta" style="padding:12px 8px;color:var(--dim)">No extensions available yet.</div>`;
+  const cb = $("mktModalCount");
+  if (cb) cb.textContent = items.length ? `${items.filter(e => e.installed).length}/${items.length} installed` : "";
+  if (list) {
+    list.querySelectorAll("[data-mkt-install]").forEach(b => b.addEventListener("click", () => _mktInstall(b.getAttribute("data-mkt-install"))));
+    list.querySelectorAll("[data-mkt-uninstall]").forEach(b => b.addEventListener("click", () => _mktUninstall(b.getAttribute("data-mkt-uninstall"))));
+  }
+}
+
+function _mktRefresh() {
+  if (mktState.inflight) return;
+  mktState.inflight = true;
+  if (!mktState.catalog && $("mktList")) showSkeleton("mktList", "blocks", 4);
+  fetch("/extensions/catalog").then(r => r.json()).then(_mktRender)
+    .catch(() => _mktNote("Could not load the catalog. Try again.", "var(--hot)"))
+    .finally(() => { mktState.inflight = false; });
+}
+
+function _mktInstall(id) {
+  if (!id || mktState.busy.has(id)) return;
+  mktState.busy.add(id); _mktRender(mktState.catalog);
+  fetch("/extensions/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
+    .then(r => r.json()).then(res => {
+      if (res.ok) _mktNote("Installed — restart the dashboard to activate.", "var(--data-pos)");
+      else _mktNote(res.error || "Install failed.", "var(--warm)");
+    })
+    .catch(() => _mktNote("Install failed. Try again.", "var(--hot)"))
+    .finally(() => { mktState.busy.delete(id); _mktRefresh(); });
+}
+
+function _mktUninstall(id) {
+  if (!id || mktState.busy.has(id)) return;
+  mktState.busy.add(id); _mktRender(mktState.catalog);
+  fetch("/extensions/uninstall", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
+    .then(r => r.json()).then(res => {
+      if (res.ok) _mktNote("Uninstalled — restart the dashboard to apply.", "var(--data-pos)");
+      else _mktNote(res.error || "Uninstall failed.", "var(--warm)");
+    })
+    .catch(() => _mktNote("Uninstall failed. Try again.", "var(--hot)"))
+    .finally(() => { mktState.busy.delete(id); _mktRefresh(); });
+}
+
+function _mktOpenMarketplace() {
+  const m = $("mktMarketplaceModal");
+  if (!m) return;
+  _mktNote("");
+  m.classList.remove("hidden");
+  document.body.classList.add("no-scroll");
+  _mktRefresh();
+}
+
+function _mktCloseMarketplace() {
+  const m = $("mktMarketplaceModal");
+  if (m) m.classList.add("hidden");
+  document.body.classList.remove("no-scroll");
+}
+
+window.mktOpenMarketplace = _mktOpenMarketplace;
+
 function _corpusOpenAddSourceModal() {
   const m = $("corpusAddSourceModal");
   if (!m) return;
@@ -12267,6 +12365,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const emc = $("extModalClose"); if (emc) emc.addEventListener("click", _extCloseModal);
   const emm = $("extensionsModal"); if (emm) emm.addEventListener("click", (e) => { if (e.target === emm) _extCloseModal(); });
   _extRefresh();
+
+  // ---- Marketplace wiring ----
+  const mkc = $("mktModalClose"); if (mkc) mkc.addEventListener("click", _mktCloseMarketplace);
+  const mkm = $("mktMarketplaceModal"); if (mkm) mkm.addEventListener("click", (e) => { if (e.target === mkm) _mktCloseMarketplace(); });
 
   const srb = $("softReloadBtn");
   if (srb) srb.addEventListener("click", _lifecycleSoftReload);

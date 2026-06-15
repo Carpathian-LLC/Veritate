@@ -12,6 +12,7 @@ veritate_engine/**/bin/
 .venv/
 ..venv/
 venv/
+.veritate_venv/
 __pycache__/
 /models/
 build_out.txt
@@ -40,3 +41,4 @@ dev_documentation/multimind/affect_probe_stats.json
 trainers/multimind_poc/corpus/
 external_data/
 corpus_for_s3/
+extensions/installed/

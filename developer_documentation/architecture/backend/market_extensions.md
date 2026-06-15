@@ -1,8 +1,12 @@
 # market extensions
 
-Downloadable add-on market datasets (stocks, forex, the broader crypto archives, ...),
+Downloadable add-on market **datasets** (stocks, forex, the broader crypto archives, ...),
 managed from the Extensions section of the settings corpus-library card. Mirrors the
 corpus-library pattern but over raw CSV dataset dirs instead of trainer `.bin` corpora.
+
+Distinct from the external-author **extension** concept in
+[documentation/extensions/authoring.md](../../../documentation/extensions/authoring.md) (downloadable code /
+plugin add-ons): same "downloadable add-on" framing, different artifact. This doc is data only.
 
 ## what it is
 
