@@ -35,6 +35,7 @@ DEFAULTS = {
     "move_gate": 1.0,           # vol_harvest: require exp_move >= move_gate * premium
                                 # directional: require exp_move >= move_gate * fee
     "premium_window": 96,       # trailing bars defining the vol "premium" (fair straddle cost)
+    "premium": None,            # vol_harvest: per-bar implied premium array (e.g. DVOL); None = trailing |ret|
     "sizing": "confidence",     # "fixed" | "confidence" | "vol_target"
     "max_size": 1.0,
     "vol_target": 0.01,         # vol_target sizing: target per-trade risk (return units)
@@ -70,24 +71,42 @@ def backtest(price, p_up, conf, exp_move, vol, ret_next, **overrides):
     price = np.asarray(price, float); p_up = np.asarray(p_up, float)
     conf = np.asarray(conf, float); exp_move = np.asarray(exp_move, float)
     vol = np.asarray(vol, float); ret_next = np.asarray(ret_next, float)
-    n = len(ret_next)
     size = _size(conf, vol, c)
     fee = c["fee"]
+    lean = np.sign(p_up - 0.5)
 
     if c["mode"] == "directional":
         gate = (conf >= c["conf_gate"]) & (exp_move >= c["move_gate"] * fee)
-        side = np.sign(p_up - 0.5)
-        raw = side * ret_next
+        raw = lean * ret_next
         if c["stop"] is not None:
             raw = np.maximum(raw, -abs(c["stop"]))      # floor the loss at the stop
         pnl = np.where(gate, raw * size - fee * size, 0.0)
     else:                                                # vol_harvest
-        prem = _trailing_mean_abs(ret_next, c["premium_window"])
+        prem = (np.asarray(c["premium"], float) if c["premium"] is not None
+                else _trailing_mean_abs(ret_next, c["premium_window"]))
         gate = (exp_move >= c["move_gate"] * prem) & (conf >= c["conf_gate"])
         payoff = np.abs(ret_next) - prem                 # long straddle vs the prevailing premium
         pnl = np.where(gate, payoff * size - fee * size, 0.0)
 
-    return _metrics(pnl, gate, size, ret_next, c)
+    out = _metrics(pnl, gate, size, ret_next, c)
+    out["equity"] = np.cumsum(pnl * 1e4).round(4).tolist()   # cumulative net pnl, bps
+    out["gate"] = gate.astype(int).tolist()
+    out["lean"] = lean.astype(int).tolist()
+    out["size"] = np.round(size, 4).tolist()
+    out["pnl_bps"] = np.round(pnl * 1e4, 4).tolist()
+    return out
+
+
+def trades(sig, res, limit=200):
+    """Per-trade rows from a backtest `res` and its aligned signal series `sig`: the
+    most-recent `limit` gated bars. side is 'straddle' for vol_harvest, else long/short."""
+    gate = res["gate"]; lean = res["lean"]; size = res["size"]; pnl = res["pnl_bps"]
+    t = sig["t"]; price = sig["price"]; vol_harvest = res["mode"] == "vol_harvest"
+    rows = [{"t": t[i], "price": round(price[i], 6),
+             "side": "straddle" if vol_harvest else ("long" if lean[i] >= 0 else "short"),
+             "lean": "up" if lean[i] >= 0 else "down", "size": size[i], "pnl_bps": pnl[i]}
+            for i, g in enumerate(gate) if g]
+    return rows[-limit:]
 
 
 def _trailing_mean_abs(ret, w):
@@ -119,7 +138,7 @@ def _metrics(pnl, gate, size, ret_next, c):
         "mean_bps": float(r.mean() * 1e4),
         "win_rate": float((r > 0).mean()),
         "sharpe": (float(r.mean()) / sd) if sd > 0 else None,
-        "max_dd": float((peak - eq).max()),
+        "max_dd": float((peak - eq).max() * 1e4),         # bps, matching mean_bps/equity
         "exposure": float(traded.mean()),
     }
 

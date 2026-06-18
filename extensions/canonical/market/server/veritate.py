@@ -38,6 +38,7 @@ RET_BYTES = [ord(c) for c in sc.ALPHABET[:sc.RET_BINS]]
 Z_CENTERS = (np.arange(sc.RET_BINS) - sc.RET_CENTER) * (sc.RET_Z_CLIP / sc.RET_CENTER)
 BENCH_THREADS = 4
 ROUND_TRIP_FEE = 0.0020                            # 20 bps per trade (10 bps/side); matches the page FEE
+PREMIUM_WINDOW = 96                                # trailing bars defining the live vol premium (matches policy default)
 BYTE2RET = np.full(256, -1, dtype=np.int64)        # ascii byte -> return bucket index
 for _i, _b in enumerate(RET_BYTES):
     BYTE2RET[_b] = _i
@@ -110,7 +111,15 @@ def predict_next(model, seq_len, df, stride=sc.BAR_STRIDE):
     ez = float((pr * np.abs(Z_CENTERS)).sum())
     sig = _roll_std(np.diff(np.log(np.clip(c, 1e-12, None)), prepend=np.log(max(c[0], 1e-12))), sc.FEAT_WINDOW)[-1]
     return {"p_up": p_up, "expected_move": ez * float(sig), "confidence": abs(p_up - 0.5) * 2.0,
-            "lean": 1 if up >= dn else -1}
+            "vol": float(sig), "lean": 1 if up >= dn else -1}
+
+
+def trailing_premium(df, window=PREMIUM_WINDOW):
+    """Trailing mean absolute log-return over `window` closed bars: the prevailing
+    vol premium decide() gates a vol-harvest entry against."""
+    c = df["close"].to_numpy(np.float64)
+    a = np.abs(np.diff(np.log(np.clip(c, 1e-12, None))))[-window:]
+    return float(a.mean()) if len(a) else 0.0
 
 
 def load_model(name):
@@ -193,6 +202,46 @@ def hindcast(model, seq_len, df, base="1m", stride=sc.BAR_STRIDE, max_points=320
         "p_up": _downsample(np.array(p_up), max_points).tolist(),
         "mark": _downsample(mk, max_points).tolist(),
     }
+
+
+def signal_series(model, seq_len, df, base="1m", stride=sc.BAR_STRIDE):
+    """Per-bar policy signal over df: aligned arrays the trading policy consumes
+    (policy.py). ret_next[i] is the realized log return from bar i to i+1, i.e. the
+    outcome of acting at bar i. Same scoring walk as hindcast, no downsampling."""
+    c = df["close"].to_numpy(np.float64)
+    arr, nb = _encode_df(df, stride)
+    if nb < 60:
+        return None
+    off = len(c) - nb
+    probpos = _score_bytes(model, seq_len, arr)
+    lr = np.diff(np.log(np.clip(c, 1e-12, None)), prepend=np.log(max(c[0], 1e-12)))
+    sigma = _roll_std(lr, sc.FEAT_WINDOW)
+    t = []; price = []; p_up = []; conf = []; exp_move = []; vol = []; ret_next = []
+    for k in range(1, nb):
+        pr = probpos.get(k * stride)
+        if pr is None:
+            continue
+        ci = k + off
+        if ci + 1 >= len(c) or ci < 1 or not np.isfinite(sigma[ci]):
+            continue
+        s = pr.sum()
+        if s <= 0:
+            continue
+        pr = pr / s
+        up = float(pr[sc.RET_CENTER + 1:].sum()); dn = float(pr[:sc.RET_CENTER].sum())
+        pu = up / (up + dn) if (up + dn) > 1e-9 else 0.5
+        ez = float((pr * np.abs(Z_CENTERS)).sum())
+        t.append(int(df.index[ci].value // 1_000_000_000))
+        price.append(float(c[ci]))
+        p_up.append(round(pu, 4))
+        conf.append(round(abs(pu - 0.5) * 2.0, 4))
+        exp_move.append(ez * float(sigma[ci]))
+        vol.append(float(sigma[ci]))
+        ret_next.append(float(np.log(c[ci + 1] / c[ci])))
+    if len(price) < 30:
+        return None
+    return {"base": base, "n": len(price), "t": t, "price": price, "p_up": p_up,
+            "conf": conf, "exp_move": exp_move, "vol": vol, "ret_next": ret_next}
 
 
 # ------------------------------------------------------------------------------------

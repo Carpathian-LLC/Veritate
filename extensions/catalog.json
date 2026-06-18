@@ -1,5 +1,6 @@
 {
   "extensions": [
-    {"id": "market", "name": "Market LLM", "version": "1.0.0", "author": "veritate", "description": "Byte-LLM market forecasting: hindcast, benchmark, and live decision support over price-series corpora.", "experimental": true, "builtin": true}
+    {"id": "market", "name": "Market LLM", "version": "1.0.0", "author": "veritate", "description": "Byte-LLM market forecasting: hindcast, benchmark, and live decision support over price-series corpora.", "experimental": true, "builtin": true},
+    {"id": "paper_trade", "name": "Paper Trading", "version": "1.0.0", "author": "veritate", "description": "Paper-trade the Market LLM's forecasts with no capital: backtest, replay, or run forward on the live feed. Companion to the Market LLM extension.", "experimental": true, "builtin": true}
   ]
 }

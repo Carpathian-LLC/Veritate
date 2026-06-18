@@ -292,6 +292,35 @@ def register(app):
             return {"error": "provider required"}, 400
         return {"models": test_mod.list_models(provider, base_url=base_url, api_key=api_key)}
 
+    @app.route("/teacher/complete", methods=["POST"])
+    def teacher_complete_route():
+        # One-shot completion from a user-added model: body {prompt, system?, provider?,
+        # model?, base_url?, api_key?, max_tokens?, temperature?}. Defaults to the configured
+        # teacher. The programmatic surface extensions call to score text with the user's model.
+        body = request.get_json(silent=True) or {}
+        prompt = (body.get("prompt") or "").strip()
+        if not prompt:
+            return {"ok": False, "error": "prompt required"}, 400
+        s = settings_mod.get()
+        provider = body.get("provider") or s.get("teacher_provider") or ""
+        model = body.get("model") or s.get("teacher_model") or None
+        base_url = body.get("base_url") or s.get("teacher_base_url") or None
+        api_key = (body.get("api_key") or os.environ.get(TEACHER_API_KEY_ENV)
+                   or _stored_key(s, provider) or None)
+        if not provider:
+            return {"ok": False, "error": "no teacher configured"}, 400
+        opts = {"base_url": base_url, "api_key": api_key,
+                "max_tokens": int(body.get("max_tokens") or s.get("teacher_max_tokens", 2048)),
+                "temperature": float(body.get("temperature", s.get("teacher_temperature", 0.7)))}
+        if body.get("system"):
+            opts["system"] = body["system"]
+        try:
+            text = teacher_mod.complete(provider, model, [{"role": "user", "content": prompt}], **opts)
+        except Exception as e:
+            logmod.warn(LOG_SOURCE, f"complete failed: {provider}/{model or '(default)'} -> {type(e).__name__}: {e}")
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}, 502
+        return {"ok": True, "text": text, "provider": provider, "model": model or s.get("teacher_model", "")}
+
     @app.route("/teacher/synth/start", methods=["POST"])
     def teacher_synth_start_route():
         body = request.get_json(silent=True) or {}

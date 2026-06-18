@@ -66,9 +66,43 @@ which also keeps `NaN`/`Infinity` from reaching `jsonify` (invalid JSON breaks t
   populated before anything is cached.
 
 - **GET `/market/veritate_live?source&symbol&model`** -> next-bar forecast
-  (`veritate.predict_next`): `p_up`, `expected_move[_bps]`, `confidence`, `lean`,
+  (`veritate.predict_next`): `p_up`, `expected_move[_bps]`, `confidence`, `vol`, `lean`,
   `last_close`, `last_t`. Crypto uses live Binance.US klines (last CLOSED bar); stocks use
   the local daily tail.
+
+## Paper-trading endpoints (drive the Paper Trading extension)
+
+The trading-policy layer (`server/policy.py`, see [market_policy.md](market_policy.md)) turns
+the model's per-bar forecast into trade decisions. `veritate.signal_series` produces the
+policy-ready per-bar signal (the same scoring walk as `hindcast`, no downsampling); `policy`
+scores it. Both endpoints take the policy overrides `mode` (`vol_harvest`|`directional`),
+`fee_bps`, `conf_gate`, `move_gate`, `sizing` (`confidence`|`fixed`|`vol_target`) parsed by
+`register._policy_args`. The Paper Trading extension (`extensions/canonical/paper_trade/`) is
+the only caller; it consumes these over HTTP and holds its paper ledger in the browser.
+
+- **GET `/market/paper_signal?source&symbol&model&base&n`** -> the raw per-bar forecast
+  (`veritate.signal_series`): `t`, `price`, `p_up`, `conf`, `exp_move`, `vol`, `ret_next`,
+  `n`, `base`, plus `symbol`/`model`/`step`. No policy applied. This is what the Paper
+  Trading page fetches (and caches): it runs the policy in the browser so rule tweaks,
+  the aggressiveness slider, and the optimizer reshape instantly with no re-score. Only a
+  data change (model/symbol/resolution/bars) re-hits this route. The in-browser sim
+  mirrors `policy.py`; keep the two in sync.
+
+- **GET `/market/paper_backtest?source&symbol&model&base&n&mode&fee_bps&conf_gate&move_gate&sizing`**
+  -> a vectorized backtest over the last `n` bars (`policy.backtest` on
+  `veritate.signal_series`): the `_metrics` set (`n_trades`, `mean_bps`, `win_rate`, `sharpe`,
+  `max_dd` in bps, `exposure`, `fee_bps`, `mode`), the aligned per-bar arrays `equity`
+  (cumulative net pnl, bps), `gate`, `lean`, `size`, `pnl_bps`, the `t`/`price` series, and
+  `trades` (most-recent gated bars: `t`, `price`, `side`, `lean`, `size`, `pnl_bps`). The
+  **canonical server-side scorer** (the reference the page's in-browser sim mirrors); for
+  programmatic/API backtests. The interactive page does not call it (it uses `paper_signal`
+  + a client mirror so rule tweaks are instant).
+
+- **GET `/market/paper_decide?source&symbol&model&mode&fee_bps&conf_gate&move_gate&sizing`**
+  -> a single-bar live decision (`policy.decide` on `veritate.predict_next` +
+  `veritate.trailing_premium`): `last_close`, `last_t`, `p_up`, `confidence`,
+  `expected_move[_bps]`, `premium[_bps]`, and `decision` (`{act, side, size, reason}`). Drives
+  Live mode; the page resolves each open decision against the next closed bar in the browser.
 
 - **GET `/market/veritate_data_report?source`** -> cheap per-instrument inventory
   (`veritate.data_report`): `n`, `total_bars` (approx from file size), `gb`, and the largest

@@ -1,0 +1,16 @@
+{
+  "id": "paper_trade",
+  "name": "Paper Trading",
+  "version": "1.0.0",
+  "author": "veritate",
+  "kind": "extension",
+  "description": "Paper-trade the Market LLM's forecasts with no capital: backtest on history, replay a window bar by bar, or run forward on the live feed. Companion to the Market LLM extension (uses its forecast + policy API).",
+  "experimental": true,
+  "page": {
+    "route": "/ext/paper_trade",
+    "file": "page/index.html",
+    "nav_label": "Paper Trading"
+  },
+  "api_prefix": "/ext/paper_trade",
+  "register": "server/register.py"
+}
