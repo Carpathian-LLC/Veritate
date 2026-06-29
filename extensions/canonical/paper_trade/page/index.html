@@ -90,7 +90,7 @@ canvas{display:block;width:100%;background:var(--canvas);border:1px solid var(--
 .pt-c .v{font-size:18px;font-weight:600;margin-top:3px}
 .pt-c .v.pos{color:var(--pos)}.pt-c .v.neg{color:var(--neg)}
 .pt-c .s{color:var(--dim);font-size:10.5px;margin-top:2px}
-.pos{color:var(--pos)}.neg{color:var(--neg)}.dim{color:var(--dim)}
+.pos{color:var(--pos)}.neg{color:var(--neg)}.dim{color:var(--dim)}.warm{color:var(--warm)}
 table{width:100%;border-collapse:collapse;font-size:11.5px}
 th,td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);color:var(--soft)}
 th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
@@ -100,6 +100,33 @@ th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em
 .pt-fig figcaption{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--soft);margin-bottom:5px;font-weight:600}
 .pt-fig figcaption .dim,.pt-fig figcaption .k{text-transform:none;letter-spacing:0;font-weight:400}
 @media(max-width:760px){.pt-ins-grid{grid-template-columns:1fr}}
+.pt-warn{font-size:11.5px;line-height:1.5;color:var(--soft);background:rgba(255,174,93,.06);border:1px solid rgba(255,174,93,.26);border-left:3px solid var(--warm);border-radius:6px;padding:9px 12px}
+.pt-chips{display:flex;flex-wrap:wrap;gap:8px}
+.pt-chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--soft);cursor:pointer;user-select:none}
+.pt-chip:hover{border-color:var(--accent)}
+.pt-chip.on{background:rgba(106,166,255,.14);border-color:var(--accent);color:#fff}
+.pt-chip .mk{font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim)}
+.pt-chip.on .mk{color:var(--accent)}
+.pt-board{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px}
+.pt-board th{text-align:right;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--dim);font-weight:600;padding:6px 10px;border-bottom:1px solid var(--line)}
+.pt-board th:first-child,.pt-board td:first-child{text-align:left}
+.pt-board td{text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+.pt-board tr.lead td{background:rgba(106,166,255,.07)}
+.pt-board .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;vertical-align:middle}
+.pt-board .mk{font-size:9px;color:var(--dim);margin-left:5px}
+.pt-badge2{font-size:9px;letter-spacing:.04em;text-transform:uppercase;padding:2px 6px;border-radius:3px;border:1px solid var(--line);color:var(--dim);margin-left:7px}
+.pt-tabs{display:flex;flex-wrap:wrap;gap:4px;margin:16px 0 0;border-bottom:1px solid var(--line)}
+.pt-tab{display:inline-flex;align-items:center;gap:7px;font-size:12px;padding:8px 13px;border:none;border-bottom:2px solid transparent;background:none;color:var(--soft);cursor:pointer;font-variant-numeric:tabular-nums}
+.pt-tab:hover{color:#fff}
+.pt-tab.on{color:#fff;border-bottom-color:var(--accent);font-weight:600}
+.pt-bar{display:flex;height:16px;border-radius:4px;overflow:hidden;border:1px solid var(--line);margin:9px 0 6px}
+.pt-bar i{display:block;height:100%}
+.pt-armrow{display:flex;align-items:center;gap:10px;padding:7px 0;font-size:12.5px;border-bottom:1px solid var(--line)}
+.pt-armrow .nm{flex:1;display:flex;align-items:center;gap:8px}
+.pt-armrow .dot{display:inline-block;width:9px;height:9px;border-radius:50%}
+.pt-armrow select{font-size:11px;padding:3px 7px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:5px}
+.pt-armrow .rm{cursor:pointer;color:var(--dim);font-size:15px;padding:0 5px;line-height:1}
+.pt-armrow .rm:hover{color:var(--neg)}
 .pt-key{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:8px 0 0;font-size:11px;color:var(--soft)}
 .pt-key .k{display:inline-flex;align-items:center;gap:6px}
 .pt-key .k i{width:12px;height:10px;border-radius:2px;display:inline-block;border:1px solid var(--line)}
@@ -108,42 +135,18 @@ th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em
 </head>
 <body>
 <div class="pt-top">
-  <h1>Paper Trading</h1><span class="pt-badge">Experimental &middot; simulated, no real money</span>
+  <h1>Paper Trading</h1><span class="pt-badge">Simulation mode &middot; simulated capital</span>
   <div class="right"><a href="/app">back to dashboard</a></div>
 </div>
-<div class="pt-ctl">
-  <div class="pt-grp">
-    <span class="cap">Run</span>
-    <div class="row">
-      <label class="pt-f"><span class="lab">Mode<span class="pt-help" data-tip="Historical scores the whole window instantly. Replay plays the same window back bar by bar so you can watch it trade. Live runs forward on the real feed, updating every 15 seconds; its results are kept in your browser.">?</span></span>
-        <select id="pt-mode"><option value="hist">Historical</option><option value="replay">Replay</option><option value="live">Live</option></select></label>
-      <div class="pt-range" id="pt-speedwrap" title="Time per bar during replay. Drag left to play faster.">
-        <span style="font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)">Replay speed</span>
-        <input id="pt-speed" type="range" min="5" max="200" step="5" value="30"/>
-      </div>
-      <button id="pt-run" class="go">Run</button>
-    </div>
-  </div>
-  <div class="pt-sep"></div>
-  <div class="pt-grp">
-    <span class="cap">What to trade <span class="pt-help" data-tip="These choose the data the model scores. Changing any of them needs a re-score, so press Run after. The trading rules below do NOT need a re-score - they update live.">?</span></span>
-    <div class="row">
-      <label class="pt-f"><span class="lab">Model<span class="pt-help" data-tip="Which trained byte model produces the forecasts. Only models with a saved checkpoint appear here. mktctx_80m is the current order-flow model; mkt_crypto_80m is mis-served right now (wrong codec stride) and will look broken.">?</span></span><select id="pt-model" style="min-width:150px"></select></label>
-      <label class="pt-f"><span class="lab">Market</span><select id="pt-source"><option value="crypto_of">Crypto</option><option value="stocks">Stocks</option></select></label>
-      <label class="pt-f"><span class="lab">Resolution<span class="pt-help" data-tip="Bar size. Each bar is one trade decision, so coarser bars (1h, 4h) mean fewer, larger decisions. 1h is the model's strongest horizon.">?</span></span><select id="pt-res"></select></label>
-      <label class="pt-f"><span class="lab">Symbol</span><select id="pt-symbol" style="min-width:120px"></select></label>
-      <label class="pt-f"><span class="lab">Bars<span class="pt-help" data-tip="How much history to score. More bars = longer test, but the score takes longer (the model runs over every bar).">?</span></span><select id="pt-bars"></select></label>
-    </div>
-  </div>
-</div>
+<!-- backtest "what to run" controls were relocated into the Backtest section below (they drive the chart-model test, not live paper trading) -->
 <div class="pt-status" id="pt-statusbar"><span class="dot"></span><span id="pt-statustext">Loading models...</span></div>
 
 <div class="pt-wrap">
 
-  <div class="pt-sec"><span class="pos">&#9679; LIVE TRADING</span> &mdash; forward, real time &middot; news-sentiment bot &middot; fake money<i></i></div>
+  <div class="pt-sec"><span id="pt-livedot" class="dim">&#9675; IDLE</span> &mdash; forward paper trading &middot; simulated capital &middot; no real money<i></i></div>
   <div class="pt-panel">
     <div class="pt-head"><h2>Live news trader</h2><span class="r" id="pt-nt-status">checking...</span></div>
-    <div class="pt-note" style="margin-top:0;margin-bottom:10px">It <b>scans</b> the news on the schedule you set, but <b>trades event-driven</b>: it only moves money when a headline shifts the signal enough to beat the fee. So it trades a lot during breaking news and nothing when it's quiet, the way markets actually move. Fake money, no broker. Pick a model and press <b>Start session</b>.</div>
+    <div class="pt-note" style="margin-top:0;margin-bottom:10px">It <b>scans</b> the news on the schedule you set, but <b>trades event-driven</b>: it only reallocates when a headline shifts the signal enough to clear the fee. So it trades actively during breaking news and stays put when it's quiet, the way markets actually move. Simulated capital, no broker, no real funds. Pick a model and press <b>Start session</b>. While it runs, changing the model, sensitivity, scan rate, or token <b>applies live</b> &mdash; no stop/restart, and the run keeps its history.</div>
     <div class="pt-livebar">
       <label class="pt-f"><span class="lab">Sentiment model<span class="pt-help" data-tip="Which local model reads and scores the news (your Ollama models). qwen2.5:7b-instruct is the fast default; a bigger model (qwen2.5:72b) judges 'already priced in' better and only re-scores new headlines, so it stays affordable.">?</span></span><select id="pt-nt-model" style="min-width:190px"></select></label>
       <label class="pt-f"><span class="lab">Trade token<span class="pt-help" data-tip="Focus on one coin: it auto-pulls news about THAT coin and trades only it. Auto = read general crypto news and trade any coin the news flags across the whole liquid universe.">?</span></span><select id="pt-nt-token" style="min-width:150px"></select></label>
@@ -156,7 +159,7 @@ th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em
     <div class="pt-big" id="pt-nt-cards"></div>
     <div class="pt-cw" style="margin-top:12px"><canvas id="pt-nt-eq"></canvas></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px">
-      <div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:5px">Positions</div><table id="pt-nt-pos"></table></div>
+      <div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:5px">Holdings &mdash; how the capital is allocated</div><table id="pt-nt-pos"></table></div>
       <div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:5px">Latest sentiment</div><table id="pt-nt-sig"></table></div>
     </div>
     <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:12px 0 5px">Recent ticks</div>
@@ -177,6 +180,32 @@ th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em
   </div>
 
   <div class="pt-panel">
+    <div class="pt-head"><h2>Experiment &mdash; spread the engine across markets</h2><span class="r" id="pt-exp-status">idle</span></div>
+    <div class="pt-note" style="margin-top:0;margin-bottom:9px">Run the same sentiment engine as <b>parallel arms</b> (A/B/C/D) across crypto and stocks &mdash; each its own $10k simulated account, all scored by one model so it is apples-to-apples. Pick a model, choose what to spread across, and <b>Launch</b>. The honest winner is whichever beats <b>its own buy-and-hold</b> (the dashed line), not whichever market went up.</div>
+    <div class="pt-warn">Simulated &middot; no real money. Grounded in the trading research: a long-only, fee-paying news-sentiment strategy has <b>no documented net-of-cost edge</b> &mdash; expect arms to <b>track or slightly underperform</b> their buy-and-hold. This is a research instrument for finding signal, not a money-maker.</div>
+    <div class="pt-livebar" style="margin-top:11px">
+      <label class="pt-f"><span class="lab">Sentiment model &middot; one for all arms<span class="pt-help" data-tip="One local LLM scores the news for every arm, so the comparison is apples-to-apples. qwen2.5:14b-instruct is the recommended middle ground: sharper than 7b at judging 'already priced in', far faster than 72b. Only NEW headlines are scored, so a bigger model stays affordable.">?</span></span><select id="pt-exp-model" style="min-width:210px"></select></label>
+      <button id="pt-exp-launch" class="go">Launch</button>
+      <button id="pt-exp-stop" style="display:none">Stop experiment</button>
+      <button id="pt-exp-adv" class="opt" style="padding:6px 12px">Advanced</button>
+    </div>
+    <div style="margin:2px 0 8px">
+      <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:7px">Add arms &mdash; tap to spread across <span class="dim" id="pt-exp-count"></span></div>
+      <div id="pt-exp-subjects" class="pt-chips"></div>
+      <div id="pt-exp-armlist" style="margin-top:10px"></div>
+    </div>
+    <div id="pt-exp-advbox" class="pt-livebar" style="display:none">
+      <label class="pt-f"><span class="lab">Scan every<span class="pt-help" data-tip="How often each arm reads the news. The research says slower is better - intraday is already priced in and overtrading bleeds to fees. 15 min is a sensible default.">?</span></span><select id="pt-exp-interval"><option value="300">5 min</option><option value="900" selected>15 min</option><option value="1800">30 min</option><option value="3600">1 hour</option></select></label>
+      <label class="pt-f"><span class="lab">Risk-off gate<span class="pt-help" data-tip="The one documented drawdown-reducer: when broad market news turns strongly negative, Follow arms cut their long exposure hard (move toward cash). Recommended on. Fade arms ignore it.">?</span></span><select id="pt-exp-riskoff"><option value="1" selected>On (cut longs in risk-off)</option><option value="0">Off</option></select></label>
+    </div>
+    <table id="pt-exp-board" class="pt-board"></table>
+    <div class="pt-cw" style="margin-top:12px"><canvas id="pt-exp-eq"></canvas></div>
+    <div class="pt-key" id="pt-exp-legend"></div>
+    <div id="pt-exp-tabs" class="pt-tabs"></div>
+    <div id="pt-exp-detail"></div>
+  </div>
+
+  <div class="pt-panel">
     <div class="pt-head"><h2>News it's reading</h2><span class="r" id="pt-nf-src">sources: CoinTelegraph &middot; Decrypt &middot; CryptoSlate &middot; Bitcoin Magazine &middot; fear-greed index</span><button id="pt-nf-scan" class="opt" style="margin-left:10px;padding:5px 12px">Scan now</button></div>
     <div class="pt-note" id="pt-nf-fg" style="margin-top:0;margin-bottom:8px">Press <b>Scan now</b> to pull the latest headlines and score them with your model — this is exactly what the bot reads each tick.</div>
     <div class="pt-scroll" style="max-height:340px"><table id="pt-nf-tbl"></table></div>
@@ -184,6 +213,31 @@ th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em
 
   <div class="pt-sec" id="pt-bt-banner" style="margin-top:6px;cursor:pointer" title="click to show or hide"><span style="color:var(--accent)">&#9676; BACKTEST</span> &mdash; test the chart model on PAST data <span id="pt-bt-toggle" style="color:var(--dim);text-transform:none;letter-spacing:0;font-weight:400">(click to hide)</span><i></i></div>
   <div id="pt-bt">
+  <div class="pt-ctl">
+    <div class="pt-grp">
+      <span class="cap">Run</span>
+      <div class="row">
+        <label class="pt-f"><span class="lab">Mode<span class="pt-help" data-tip="Historical scores the whole window instantly. Replay plays the same window back bar by bar so you can watch it trade. Live runs forward on the real feed, updating every 15 seconds; its results are kept in your browser.">?</span></span>
+          <select id="pt-mode"><option value="hist">Historical</option><option value="replay">Replay</option><option value="live">Live</option></select></label>
+        <div class="pt-range" id="pt-speedwrap" title="Time per bar during replay. Drag left to play faster.">
+          <span style="font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)">Replay speed</span>
+          <input id="pt-speed" type="range" min="5" max="200" step="5" value="30"/>
+        </div>
+        <button id="pt-run" class="go">Run</button>
+      </div>
+    </div>
+    <div class="pt-sep"></div>
+    <div class="pt-grp">
+      <span class="cap">What to trade <span class="pt-help" data-tip="These choose the data the model scores. Changing any of them needs a re-score, so press Run after. The trading rules below do NOT need a re-score - they update live.">?</span></span>
+      <div class="row">
+        <label class="pt-f"><span class="lab">Model<span class="pt-help" data-tip="Which trained byte model produces the forecasts. Only models with a saved checkpoint appear here. mktctx_80m is the current order-flow model; mkt_crypto_80m is mis-served right now (wrong codec stride) and will look broken.">?</span></span><select id="pt-model" style="min-width:150px"></select></label>
+        <label class="pt-f"><span class="lab">Market</span><select id="pt-source"><option value="crypto_of">Crypto</option><option value="stocks">Stocks</option></select></label>
+        <label class="pt-f"><span class="lab">Resolution<span class="pt-help" data-tip="Bar size. Each bar is one trade decision, so coarser bars (1h, 4h) mean fewer, larger decisions. 1h is the model's strongest horizon.">?</span></span><select id="pt-res"></select></label>
+        <label class="pt-f"><span class="lab">Symbol</span><select id="pt-symbol" style="min-width:120px"></select></label>
+        <label class="pt-f"><span class="lab">Bars<span class="pt-help" data-tip="How much history to score. More bars = longer test, but the score takes longer (the model runs over every bar).">?</span></span><select id="pt-bars"></select></label>
+      </div>
+    </div>
+  </div>
   <div class="pt-panel">
     <div class="pt-head"><h2>Trading rules</h2><span class="r">live &middot; tweaks reshape instantly, no re-score</span></div>
     <div class="pt-rules">
@@ -257,7 +311,7 @@ const usd=x=>(x<0?'-$':'$')+Math.abs(x).toLocaleString(undefined,{maximumFractio
 const usdSign=x=>(x>=0?'+':'')+usd(x);
 const fmtT=s=>new Date(s*1000).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
 const C={white:'#ffffff',pos:'#5d9c75',neg:'#ff5d5d',accent:'#6aa6ff',warm:'#ffae5d',dim:'#6f7480',grid:'#161b27',soft:'#9aa4b5',ref:'#2a3550'};
-const CH={'pt-eq':240,'pt-px':210,'pt-nt-eq':200,'pt-ins-scatter':180,'pt-ins-sent':180,'pt-ins-pp':180,'pt-ins-hit':180,'pt-ins-roll':160,'pt-ins-pnl':180};
+const CH={'pt-eq':240,'pt-px':210,'pt-nt-eq':200,'pt-ins-scatter':180,'pt-ins-sent':180,'pt-ins-pp':180,'pt-ins-hit':180,'pt-ins-roll':160,'pt-ins-pnl':180,'pt-exp-eq':230,'pt-exp-arm':200};
 const PT_TOKENS=['BTC','ETH','SOL','DOGE','XRP','LINK','AVAX','ADA','LTC','BCH','DOT','ATOM','NEAR','UNI','XLM','AAVE','SHIB','PEPE','ARB','OP','APT','SUI','HYPE'];
 const NTC=['#6aa6ff','#ffae5d','#b075ff','#5dc8ff','#f0d65a','#5d9c75','#ff8fae','#7fd6a0'];
 const SRC={
@@ -269,7 +323,25 @@ const LK='pt:';
 const PREM_WINDOW=96, VOL_TARGET=0.01;          // mirror policy.py DEFAULTS
 const AGGR_HI=2.0, AGGR_LO=0.6;                  // aggressiveness 0 -> move gate 2.0, 100 -> 0.6
 const MIN_TRADES=20;                             // optimizer ignores settings with fewer trades
-let SIG=null, SIM=null, replayTimer=null, replayK=0, liveTimer=null, MODELS=[], ntRunning=null;
+let SIG=null, SIM=null, replayTimer=null, replayK=0, liveTimer=null, MODELS=[], ntRunning=null, expRunning=false, mainRunning=false;
+function updateLiveDot(){const on=expRunning||mainRunning,el=$('pt-livedot');if(el){el.innerHTML=on?'&#9679; LIVE':'&#9675; IDLE';el.className=on?'pos':'dim';}}
+function setupPanels(){           // every panel collapses by clicking its header; secondary ones collapsed by default
+  const PRIMARY=['Live news trader','Experiment'];
+  document.querySelectorAll('.pt-panel').forEach(panel=>{
+    const head=panel.querySelector('.pt-head'); if(!head||head.dataset.coll)return;
+    head.dataset.coll='1';
+    const h2=head.querySelector('h2'), title=h2?h2.textContent:'';
+    const key='pcoll:'+title.slice(0,28);
+    const body=Array.prototype.filter.call(panel.children,c=>c!==head);
+    const chev=document.createElement('span'); chev.style.marginLeft='8px'; chev.style.color='var(--dim)'; chev.style.fontSize='11px';
+    (h2||head).appendChild(chev);
+    const apply=c=>{body.forEach(el=>el.style.display=c?'none':'');chev.innerHTML=c?'&#9656;':'&#9662;';};
+    const saved=lget(key);
+    let c=(saved===null||saved===undefined)?!PRIMARY.some(t=>title.indexOf(t)>=0):saved===true;
+    apply(c); head.style.cursor='pointer';
+    head.addEventListener('click',e=>{const tg=e.target.tagName;if(tg==='SELECT'||tg==='INPUT'||tg==='BUTTON'||tg==='OPTION'||tg==='A')return;c=!c;lset(key,c);apply(c);});
+  });
+}
 function setBacktestCollapsed(c){const bt=$('pt-bt'),tg=$('pt-bt-toggle');if(!bt)return;bt.style.display=c?'none':'';if(tg)tg.textContent=c?'(click to show)':'(click to hide)';}
 
 // ---- localStorage (signal cache + ledger + controls) ----
@@ -520,22 +592,23 @@ function renderLive(d,L){
 function renderLiveFromCap(L){const cap=capital();$('pt-liver').innerHTML=`<b class="${L.equity>=0?'pos':'neg'}">${usdSign(cap*L.equity/1e4)}</b> on ${usd(cap)} &middot; ${L.closed.length} closed`;drawEquity(toDollars(L.closed.reduce((a,t)=>{a.push((a[a.length-1]||0)+t.pnl_bps);return a;},[0])),cap,usd);}
 
 // ---- live news trader (reads the autonomous ledger) ----
-function drawNTEquity(curve,bench){
-  const cv=$('pt-nt-eq'),arr=(curve||[]).map(p=>p.equity);
+function drawNTEquity(cid,curve,bench,holdLabel){
+  const cv=$(cid),arr=(curve||[]).map(p=>p.equity);
   if(arr.length<2){dpr(cv);return;}
   const bn=(bench||[]).map(p=>p&&p.equity).filter(v=>v!=null);
   const all=arr.concat(bn);
   const[x,w,h]=dpr(cv),lo=Math.min(...all),hi=Math.max(...all);
   const X=i=>64+i/(arr.length-1)*(w-72),Y=v=>12+(hi-v)/(hi-lo||1)*(h-30);
   gridY(x,w,h,lo,hi,usd);
-  // BTC buy-hold benchmark (dashed) - the honest bar: above it = real edge, below = worse than holding
+  // coin buy-hold benchmark (dashed) - the honest bar: above it = real edge, below = worse than holding
+  const hl=holdLabel||'BTC';
   if(bench&&bench.length===arr.length){
     x.strokeStyle=C.dim;x.lineWidth=1.2;x.setLineDash([4,3]);x.beginPath();let st=false;
     for(let i=0;i<bench.length;i++){const v=bench[i]&&bench[i].equity;if(v==null){st=false;continue;}if(!st){x.moveTo(X(i),Y(v));st=true;}else x.lineTo(X(i),Y(v));}
     x.stroke();x.setLineDash([]);
   }
   for(let i=1;i<arr.length;i++){x.strokeStyle=arr[i]>=arr[i-1]?C.pos:C.neg;x.lineWidth=1.7;x.beginPath();x.moveTo(X(i-1),Y(arr[i-1]));x.lineTo(X(i),Y(arr[i]));x.stroke();}
-  x.font='10px ui-monospace,monospace';x.fillStyle=C.dim;x.fillText('- - hold BTC',w-86,13);
+  x.font='10px ui-monospace,monospace';x.fillStyle=C.dim;x.fillText('- - hold '+hl,w-92,13);
   const bLast=bn.length?bn[bn.length-1]:null;
   if(bLast!=null){const d=arr[arr.length-1]-bLast;x.fillStyle=d>=0?C.pos:C.neg;x.fillText((d>=0?'beating hold +':'behind hold ')+usd(Math.abs(d)),64,h-5);}
 }
@@ -545,16 +618,22 @@ async function pollAccount(){
   if(!d.running){$('pt-nt-status').textContent='no ticks yet - start news_trader.py';return;}
   const pl=d.equity-d.start_cash,pc=d.start_cash?pl/d.start_cash*100:0;
   $('pt-nt-status').innerHTML='last tick '+(d.last_t?fmtT(d.last_t):'-');
+  const invested=d.equity-d.cash, iw=d.equity?invested/d.equity*100:0, cw=d.equity?d.cash/d.equity*100:0;
   $('pt-nt-cards').innerHTML=[
-    card('Equity',usd(d.equity),'paper account','',true),
+    card('Equity',usd(d.equity),'simulated account','',true),
     card('Profit / loss',usdSign(pl),(pc>=0?'+':'')+pc.toFixed(2)+'%',pl>=0?'pos':'neg',true),
-    card('Cash',usd(d.cash),Object.keys(d.positions||{}).length+' positions','',true),
-    card('Scans',(d.curve?d.curve.length:0).toLocaleString(),'news checks','',true),
+    card('Cash',usd(d.cash),cw.toFixed(0)+'% of account','',true),
+    card('Invested',usd(invested),iw.toFixed(0)+'% in '+(d.holdings||[]).length+' assets',invested>0.5?'pos':'',true),
   ].join('');
-  drawNTEquity(d.curve,d.bench);
+  drawNTEquity('pt-nt-eq',d.curve,d.bench,'BTC');
   drawInsights(d.series, d.focus||focusToken());
   const pos=Object.entries(d.positions||{});
-  $('pt-nt-pos').innerHTML=pos.length?'<tr><th>symbol</th><th>qty</th></tr>'+pos.map(([s,q])=>`<tr><td>${s}</td><td>${(+q).toLocaleString(undefined,{maximumFractionDigits:4})}</td></tr>`).join(''):'<tr><td class="pt-note">all cash</td></tr>';
+  const hold=d.holdings||[];
+  $('pt-nt-pos').innerHTML=hold.length
+    ?'<tr><th>asset</th><th>qty</th><th>price</th><th>value</th><th>% acct</th></tr>'
+      +hold.map(h=>`<tr><td>${h.asset}</td><td>${(+h.qty).toLocaleString(undefined,{maximumFractionDigits:4})}</td><td>${h.price?usd(h.price):'-'}</td><td>${h.value!=null?usd(h.value):'-'}</td><td>${h.weight!=null?(h.weight*100).toFixed(0)+'%':'-'}</td></tr>`).join('')
+      +`<tr><td class="dim">cash</td><td></td><td></td><td class="dim">${usd(d.cash)}</td><td class="dim">${d.cash_weight!=null?(d.cash_weight*100).toFixed(0)+'%':''}</td></tr>`
+    :`<tr><td class="pt-note">all cash &middot; ${usd(d.cash)}</td></tr>`;
   const sig=Object.entries(d.signal||{}).sort((a,b)=>b[1]-a[1]);
   $('pt-nt-sig').innerHTML=sig.length?'<tr><th>asset</th><th>score</th></tr>'+sig.map(([a,v])=>`<tr><td>${a}</td><td class="${v>=0?'pos':'neg'}">${(+v).toFixed(2)}</td></tr>`).join(''):'<tr><td class="pt-note">-</td></tr>';
   const rec=d.recent||[];
@@ -667,19 +746,33 @@ async function loadScorerModels(){
     const ms=(j&&j.models)||[];
     if(!ms.length){$('pt-nt-model').innerHTML='<option value="">(no Ollama models)</option>';return;}
     $('pt-nt-model').innerHTML=ms.map(m=>`<option value="${m}">${m}</option>`).join('');
-    if(ms.includes('qwen2.5:7b-instruct'))$('pt-nt-model').value='qwen2.5:7b-instruct';
+    const saved=ntCtl().model;
+    $('pt-nt-model').value=(saved&&ms.includes(saved))?saved:(ms.includes('qwen2.5:7b-instruct')?'qwen2.5:7b-instruct':ms[0]);
   }catch(e){$('pt-nt-model').innerHTML='<option value="">(teacher offline)</option>';}
 }
 function loadTokenCtl(){
   const sel=$('pt-nt-token');if(!sel)return;
   sel.innerHTML='<option value="AUTO">Auto (all coins)</option>'+PT_TOKENS.map(t=>`<option value="${t}">${t}</option>`).join('');
-  const sv=lget('nttoken');if(sv)sel.value=sv;
-  sel.onchange=()=>{lset('nttoken',sel.value);pollAccount();};
+  const sv=ntCtl().token;if(sv)sel.value=sv;
+  sel.onchange=()=>{saveNT();pollAccount();applyNTLive();};
 }
 function focusToken(){const s=$('pt-nt-token');return s?s.value:'AUTO';}
+function ntCtl(){return lget('nt')||{};}
+function saveNT(){lset('nt',{model:$('pt-nt-model').value,token:$('pt-nt-token').value,interval:$('pt-nt-interval').value,band:$('pt-nt-band').value,gate:$('pt-nt-gate').value});}
+async function applyNTLive(){           // push edits to a RUNNING main trader in place (no stop/start)
+  let st; try{st=await jget('/ext/paper_trade/trader/status');}catch(e){return false;}
+  if(!st||!st.running)return false;
+  const body={model:$('pt-nt-model').value,focus:focusToken(),interval:+$('pt-nt-interval').value||300,band:+$('pt-nt-band').value||0.12,gate:+$('pt-nt-gate').value||0.25};
+  try{const r=await fetch('/ext/paper_trade/trader/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(r.ok){setStatus('Applied live - no restart: '+body.model+' / band '+body.band+' / scan '+Math.round(body.interval/60)+'min','ok');return true;}}
+  catch(e){}
+  return false;
+}
+function onNTChange(){saveNT();applyNTLive();}
 async function pollTraderStatus(){
   let d; try{d=await jget('/ext/paper_trade/trader/status');}catch(e){return;}
   const on=!!(d&&d.running);
+  mainRunning=on; updateLiveDot();
   $('pt-nt-start').style.display=on?'none':'';
   $('pt-nt-stop').style.display=on?'':'none';
   if(on&&d.model)$('pt-nt-status').innerHTML='running &middot; '+d.model+' &middot; '+((d.focus&&d.focus!=='all')?d.focus:'all coins')+' &middot; scan '+Math.round((d.interval||300)/60)+'min &middot; trades on news';
@@ -700,6 +793,158 @@ async function stopSession(){
   try{await fetch('/ext/paper_trade/trader/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});setStatus('Live session ended (ledger kept).','ok');}
   catch(e){setStatus('Stop failed: '+e,'err');}
   pollTraderStatus();
+}
+
+// ---- Experiment: N parallel arms (A/B/C/D) across crypto + stocks, one shared model ----
+const EXP_SUBJECTS=[
+  {market:'crypto',focus:null,title:'All crypto'},{market:'crypto',focus:'BTC',title:'BTC'},
+  {market:'crypto',focus:'ETH',title:'ETH'},{market:'crypto',focus:'SOL',title:'SOL'},
+  {market:'crypto',focus:'DOGE',title:'DOGE'},{market:'stocks',focus:null,title:'All stocks'},
+  {market:'stocks',focus:'NVDA',title:'NVDA'},{market:'stocks',focus:'TSLA',title:'TSLA'},
+  {market:'stocks',focus:'AAPL',title:'AAPL'},
+];
+const EXP_MAXARMS=10;
+const AGGR_OPTS=[['cons','Conservative'],['bal','Balanced'],['aggr','Aggressive']];
+const MODE_OPTS=[['follow','Follow'],['fade','Fade']];
+let expSel=[], expActive=0;     // expSel: [{market,focus,title,aggr,mode}]
+function subjKey(s){return s.market+':'+(s.focus||'broad');}
+function expColor(i){return NTC[i%NTC.length];}
+function saveExpSel(){lset('expsel2',expSel);}
+function updateLaunchLabel(){if($('pt-exp-launch'))$('pt-exp-launch').textContent='Launch'+(expSel.length?(' '+expSel.length+' arm'+(expSel.length>1?'s':'')):'');}
+function armVsHold(a){const bn=(a.bench||[]).map(p=>p&&p.equity).filter(v=>v!=null);return bn.length?a.equity-bn[bn.length-1]:null;}
+function armHit(a){          // directional hit-rate across the arm's tracked assets (honest: needs >=10)
+  const ser=a.series||[],pairs=[];
+  for(let i=0;i<ser.length-1;i++){const sg=ser[i].signal||{},px=ser[i].prices||{},np=(ser[i+1].prices)||{};
+    for(const c in sg){if(px[c]&&np[c])pairs.push({s:sg[c],r:np[c]/px[c]-1});}}
+  return _stat(pairs);
+}
+function renderSubjects(){
+  const box=$('pt-exp-subjects'); if(!box)return;
+  const have=new Set(expSel.map(subjKey));
+  box.innerHTML=EXP_SUBJECTS.map(s=>{const k=subjKey(s),on=have.has(k);
+    return `<span class="pt-chip${on?' on':''}" data-k="${k}"><span class="mk">${s.market==='stocks'?'stock':'crypto'}</span>${s.title}</span>`;}).join('');
+  $('pt-exp-count').textContent=`(${expSel.length}/${EXP_MAXARMS})`;
+  box.querySelectorAll('.pt-chip').forEach(el=>el.onclick=()=>{
+    const k=el.dataset.k,i=expSel.findIndex(a=>subjKey(a)===k);
+    if(i>=0)expSel.splice(i,1);
+    else{if(expSel.length>=EXP_MAXARMS){setStatus('Up to '+EXP_MAXARMS+' arms.','stale');return;}
+      const s=EXP_SUBJECTS.find(x=>subjKey(x)===k); expSel.push({market:s.market,focus:s.focus,title:s.title,aggr:'bal',mode:'follow'});}
+    saveExpSel(); renderSubjects(); renderArmEditor(); updateLaunchLabel();
+  });
+}
+function renderArmEditor(){
+  const box=$('pt-exp-armlist'); if(!box)return;
+  if(!expSel.length){box.innerHTML='<div class="pt-note" style="margin:0">Tap a subject above to add an arm. Set each arm’s aggressiveness and strategy here.</div>';return;}
+  box.innerHTML=expSel.map((a,i)=>`<div class="pt-armrow">
+    <span class="nm"><span class="dot" style="background:${expColor(i)}"></span><b>${a.title}</b><span style="font-size:9px;text-transform:uppercase;color:var(--dim)">${a.market}</span></span>
+    <select data-i="${i}" data-f="aggr">${AGGR_OPTS.map(([v,l])=>`<option value="${v}"${a.aggr===v?' selected':''}>${l}</option>`).join('')}</select>
+    <select data-i="${i}" data-f="mode">${MODE_OPTS.map(([v,l])=>`<option value="${v}"${a.mode===v?' selected':''}>${l}${v==='fade'?' (contrarian)':''}</option>`).join('')}</select>
+    <span class="rm" data-rm="${i}" title="remove">&times;</span></div>`).join('');
+  box.querySelectorAll('select').forEach(el=>el.onchange=()=>{expSel[+el.dataset.i][el.dataset.f]=el.value;saveExpSel();});
+  box.querySelectorAll('.rm').forEach(el=>el.onclick=()=>{expSel.splice(+el.dataset.rm,1);saveExpSel();renderSubjects();renderArmEditor();updateLaunchLabel();});
+}
+function selectedArms(){return expSel.map(a=>({market:a.market,focus:a.focus,aggr:a.aggr,mode:a.mode}));}
+async function loadExpModel(){
+  try{
+    const j=await fetch('/teacher/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:'ollama'})}).then(r=>r.json());
+    const ms=(j&&j.models)||[];
+    if(!ms.length){$('pt-exp-model').innerHTML='<option value="">(no Ollama models)</option>';return;}
+    $('pt-exp-model').innerHTML=ms.map(m=>`<option value="${m}">${m}${m==='qwen2.5:14b-instruct'?' (recommended)':''}</option>`).join('');
+    const saved=lget('expmodel'),pref=['qwen2.5:14b-instruct','qwen2.5:7b-instruct'].find(m=>ms.includes(m));
+    $('pt-exp-model').value=(saved&&ms.includes(saved))?saved:(pref||ms[0]);
+    $('pt-exp-model').onchange=()=>lset('expmodel',$('pt-exp-model').value);
+  }catch(e){$('pt-exp-model').innerHTML='<option value="">(teacher offline)</option>';}
+}
+async function launchExp(){
+  const arms=selectedArms();
+  if(!arms.length){setStatus('Pick at least one subject to spread across.','stale');return;}
+  const body={model:$('pt-exp-model').value,arms,interval:+$('pt-exp-interval').value||900,risk_off:($('pt-exp-riskoff')||{}).value!=='0',reset:true};
+  $('pt-exp-launch').disabled=true;
+  try{await fetch('/ext/paper_trade/ab/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});}catch(e){}
+  try{await fetch('/ext/paper_trade/exp/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});setStatus('Launched '+arms.length+' arms with '+body.model,'ok');}
+  catch(e){setStatus('Launch failed: '+e,'err');}
+  $('pt-exp-launch').disabled=false;expActive=0;pollExpStatus();setTimeout(pollExp,2500);
+}
+async function stopExp(){
+  try{await fetch('/ext/paper_trade/exp/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});setStatus('Experiment stopped (ledgers kept).','ok');}
+  catch(e){setStatus('Stop failed: '+e,'err');}
+  pollExpStatus();
+}
+async function applyExpLive(){
+  let st; try{st=await jget('/ext/paper_trade/exp/status');}catch(e){return;}
+  if(!st||!st.running_any)return;
+  const body={model:$('pt-exp-model').value,interval:+$('pt-exp-interval').value||900,risk_off:($('pt-exp-riskoff')||{}).value!=='0'};
+  try{const r=await fetch('/ext/paper_trade/exp/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok)setStatus('Experiment updated live - no restart.','ok');}catch(e){}
+}
+async function pollExpStatus(){
+  let d; try{d=await jget('/ext/paper_trade/exp/status');}catch(e){return;}
+  const on=d&&d.running_any;
+  expRunning=!!on; updateLiveDot();
+  $('pt-exp-launch').style.display=on?'none':'';
+  $('pt-exp-stop').style.display=on?'':'none';
+  $('pt-exp-status').innerHTML=on?('running &middot; '+(d.model||'')+' &middot; '+((d.arms||[]).length)+' arms'):'idle';
+}
+function drawExpOverlay(arms){
+  const cv=$('pt-exp-eq'),series=arms.map(a=>(a.curve||[]).map(p=>p.equity)).filter(x=>x.length>=2);
+  const[x,w,h]=dpr(cv);
+  if(!series.length){x.fillStyle=C.dim;x.font='11px ui-monospace,monospace';x.fillText('Launch an experiment - arms appear here as they trade.',12,h/2);return;}
+  const all=[].concat(...series),lo=Math.min(...all,10000),hi=Math.max(...all,10000),L=Math.max(...series.map(s=>s.length));
+  const X=i=>56+i/(L-1)*(w-66),Y=v=>12+(hi-v)/(hi-lo||1)*(h-28);
+  gridY(x,w,h,lo,hi,usd);
+  x.strokeStyle=C.grid;x.setLineDash([2,3]);x.beginPath();x.moveTo(56,Y(10000));x.lineTo(w-10,Y(10000));x.stroke();x.setLineDash([]);
+  arms.forEach((a,k)=>{const arr=(a.curve||[]).map(p=>p.equity);if(arr.length>=2)poly(x,arr,X,Y,expColor(k),1.8);});
+}
+function cashBar(a){
+  const inv=a.equity-a.cash,iw=a.equity?inv/a.equity*100:0,cw=a.equity?a.cash/a.equity*100:0;
+  return `<div class="pt-bar"><i style="width:${iw.toFixed(1)}%;background:var(--pos)"></i><i style="width:${cw.toFixed(1)}%;background:var(--soft)"></i></div>`
+    +`<div style="font-size:11px;color:var(--soft)"><b style="color:var(--pos)">Invested ${usd(inv)} (${iw.toFixed(0)}%)</b> &nbsp;&middot;&nbsp; Cash ${usd(a.cash)} (${cw.toFixed(0)}%)</div>`;
+}
+function renderBoard(arms){
+  const rows=arms.map((a,k)=>{const vs=armVsHold(a),hit=armHit(a);return {a,k,vs,hit:hit.acc,n:hit.n,ret:a.start_cash?(a.equity/a.start_cash-1)*100:0};});
+  const sorted=[...rows].sort((p,q)=>((q.vs==null?-1e9:q.vs)-(p.vs==null?-1e9:p.vs)));
+  const leadK=sorted.length&&sorted[0].vs!=null?sorted[0].k:-1;
+  $('pt-exp-board').innerHTML='<tr><th>Arm</th><th>Return</th><th>vs buy &amp; hold</th><th>Hit-rate</th><th>Trades</th><th>Equity</th></tr>'
+    +sorted.map(r=>{const a=r.a,lead=(r.k===leadK&&r.vs!=null&&r.vs>0);
+      const vsCell=r.vs==null?'<span class="dim">&mdash;</span>':`<b class="${r.vs>=0?'pos':'neg'}">${usdSign(r.vs)}</b>`;
+      const hitCell=r.n>=10?`${(r.hit*100).toFixed(0)}%`:'<span class="dim">thin</span>';
+      const badge=lead?'<span class="pt-badge2" style="color:var(--pos);border-color:var(--pos)">leading</span>':(r.k===leadK&&r.vs!=null?'<span class="pt-badge2">ahead, thin</span>':'');
+      const cfg=`<span class="pt-badge2">${(a.aggr||'bal')==='cons'?'cons':(a.aggr==='aggr'?'aggr':'bal')}&middot;${a.mode==='fade'?'fade':'follow'}</span>`;
+      return `<tr class="${lead?'lead':''}"><td><span class="dot" style="background:${expColor(r.k)}"></span>${a.title}<span class="mk">${a.market==='stocks'?'stock':'crypto'}</span>${cfg}${badge}</td>`
+        +`<td><span class="${r.ret>=0?'pos':'neg'}">${(r.ret>=0?'+':'')+r.ret.toFixed(2)}%</span></td><td>${vsCell}</td><td>${hitCell}</td><td>${a.trades||0}</td><td>${usd(a.equity)}</td></tr>`;}).join('');
+}
+function renderTabs(arms){
+  if(expActive>=arms.length)expActive=0;
+  $('pt-exp-tabs').innerHTML=arms.map((a,k)=>`<button class="pt-tab${k===expActive?' on':''}" data-i="${k}"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${expColor(k)}"></span>${a.title} <b class="${a.pnl>=0?'pos':'neg'}">${usdSign(a.pnl)}</b></button>`).join('');
+  $('pt-exp-tabs').querySelectorAll('.pt-tab').forEach(el=>el.onclick=()=>{expActive=+el.dataset.i;renderTabs(arms);renderDetail(arms);});
+}
+function renderDetail(arms){
+  const a=arms[expActive]; if(!a){$('pt-exp-detail').innerHTML='';return;}
+  const vs=armVsHold(a),hit=armHit(a),benchName=a.bench_asset||(a.market==='stocks'?'SPY':'BTC');
+  const trades=(a.recent||[]).flatMap(h=>(h.acts||[]).map(x=>({t:h.t,...x})));
+  const tradeRows=trades.length?trades.slice(0,8).map(x=>`<tr><td>${fmtT(x.t)}</td><td class="${x.side==='buy'?'pos':'neg'}">${x.side}</td><td>${(+x.qty<0?-x.qty:x.qty).toLocaleString(undefined,{maximumFractionDigits:3})} ${(''+x.sym).replace('USDT','')}</td><td>${usd(x.price)}</td></tr>`).join(''):'<tr><td class="pt-note">No trades yet.</td></tr>';
+  const holdRows=(a.holdings||[]).length?a.holdings.map(h=>`<tr><td>${h.asset}</td><td>${(+h.qty).toLocaleString(undefined,{maximumFractionDigits:4})}</td><td>${h.value!=null?usd(h.value):'-'}</td><td>${h.weight!=null?(h.weight*100).toFixed(0)+'%':'-'}</td></tr>`).join(''):'<tr><td class="pt-note">All cash - no positions.</td></tr>';
+  $('pt-exp-detail').innerHTML=`<div style="display:grid;grid-template-columns:1.35fr 1fr;gap:18px;margin-top:14px">
+    <div>
+      <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:5px">${a.title} equity vs holding ${benchName}</div>
+      <div class="pt-cw"><canvas id="pt-exp-arm"></canvas></div>
+      <div style="font-size:11.5px;margin-top:7px">Return <b class="${a.pnl>=0?'pos':'neg'}">${usdSign(a.pnl)}</b> ${vs!=null?`&middot; <b class="${vs>=0?'pos':'neg'}">${usdSign(vs)}</b> vs buy &amp; hold ${benchName}`:''} ${hit.n>=10?`&middot; ${(hit.acc*100).toFixed(0)}% directional (n=${hit.n})`:'&middot; <span class="dim">hit-rate: not enough trades yet</span>'}</div>
+      ${cashBar(a)}
+    </div>
+    <div>
+      <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:5px">Holdings &mdash; cash vs invested</div>
+      <table class="pt-board" style="margin:0"><tr><th>asset</th><th>qty</th><th>value</th><th>%</th></tr>${holdRows}</table>
+      <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:13px 0 5px">Recent trades</div>
+      <table class="pt-board" style="margin:0">${tradeRows}</table>
+    </div></div>`;
+  drawNTEquity('pt-exp-arm',a.curve,a.bench,benchName);
+}
+async function pollExp(){
+  let d; try{d=await jget('/ext/paper_trade/exp/accounts');}catch(e){return;}
+  if(!d||!d.ok)return;
+  const arms=d.arms||[];
+  if(!arms.length){$('pt-exp-board').innerHTML='';drawExpOverlay([]);$('pt-exp-tabs').innerHTML='';$('pt-exp-detail').innerHTML='';$('pt-exp-legend').innerHTML='';return;}
+  renderBoard(arms);drawExpOverlay(arms);renderTabs(arms);renderDetail(arms);
+  $('pt-exp-legend').innerHTML=arms.map((a,k)=>`<span class="k"><i class="ln" style="background:${expColor(k)}"></i>${a.title}</span>`).join('');
 }
 async function scanNews(){
   $('pt-nf-fg').textContent='Scanning + scoring with '+($('pt-nt-model').value||'model')+'...';$('pt-nf-scan').disabled=true;
@@ -726,6 +971,10 @@ function markStale(){saveControls();if(SIG&&mode()!=='live')setStatus('Data choi
 $('pt-run').onclick=onRun;
 $('pt-nt-start').onclick=startSession;
 $('pt-nt-stop').onclick=stopSession;
+$('pt-exp-launch').onclick=launchExp;
+$('pt-exp-stop').onclick=stopExp;
+$('pt-exp-adv').onclick=()=>{const b=$('pt-exp-advbox');b.style.display=b.style.display==='none'?'flex':'none';};
+['pt-exp-interval','pt-exp-riskoff'].forEach(id=>{const e=$(id);if(e)e.addEventListener('change',applyExpLive);});
 $('pt-nf-scan').onclick=scanNews;
 $('pt-bt-banner').onclick=()=>setBacktestCollapsed($('pt-bt').style.display!=='none');
 $('pt-mode').onchange=()=>{applyMode();saveControls();};
@@ -759,9 +1008,20 @@ function loadCtl(){return lget('ctl')||{};}
   if(s.bars)$('pt-bars').value=s.bars;
   loadScorerModels();
   loadTokenCtl();
+  const nc=ntCtl();
+  ['interval','band','gate'].forEach(k=>{if(nc[k]!=null&&$('pt-nt-'+k))$('pt-nt-'+k).value=nc[k];});
+  ['pt-nt-model','pt-nt-interval','pt-nt-band','pt-nt-gate'].forEach(id=>{const e=$(id);if(e)e.addEventListener('change',onNTChange);});
+  expSel=(lget('expsel2')||[
+    {market:'crypto',focus:null,title:'All crypto',aggr:'bal',mode:'follow'},
+    {market:'stocks',focus:null,title:'All stocks',aggr:'bal',mode:'follow'},
+    {market:'crypto',focus:'BTC',title:'BTC',aggr:'aggr',mode:'follow'}
+  ]).slice(0,EXP_MAXARMS);
+  renderSubjects(); renderArmEditor(); loadExpModel(); updateLaunchLabel();
   pollAccount(); setInterval(pollAccount, 30000);
   pollTraderStatus(); setInterval(pollTraderStatus, 15000);
-  if(MODELS.length)setStatus('Ready. Press Run to score, then tweak the rules or drag aggressiveness - it reshapes live. Use Find best settings to auto-tune.','ok');
+  pollExp(); setInterval(pollExp, 30000);
+  pollExpStatus(); setInterval(pollExpStatus, 15000);
+  setupPanels();
 })();
 </script>
 </body>

@@ -79,10 +79,78 @@ LLM extension).
   screen. Each tick records `btc` price for this. Polled every 30s.
 - `POST /ext/paper_trade/trader/start` — start the news trader as a managed in-process
   thread (`news_trader.start_thread`); body `{model, provider, gate, interval, fee_bps,
-  source, use_chart}`, defaults to `sentiment.DEFAULT_MODEL`. `POST .../trader/stop` stops
-  it; `GET .../trader/status` -> `{running, model, interval, ...}`. The page's Start/End
-  session buttons + status poll drive these. The thread is the single owner — the standalone
-  `news_trader.py` CLI is for headless use; don't run both on one ledger (they race).
+  source, use_chart, focus}`, defaults to `sentiment.DEFAULT_MODEL`. `POST .../trader/stop` stops
+  it; `GET .../trader/status` -> `{running, model, interval, focus, ...}`. The page's Start/End
+  session buttons + status poll drive these. This is the "main" run (label `main`,
+  `account.json`).
+
+### multi-run + A/B (BTC vs DOGE)
+
+`news_trader` supports concurrent named runs: `_RUNS` is a registry keyed by label, and
+`ledger_for(label)` maps each to its own ledger (`main` -> `account.json`, else
+`account_<label>.json`), so runs never share a ledger. `start_thread(..., label=)`,
+`stop_thread(label=)`, `status(label=)`, `status_all()` operate per-label; `load_ledger(path)` /
+`save_ledger(led, path)` / `tick(..., ledger_path=)` take an explicit path. The CLI gained
+`--label`. Ledgers persist on disk, so a run resumes its equity history across restarts (stateful).
+
+**Live config update (no restart):** each run's tick reads its config from a shared mutable
+`_RUNS[label]["cfg"]` dict, so `update_run(label, model=/gate=/band=/interval=/focus=...)` changes
+take effect on the next tick with the ledger untouched. Routes: `POST .../trader/update` (main),
+`POST .../ab/update` (both arms). The page applies model/sensitivity/scan-rate/token edits live
+while a run is active instead of forcing stop/start.
+
+**Holdings:** `_holdings(led, eq, last_prices)` marks each position to the last tick price ->
+`{asset, qty, price, value, weight}`; `/account` and `/ab/accounts` return `holdings` +
+`cash_weight` (and the arms return `recent` trades) so the page shows how the capital is allocated
+and spent, not just a curve.
+
+The legacy 2-arm A/B (`/ab/*`, fixed BTC vs DOGE) is superseded by the generic N-arm experiment.
+
+### markets: crypto + stocks
+
+The trader is market-aware (`tick(..., market=)`, default `crypto`). `price(symbol, market)` dispatches:
+crypto -> Binance.US spot (`BTCUSDT`), stocks -> Yahoo Finance quote (`AAPL`). `universe(market)` is a
+research-grounded **barbell**: `TRADABLE` = liquid crypto majors + a small meme tier (crypto breadth
+is mostly illusory); `STOCK_UNIVERSE` = high-retail-attention / news-covered US names + SPY/QQQ.
+`sym_for(asset, market)` builds the trade symbol. `market_open(market)` gates trading: crypto is
+24/7, stocks trade only in the US regular session (09:30-16:00 ET, Mon-Fri) because the free Yahoo
+quote freezes after hours, so a tick out of session marks positions but places no trades (otherwise
+the arm pays spread on a frozen price = pure fee loss). `scraper.scrape(..., market=)` swaps the feed set
+(crypto RSS vs `STOCK_FEEDS` general financial) and the Google-News qualifier (`cryptocurrency` vs
+`stock`); the sentiment prompt is unified for crypto + equities. Each tick records `bench_px` (price of
+the arm's benchmark asset: the focused ticker, or BTC for broad crypto / SPY for broad stocks) so the
+view benchmarks any arm against its own buy-and-hold.
+
+### generic N-arm experiment (`/exp/*`)
+
+Each arm also carries a **strategy config**: `aggr` (Conservative/Balanced/Aggressive -> the `AGGR`
+map sets gate/band/max_size: choosy+small+low-turnover vs acts-on-weak-signal+full-size) and `mode`
+(`follow` = momentum, long on positive sentiment; `fade` = contrarian, long on NEGATIVE sentiment,
+since the research says news sentiment mean-reverts). A global **risk-off gate** (`risk_off`, default
+on) is the one documented drawdown-reducer: when broad `MARKET` sentiment <= -0.35, Follow arms cut
+target exposure to 25% (toward cash); Fade arms ignore it. These are the levers the tool exists to
+search over.
+
+`POST /ext/paper_trade/exp/start` body `{model, arms:[{market, focus, aggr, mode}], interval, risk_off, reset}`
+launches up to `EXP_MAX_ARMS` parallel arms — each a `{market, focus}` slice (focus=None => broad)
+on its own ledger, all scored by ONE shared model. Arm specs are normalized to stable labels
+(`_arm_spec`) and persisted to `experiment.json`, so the experiment + its ledgers resume across
+restarts (the cron re-starts with `reset:false`). `.../exp/stop`, `.../exp/status`,
+`.../exp/update` (live-edit model/gate/band/interval on all arms), and `.../exp/accounts` (per arm:
+equity, pnl, **vs own buy-and-hold** bench, holdings, recent trades, trades/ticks counts, series for
+client-side hit-rate) drive the **Experiment panel**: one-click launch, a sorted leaderboard
+(leading arm tinted; hit-rate shown only at >=10 resolved pairs, else "thin"), an overlaid equity
+chart (all arms, shared Y, stable colors), and per-arm tabs (equity-vs-its-hold, cash-vs-invested
+bar, holdings, recent trades). The standalone `news_trader.py` CLI (`--market`, `--label`, `--focus`)
+is for headless use; don't run a CLI and a managed thread on the same ledger (they race).
+
+### honest status (grounded in the trading research, 2026-06-19)
+
+The literature is blunt: a **long-only, fee-paying news-sentiment strategy has no documented
+net-of-cost edge.** The alpha lives in the short leg (unusable here); costs erase ~96% of the rest;
+the signal mean-reverts (buy the spike, eat the reversal); crypto adds spread + pump contamination.
+Realistic expectation: arms **track or slightly underperform** their own buy-and-hold. This is a
+research instrument for measuring signal honestly, not a money-maker — the UI says so on the panel.
 
 ## page cockpit (page/index.html)
 

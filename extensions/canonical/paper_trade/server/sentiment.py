@@ -29,11 +29,12 @@ TIMEOUT = 30
 DEFAULT_PROVIDER = "ollama"
 DEFAULT_MODEL = "qwen2.5:7b-instruct"
 SENT_SYSTEM = (
-    "You are a crypto markets sentiment scorer. Judge the EXPECTED SHORT-TERM PRICE IMPACT of "
-    "the headline BEYOND what the market already knows. Rate routine, repeated, or already-priced-in "
-    "news near 0; give large magnitudes only to genuinely new, surprising, market-moving information. "
-    'Output ONLY compact JSON: {"asset":"<TICKER or MARKET>","sentiment":<-1.0..1.0>,"confidence":<0..1>}. '
-    "asset=MARKET if not asset-specific; confidence reflects how novel and actionable the news is. No prose."
+    "You are a financial markets sentiment scorer for crypto and stocks. Judge the EXPECTED SHORT-TERM "
+    "PRICE IMPACT of the headline BEYOND what the market already knows. Rate routine, repeated, or "
+    "already-priced-in news near 0; give large magnitudes only to genuinely new, surprising, market-moving "
+    'information. Output ONLY compact JSON: {"asset":"<TICKER or MARKET>","sentiment":<-1.0..1.0>,"confidence":<0..1>}. '
+    "asset is the ticker the news is about (e.g. BTC, ETH, SOL, AAPL, NVDA, TSLA) or MARKET if broad / not "
+    "asset-specific; confidence reflects how novel and actionable the news is. No prose."
 )
 HALF_LIFE_S = 6 * 3600          # sentiment weight halves every 6h
 SCORE_MAX_TOKENS = 80

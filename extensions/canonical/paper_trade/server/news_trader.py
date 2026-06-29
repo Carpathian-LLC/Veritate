@@ -36,7 +36,9 @@ import sentiment as sent
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".."))
 LEDGER_PATH = os.path.join(ROOT, "extensions", "installed", "paper_trade", "data", "account.json")
+LEDGER_DIR = os.path.dirname(LEDGER_PATH)
 TICKER_URL = "https://api.binance.us/api/v3/ticker/price?symbol={}"
+STOCK_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range=1d"
 DECIDE_URL = "http://127.0.0.1:8001/market/paper_decide"
 CTX = ssl.create_default_context(cafile=certifi.where())
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
@@ -48,15 +50,32 @@ FEE = 0.0020              # round-trip spread, fraction
 MAX_SIZE = 1.0
 REBAL_BAND = 0.12         # event-driven: only trade when target exposure shifts > this (of equity)
 INTERVAL = 300            # SCAN news every 5 min; trading is event-driven, not on this clock
-# Tradable universe: liquid coins on the price feed. The LLM tags many entities (MARKET,
-# COINBASE, ALIBABA, ...); only these are traded/charted, so noise never becomes a position.
-TRADABLE = {"BTC", "ETH", "SOL", "DOGE", "XRP", "LINK", "AVAX", "ADA", "LTC", "BCH", "DOT",
-            "ATOM", "NEAR", "UNI", "XLM", "AAVE", "SHIB", "PEPE", "ARB", "OP", "APT", "SUI", "HYPE"}
+# Tradable universes by market. The LLM tags many entities; only names in the universe are
+# traded, so noise never becomes a position. A symbol with no live price is silently skipped,
+# so a generous list is safe (dead tickers just never trade).
+# Barbell, grounded in the sentiment-trading research: liquid crypto majors (where news sentiment
+# actually links to price) + the high-retail-attention meme tier (strong signal, size small). Crypto
+# breadth is mostly illusory (majors correlate >0.85 in stress), so this stays focused, not sprawling.
+TRADABLE = {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "LINK", "LTC", "BCH", "TRX",
+            "DOT", "UNI", "ATOM", "NEAR", "APT", "SUI", "XLM", "AAVE",
+            "SHIB", "PEPE", "WIF", "BONK", "FLOKI"}
+# US equities: highest retail-attention / most news-covered names (where breadth genuinely helps),
+# plus SPY/QQQ as macro proxies / broad-stock benchmark.
+STOCK_UNIVERSE = {"TSLA", "NVDA", "AAPL", "AMZN", "MSFT", "GOOGL", "META", "AMD", "PLTR", "GME",
+                  "AMC", "HOOD", "SMCI", "SOUN", "COIN", "MSTR", "SOFI", "NIO", "RIVN", "INTC",
+                  "NFLX", "BABA", "SHOP", "F", "BA", "DIS", "PFE", "SPY", "QQQ"}
+ET_ZONE = "America/New_York"
+MKT_OPEN_MIN = 9 * 60 + 30        # US equities regular session open, 09:30 ET
+MKT_CLOSE_MIN = 16 * 60           # close, 16:00 ET
 
 # ------------------------------------------------------------------------------------
-# Prices + ledger
+# Prices (market-aware) + ledger
 
-def price(symbol):
+def price(symbol, market="crypto"):
+    """Live price for a symbol. crypto -> Binance.US spot; stocks -> Yahoo Finance quote. None
+    on any failure (caller skips symbols with no price), so an unknown ticker never crashes a tick."""
+    if market == "stocks":
+        return stock_price(symbol)
     try:
         req = urllib.request.Request(TICKER_URL.format(symbol), headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=TIMEOUT, context=CTX) as r:
@@ -65,22 +84,68 @@ def price(symbol):
         return None
 
 
-def load_ledger():
-    if os.path.isfile(LEDGER_PATH):
+def stock_price(ticker):
+    try:
+        req = urllib.request.Request(STOCK_URL.format(ticker), headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=TIMEOUT, context=CTX) as r:
+            d = json.loads(r.read())
+        return float(d["chart"]["result"][0]["meta"]["regularMarketPrice"])
+    except Exception:
+        return None
+
+
+def universe(market="crypto"):
+    return STOCK_UNIVERSE if market == "stocks" else TRADABLE
+
+
+def sym_for(asset, market="crypto"):
+    """Trade symbol for an asset: crypto appends the quote (BTC -> BTCUSDT); stocks use the bare ticker."""
+    return asset if market == "stocks" else asset + QUOTE
+
+
+def _is_market_hours(now):
+    if now.weekday() >= 5:
+        return False
+    m = now.hour * 60 + now.minute
+    return MKT_OPEN_MIN <= m < MKT_CLOSE_MIN
+
+
+def market_open(market):
+    """True when the market is tradable now. Crypto trades 24/7; stocks only in the US regular
+    session, because the free Yahoo quote freezes after hours, so trading then is pure fee loss."""
+    if market != "stocks":
+        return True
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return _is_market_hours(datetime.now(ZoneInfo(ET_ZONE)))
+    except Exception:
+        return True
+
+
+def ledger_for(label):
+    """Path to a named run's ledger. 'main' (or empty) -> the default account.json; any other
+    label (e.g. an A/B arm 'btc'/'doge') gets its own account_<label>.json, so multiple runs
+    never share a ledger."""
+    return LEDGER_PATH if (not label or label == "main") else os.path.join(LEDGER_DIR, f"account_{label}.json")
+
+
+def load_ledger(path=LEDGER_PATH):
+    if os.path.isfile(path):
         try:
-            with open(LEDGER_PATH) as f:
+            with open(path) as f:
                 return json.load(f)
         except (OSError, ValueError):
             pass
     return {"cash": START_CASH, "positions": {}, "start_cash": START_CASH, "history": []}
 
 
-def save_ledger(led):
-    os.makedirs(os.path.dirname(LEDGER_PATH), exist_ok=True)
-    tmp = LEDGER_PATH + ".tmp"
+def save_ledger(led, path=LEDGER_PATH):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(led, f)
-    os.replace(tmp, LEDGER_PATH)
+    os.replace(tmp, path)
 
 
 def equity(led, prices):
@@ -94,22 +159,24 @@ def equity(led, prices):
 # ------------------------------------------------------------------------------------
 # Signal -> targets -> rebalance
 
-def targets(signal, gate, max_size, focus=None):
-    """Per-symbol target long exposure (0..1) from per-asset sentiment. Long-only: positive
-    sentiment above the gate -> sized long; otherwise flat. MARKET/unknown assets skipped.
-    When `focus` is a ticker, only that coin is eligible (single-token mode)."""
+def targets(signal, gate, max_size, focus=None, market="crypto", mode="follow"):
+    """Per-symbol target long exposure (0..1) from per-asset sentiment. Long-only. `mode`:
+    'follow' (momentum) sizes long on POSITIVE sentiment; 'fade' (contrarian) sizes long on
+    NEGATIVE sentiment (the research says news sentiment mean-reverts, so fading the spike is the
+    other hypothesis worth testing). Only names in the market's universe; focus restricts to one."""
     out = {}
     foc = (focus or "").upper() or None
+    uni = universe(market)
     for asset, v in signal.items():
-        if asset not in TRADABLE:
+        if asset not in uni:
             continue
         if foc and asset != foc:
             continue
-        s = v["score"]
-        if s >= gate:
-            out[asset + QUOTE] = min(max_size, max(0.0, s))
+        sig = v["score"] if mode != "fade" else -v["score"]
+        if sig >= gate:
+            out[sym_for(asset, market)] = min(max_size, max(0.0, sig))
     total = sum(out.values())
-    if total > 1.0:                       # long-only spot: never deploy over 100% of equity (no leverage)
+    if total > 1.0:                       # long-only: never deploy over 100% of equity (no leverage)
         out = {k: w / total for k, w in out.items()}
     return out
 
@@ -156,40 +223,49 @@ def rebalance(led, tgt, prices, fee, band):
 
 _SCORE_CACHE = {}        # title -> parsed score; only NEW headlines hit the model each scan
 
-def tick(model, provider, gate, max_size, fee, use_chart, source, band, focus=None):
-    items = scraper.scrape(limit=20, focus=focus)
+def tick(model, provider, gate, max_size, fee, use_chart, source, band, focus=None, ledger_path=LEDGER_PATH,
+         market="crypto", mode="follow", risk_off=True):
+    items = scraper.scrape(limit=20, focus=focus, market=market)
     scored = sent.score_items(items, provider=provider, model=model, cache=_SCORE_CACHE)
     if len(_SCORE_CACHE) > 2000:
         _SCORE_CACHE.clear()
     signal = sent.aggregate(scored)
-    led = load_ledger()
-    tgt = targets(signal, gate, max_size, focus)
-    if use_chart:
+    led = load_ledger(ledger_path)
+    tgt = targets(signal, gate, max_size, focus, market, mode)
+    # Research-backed macro risk-off gate (the one documented drawdown-reducer): when broad MARKET
+    # sentiment is strongly negative, cut new long exposure hard (follow mode only; fade wants the dip).
+    if risk_off and mode != "fade":
+        ms = signal.get("MARKET", {}).get("score", 0.0)
+        if ms <= -0.35:
+            tgt = {s: f * 0.25 for s, f in tgt.items()}
+    if use_chart and market == "crypto":
         tgt = {s: f for s, f in tgt.items() if chart_ok(s, source, model)}
-    track = [a for a in signal if a in TRADABLE]
+    uni = universe(market)
+    track = [a for a in signal if a in uni]
     foc = (focus or "").upper()
-    if foc and foc in TRADABLE and foc not in track:
+    if foc and foc in uni and foc not in track:
         track.append(foc)
-    syms = set(tgt) | set(led["positions"]) | {a + QUOTE for a in track} | {"BTC" + QUOTE}
-    prices = {s: price(s) for s in syms}
-    acts = rebalance(led, tgt, prices, fee, band)
+    bench_asset = foc if (foc and foc in uni) else ("SPY" if market == "stocks" else "BTC")
+    syms = set(tgt) | set(led["positions"]) | {sym_for(a, market) for a in track} | {sym_for(bench_asset, market)}
+    prices = {s: price(s, market) for s in syms}
+    acts = rebalance(led, tgt, prices, fee, band) if market_open(market) else []
     eq = equity(led, prices)
-    led["history"].append({"t": int(time.time()), "equity": round(eq, 2),
-                           "btc": prices.get("BTC" + QUOTE),
+    led["history"].append({"t": int(time.time()), "equity": round(eq, 2), "market": market,
+                           "bench_px": prices.get(sym_for(bench_asset, market)), "bench_asset": bench_asset,
                            "signal": {a: round(signal[a]["score"], 3) for a in track if a in signal},
-                           "prices": {a: prices.get(a + QUOTE) for a in track if prices.get(a + QUOTE)},
+                           "prices": {a: prices.get(sym_for(a, market)) for a in track if prices.get(sym_for(a, market))},
                            "acts": acts})
     led["history"] = led["history"][-1000:]
-    save_ledger(led)
+    save_ledger(led, ledger_path)
     return {"equity": eq, "pnl": eq - led["start_cash"], "signal": signal, "acts": acts, "n_scored": len(scored)}
 
 
-def loop(model, provider, gate, max_size, fee, use_chart, source, interval, band, focus=None):
-    print(f"news_trader [PAPER] model={model or '(configured)'} focus={focus or 'all'} gate={gate} "
-          f"fee={fee*1e4:.0f}bps band={band} scan every {interval}s (trades event-driven) -> {LEDGER_PATH}", flush=True)
+def loop(model, provider, gate, max_size, fee, use_chart, source, interval, band, focus=None, ledger_path=LEDGER_PATH, market="crypto"):
+    print(f"news_trader [PAPER] model={model or '(configured)'} market={market} focus={focus or 'all'} gate={gate} "
+          f"fee={fee*1e4:.0f}bps band={band} scan every {interval}s (trades event-driven) -> {ledger_path}", flush=True)
     while True:
         try:
-            r = tick(model, provider, gate, max_size, fee, use_chart, source, band, focus)
+            r = tick(model, provider, gate, max_size, fee, use_chart, source, band, focus, ledger_path, market)
             pos = ", ".join(f"{a}={v['score']:+.2f}" for a, v in sorted(r["signal"].items())[:6])
             print(f"{time.strftime('%H:%M:%S')} eq=${r['equity']:,.2f} pnl=${r['pnl']:+,.2f} "
                   f"scored={r['n_scored']} acts={len(r['acts'])} | {pos}", flush=True)
@@ -200,39 +276,73 @@ def loop(model, provider, gate, max_size, fee, use_chart, source, interval, band
 # ------------------------------------------------------------------------------------
 # Managed thread (UI start/stop from the dashboard)
 
-_RUN = {"thread": None, "stop": None, "cfg": {}}
+_RUNS = {}          # label -> {"thread", "stop", "cfg"}; supports concurrent runs on separate ledgers
 
-def start_thread(model, provider, gate, max_size, fee, use_chart, source, interval, band, focus=None):
-    if _RUN["thread"] and _RUN["thread"].is_alive():
+def start_thread(model, provider, gate, max_size, fee, use_chart, source, interval, band, focus=None,
+                 label="main", market="crypto", mode="follow", risk_off=True):
+    r = _RUNS.get(label)
+    if r and r["thread"] and r["thread"].is_alive():
         return False
+    ledger_path = ledger_for(label)
     ev = threading.Event()
-    _RUN["stop"] = ev
-    _RUN["cfg"] = {"model": model, "gate": gate, "interval": interval, "band": band, "focus": focus or "all",
-                   "source": source, "fee_bps": round(fee * 1e4, 1), "started": int(time.time())}
+    # cfg is the LIVE config: each tick reads from it, so update_run() changes take effect with no restart.
+    cfg = {"label": label, "model": model, "provider": provider, "gate": gate, "max_size": max_size,
+           "fee": fee, "use_chart": use_chart, "source": source, "interval": interval, "band": band,
+           "focus": focus, "market": market, "mode": mode, "risk_off": risk_off,
+           "fee_bps": round(fee * 1e4, 1), "started": int(time.time())}
+    _RUNS[label] = {"thread": None, "stop": ev, "cfg": cfg}
 
     def _run():
         while not ev.is_set():
+            c = _RUNS.get(label, {}).get("cfg", cfg)
             try:
-                tick(model, provider, gate, max_size, fee, use_chart, source, band, focus)
+                tick(c["model"], c["provider"], c["gate"], c["max_size"], c["fee"], c["use_chart"],
+                     c["source"], c["band"], c["focus"], ledger_path, c.get("market", "crypto"),
+                     c.get("mode", "follow"), c.get("risk_off", True))
             except Exception:
                 pass
-            ev.wait(interval)
-    t = threading.Thread(target=_run, name="news-trader", daemon=True)
-    _RUN["thread"] = t
+            ev.wait(max(15, int(c.get("interval", interval))))
+    t = threading.Thread(target=_run, name=f"news-trader-{label}", daemon=True)
+    _RUNS[label]["thread"] = t
     t.start()
     return True
 
 
-def stop_thread():
-    if _RUN["stop"]:
-        _RUN["stop"].set()
-    _RUN["thread"] = None
+def update_run(label="main", **changes):
+    """Mutate a RUNNING run's live config in place (model, gate, band, interval, focus, market, ...).
+    The loop picks up the change on its next tick. No restart, ledger untouched. False if not running."""
+    r = _RUNS.get(label)
+    if not (r and r["thread"] and r["thread"].is_alive()):
+        return False
+    cfg = r["cfg"]
+    for k in ("model", "provider", "gate", "band", "interval", "focus", "use_chart", "source",
+              "max_size", "fee", "market", "mode", "risk_off"):
+        if k in changes and (changes[k] is not None or k == "focus"):   # focus may be cleared to None (AUTO)
+            cfg[k] = changes[k]
+    cfg["fee_bps"] = round(cfg["fee"] * 1e4, 1)
     return True
 
 
-def status():
-    alive = bool(_RUN["thread"] and _RUN["thread"].is_alive())
-    return {"running": alive, **(_RUN.get("cfg", {}) if alive else {})}
+def stop_thread(label="main"):
+    if label is None:                       # stop every run
+        for lbl in list(_RUNS):
+            stop_thread(lbl)
+        return True
+    r = _RUNS.get(label)
+    if r and r["stop"]:
+        r["stop"].set()
+    _RUNS.pop(label, None)
+    return True
+
+
+def status(label="main"):
+    r = _RUNS.get(label)
+    alive = bool(r and r["thread"] and r["thread"].is_alive())
+    return {"running": alive, **(r["cfg"] if (alive and r) else {})}
+
+
+def status_all():
+    return {lbl: status(lbl) for lbl in list(_RUNS)}
 
 # ------------------------------------------------------------------------------------
 # CLI
@@ -249,14 +359,17 @@ def main():
     p.add_argument("--interval", type=int, default=INTERVAL, help="seconds between news scans")
     p.add_argument("--band", type=float, default=REBAL_BAND, help="event-driven rebalance deadband (of equity)")
     p.add_argument("--focus", default=None, help="trade only this ticker (e.g. SOL); also focuses the news pull")
+    p.add_argument("--market", default="crypto", choices=["crypto", "stocks"], help="crypto (Binance.US) or stocks (Yahoo)")
+    p.add_argument("--label", default="main", help="named run -> its own ledger account_<label>.json")
     p.add_argument("--once", action="store_true", help="run a single tick and exit")
     a = p.parse_args()
+    ledger_path = ledger_for(a.label)
     if a.once:
-        r = tick(a.model, a.provider, a.gate, a.max_size, a.fee_bps / 1e4, a.use_chart, a.source, a.band, a.focus)
+        r = tick(a.model, a.provider, a.gate, a.max_size, a.fee_bps / 1e4, a.use_chart, a.source, a.band, a.focus, ledger_path, a.market)
         print(json.dumps({"equity": r["equity"], "pnl": r["pnl"], "acts": r["acts"],
                           "signal": {k: round(v["score"], 3) for k, v in r["signal"].items()}}, indent=2))
         return
-    loop(a.model, a.provider, a.gate, a.max_size, a.fee_bps / 1e4, a.use_chart, a.source, a.interval, a.band, a.focus)
+    loop(a.model, a.provider, a.gate, a.max_size, a.fee_bps / 1e4, a.use_chart, a.source, a.interval, a.band, a.focus, ledger_path, a.market)
 
 
 if __name__ == "__main__":

@@ -44,6 +44,22 @@ TOKEN_NAMES = {
     "ARB": ["Arbitrum", "ARB"], "OP": ["Optimism crypto", "OP token"], "APT": ["Aptos", "APT"],
     "SUI": ["Sui crypto", "SUI"], "HYPE": ["Hyperliquid", "HYPE"],
 }
+# Stocks: general financial feeds (broad market/macro) + ticker -> company names for focused pulls.
+STOCK_FEEDS = [
+    ("marketwatch", "https://feeds.marketwatch.com/marketwatch/topstories/"),
+    ("cnbc", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"),
+    ("yahoofinance", "https://finance.yahoo.com/news/rssindex"),
+]
+STOCK_NAMES = {
+    "AAPL": ["Apple"], "MSFT": ["Microsoft"], "NVDA": ["Nvidia"], "TSLA": ["Tesla"],
+    "AMZN": ["Amazon"], "GOOGL": ["Google", "Alphabet"], "META": ["Meta", "Facebook"],
+    "AMD": ["AMD"], "NFLX": ["Netflix"], "INTC": ["Intel"], "BA": ["Boeing"], "DIS": ["Disney"],
+    "PYPL": ["PayPal"], "COIN": ["Coinbase"], "MSTR": ["MicroStrategy", "Strategy stock"],
+    "GME": ["GameStop"], "AMC": ["AMC Entertainment"], "PLTR": ["Palantir"], "SOFI": ["SoFi"],
+    "NIO": ["NIO"], "RIVN": ["Rivian"], "LCID": ["Lucid Motors"], "F": ["Ford Motor"],
+    "JPM": ["JPMorgan"], "BAC": ["Bank of America"], "WMT": ["Walmart"], "KO": ["Coca-Cola"],
+    "PFE": ["Pfizer"], "MRNA": ["Moderna"], "SPY": ["S&P 500"], "QQQ": ["Nasdaq 100"],
+}
 GNEWS_URL = "https://news.google.com/rss/search?q={}&hl=en-US&gl=US&ceid=US:en"
 FNG_URL = "https://api.alternative.me/fng/?limit=1&format=json"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
@@ -97,21 +113,28 @@ def fear_greed():
         return None
 
 
-def gnews(names):
-    """Google News search RSS for a token's names -> token-specific headlines."""
-    q = " OR ".join(f'"{n}"' for n in names) + " cryptocurrency"
+def gnews(names, qualifier="cryptocurrency"):
+    """Google News search RSS for a name's aliases -> focused headlines (qualifier disambiguates,
+    e.g. 'cryptocurrency' or 'stock')."""
+    q = " OR ".join(f'"{n}"' for n in names) + " " + qualifier
     return fetch_rss("googlenews", GNEWS_URL.format(urllib.parse.quote(q)))
 
 
-def scrape(limit=40, focus=None):
-    """Recent crypto headlines, deduped by title. When `focus` is a ticker (e.g. SOL), pull a
-    token-specific Google News query first and rank headlines mentioning that coin to the top, so
-    choosing a coin automatically focuses the news the model reads. Otherwise: all feeds, newest first."""
-    names = TOKEN_NAMES.get((focus or "").upper())
+def scrape(limit=40, focus=None, market="crypto"):
+    """Recent headlines for a market, deduped by title. `market` picks the feed set (crypto RSS vs
+    general financial RSS). When `focus` is a ticker (SOL, NVDA), a Google News query for that
+    name is pulled first and matching headlines rank to the top, so choosing an asset auto-focuses
+    the news. With no focus it scans the broad feeds (general crypto, or general market/macro)."""
+    if market == "stocks":
+        names = STOCK_NAMES.get((focus or "").upper())
+        feeds, qual = STOCK_FEEDS, "stock"
+    else:
+        names = TOKEN_NAMES.get((focus or "").upper())
+        feeds, qual = NEWS_FEEDS, "cryptocurrency"
     items, seen = [], set()
-    sources = ([("googlenews", None)] if names else []) + NEWS_FEEDS
+    sources = ([("googlenews", None)] if names else []) + feeds
     for source, url in sources:
-        feed = gnews(names) if url is None else fetch_rss(source, url)
+        feed = gnews(names, qual) if url is None else fetch_rss(source, url)
         for it in feed:
             key = it["title"].lower()
             if key in seen:

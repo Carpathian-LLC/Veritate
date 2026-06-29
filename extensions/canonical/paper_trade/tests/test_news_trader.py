@@ -78,3 +78,20 @@ def test_rebalance_deadband_skips_small_drift():
     led = _fresh(); led["positions"]["BTCUSDT"] = 50.0; led["cash"] = 4990.0   # ~50% exposure
     acts = nt.rebalance(led, {"BTCUSDT": 0.55}, {"BTCUSDT": 100.0}, 0.002, 0.12)  # +5% < band
     assert acts == []
+
+# ------------------------------------------------------------------------------------
+# market hours (stocks only trade when the exchange is open)
+
+def test_market_open_crypto_always():
+    """Crypto is 24/7, so market_open('crypto') is always True."""
+    assert nt.market_open("crypto") is True
+
+
+def test_is_market_hours_gates_us_session():
+    """US equity gate: open midday on a weekday, closed after hours and on weekends."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    et = ZoneInfo("America/New_York")
+    assert nt._is_market_hours(datetime(2026, 6, 17, 10, 0, tzinfo=et)) is True    # Wed 10:00 ET
+    assert nt._is_market_hours(datetime(2026, 6, 17, 20, 0, tzinfo=et)) is False   # Wed 20:00 ET
+    assert nt._is_market_hours(datetime(2026, 6, 20, 11, 0, tzinfo=et)) is False   # Saturday
