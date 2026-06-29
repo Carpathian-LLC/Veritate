@@ -4,12 +4,17 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - phones home to carpathian.ai every HEARTBEAT_INTERVAL_SECS while idle (5min)
-#   and every HEARTBEAT_INTERVAL_TRAINING_SECS (60s) while a training run is
-#   active, so the dashboard keeps the device flagged active through long runs.
-#   tiny json payload: machine_id, version, uptime, total_runtime, restarts,
-#   errors, models hash, optional active_training. opt-out via
-#   settings.heartbeat_enabled.
+# - two independent sends to the same HEARTBEAT_URL, distinguished by the
+#   payload "kind" field, one daemon thread:
+#   1. presence (kind="presence") every HEARTBEAT_INTERVAL_SECS while idle
+#      (5min) / HEARTBEAT_INTERVAL_TRAINING_SECS (60s) while training, so the
+#      dashboard keeps the device flagged active. ALWAYS minimal + bounded:
+#      machine_id, version, uptime, restarts, error count, small analytics +
+#      training presence. Never carries logs, so it never trips the webhook
+#      size limit (413) and the online count stays reliable.
+#   2. diagnostics (kind="diagnostics") every HEARTBEAT_DIAGNOSTICS_INTERVAL_SECS
+#      when diagnostics_logs_enabled. Carries the heavy specs + log tails. A
+#      413 here can never knock out presence reporting.
 # - state persisted at data/heartbeat_state.json. one daemon thread, one socket
 #   connection per ping, no deps beyond stdlib + readers.
 # veritate_mri/runtime/heartbeat.py
@@ -39,18 +44,22 @@ from readers import paths, models as models_reader
 from . import logs as logmod
 from . import settings as settings_mod
 from . import sys_metrics
-from . import sys_metrics
 
 # ------------------------------------------------------------------------------------
 # Constants
 
 HEARTBEAT_URL          = "https://api.carpathian.ai/webhook/veritate-heartbeat"
+PAYLOAD_KIND_PRESENCE    = "presence"
+PAYLOAD_KIND_DIAGNOSTICS = "diagnostics"
 # Cadence: idle gets a tight 5-minute pulse, training drops to a 60-second
 # pulse so the dashboard server can keep the device flagged "active" through
 # multi-hour runs. The previous 6h interval let the server's online window
 # expire mid-run, which is why training devices were showing as idle.
 HEARTBEAT_INTERVAL_SECS          = 5 * 60
 HEARTBEAT_INTERVAL_TRAINING_SECS = 60
+# Diagnostics are not presence: a slow cadence is plenty and keeps the heavy
+# payload off the wire most of the time.
+HEARTBEAT_DIAGNOSTICS_INTERVAL_SECS = 5 * 60
 # +/- jitter applied to every scheduled send. Spreads thundering herds when
 # many clients restart at once (release rollout, regional power blip, etc).
 HEARTBEAT_JITTER_FRAC   = 0.10
@@ -298,6 +307,7 @@ def _build_payload(peek=False):
     err_count, err_detail = _consume_errors(with_detail=send_errors, peek=peek)
     payload = {
         "v":           PROTOCOL_VERSION,
+        "kind":        PAYLOAD_KIND_PRESENCE,
         "machine_id":  _machine_id(),
         "device_id":   _effective_device_id(),
         "ts":          int(time.time()),
@@ -338,11 +348,28 @@ def _build_payload(peek=False):
         pend = s.get("pending_training_events") or []
         if isinstance(pend, list) and pend:
             payload["trainings"] = pend[:TRAINING_EVENTS_PER_PING_MAX]
-    if bool(cfg.get("diagnostics_logs_enabled")):
-        diag = _diagnostics_block()
-        if diag is not None:
-            payload["diagnostics"] = diag
     return payload
+
+
+def _diagnostics_payload():
+    """Self-contained diagnostics envelope (kind="diagnostics") posted to the
+    same HEARTBEAT_URL as presence, separate from the presence ping. Carries
+    machine_id + ts so the server can attribute the logs, then the bounded
+    diagnostics block. Returns None when diagnostics are disabled or the block
+    is empty so nothing is sent."""
+    if not bool(settings_mod.get().get("diagnostics_logs_enabled")):
+        return None
+    block = _diagnostics_block()
+    if block is None:
+        return None
+    return {
+        "v":          PROTOCOL_VERSION,
+        "kind":       PAYLOAD_KIND_DIAGNOSTICS,
+        "machine_id": _machine_id(),
+        "device_id":  _effective_device_id(),
+        "ts":         int(time.time()),
+        "diagnostics": block,
+    }
 
 
 def _path_scrub_pairs():
@@ -448,17 +475,22 @@ def _diagnostics_block():
 
 
 def preview_payload():
-    """Return exactly what _build_payload() would emit right now. Used by the
+    """Return both wire payloads as they'd be emitted right now: the presence
+    heartbeat and, when enabled, the separate diagnostics envelope. Used by the
     settings-tab 'preview the payload' button so users see precisely what is
     sent under their current consent flags. Non-mutating: doesn't drain the
     error queue or count this toward the runtime accumulator."""
-    return _build_payload(peek=True)
+    out = {"heartbeat": _build_payload(peek=True)}
+    diag = _diagnostics_payload()
+    if diag is not None:
+        out["diagnostics"] = diag
+    return out
 
 
-def _post(payload):
+def _post(url, payload):
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     req = urllib.request.Request(
-        HEARTBEAT_URL,
+        url,
         data=body,
         method="POST",
         headers={
@@ -476,7 +508,7 @@ def _send_once():
     sent_trainings = payload.get("trainings") or []
     sent_hw        = payload.get("hw") is not None
     try:
-        status = _post(payload)
+        status = _post(HEARTBEAT_URL, payload)
         patch = {
             "last_send_ts":     int(time.time()),
             "last_send_status": int(status),
@@ -514,6 +546,29 @@ def _send_once():
         return False
 
 
+def _send_diagnostics_once():
+    """Posts the diagnostics envelope to HEARTBEAT_URL. No-op when disabled
+    or empty. Failures are logged under the 'diagnostics' source so they never
+    masquerade as presence-heartbeat failures."""
+    payload = _diagnostics_payload()
+    if payload is None:
+        return False
+    try:
+        _post(HEARTBEAT_URL, payload)
+        return True
+    except urllib.error.HTTPError as e:
+        body_excerpt = ""
+        try:
+            body_excerpt = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            pass
+        logmod.warn("diagnostics", f"send failed: http {e.code}: {body_excerpt or e.reason}")
+        return False
+    except (urllib.error.URLError, socket.timeout, OSError) as e:
+        logmod.warn("diagnostics", f"send failed: {type(e).__name__}: {e}")
+        return False
+
+
 def _enabled():
     s = settings_mod.get()
     return bool(s.get("heartbeat_enabled"))
@@ -545,6 +600,7 @@ def _training_signature():
 def _loop():
     last_persist = time.monotonic()
     next_send    = time.monotonic() + HEARTBEAT_FIRST_DELAY
+    next_diag    = time.monotonic() + HEARTBEAT_FIRST_DELAY
     last_train   = _training_signature()
     while True:
         time.sleep(HEARTBEAT_LOOP_TICK_SECS)
@@ -557,6 +613,9 @@ def _loop():
             next_send = now + _jittered_interval(False)
             last_train = _training_signature()
             continue
+        if now >= next_diag:
+            _send_diagnostics_once()
+            next_diag = now + HEARTBEAT_DIAGNOSTICS_INTERVAL_SECS
         cur_train = _training_signature()
         training_active = cur_train is not None
         # Edge-triggered ping on training start/stop. Lets the server flip the

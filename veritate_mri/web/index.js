@@ -2758,7 +2758,7 @@ async function ensureLearningLoaded() {
     // not "hookless" — those panels will still render.
     const noHooksWarn = (tlEntry.has_hooks === false)
       ? `<div class="meta" style="margin-top:8px;padding:8px 10px;border:1px solid var(--warm);border-radius:3px;color:var(--warm);font-size:11.5px;line-height:1.45">
-          <b>No hook artifacts for this model yet.</b> Checkpoints (.pt) are present but the per-step probe / lens / classroom / generation dumps were not written. Either training has not reached its first save_checkpoint yet, or this trainer has not been ported to the <code>hook_spec()</code> contract (see documentation/hooks/contract.md). Outputs / quant-KL / classroom panels will stay empty until hooks land.
+          <b>No hook artifacts for this model yet.</b> Checkpoints (.pt) are present but the per-step probe / lens / classroom / generation dumps were not written. Either training has not reached its first save_checkpoint yet, or this trainer has not been ported to the <code>hook_spec()</code> contract (see developer_documentation/hooks/contract.md). Outputs / quant-KL / classroom panels will stay empty until hooks land.
         </div>`
       : "";
     $("learningStatus").innerHTML = `
@@ -5775,6 +5775,24 @@ function render_reading_comprehension(refs, run, compSteps, compByStep, haveChec
 // load classroom panels for a model name into the supplied (state, refs) pair.
 // state holds the cached config/steps/probes/lens; refs hold the dom IDs / canvas to render into.
 // shared by the live-training tab (trainSelectedRun) and the learning tab (timeline picker).
+// Language probe panels are meaningless for a code/statistical/other model. When the
+// selected run's config says it is not a language model, hide those panels so the tab
+// shows only the universal metrics (size, lens drift, confidence). The backend skips
+// computing these probes for such models, so the panels would be empty anyway.
+function applyEvalGate(refs, config) {
+  const mtype = ((config && config.training_args && config.training_args.model_type) || "language").toLowerCase();
+  const lang = mtype === "language";
+  const langPanelIds = [refs.readLevelId, refs.readingCompId, refs.mathLevelId,
+                        refs.grammarLevelId, refs.reasoningLevelId, refs.writingHealthId, refs.conceptsId];
+  for (const id of langPanelIds) {
+    if (!id) continue;
+    const el = $(id);
+    const panel = el && el.closest(".panel");
+    if (panel) panel.style.display = lang ? "" : "none";
+  }
+  document.querySelectorAll('[data-eval="language"]').forEach(el => { el.style.display = lang ? "" : "none"; });
+}
+
 async function loadClassroomFor(state, refs, run) {
   if (!run) return;
   if (state.run === run && state.loaded && state.steps.length > 0) return;
@@ -5815,6 +5833,7 @@ async function loadClassroomFor(state, refs, run) {
     const r = await fetch(`/run/${encodeURIComponent(run)}/config?` + Date.now(), { cache: "no-store" });
     if (r.ok) state.config = await r.json();
   } catch (e) {}
+  applyEvalGate(refs, state.config);
   render_size_meter(refs, run, state.config);
   if (refs.pruneBodyId) load_pruning_report(refs, run);
   // probes index
@@ -6935,6 +6954,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 const trainState = {
   list: [],
+  loaded: false,  // first /trainers response received
   flow: null,
   selected: null,
   running: { status: "idle" },
@@ -6986,19 +7006,18 @@ function _trBuildInput(a) {
         : (source === "shared" ? "the shared corpus folder (trainers/corpus/)" : "any corpus folder");
       return `<p class="train-no-corpus-error">No training data file found in ${what}. Drop a <code>&lt;name&gt;_train.bin</code> file at ${where}, then click <i>refresh</i>.</p><input type="hidden" data-arg="${_trEsc(name)}" value="">`;
     }
-    // Multi-select: cmd/ctrl-click to pick more than one corpus. Submit joins
-    // selections with "+" -> the trainer's multicorpus helper handles weighting.
-    // Pre-fill: parse existing def, supports "a", "a+b+c", or "a:0.5,b:0.3"
-    // by extracting bare stems so the dropdown can reflect them.
+    // Collapsed checkbox picker. The hidden input carries the joined "+"
+    // stem list (multicorpus handles weighting); the summary echoes it.
     const selectedSet = new Set(
       String(def || "").split(/[+,]/).map(s => s.split(":")[0].trim()).filter(Boolean)
     );
-    const visible = Math.max(2, Math.min(6, filtered.length));
-    const opts = filtered.map(c =>
-      `<option value="${_trEsc(c.stem)}" ${selectedSet.has(c.stem) ? "selected" : ""}>${_trEsc(c.label)}</option>`
+    const initial = filtered.filter(c => selectedSet.has(c.stem)).map(c => c.stem);
+    const boxes = filtered.map(c =>
+      `<label class="corpus-opt"><input type="checkbox" value="${_trEsc(c.stem)}" ${selectedSet.has(c.stem) ? "checked" : ""}><span>${_trEsc(c.label)}</span></label>`
     ).join("");
-    return `<select multiple data-arg="${_trEsc(name)}" data-arg-kind="corpus" size="${visible}" style="${inputBase};height:auto">${opts}</select>` +
-           `<div style="font-size:10.5px;color:var(--dim);margin-top:3px">cmd/ctrl-click to mix multiple corpora &mdash; sampling is size-weighted. blank = reuse original on resume.</div>`;
+    return `<details class="corpus-picker"><summary data-corpus-summary>${initial.length ? _trEsc(initial.join(" + ")) : "pick training data"}</summary>` +
+           `<div class="corpus-list">${boxes}<div class="corpus-note">check several to mix &mdash; sampling is size-weighted. blank = reuse original on resume.</div></div></details>` +
+           `<input type="hidden" data-arg="${_trEsc(name)}" data-arg-kind="corpus" value="${_trEsc(initial.join("+"))}">`;
   }
   if (t === "model_name") {
     const opts = ['<option value="">- pick a model -</option>']
@@ -7022,9 +7041,6 @@ function _trArgVal(name) {
   const el = _trArgEl(name);
   if (!el) return "";
   if (el.type === "checkbox") return !!el.checked;
-  // Multi-select (corpus mix): join selections with "+" so the trainer's
-  // multicorpus.parse_spec sees an additive spec.
-  if (el.multiple) return Array.from(el.selectedOptions).map(o => o.value).join("+");
   return el.value;
 }
 
@@ -7044,7 +7060,7 @@ function _trUpdateComposedName() {
   const out = _trEl("trainComposedName");
   if (!out) return;
   const name      = _trArgVal("name");
-  const size      = _trArgVal("size");
+  const size      = _trResolvedSize();
   const corpus    = _trArgVal("corpus");
   const precision = _trArgVal("precision");
   const version   = _trArgVal("version");
@@ -7111,6 +7127,15 @@ function _trSizeShape(size) {
   return (size && t[size]) ? t[size] : null;
 }
 
+// Size is fixed per trainer (single-entry sizes table); the form only renders
+// a size dropdown for multi-size manifests (native trainer).
+function _trResolvedSize() {
+  const v = _trArgVal("size");
+  if (v) return v;
+  const p = (typeof trainState !== "undefined" && trainState) ? trainState.selected : null;
+  return (p && p.manifest && p.manifest.defaults && p.manifest.defaults.size) || "";
+}
+
 // ---------------------------------------------------------------
 // Trainer form schema. The dashboard owns labels, helps, types,
 // choices, and required-flags. Plugin manifests only carry preset
@@ -7122,10 +7147,11 @@ const TRAINER_SCHEMA = {
     // ---- required (every trainer) ----
     { name: "name",         type: "str",    required: true,  label: "model name",               help: "your name for this model; the model size is auto-appended to make the on-disk folder (e.g. 'chatty_otter' becomes 'chatty_otter_85m')." },
     { name: "corpus",       type: "corpus", required: true,  label: "training data file",      help: "the file the model reads." },
-    { name: "size",         type: "str",    required: true,  label: "model size",               help: "bigger = smarter, slower, more VRAM. MoE sizes (the ones with active_params in the trainer's manifest) store all experts on disk but only fire a slice per byte.", choices: _trSizeOrder },
+    { name: "size",         type: "str",    required: true,  label: "model size",               help: "bigger = smarter, slower, more VRAM. Plugin trainers are fixed to one size (the trainer IS the size); this dropdown only appears for multi-size trainers like the native trainer.", choices: _trSizeOrder },
     { name: "precision",    type: "str",    required: true,  label: "number precision",         help: "bf16 = half memory; fp32 = double.", choices: ["bf16","fp32"] },
     { name: "version",      type: "str",                     label: "version tag (optional)",   help: "free-form revision label (v1, v2a, ...); shows up in the description, not the folder name." },
     { name: "description",  type: "text",                    label: "what this model is for",   help: "saved into the model config. If left blank, auto-filled from corpus/size/precision/version/variant." },
+    { name: "model_type",   type: "str",                     label: "model type",               help: "what this model is for. Controls which checkpoint evaluations run: 'language' runs the full language probe suite (fluency, reading, grammar, reasoning, concepts, writing); 'code', 'statistical', and 'other' skip the language tests because they are meaningless for non-text models.", choices: ["language","code","statistical","other"] },
     // ---- standard training loop ----
     { name: "total_steps",  type: "int",   required: true,   label: "total training steps",     help: "the training loop stops when it reaches this many steps. More = longer training, lower final loss, more wall-clock and disk." },
     { name: "batch_size",   type: "int",   required: true,   label: "batch size",               help: "rows processed per step. Higher = faster wall-clock and smoother gradients but more VRAM." },
@@ -7150,7 +7176,6 @@ const TRAINER_SCHEMA = {
     { name: "variant",         type: "str",                   label: "variant tag",             help: "single-token suffix appended to the model dir name (e.g. 'sparse', 'qat'). leave blank for no variant." },
     { name: "n_predict",       type: "int",                   label: "MTP heads (n_predict)",   help: "multi-token-prediction head count; 1 = vanilla, 2 = byte-t+2 head, 4 = 800M-style." },
     { name: "mtp_aux_weight",  type: "float",                 label: "MTP aux weight",          help: "loss weight on the auxiliary MTP heads (heads 1..N-1). 0 = MTP heads untrained." },
-    { name: "l1_lambda",       type: "float",                 label: "L1 sparsity penalty",     help: "coefficient on mean(|post-activation|) loss for sparse-ReLU FFNs. 0 = off." },
     { name: "wsd_decay_frac",  type: "float",                 label: "WSD decay fraction",      help: "fraction of total steps spent in decay phase. typical 0.1." },
     { name: "wsd_decay_kind",  type: "str",                   label: "WSD decay shape",         help: "shape of the LR decay tail.", choices: ["sqrt","linear","cosine"] },
     { name: "hidden",          type: "int",                   label: "hidden width",            help: "transformer hidden dim. plugin-set; rarely edited." },
@@ -7161,8 +7186,6 @@ const TRAINER_SCHEMA = {
     { name: "rope_base",       type: "float",                 label: "RoPE base",               help: "rotary positional base (theta). 10000 = default, higher = longer-context extrapolation." },
     { name: "router_aux_loss_coef", type: "float",            label: "router balance weight",   help: "MoE load-balancing loss coefficient (~0.01). MEGA only." },
     // ---- experimental / test-model clusters (all ADVANCED) ----
-    { name: "rank",            type: "int",        advanced: true, label: "adapter rank",            help: "Multimind M3 only. higher = more adapter memory." },
-    { name: "n_slots",         type: "int",        advanced: true, label: "schema slots",            help: "Multimind M1 only. # of named slots (256 canonical)." },
     { name: "alpha",           type: "float",      advanced: true, label: "adapter write alpha",     help: "M1/M3 only. higher = stronger writes to memory." },
     { name: "inject_layer",    type: "int",        advanced: true, label: "inject layer (-1=auto)",  help: "M1/M3 only. -1 = mid-stack." },
     { name: "init_from",       type: "model_name", advanced: true, label: "init base from model",    help: "M1 only. load base weights, train M1 adapter on top." },
@@ -7172,17 +7195,10 @@ const TRAINER_SCHEMA = {
     { name: "router_topk",     type: "int",        advanced: true, label: "router top-k",            help: "MEGA only. experts that fire per token." },
     { name: "router_aux_loss", type: "float",      advanced: true, label: "router balance weight",   help: "MEGA only. load-balance loss coefficient (~0.01)." },
     // ---- checkboxes (all together at the end) ----
-    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "Trades compute for memory: rerun the forward pass during backward instead of storing every layer's activations. About 30% slower, about 50% less activation VRAM." },
-    { name: "qat_enabled",   type: "bool", featured: true,                  label: "QAT enabled",                help: "Quantization-aware training. Wraps weights + activations + RMSNorm in fake-quant ops (INT8 per-tensor maxabs) during the forward pass; the resulting checkpoint exports to a v9 (canonical trunk) or v12 (MTP head) INT8 engine binary with no post-hoc calibration loss. RoPE trunks (Veritate800M and friends) are still PyTorch-only until a future format ships." },
-    { name: "freeze_base",   type: "bool", featured: true, advanced: true,  label: "freeze base",                help: "Adapter-only training: lock the base trunk so only the adapter (M1/M3) learns. Faster, smaller deltas, lower forgetting." },
-    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "Optimizer state in INT8 instead of FP32. Cuts ~6 bytes/param from VRAM (10 vs 16). Required to fit 1B+ MoE on 12 GB. Tiny convergence cost." },
   ],
   continue: [
     // ---- required ----
     { name: "resume",       type: "model_name", required: true, label: "model to continue", help: "previously-trained model; its config sets shape, corpus, adapter." },
-    // QAT is featured at the top so the canonical "repair my non-QAT model into
-    // an INT8 export" workflow is one click and one resume away.
-    { name: "qat_enabled",   type: "bool", featured: true,      label: "convert this model to INT8 (QAT)", help: "Fine-tune the resumed model under fake-quant ops. Result exports to a v9 INT8 binary (canonical trunk) or v12 (MTP head). Use lr ~1e-5 to avoid breaking the base. New checkpoints overwrite the resumed model's directory; keep a copy of the pre-QAT checkpoint if you want to roll back." },
     // ---- optional corpus override ----
     // The resume-target's config.json holds the original corpus, and
     // apply_resume_overrides() restores it when this field is left blank
@@ -7213,8 +7229,6 @@ const TRAINER_SCHEMA = {
     { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "BPTT depth. 1 = frozen, 4 = balanced, n_chunks = full." },
     { name: "quant_mode",   type: "str", advanced: true,        label: "weight quant mode",     help: "active only when QAT enabled. int8 (default), int4, or ternary (BitNet 1.58).", choices: ["int8","int4","ternary"] },
     // ---- checkboxes (all together at the end; qat_enabled is up top with resume) ----
-    { name: "use_act_ckpt",  type: "bool", featured: true,                  label: "activation checkpointing",   help: "Trades compute for memory: rerun the forward during backward. ~30% slower, ~50% less activation VRAM." },
-    { name: "use_8bit_adam", type: "bool", featured: true, advanced: true,  label: "8-bit AdamW (bitsandbytes)", help: "INT8 optimizer state. Match the original run's setting or VRAM math breaks." },
   ],
 };
 
@@ -7236,6 +7250,9 @@ function _trArgsForPlugin(p) {
   // locked on continue.
   const sch  = TRAINER_SCHEMA[trainState.flow] || [];
   const defs = (p && p.manifest && p.manifest.defaults) || {};
+  // Single-size trainers get no size row: the size is a given of the trainer.
+  const nSizes = Object.keys((p && p.manifest && p.manifest.sizes) || {}).length;
+  const fields = nSizes > 1 ? sch : sch.filter(a => a.name !== "size");
 
   const _withDefault = (base, defaultVal) => {
     const o = Object.assign({}, base, { default: defaultVal });
@@ -7255,7 +7272,7 @@ function _trArgsForPlugin(p) {
     return o;
   };
 
-  return sch.map(a => _withDefault(a, defs[a.name]));
+  return fields.map(a => _withDefault(a, defs[a.name]));
 }
 
 const _TR_CONTINUE_CFG_CACHE = {};
@@ -7309,10 +7326,9 @@ function _trEstimateMemory() {
   let seq         = parseInt(_trArgVal("seq"), 10);
   const batch     = parseInt(_trArgVal("batch_size"), 10);
   const bpttRaw   = parseInt(_trArgVal("bptt_window"), 10);
-  const ckpt      = _trArgEl("use_act_ckpt");
-  const ckptOn    = ckpt && ckpt.type === "checkbox" && ckpt.checked;
-  const a8        = _trArgEl("use_8bit_adam");
-  const adam8On   = a8 && a8.type === "checkbox" && a8.checked;
+  const coreArgs  = _corePluginsArgs();
+  const ckptOn    = !!coreArgs.use_act_ckpt;
+  const adam8On   = !!coreArgs.use_8bit_adam;
 
   if (!size || !precision || !seq) {
     const resumeName = _trArgVal("resume");
@@ -7330,6 +7346,7 @@ function _trEstimateMemory() {
     }
   }
 
+  if (!size) size = _trResolvedSize();
   const sz = _trSizeShape(size);
   if (!sz || !batch || !seq) return null;
 
@@ -7420,19 +7437,19 @@ function _trUpdateVramEstimate() {
     budgetLine;
 }
 
-// Auto-pick training settings. Gated by Advanced telemetry consent + a
-// detected sys_specs file. Fills batch_size, base_lr, use_act_ckpt, and
-// (when total_steps is set) warmup_steps + log/eval/ckpt cadence. Leaves
-// total_steps and architecture-specific knobs to the manifest defaults
-// or the user. The Veritate trainers do not implement gradient
-// accumulation, so batch_size is the effective batch.
-function _trUpdateAutoOptimizeVisibility() {
-  const row  = $("trainAutoOptimizeRow");
-  const help = $("trainAutoOptimizeHelp");
+// Auto tune: measured benchmark via a trainer's --bench mode. Launches the
+// trainer subprocess on throwaway weights, streams its narration from the log
+// ring into the modal, then writes the measured batch/lr/cadence into the
+// trainer manifest (and the form when that trainer is selected). Gated by
+// Advanced telemetry consent + detected specs + an auto-tune-capable trainer.
+function _trUpdateAutoTuneVisibility() {
+  const row  = $("trainAutoTuneRow");
+  const help = $("trainAutoTuneHelp");
   if (!row) return;
   const consent = !!(settingsState.current && settingsState.current.analytics_advanced_enabled);
   const haveSpecs = !!(_sysSpecsCache && _sysSpecsCache.platform);
-  const visible = consent && haveSpecs;
+  const probeable = !!(trainState.selected && trainState.selected.manifest && trainState.selected.manifest.bench);
+  const visible = consent && haveSpecs && probeable;
   row.style.display = visible ? "flex" : "none";
   if (help) help.style.display = visible ? "block" : "none";
 }
@@ -7447,110 +7464,228 @@ function _trSetArgVal(name, val) {
   return true;
 }
 
-function _trAutoOptimize() {
-  const status = $("trainAutoOptimizeStatus");
-  const setStatus = (msg, color) => { if (status) { status.textContent = msg; status.style.color = color || "var(--dim)"; } };
+const _autoTuneState = { es: null, poll: null, plugin: null, result: null, recs: null };
+// Modal uses the Training tab's selected trainer; no separate picker.
 
-  const budget = _trMemoryBudget();
-  if (!budget) { setStatus("no system specs — click 'detect my system' in settings first.", "var(--hot)"); return; }
+function _autoTuneOpen() {
+  const p = trainState.selected;
+  const usable = !!(p && p.manifest && p.manifest.bench);
+  $("autoTuneTrainerName").textContent = usable ? (p.manifest.name || p.id) : "none selected";
+  $("autoTuneStart").disabled = !usable;
+  $("autoTuneLog").style.display = "none";
+  $("autoTuneLog").innerHTML = "";
+  $("autoTuneResults").style.display = "none";
+  $("autoTuneInfeasible").style.display = "none";
+  $("autoTuneStart").style.display = "";
+  $("autoTuneStop").style.display = "none";
+  $("autoTuneApplyStatus").textContent = "";
+  if (!usable) _autoTuneLine("pick a trainer on the Training tab first (step 2).", "var(--warm)");
+  $("autoTuneModal").classList.remove("hidden");
+  document.body.classList.add("no-scroll");
+}
 
-  const plugin  = trainState.selected;
-  const defs    = (plugin && plugin.manifest && plugin.manifest.defaults) || {};
+function _autoTuneLine(msg, color) {
+  const log = $("autoTuneLog");
+  log.style.display = "";
+  const div = document.createElement("div");
+  div.textContent = msg;
+  if (color) div.style.color = color;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function _autoTuneCleanup() {
+  if (_autoTuneState.es)   { _autoTuneState.es.close(); _autoTuneState.es = null; }
+  if (_autoTuneState.poll) { clearInterval(_autoTuneState.poll); _autoTuneState.poll = null; }
+  $("autoTuneStart").style.display = "";
+  $("autoTuneStop").style.display = "none";
+}
+
+function _autoTuneStart() {
+  const plugin = trainState.selected;
+  if (!plugin || !plugin.manifest || !plugin.manifest.bench) { _autoTuneLine("pick a trainer on the Training tab first.", "var(--hot)"); return; }
+  const id = plugin.id;
+  _autoTuneState.plugin = plugin;
+  _autoTuneState.result = null;
+  const defs = plugin.manifest.defaults || {};
+  // Form values win when the form is rendered; manifest defaults otherwise.
+  const val = (k) => _trArgVal(k) || defs[k];
+  const args = { bench: true, size: val("size"), seq: val("seq"), precision: val("precision") };
+  $("autoTuneResults").style.display = "none";
+  $("autoTuneInfeasible").style.display = "none";
+  $("autoTuneLog").innerHTML = "";
+  _autoTuneLine("starting benchmark (throwaway weights, nothing is saved)...", "var(--dim)");
+  _autoTuneLine("your computer may slow down while memory is pushed to its limit — this is expected.", "var(--warm)");
+  fetch("/trainers/run", { method: "POST", headers: { "Content-Type": "application/json" },
+                           body: JSON.stringify({ id, args }) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) { _autoTuneLine(d.error || "could not start (is a training run active?)", "var(--hot)"); return; }
+      $("autoTuneStart").style.display = "none";
+      $("autoTuneStop").style.display = "";
+      _autoTuneSubscribe(id);
+    })
+    .catch(e => _autoTuneLine("start failed: " + e, "var(--hot)"));
+}
+
+function _autoTuneSubscribe(id) {
+  const src = "plugin:" + id;
+  const es = new EventSource("/logs/stream");
+  _autoTuneState.es = es;
+  es.onmessage = (ev) => {
+    let e; try { e = JSON.parse(ev.data); } catch (err) { return; }
+    if (!e || e.source !== src || !e.msg) return;
+    if (e.msg.startsWith("BENCH_RESULT ")) {
+      try { _autoTuneFinish(JSON.parse(e.msg.slice("BENCH_RESULT ".length))); }
+      catch (err) { _autoTuneLine("could not parse benchmark result", "var(--hot)"); _autoTuneCleanup(); }
+      return;
+    }
+    const benchLine = e.msg.startsWith("bench: ");
+    _autoTuneLine(benchLine ? e.msg.slice(7) : e.msg, benchLine ? undefined : "var(--dim)");
+  };
+  // The runner going idle without a BENCH_RESULT means the benchmark died early.
+  _autoTuneState.poll = setInterval(() => {
+    fetch("/trainers").then(r => r.json()).then(d => {
+      const running = d.running && d.running.status === "running";
+      if (!running && !_autoTuneState.result) {
+        _autoTuneLine("benchmark ended without a result — check the Logs tab.", "var(--hot)");
+        _autoTuneCleanup();
+      }
+    }).catch(() => {});
+  }, 4000);
+}
+
+// MPSGraph indexes tensor elements with int32; the attention-score tensor
+// (B * heads * T * T) crashes backward past INT_MAX elements. Cap the
+// recommended batch below that regardless of what fit in memory.
+const MPS_INT_MAX = 2147483647;
+const MPS_SAFETY  = 0.85;
+
+// mem_planner tier -> human label for the modal. The two offload tiers are
+// delivered by paging the Adam optimizer state to NVMe (veritate_core/plugin/
+// paged_optimizer.py); their tok/s is disk-bound and the modal says so.
+const TIER_LABELS = {
+  "none": "fits in memory (no offload)",
+  "checkpoint_activations": "activation checkpointing",
+  "checkpoint+bf16_optimizer": "checkpointing + optimizer paged to NVMe",
+  "checkpoint+page_optimizer_to_nvme": "checkpointing + optimizer paged to NVMe",
+};
+const CHECKPOINT_TIERS = new Set([
+  "checkpoint_activations", "checkpoint+bf16_optimizer",
+  "checkpoint+page_optimizer_to_nvme",
+]);
+const PAGED_TIERS = new Set([
+  "checkpoint+bf16_optimizer", "checkpoint+page_optimizer_to_nvme",
+]);
+
+function _autoTuneRecommend(result, plugin) {
+  const defs  = plugin.manifest.defaults || {};
+  const sizes = plugin.manifest.sizes || {};
+  const shape = sizes[String(defs.size)] || {};
+  const ramp  = result.ramp || [];
+  const best  = ramp.reduce((a, b) => (b.tok_per_s > (a ? a.tok_per_s : 0) ? b : a), null);
+  if (!best) return null;
+  let batch = best.batch;
+  if (result.device === "mps" && shape.heads && result.seq > 0) {
+    const cap = Math.max(1, Math.floor((MPS_INT_MAX * MPS_SAFETY) / (shape.heads * result.seq * result.seq)));
+    batch = Math.min(batch, cap);
+  }
   const manifestBatch = parseInt(defs.batch_size, 10) || 8;
   const manifestLR    = parseFloat(defs.base_lr) || 6e-4;
-
-  // Memory-fit search. Start from manifest batch (already tuned per
-  // architecture) and only adjust to fit hardware: shrink if over budget,
-  // grow if there is comfortable headroom. Trainers do not implement
-  // gradient accumulation so batch_size is the effective batch.
-  const tryEstimate = (batch, ckpt) => {
-    const bEl = _trArgEl("batch_size");
-    const cEl = _trArgEl("use_act_ckpt");
-    const prevB = bEl ? bEl.value : null;
-    const prevC = cEl && cEl.type === "checkbox" ? cEl.checked : null;
-    if (bEl) bEl.value = batch;
-    if (cEl) cEl.checked = !!ckpt;
-    const e = _trEstimateMemory();
-    if (bEl && prevB !== null) bEl.value = prevB;
-    if (cEl && prevC !== null) cEl.checked = prevC;
-    return e;
-  };
-
-  const TARGET_RATIO = 0.75;     // aim for ~75% of budget
-  const TIGHT_RATIO  = 0.92;     // anything above this is "too tight"
-  const HEADROOM_RATIO = 0.45;   // anything below means there is room to grow
-
-  // Apple MPS (unified memory) indexes tensor elements with int32 inside
-  // MPSGraph. Any single tensor with > INT_MAX (2^31 - 1) elements crashes
-  // backward with "MPSGraph does not support tensor dims larger than
-  // INT_MAX". The largest tensor in this trainer is the attention scores
-  // (B * heads * T * T). Cap batch_size so that stays comfortably below
-  // INT_MAX even with a precision/grad-graph safety margin.
-  const MPS_INT_MAX = 2147483647;
-  const MPS_SAFETY  = 0.85;
-  const sizePreset  = _trSizeShape(_trArgVal("size"));
-  const seqVal      = parseInt(_trArgVal("seq"), 10);
-  let mpsBatchCap = Infinity;
-  if (budget.kind === "unified" && sizePreset && sizePreset.heads && seqVal > 0) {
-    const perBatch = sizePreset.heads * seqVal * seqVal;
-    if (perBatch > 0) {
-      mpsBatchCap = Math.max(1, Math.floor((MPS_INT_MAX * MPS_SAFETY) / perBatch));
-    }
-  }
-
-  let targetBatch = Math.min(manifestBatch, mpsBatchCap);
-  let actCkpt = !!defs.use_act_ckpt;
-
-  // Step 1: shrink if manifest at current ckpt setting overshoots.
-  let est = tryEstimate(targetBatch, actCkpt);
-  while (est && est.total > budget.bytes * TIGHT_RATIO && (targetBatch > 1 || !actCkpt)) {
-    if (!actCkpt) {
-      actCkpt = true;            // try act_ckpt before halving
-    } else if (targetBatch > 1) {
-      targetBatch = Math.max(1, Math.floor(targetBatch / 2));
-    } else {
-      break;
-    }
-    est = tryEstimate(targetBatch, actCkpt);
-  }
-
-  // Step 2: if still way under budget at current settings, try doubling
-  // batch (cap at 4× manifest to avoid extreme lr scaling).
-  const batchCap = Math.min(manifestBatch * 4, mpsBatchCap);
-  let growEst = est;
-  while (growEst && growEst.total < budget.bytes * HEADROOM_RATIO && targetBatch * 2 <= batchCap) {
-    const next = targetBatch * 2;
-    const probe = tryEstimate(next, actCkpt);
-    if (!probe || probe.total > budget.bytes * TARGET_RATIO) break;
-    targetBatch = next;
-    growEst = probe;
-  }
-
-  // sqrt scaling rule for lr.
-  const lrScale = Math.sqrt(targetBatch / manifestBatch);
-  const newLR = +(manifestLR * lrScale).toPrecision(2);
-
-  _trSetArgVal("batch_size",    targetBatch);
-  _trSetArgVal("base_lr",       newLR);
-  _trSetArgVal("use_act_ckpt",  actCkpt);
-
-  // Cadence + warmup as % of total_steps. total_steps is user-owned;
-  // if it's empty we don't touch the time-based knobs.
-  const totalSteps = parseInt(_trArgVal("total_steps"), 10);
+  const lr = +(manifestLR * Math.sqrt(batch / manifestBatch)).toPrecision(2);
+  const args = { batch_size: batch, base_lr: lr };
+  if (CHECKPOINT_TIERS.has(result.tier)) args.use_act_ckpt = true;
+  const totalSteps = parseInt(defs.total_steps, 10);
   if (totalSteps > 0) {
-    _trSetArgVal("warmup_steps", Math.max(50,  Math.round(totalSteps * 0.03)));
-    _trSetArgVal("log_every",    Math.max(10,  Math.round(totalSteps * 0.001)));
-    _trSetArgVal("eval_every",   Math.max(100, Math.round(totalSteps * 0.05)));
-    _trSetArgVal("ckpt_every",   Math.max(200, Math.round(totalSteps * 0.10)));
+    args.warmup_steps = Math.max(50,  Math.round(totalSteps * 0.03));
+    args.log_every    = Math.max(10,  Math.round(totalSteps * 0.001));
+    args.eval_every   = Math.max(100, Math.round(totalSteps * 0.05));
+    args.ckpt_every   = Math.max(200, Math.round(totalSteps * 0.10));
   }
+  const bestEntry = ramp.find(r => r.batch === best.batch) || best;
+  const hours = totalSteps > 0 && bestEntry.tok_per_s > 0
+    ? (totalSteps * batch * result.seq / bestEntry.tok_per_s / 3600) : null;
+  return { args, batch, lr, totalSteps, hours, best };
+}
 
-  _trUpdateVramEstimate();
-  const mpsCapHit = (mpsBatchCap !== Infinity) && (targetBatch >= mpsBatchCap);
-  const mpsNote   = mpsCapHit ? " (batch capped by MPS INT_MAX attention-tensor limit)" : "";
-  const cadenceNote = totalSteps > 0
-    ? ", warmup/log/eval/ckpt cadence scaled to total_steps"
-    : " — set total_steps then click again to also tune warmup/log/eval/ckpt";
-  setStatus(`training settings updated: batch=${targetBatch}, lr=${newLR}, act_ckpt=${actCkpt ? "on" : "off"}${mpsNote}${cadenceNote}.`, "var(--data-pos)");
+function _autoTuneFinish(result) {
+  _autoTuneState.result = result;
+  _autoTuneCleanup();
+  if (result.fits === false) { _autoTuneShowInfeasible(result); return; }
+  $("autoTuneInfeasible").style.display = "none";
+  const plugin = _autoTuneState.plugin;
+  const recs = _autoTuneRecommend(result, plugin);
+  _autoTuneState.recs = recs;
+  $("autoTuneRam").textContent      = result.mem_ceiling_gb.toFixed(1) + " GB used at batch " + result.max_batch;
+  $("autoTuneMaxBatch").textContent = String(result.max_batch);
+  $("autoTuneBestBatch").textContent = recs ? String(recs.best.batch) : "—";
+  $("autoTuneTokS").textContent     = recs ? Math.round(recs.best.tok_per_s).toLocaleString() + " tok/s" : "—";
+  $("autoTuneTier").textContent     = TIER_LABELS[result.tier] || result.tier || "—";
+  if (recs) {
+    const timeNote = recs.hours != null
+      ? ` At this speed, ${recs.totalSteps.toLocaleString()} steps would take ~${recs.hours.toFixed(1)} h.` : "";
+    const pagedNote = PAGED_TIERS.has(result.tier)
+      ? `<br><span style="color:var(--warm)">This size only fits by paging the optimizer to NVMe, so each step is disk-bound — the tok/s above already reflects that. Bigger batches amortize the disk cost.</span>`
+      : "";
+    $("autoTuneRecs").innerHTML =
+      `Recommended: <b>batch ${recs.batch}</b> at <b>lr ${recs.lr}</b>` +
+      (recs.args.warmup_steps ? `, warmup/log/eval/ckpt cadence scaled to ${recs.totalSteps.toLocaleString()} steps` : "") +
+      (recs.args.use_act_ckpt ? `, activation checkpointing on` : "") +
+      `.${timeNote}<br><span style="color:var(--dim)">Bigger batches fit (up to ${result.max_batch}) but measured slower — the recommendation is the throughput sweet spot.</span>${pagedNote}`;
+  } else {
+    $("autoTuneRecs").textContent = "no usable measurements — see the log above.";
+  }
+  $("autoTuneResults").style.display = "";
+}
+
+function _autoTuneShowInfeasible(result) {
+  _autoTuneState.recs = null;
+  $("autoTuneResults").style.display = "none";
+  const gb = (x) => (x == null ? "—" : Math.round(x).toLocaleString() + " GB");
+  const optLine = result.optimizer_gb
+    ? ` + optimizer ${gb(result.optimizer_gb)}` : "";
+  $("autoTuneInfeasibleBody").innerHTML =
+    `Training this size needs about <b>${gb(result.required_gb)}</b> (weights ${gb(result.params_gb)} ` +
+    `+ grads ${gb(result.grads_gb)}${optLine}), but this machine's usable budget is ` +
+    `<b>${gb(result.budget_gb)}</b>.<br>Weights and gradients alone exceed the budget, so ` +
+    `paging the optimizer to disk cannot make it fit. Pick a smaller model size, shorten ` +
+    `sequence length, or train on a larger-memory machine.`;
+  $("autoTuneInfeasible").style.display = "";
+}
+
+function _autoTuneApply() {
+  const plugin = _autoTuneState.plugin, recs = _autoTuneState.recs, result = _autoTuneState.result;
+  const status = $("autoTuneApplyStatus");
+  if (!plugin || !recs) return;
+  const measured = { device: result.device, seq: result.seq, max_batch: result.max_batch,
+                     mem_ceiling_gb: result.mem_ceiling_gb, best_batch: recs.best.batch,
+                     tok_per_s: recs.best.tok_per_s };
+  fetch("/trainers/tune_defaults", { method: "POST", headers: { "Content-Type": "application/json" },
+                                     body: JSON.stringify({ id: plugin.id, args: recs.args, measured }) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) { status.textContent = d.error || "apply failed"; status.style.color = "var(--hot)"; return; }
+      if (trainState.selected && trainState.selected.id === plugin.id) {
+        Object.entries(recs.args).forEach(([k, v]) => _trSetArgVal(k, v));
+        _trUpdateVramEstimate();
+      }
+      fetch("/sys/specs").then(r => r.json()).then(s => { if (s && s.platform) { _sysSpecsCache = s; _renderSysSpecs(s); } }).catch(() => {});
+      status.textContent = "saved to trainer" + (d.manifest_updated ? " manifest" : "") + " — future runs start from these values.";
+      status.style.color = "var(--data-pos)";
+    })
+    .catch(e => { status.textContent = "apply failed: " + e; status.style.color = "var(--hot)"; });
+}
+
+function _autoTuneStop() {
+  fetch("/trainers/stop", { method: "POST" }).catch(() => {});
+  _autoTuneLine("stopped.", "var(--dim)");
+  _autoTuneCleanup();
+}
+
+function _autoTuneClose() {
+  if (_autoTuneState.es) _autoTuneStop();
+  $("autoTuneModal").classList.add("hidden");
+  document.body.classList.remove("no-scroll");
 }
 
 function _trUpdateStepCascades() {
@@ -7746,14 +7881,43 @@ function _trRestoreFormState() {
   }
 }
 
+// Knobs that only matter under another knob's setting stay hidden otherwise.
+const ARG_VISIBLE_WHEN = {
+  wsd_decay_frac: () => _trArgVal("lr_schedule") === "wsd",
+  wsd_decay_kind: () => _trArgVal("lr_schedule") === "wsd",
+  min_lr:         () => _trArgVal("lr_schedule") !== "constant",
+  warmup_steps:   () => _trArgVal("lr_schedule") !== "constant",
+  quant_mode:     () => !!_corePluginsArgs().qat_enabled,
+  mtp_aux_weight: () => parseInt(_trArgVal("n_predict"), 10) > 1,
+};
+
+function _trUpdateKnobVisibility() {
+  for (const [name, visible] of Object.entries(ARG_VISIBLE_WHEN)) {
+    const cell = document.querySelector(`#trainArgs .cell[data-cell="${name}"]`);
+    if (cell) cell.style.display = visible() ? "" : "none";
+  }
+}
+
 function _trWireArgListeners() {
   document.querySelectorAll('#trainArgs [data-arg]').forEach(el => {
-    const fn = () => { _trUpdateComposedName(); _trUpdateStepCascades(); _trUpdateCorpusMeta(); _trUpdateVramEstimate(); _trCorpusSizeWarning(); _trSaveFormState(); };
+    const fn = () => { _trUpdateComposedName(); _trUpdateStepCascades(); _trUpdateCorpusMeta(); _trUpdateVramEstimate(); _trCorpusSizeWarning(); _trSaveFormState(); _trUpdateKnobVisibility(); };
     el.addEventListener("change", fn);
     el.addEventListener("input",  fn);
     if (el.dataset.arg === "resume") {
       el.addEventListener("change", () => _trApplyResumeConfig(el.value));
     }
+  });
+  document.querySelectorAll('#trainArgs .corpus-picker').forEach(picker => {
+    const hidden  = picker.parentElement.querySelector('input[type=hidden][data-arg]');
+    const summary = picker.querySelector('[data-corpus-summary]');
+    picker.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const stems = Array.from(picker.querySelectorAll('input[type=checkbox]:checked')).map(c => c.value);
+        hidden.value = stems.join('+');
+        summary.textContent = stems.length ? stems.join(' + ') : 'pick training data';
+        hidden.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    });
   });
   document.querySelectorAll('#trainArgs .hint').forEach(hint => {
     hint.addEventListener("mouseenter", () => _trPosHintPop(hint));
@@ -7958,6 +8122,7 @@ function _trAutoPickBundledCorpus() {
 const coreTrainersState = {
   list:     [],   // fetched plugin metadata
   selected: new Set(),
+  detailId: null, // card whose description shows in the shared detail panel
   ready:    false,
   flow:     null,
 };
@@ -8005,19 +8170,19 @@ function _coreTrainersRender() {
   }
   wrap.style.display = "block";
 
-  // Group sizes so we can pick the right control: single-member groups stay
-  // as toggles (independent switches), multi-member groups render as radios
-  // (one-of-many, with a "none" affordance via re-click).
+  // Cards cluster by group: multi-member groups are one-of-many (the "pick
+  // one" badge says so); single-member groups are independent toggles.
+  // Descriptions render in ONE shared panel below the strip, so opening or
+  // switching details never reflows the cards.
+  const groupOrder = [...new Set(items.map(p => p.group))];
   const groupCounts = items.reduce((acc, p) => {
     acc[p.group] = (acc[p.group] || 0) + 1;
     return acc;
   }, {});
-
-  grid.innerHTML = items.map(p => {
+  const card = (p) => {
     const sel  = coreTrainersState.selected.has(p.id);
     const mode = (groupCounts[p.group] > 1) ? "radio" : "toggle";
-    const argsStr = Object.entries(p.args || {})
-      .map(([k, v]) => `${k}=${v}`).join("  ");
+    const open = coreTrainersState.detailId === p.id;
     return `<div class="core-plugin-box${sel ? " is-selected" : ""}"
                  data-id="${_trEsc(p.id)}"
                  data-group="${_trEsc(p.group)}"
@@ -8026,24 +8191,56 @@ function _coreTrainersRender() {
       <div class="core-plugin-name">
         <input type="checkbox" ${sel ? "checked" : ""} aria-label="${_trEsc(p.label)}" />
         <span>${_trEsc(p.label)}</span>
-        <span class="core-plugin-group">${_trEsc(p.group)}</span>
+        <button type="button" class="core-plugin-info">${open ? "hide details" : "see details"}</button>
       </div>
-      <div class="core-plugin-desc">${_trEsc(p.description)}</div>
-      ${argsStr ? `<div class="core-plugin-args">${_trEsc(argsStr)}</div>` : ""}
+    </div>`;
+  };
+  let html = groupOrder.map(g => {
+    const members = items.filter(p => p.group === g);
+    const pick = members.length > 1 ? `<span class="core-group-pick">pick one</span>` : "";
+    return `<div class="core-group">
+      <div class="core-group-head">${_trEsc(g)}${pick}</div>
+      <div class="core-group-cards">${members.map(card).join("")}</div>
     </div>`;
   }).join("");
+  const detail = items.find(p => p.id === coreTrainersState.detailId);
+  if (detail) {
+    const argsStr = Object.entries(detail.args || {}).map(([k, v]) => `${k}=${v}`).join("  ");
+    html += `<div class="core-plugin-detail">
+      <b>${_trEsc(detail.label)}</b> <span class="core-plugin-group">${_trEsc(detail.group)}</span>
+      <div class="core-plugin-desc">${_trEsc(detail.description)}</div>
+      ${argsStr ? `<div class="core-plugin-args">${_trEsc(argsStr)}</div>` : ""}
+    </div>`;
+  }
+  grid.innerHTML = html;
 
   grid.querySelectorAll(".core-plugin-box").forEach(node => {
     const cb = node.querySelector("input[type=checkbox]");
     const click = (e) => {
+      if (e.target.closest(".core-plugin-info")) return;
       // Avoid double-toggle when the click bubbles from the checkbox itself.
       if (e.target !== cb) e.preventDefault();
       _corePluginsToggle(node.dataset.id);
     };
     node.addEventListener("click", click);
     cb.addEventListener("click", (e) => { e.stopPropagation(); _corePluginsToggle(node.dataset.id); });
+    const info = node.querySelector(".core-plugin-info");
+    if (info) info.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = node.dataset.id;
+      coreTrainersState.detailId = (coreTrainersState.detailId === id) ? null : id;
+      _coreTrainersRender();
+    });
   });
 }
+
+// Click anywhere outside the detail panel (and outside the cards) closes it.
+document.addEventListener("click", (e) => {
+  if (!coreTrainersState.detailId) return;
+  if (e.target.closest(".core-plugin-detail") || e.target.closest(".core-plugin-box")) return;
+  coreTrainersState.detailId = null;
+  _coreTrainersRender();
+});
 
 function _corePluginsToggle(id) {
   const items = coreTrainersState.list || [];
@@ -8066,6 +8263,8 @@ function _corePluginsToggle(id) {
     sel.add(id);
   }
   _coreTrainersRender();
+  _trUpdateVramEstimate();
+  _trUpdateKnobVisibility();
 }
 
 function _corePluginsArgs() {
@@ -8079,8 +8278,34 @@ function _corePluginsArgs() {
 }
 
 
+// Size-derived capability line for the picker. manifest.teaches (a capability
+// tier keyword) wins when set; otherwise headline param count picks the list.
+const IDEAL_FOR_TIERS = [
+  [50e6,  "autocomplete"],
+  [300e6, "autocomplete, short replies"],
+  [1e9,   "autocomplete, chat"],
+  [5e9,   "autocomplete, chat, light coding"],
+];
+const IDEAL_FOR_TOP = "autocomplete, chat, coding";
+
+function _trIdealFor(m) {
+  if (m && m.teaches) return String(m.teaches);
+  const sizes = (m && m.sizes) || {};
+  const d = (m && m.defaults) || {};
+  const sz = sizes[d.size] || {};
+  let params = sz.params;
+  if (params == null) {
+    const all = Object.values(sizes).map(s => s.params || 0);
+    params = all.length ? Math.max(...all) : 0;
+  }
+  for (const [cap, label] of IDEAL_FOR_TIERS) {
+    if (params < cap) return label;
+  }
+  return IDEAL_FOR_TOP;
+}
+
 // Compact manifest summary: chips for shape, params, corpus, output dir,
-// engine target, QAT, teaches. Replaces the multi-line paragraph from
+// engine target, QAT, ideal-for. Replaces the multi-line paragraph from
 // manifest.description, which still lives in the form's tooltip on hover.
 function _trRenderManifestSummary(m) {
   if (!m || typeof m !== "object") return "";
@@ -8098,7 +8323,7 @@ function _trRenderManifestSummary(m) {
     if (value == null || value === "") return;
     chips.push(`<span class="stat" style="color:var(--dim)">${_trEsc(label)} <b style="color:var(--text)">${_trEsc(String(value))}</b></span>`);
   };
-  push("teaches",  m.teaches || "autocomplete");
+  push("ideal for", _trIdealFor(m));
   if (layers || hidden || ffn || heads) {
     push("shape", `h=${hidden ?? "?"} L=${layers ?? "?"} ffn=${ffn ?? "?"} heads=${heads ?? "?"}`);
   }
@@ -8132,27 +8357,33 @@ function _trRenderForm() {
   if (descEl) descEl.innerHTML = _trRenderManifestSummary(p.manifest);
   const introEl = _trEl("trainFormIntro");
   if (introEl) {
-    const teaches = _trEsc((p.manifest.teaches || "autocomplete"));
-    introEl.innerHTML = `teaches <b>${teaches}</b> &middot; <span style="color:var(--hot)">*</span> required`;
+    const ideal = _trEsc(_trIdealFor(p.manifest));
+    introEl.innerHTML = `ideal for <b>${ideal}</b> &middot; <span style="color:var(--hot)">*</span> required`;
   }
   // Responsive grid: small fields auto-pack into columns; wide types (text/path/tools)
   // and bool span the full row. Help text is condensed to a hoverable blue ? badge so
   // the form stays compact; the popover surfaces the same explanation.
   let html = `<style>
-    .trArgsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px 16px; font-size: 11.5px; }
-    .trArgsGrid .cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; position: relative; }
+    .trArgsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 12px; font-size: 10.5px; }
+    .trArgsGrid .cell { display: flex; flex-direction: column; gap: 3px; min-width: 0; position: relative; }
     .trArgsGrid .cell.wide { grid-column: 1 / -1; }
     .trArgsGrid .cell .row { display: flex; align-items: center; gap: 6px; }
-    .trArgsGrid .cell label { color: var(--text); font-size: 11px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; }
+    .trArgsGrid .cell label { color: var(--text); font-size: 10px; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; }
+    .trArgsGrid .cell input, .trArgsGrid .cell select, .trArgsGrid .cell textarea { padding: 3px 6px; font-size: 10.5px; }
     .trArgsGrid .cell input[type="text"],
     .trArgsGrid .cell input[type="number"],
     .trArgsGrid .cell select,
     .trArgsGrid .cell textarea { width: 100%; min-width: 0; box-sizing: border-box; }
     .trArgsGrid .cell.bool { flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap; }
     .trArgsGrid .cell.bool label { font-size: 11.5px; }
-    .trArgsGrid .cell.featured { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 6px; }
+    .trArgsGrid .cell.featured { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px; }
     .trArgsGrid .cell.featured label { color: var(--text); font-weight: 600; }
     .trArgsGrid .cell .adv-badge { color: var(--warm); font-weight: 600; font-size: 9.5px; letter-spacing: 0.5px; }
+    .corpus-picker { background: #0a0c12; border: 1px solid var(--line); border-radius: 2px; font-size: 10.5px; }
+    .corpus-picker summary { cursor: pointer; padding: 3px 6px; color: var(--text); list-style-position: inside; }
+    .corpus-picker .corpus-list { border-top: 1px solid var(--line); padding: 4px 6px; max-height: 130px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+    .corpus-picker .corpus-opt { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text); }
+    .corpus-picker .corpus-note { color: var(--dim); font-size: 9.5px; margin-top: 3px; }
     .trArgsGrid .cell .hint {
       display: inline-block;
       cursor: help; user-select: none; vertical-align: middle;
@@ -8196,9 +8427,9 @@ function _trRenderForm() {
     const wide     = (a.type === "text" || a.type === "path") ? " wide" : "";
     const featured = a.featured ? " featured" : "";
     if (a.type === "bool") {
-      html += `<div class="cell bool wide${featured}">${_trBuildInput(a)}<label>${labelTxt}${req}</label>${advBadge}${hint}</div>`;
+      html += `<div class="cell bool wide${featured}" data-cell="${_trEsc(a.name)}">${_trBuildInput(a)}<label>${labelTxt}${req}</label>${advBadge}${hint}</div>`;
     } else {
-      html += `<div class="cell${wide}${featured}"><label>${labelTxt}${req} ${advBadge}${hint}</label>${_trBuildInput(a)}</div>`;
+      html += `<div class="cell${wide}${featured}" data-cell="${_trEsc(a.name)}"><label>${labelTxt}${req} ${advBadge}${hint}</label>${_trBuildInput(a)}</div>`;
     }
   }
   html += `</div>`;
@@ -8207,6 +8438,7 @@ function _trRenderForm() {
   if (runRow) runRow.style.display = "flex";
   _trWireArgListeners();
   _trApplyDefaults();
+  _trUpdateKnobVisibility();
   _trUpdateComposedName();
   _trUpdateStepCascades();
   _trUpdateCorpusMeta();
@@ -8292,7 +8524,7 @@ function _trRenderPicker() {
   const hint = _trEl("trainEmptyHint");
   const flowLabel = _trEl("trainFlowCurrent");
   if (flowLabel) {
-    const labels = { scratch: "from scratch", continue: "continue saved", distill: "distill", synth: "synthetic corpus", export: "export .bin" };
+    const labels = { scratch: "start a new model", continue: "continue a saved model", rag: "answer from context (RAG)", synth: "generate training data", export: "export to .bin" };
     if (trainState.flow) {
       flowLabel.textContent = labels[trainState.flow] || trainState.flow;
       flowLabel.style.color = "var(--accent)";
@@ -8302,11 +8534,17 @@ function _trRenderPicker() {
     }
   }
   if (!sel || !row) return;
-  if (!trainState.flow || trainState.flow === "export") { row.style.display = "none"; return; }
+  // export uses its own model/step picker; synth and rag have their own
+  // inline panels. None of them use the trainer picker.
+  const NO_PICKER = ["export", "synth", "rag"];
+  if (!trainState.flow || NO_PICKER.includes(trainState.flow)) { row.style.display = "none"; return; }
   row.style.display = "flex";
   const list = _trFiltered();
   const cur  = sel.value;
-  if (list.length === 0) {
+  if (!trainState.loaded && list.length === 0) {
+    sel.innerHTML = `<option value="">loading trainers&hellip;</option>`;
+    if (hint) hint.style.display = "none";
+  } else if (list.length === 0) {
     sel.innerHTML = `<option value="">- no ${_trEsc(trainState.flow)} trainers -</option>`;
     if (hint) {
       hint.style.display = "inline";
@@ -8326,6 +8564,7 @@ function _trPoll() {
     fetch("/trainers").then(r => r.json()),
     fetch("/train/discovery").then(r => r.json()),
   ]).then(([plug, disc]) => {
+    trainState.loaded    = true;
     trainState.list      = plug.trainers || [];
     trainState.running   = plug.running || { status: "idle" };
     trainState.discovery = disc || { corpora: [], models: [] };
@@ -8381,10 +8620,128 @@ function _exPopulateSteps() {
 }
 
 // flows that require a configured teacher model
-const TEACHER_REQUIRED_FLOWS = ["distill", "synth"];
+const TEACHER_REQUIRED_FLOWS = ["synth", "rag"];
 const SYNTH_TRAIN_BTN_ID = "trainRun";
 
-const synthState = { seeds: [], jobId: null, pollTimer: null };
+const synthState = { seeds: [], jobId: null, pollTimer: null, jobs: [] };
+
+// Persist the selected flow + active synth job so a reload lands the user back
+// on the same action with its live status reattached.
+const TRAIN_FLOW_STORE = "vt:training:flow";
+const SYNTH_JOB_STORE = "vt:training:synth_job";
+const TRAIN_VALID_FLOWS = ["scratch", "continue", "rag", "synth", "export"];
+
+// Per-flow job descriptors: one place owns how to stop each running job type.
+// Consumed by the per-panel stop buttons (all confirm-gated).
+const TRAIN_JOB = { stop: () => fetch("/trainers/stop", { method: "POST" }) };
+const SYNTH_JOB = { stop: () => fetch(TEACHER_SYNTH_STOP, { method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ job_id: synthState.jobId }) }) };
+const RAG_JOB = { stop: () => fetch("/rag/stop", { method: "POST" }) };
+const TRAIN_FLOWS = {
+  scratch:  { job: TRAIN_JOB },
+  continue: { job: TRAIN_JOB },
+  rag: { job: RAG_JOB },
+  synth:    { job: SYNTH_JOB },
+  export:   { job: null },
+};
+
+function _trStore(flow) { try { localStorage.setItem(TRAIN_FLOW_STORE, flow); } catch (e) {} }
+function _trStored() { try { return localStorage.getItem(TRAIN_FLOW_STORE); } catch (e) { return null; } }
+
+// Reusable are-you-sure dialog. Resolves true on confirm, false on cancel.
+function confirmDialog(message, okLabel) {
+  return new Promise((resolve) => {
+    const modal = $("confirmModal");
+    const ok = $("confirmModalOk");
+    const no = $("confirmModalCancel");
+    if (!modal || !ok || !no) { resolve(window.confirm(message)); return; }
+    const msgEl = $("confirmModalMsg");
+    if (msgEl) msgEl.textContent = message || "Are you sure?";
+    ok.textContent = okLabel || "Confirm";
+    const close = (val) => {
+      modal.classList.add("hidden");
+      ok.removeEventListener("click", onOk);
+      no.removeEventListener("click", onNo);
+      resolve(val);
+    };
+    const onOk = () => close(true);
+    const onNo = () => close(false);
+    ok.addEventListener("click", onOk);
+    no.addEventListener("click", onNo);
+    modal.classList.remove("hidden");
+  });
+}
+window.confirmDialog = confirmDialog;
+
+function _synthStopJob() {
+  if (!synthState.jobId) return;
+  confirmDialog("Stop the synthesis job? Samples generated so far are kept.", "Stop").then(ok => {
+    if (!ok) return;
+    SYNTH_JOB.stop().then(() => _synthPollOnce()).catch(() => {});
+  });
+}
+
+// Start button doubles as Resume: a stopped job with samples on disk gets a
+// "Resume" label; clicking it re-submits to the same job_id and the runner
+// skips ids already in samples.jsonl.
+function _synthSyncStartLabel() {
+  const btn = $("synthStartBtn");
+  const sel = $("synthJobSelect");
+  if (!btn || !sel) return;
+  const job = (synthState.jobs || []).find(j => j.job_id === sel.value);
+  const resume = !!(job && !job.running && (job.completed || 0) > 0);
+  btn.textContent = resume ? "Resume" : "Start Synthesis";
+}
+
+// Hide the training metrics/charts for actions that don't produce a training
+// run. Synth shows live teacher output instead; export is a one-shot.
+const TRAIN_METRICS_FLOWS = ["scratch", "continue", "rag"];
+function _trToggleMetrics(flow) {
+  const sec = $("trainMetricsSection");
+  if (!sec) return;
+  sec.style.display = TRAIN_METRICS_FLOWS.includes(flow) ? "" : "none";
+}
+
+const SYNTH_SCROLL_STICK_PX = 48;
+function _synthRenderSamples(samples) {
+  const wrap = $("synthLiveWrap");
+  const out = $("synthLiveOutput");
+  const cnt = $("synthLiveCount");
+  if (!out || !wrap) return;
+  if (!samples || !samples.length) { wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+  if (cnt) cnt.textContent = `(${samples.length} shown)`;
+  const stick = out.scrollHeight - out.scrollTop - out.clientHeight < SYNTH_SCROLL_STICK_PX;
+  out.innerHTML = samples.map(s =>
+    `<div style="border-bottom:1px solid var(--line);padding:6px 0">` +
+    `<div style="color:var(--accent);font-size:10px;margin-bottom:2px">${_trEsc(s.id)}</div>` +
+    `${_trEsc(s.response)}</div>`).join("");
+  if (stick) out.scrollTop = out.scrollHeight;
+}
+
+function _synthLoadSamples() {
+  if (!synthState.jobId) return;
+  fetch(`${TEACHER_SYNTH_SAMPLES}?job_id=${encodeURIComponent(synthState.jobId)}`)
+    .then(r => r.json())
+    .then(d => { if (d && d.samples) _synthRenderSamples(d.samples); })
+    .catch(() => {});
+}
+
+function _synthReattach() {
+  let saved = null;
+  try { saved = localStorage.getItem(SYNTH_JOB_STORE); } catch (e) {}
+  if (!saved || synthState.jobId === saved) return;
+  synthState.jobId = saved;
+  const sel = $("synthJobSelect");
+  if (sel && synthState.jobs.some(j => j.job_id === saved)) sel.value = saved;
+  _synthSyncStartLabel();
+  const info = $("synthJobInfo");
+  if (info) { info.style.display = "block"; info.textContent = `job ${saved}`; }
+  if (synthState.pollTimer) clearInterval(synthState.pollTimer);
+  synthState.pollTimer = setInterval(_synthPollOnce, TEACHER_POLL_MS);
+  _synthPollOnce();
+}
 
 function _teacherConfigured() {
   const s = settingsState.current || {};
@@ -8403,6 +8760,29 @@ function _trUpdateTeacherGate() {
   if (run && need && !ok) run.disabled = true;
   const ss = $("synthStartBtn");
   if (ss) ss.disabled = (need && !ok);
+  const rt = $("ragTrain");
+  if (rt && need && !ok) rt.disabled = true;
+}
+
+function _synthSeedRow(s, child) {
+  const name = _trEsc(child ? (s.tier || s.display_name || s.id) : (s.display_name || s.id));
+  const cat = _trEsc(s.category || "");
+  const lic = _trEsc(s.license || "");
+  const grp = _trEsc(s.group || "");
+  return `<label class="synth-seed-row${child ? " child" : ""}">
+    <input type="checkbox" class="synth-seed-cb" data-id="${_trEsc(s.id)}" data-group="${grp}">
+    <span>${name}</span>
+    <span class="meta">${s.count || 0} ${cat ? "&middot; " + cat : ""} ${lic ? "&middot; " + lic : ""}</span>
+  </label>`;
+}
+
+function _synthSyncGroupCbs(host) {
+  host.querySelectorAll(".synth-group-cb").forEach(gc => {
+    const kids = host.querySelectorAll(`.synth-seed-cb[data-group="${gc.dataset.group}"]`);
+    const on = Array.from(kids).filter(cb => cb.checked).length;
+    gc.checked = on > 0 && on === kids.length;
+    gc.indeterminate = on > 0 && on < kids.length;
+  });
 }
 
 function _synthRenderSeeds(list) {
@@ -8412,16 +8792,37 @@ function _synthRenderSeeds(list) {
     host.innerHTML = '<div class="meta" style="font-size:10.5px;color:var(--dim)">no seeds available</div>';
     return;
   }
-  host.innerHTML = list.map(s => {
-    const name = _trEsc(s.display_name || s.id);
-    const cat = _trEsc(s.category || "");
-    const lic = _trEsc(s.license || "");
-    return `<label class="synth-seed-row">
-      <input type="checkbox" class="synth-seed-cb" data-id="${_trEsc(s.id)}">
-      <span>${name}</span>
-      <span class="meta">${s.count || 0} ${cat ? "&middot; " + cat : ""} ${lic ? "&middot; " + lic : ""}</span>
-    </label>`;
-  }).join("");
+  const groups = [];
+  const byGroup = {};
+  const flat = [];
+  for (const s of list) {
+    if (!s.group) { flat.push(s); continue; }
+    if (!byGroup[s.group]) { byGroup[s.group] = []; groups.push(s.group); }
+    byGroup[s.group].push(s);
+  }
+  const html = [];
+  for (const g of groups) {
+    const kids = byGroup[g].slice().sort((a, b) =>
+      SEED_TIER_ORDER.indexOf(a.tier) - SEED_TIER_ORDER.indexOf(b.tier));
+    const total = kids.reduce((n, s) => n + (s.count || 0), 0);
+    html.push(`<label class="synth-seed-row group">
+      <input type="checkbox" class="synth-group-cb" data-group="${_trEsc(g)}">
+      <span>${_trEsc(g)}</span>
+      <span class="meta">${total}</span>
+    </label>`);
+    kids.forEach(s => html.push(_synthSeedRow(s, true)));
+  }
+  flat.forEach(s => html.push(_synthSeedRow(s, false)));
+  host.innerHTML = html.join("");
+  host.querySelectorAll(".synth-group-cb").forEach(gc => {
+    gc.addEventListener("change", () => {
+      host.querySelectorAll(`.synth-seed-cb[data-group="${gc.dataset.group}"]`)
+        .forEach(cb => { cb.checked = gc.checked; });
+    });
+  });
+  host.querySelectorAll(".synth-seed-cb").forEach(cb => {
+    cb.addEventListener("change", () => _synthSyncGroupCbs(host));
+  });
 }
 
 function _synthLoadSeeds() {
@@ -8431,9 +8832,55 @@ function _synthLoadSeeds() {
   }).catch(() => {});
 }
 
+function _synthLoadJobs() {
+  const sel = $("synthJobSelect");
+  if (!sel) return Promise.resolve();
+  return fetch(TEACHER_SYNTH_JOBS).then(r => r.json()).then(d => {
+    synthState.jobs = (d && d.jobs) || [];
+    const cur = sel.value;
+    const opts = synthState.jobs.map(j => {
+      const cats = (j.categories || []).join(", ") || "empty";
+      const run = j.running ? " · running" : "";
+      return `<option value="${_trEsc(j.job_id)}">${_trEsc(j.job_id)} · ${j.completed || 0} samples · ${_trEsc(cats)}${run}</option>`;
+    }).join("");
+    sel.innerHTML = '<option value="">&mdash; new job &mdash;</option>' + opts;
+    if (cur && synthState.jobs.some(j => j.job_id === cur)) sel.value = cur;
+    _trFilesRender();
+  }).catch(() => {});
+}
+
 function _synthSelectedIds() {
   return Array.from(document.querySelectorAll(".synth-seed-cb"))
     .filter(cb => cb.checked).map(cb => cb.dataset.id);
+}
+
+function _trFilesRender() {
+  const host = $("trainFilesList");
+  if (!host) return;
+  const jobs = synthState.jobs || [];
+  if (!jobs.length) { host.textContent = "no synth jobs on disk."; return; }
+  host.innerHTML = jobs.map(j => {
+    const cats = (j.categories || []).join(", ") || "empty";
+    const run = j.running ? ' <span style="color:var(--warm)">running</span>' : "";
+    const del = j.running
+      ? '<button type="button" disabled style="opacity:.5">delete</button>'
+      : `<button type="button" class="train-file-del" data-id="${_trEsc(j.job_id)}" style="background:var(--hot);color:#000">delete</button>`;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)">`
+      + `<code style="min-width:130px">${_trEsc(j.job_id)}</code>`
+      + `<span style="flex:1">${j.completed || 0} samples · ${_trEsc(cats)}${run}</span>${del}</div>`;
+  }).join("");
+  host.querySelectorAll(".train-file-del").forEach(b => {
+    b.addEventListener("click", () => _trFilesDelete(b.dataset.id));
+  });
+}
+
+function _trFilesDelete(jobId) {
+  if (!jobId || !confirm(`Delete synth job ${jobId}? This removes its files from disk.`)) return;
+  fetch(TEACHER_SYNTH_DELETE, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: jobId }) })
+    .then(r => r.json())
+    .then(() => { _synthLoadJobs(); })
+    .catch(() => {});
 }
 
 function _synthGatherPrompts(ids) {
@@ -8457,6 +8904,7 @@ function _synthStopPoll(msg) {
 
 function _synthPollOnce() {
   if (!synthState.jobId) return;
+  _synthLoadSamples();
   fetch(`${TEACHER_SYNTH_STATUS}?job_id=${encodeURIComponent(synthState.jobId)}`)
     .then(r => r.json())
     .then(s => {
@@ -8464,41 +8912,114 @@ function _synthPollOnce() {
       if (!line) return;
       const running = !!s.running;
       const c = s.completed || 0, f = s.failed || 0, d = s.skipped_dup || 0;
-      line.textContent = `${running ? "running" : "done"}: completed ${c}, failed ${f}, skipped ${d}`;
-      line.style.color = running ? "var(--warm)" : "var(--data-pos)";
+      const head = s.aborted ? "ABORTED" : (running ? "running" : "done");
+      let txt = `${head}: completed ${c}, failed ${f}, skipped ${d}`;
+      const sum = s.error_summary || {};
+      const reasons = Object.keys(sum);
+      if (f > 0 && reasons.length) {
+        const top = reasons.map(k => `${k} x${sum[k]}`).slice(0, 3).join("; ");
+        txt += ` — ${top}`;
+      } else if (f > 0 && s.last_error) {
+        txt += ` — ${s.last_error}`;
+      }
+      line.textContent = txt;
+      line.style.color = s.aborted ? "var(--hot)" : (running ? "var(--warm)" : (f > c ? "var(--hot)" : "var(--data-pos)"));
+      const job = (synthState.jobs || []).find(j => j.job_id === synthState.jobId);
+      if (job) { job.running = running; job.completed = c; }
+      _synthSyncStartLabel();
+      const stopBtn = $("synthStopPollBtn");
+      if (stopBtn) stopBtn.style.display = running ? "" : "none";
+      // Build corpus only after the job is complete or stopped, and only with
+      // samples to build from; disabled (and hidden) while still running.
+      const ready = !running && c > 0;
+      const buildRow = $("synthBuildRow");
+      if (buildRow) buildRow.style.display = ready ? "flex" : "none";
+      const buildBtn = $("synthBuildBtn");
+      if (buildBtn) buildBtn.disabled = !ready;
       if (!running) _synthStopPoll();
     })
     .catch(() => {});
 }
 
+function _synthBuild() {
+  const stat = $("synthBuildStatus");
+  const stem = ($("synthCorpusStem") && $("synthCorpusStem").value || "").trim();
+  if (!synthState.jobId) { if (stat) { stat.textContent = "no job"; stat.style.color = "var(--hot)"; } return; }
+  if (!stem) { if (stat) { stat.textContent = "name the corpus"; stat.style.color = "var(--hot)"; } return; }
+  if (stat) { stat.textContent = "building..."; stat.style.color = "var(--warm)"; }
+  fetch(TEACHER_SYNTH_BUILD, { method: "POST", headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ job_id: synthState.jobId, stem: stem }) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) { if (stat) { stat.textContent = "error: " + (d && d.error || "failed"); stat.style.color = "var(--hot)"; } return; }
+      if (stat) { stat.textContent = `built ${d.stem}: ${d.n_train} train, ${d.n_val} val`; stat.style.color = "var(--data-pos)"; }
+      _trPoll();
+    })
+    .catch(e => { if (stat) { stat.textContent = _backendErrMsg(e); stat.style.color = "var(--hot)"; } });
+}
+
 function _synthStart() {
   const line = $("synthStatusLine");
   const info = $("synthJobInfo");
-  const ids = _synthSelectedIds();
+  const target = ($("synthJobSelect") && $("synthJobSelect").value) || "";
+  let ids = _synthSelectedIds();
+  // Resume with no boxes ticked: continue the destination job from its own seeds.
+  if (!ids.length && target) {
+    const job = (synthState.jobs || []).find(j => j.job_id === target);
+    ids = (job && job.seeds) || [];
+  }
   if (!ids.length) { if (line) { line.textContent = "pick at least one seed"; line.style.color = "var(--hot)"; } return; }
   if (line) { line.textContent = "loading prompts..."; line.style.color = "var(--warm)"; }
   const fmt = ($("synthFormat") && $("synthFormat").value) || "text";
   _synthGatherPrompts(ids).then(prompts => {
     if (!prompts.length) { if (line) { line.textContent = "no prompts in seeds"; line.style.color = "var(--hot)"; } return; }
-    if (line) { line.textContent = "starting..."; line.style.color = "var(--warm)"; }
-    return fetch(TEACHER_SYNTH_START, { method: "POST", headers: { "Content-Type": "application/json" },
-                                         body: JSON.stringify({ prompts: prompts, format: fmt }) })
-      .then(r => r.json())
-      .then(d => {
-        if (!d || d.error) { if (line) { line.textContent = "error: " + (d && d.error || "failed"); line.style.color = "var(--hot)"; } return; }
-        synthState.jobId = d.job_id;
-        if (info) { info.style.display = "block"; info.textContent = `job ${d.job_id} -> ${d.output_dir}`; }
-        const stop = $("synthStopPollBtn"); if (stop) stop.style.display = "";
-        if (synthState.pollTimer) clearInterval(synthState.pollTimer);
-        synthState.pollTimer = setInterval(_synthPollOnce, TEACHER_POLL_MS);
-        _synthPollOnce();
-      });
+    const cats = Array.from(new Set(prompts.map(p => p.category).filter(Boolean)));
+    const go = () => _synthStartReq(prompts, fmt, ids, target, line, info);
+    if (target) {
+      const job = (synthState.jobs || []).find(j => j.job_id === target);
+      const jobCats = (job && job.categories) || [];
+      const newCats = cats.filter(c => jobCats.indexOf(c) < 0);
+      if (newCats.length) {
+        const m = `Job ${target} already contains: ${jobCats.join(", ") || "(empty)"}. You are adding different data: ${newCats.join(", ")}. Mixing corpora can reduce purity. Continue?`;
+        (window.confirmDialog ? window.confirmDialog(m, "Continue") : Promise.resolve(window.confirm(m)))
+          .then(ok => { if (ok) go(); else if (line) { line.textContent = "cancelled"; line.style.color = "var(--dim)"; } });
+        return;
+      }
+    }
+    go();
   }).catch(e => { if (line) { line.textContent = _backendErrMsg(e); line.style.color = "var(--hot)"; } });
+}
+
+function _synthStartReq(prompts, fmt, ids, target, line, info) {
+  if (line) { line.textContent = "starting..."; line.style.color = "var(--warm)"; }
+  const body = { prompts: prompts, format: fmt, seed_ids: ids };
+  if (target) body.job_id = target;
+  fetch(TEACHER_SYNTH_START, { method: "POST", headers: { "Content-Type": "application/json" },
+                               body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) { if (line) { line.textContent = "error: " + (d && d.error || "failed"); line.style.color = "var(--hot)"; } return; }
+      synthState.jobId = d.job_id;
+      try { localStorage.setItem(SYNTH_JOB_STORE, d.job_id); } catch (e) {}
+      if (info) { info.style.display = "block"; info.textContent = `job ${d.job_id} -> ${d.output_dir}`; }
+      const stop = $("synthStopPollBtn"); if (stop) stop.style.display = "";
+      if (synthState.pollTimer) clearInterval(synthState.pollTimer);
+      synthState.pollTimer = setInterval(_synthPollOnce, TEACHER_POLL_MS);
+      _synthPollOnce();
+      _synthLoadJobs().then(() => {
+        const sel = $("synthJobSelect");
+        if (sel) sel.value = d.job_id;
+        _synthSyncStartLabel();
+      });
+    })
+    .catch(e => { if (line) { line.textContent = _backendErrMsg(e); line.style.color = "var(--hot)"; } });
 }
 
 function _trShowSynthPanel(show) {
   const panel = $("synthPanel");
   if (panel) panel.style.display = show ? "block" : "none";
+  const files = $("trainFilesPanel");
+  if (files) files.style.display = show ? "block" : "none";
   // hide trainer picker + form when synth flow active
   const pickerRow = _trEl("trainPickerRow");
   if (show && pickerRow) pickerRow.style.display = "none";
@@ -8506,6 +9027,11 @@ function _trShowSynthPanel(show) {
   if (show && formWrap) formWrap.style.display = "none";
   const runRow = _trEl("trainRunRow");
   if (show && runRow) runRow.style.display = "none";
+}
+
+function _trShowRagPanel(show) {
+  const panel = $("ragTrainPanel");
+  if (panel) panel.style.display = show ? "block" : "none";
 }
 
 function _trGotoTeacherSettings(ev) {
@@ -8521,19 +9047,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const flowModal = $("trainFlowModal");
   const flowOpen  = $("trainFlowOpenBtn");
   const flowClose = $("trainFlowModalClose");
-  const flowUse   = $("trainFlowUseBtn");
   const flowSetActive = (flow) => {
     if (!flowModal) return;
-    flowModal.querySelectorAll(".train-flow-tab").forEach(t => {
-      t.classList.toggle("active", t.dataset.flowTab === flow);
+    flowModal.querySelectorAll(".train-flow-card").forEach(c => {
+      c.classList.toggle("active", c.dataset.flow === flow);
     });
-    flowModal.querySelectorAll(".train-flow-pane").forEach(p => {
-      p.classList.toggle("active", p.dataset.flowPane === flow);
-    });
-    if (flowUse) flowUse.style.display = (flow === "pipeline") ? "none" : "";
   };
   const flowOpenModal = () => {
-    flowSetActive(trainState.flow || "pipeline");
+    flowSetActive(trainState.flow);
     flowModal.classList.remove("hidden");
     document.body.style.overflow = "hidden";
   };
@@ -8541,35 +9062,58 @@ document.addEventListener("DOMContentLoaded", () => {
     flowModal.classList.add("hidden");
     document.body.style.overflow = "";
   };
-  if (flowOpen && flowModal) flowOpen.addEventListener("click", flowOpenModal);
-  if (flowClose && flowModal) flowClose.addEventListener("click", flowCloseModal);
-  if (flowModal) {
-    flowModal.querySelectorAll(".train-flow-tab").forEach(t => {
-      t.addEventListener("click", () => flowSetActive(t.dataset.flowTab));
-    });
-  }
-  if (flowUse && flowModal) flowUse.addEventListener("click", () => {
-    const activeTab = flowModal.querySelector(".train-flow-tab.active");
-    const flow = activeTab ? activeTab.dataset.flowTab : "scratch";
+  const flowPick = (flow) => {
     trainState.flow = flow;
     trainState.selected = null;
+    _trStore(flow);
+    _trToggleMetrics(flow);
     // Core Trainers list is flow-scoped; force a refetch on the next render.
     coreTrainersState.ready = false;
     _trShowSynthPanel(flow === "synth");
+    _trShowRagPanel(flow === "rag");
     _trUpdateTeacherGate();
-    if (flow === "synth" && !synthState.seeds.length) _synthLoadSeeds();
+    if (flow === "synth") {
+      if (!synthState.seeds.length) _synthLoadSeeds();
+      _synthLoadJobs().then(() => _synthReattach());
+    }
     _trRenderPicker();
     _trRenderForm();
     _trRenderStatus();
     _exRender();
     flowCloseModal();
-  });
+  };
+  if (flowOpen && flowModal) flowOpen.addEventListener("click", flowOpenModal);
+  if (flowClose && flowModal) flowClose.addEventListener("click", flowCloseModal);
+  if (flowModal) {
+    flowModal.addEventListener("click", (ev) => { if (ev.target === flowModal) flowCloseModal(); });
+    flowModal.querySelectorAll(".train-flow-card").forEach(c => {
+      c.addEventListener("click", () => flowPick(c.dataset.flow));
+    });
+  }
+  const restoredFlow = _trStored();
+  if (restoredFlow && TRAIN_VALID_FLOWS.includes(restoredFlow)) flowPick(restoredFlow);
+  else _trToggleMetrics(null);
   const gotoLink = $("teacherGotoSettings");
   if (gotoLink) gotoLink.addEventListener("click", _trGotoTeacherSettings);
   const synthStart = $("synthStartBtn");
   if (synthStart) synthStart.addEventListener("click", _synthStart);
   const synthStop = $("synthStopPollBtn");
-  if (synthStop) synthStop.addEventListener("click", () => _synthStopPoll("stopped polling, job continues in background"));
+  if (synthStop) synthStop.addEventListener("click", _synthStopJob);
+  const synthBuild = $("synthBuildBtn");
+  if (synthBuild) synthBuild.addEventListener("click", _synthBuild);
+  const filesRefresh = $("trainFilesRefresh");
+  if (filesRefresh) filesRefresh.addEventListener("click", _synthLoadJobs);
+  const synthJobSel = $("synthJobSelect");
+  if (synthJobSel) synthJobSel.addEventListener("change", () => {
+    _synthSyncStartLabel();
+    const jid = synthJobSel.value;
+    if (!jid) return;
+    synthState.jobId = jid;
+    try { localStorage.setItem(SYNTH_JOB_STORE, jid); } catch (e) {}
+    if (synthState.pollTimer) clearInterval(synthState.pollTimer);
+    synthState.pollTimer = setInterval(_synthPollOnce, TEACHER_POLL_MS);
+    _synthPollOnce();
+  });
   const exModel = _trEl("exportModel");
   if (exModel) exModel.addEventListener("change", _exPopulateSteps);
   const exRun = _trEl("exportRun");
@@ -8610,6 +9154,7 @@ document.addEventListener("DOMContentLoaded", () => {
     _trRenderForm();
     _trRenderStatus();
     _trCheckSizeMismatch();
+    _trUpdateAutoTuneVisibility();
   });
   const refresh = _trEl("trainRefresh");
   if (refresh) refresh.addEventListener("click", _trPoll);
@@ -8643,7 +9188,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   const stop = _trEl("trainStop");
   if (stop) stop.addEventListener("click", () => {
-    fetch("/trainers/stop", { method: "POST" }).then(r => r.json()).then(_trPoll).catch(_trPoll);
+    confirmDialog("Stop the training run? The latest checkpoint is kept; progress since it is lost.", "Stop").then(ok => {
+      if (!ok) return;
+      TRAIN_JOB.stop().then(r => r.json()).then(_trPoll).catch(_trPoll);
+    });
   });
   const tog = _trEl("trainFormToggle");
   if (tog) tog.addEventListener("click", () => {
@@ -9014,6 +9562,8 @@ function _applySettingsToUI(s) {
   if (aiEp) aiEp.value = s.ai_endpoint_user || "";
   const aiKy = $("aiApiKeyUser");
   if (aiKy) aiKy.value = s.ai_api_key_user || "";
+  const aiBlurb = $("aiAssistBlurb");
+  if (aiBlurb) aiBlurb.textContent = s.ai_assist_blurb || "";
   _aiUpdateEffectiveLine(s);
   if (typeof _AI !== "undefined" && _AI && _AI.applyEnabled) _AI.applyEnabled(!!s.ai_enabled);
 }
@@ -9043,40 +9593,107 @@ function _aiUpdateEffectiveLine(s) {
 // ---- teacher model ----
 const TEACHER_GET = "/teacher";
 const TEACHER_TEST = "/teacher/test";
+const TEACHER_MODELS = "/teacher/models";
 const TEACHER_SEEDS = "/teacher/seeds";
 const TEACHER_SYNTH_START = "/teacher/synth/start";
 const TEACHER_SYNTH_STATUS = "/teacher/synth/status";
+const TEACHER_SYNTH_BUILD = "/teacher/synth/build_corpus";
+const TEACHER_SYNTH_STOP = "/teacher/synth/stop";
+const TEACHER_SYNTH_SAMPLES = "/teacher/synth/samples";
+const TEACHER_SYNTH_JOBS = "/teacher/synth/jobs";
+const TEACHER_SYNTH_DELETE = "/teacher/synth/delete";
 const TEACHER_KIND_API = "api";
 const TEACHER_KIND_LOCAL = "local";
 const TEACHER_DEFAULT_MAX_CONC = 16;
+const TEACHER_LOCAL_MAX_CONC = 4;
 const TEACHER_DEFAULT_MAX_TOK = 2048;
-const TEACHER_DEFAULT_TEMP = 0.7;
 const TEACHER_POLL_MS = 2000;
-const TEACHER_NOTE_API = "leave empty to use VERITATE_TEACHER_API_KEY env var if set.";
-const TEACHER_NOTE_LOCAL = "ensure your local server is running at the base URL.";
+const TEACHER_KEY_MASK = "•".repeat(12);
+const SEED_TIER_ORDER = ["easy", "basic", "advanced"];
+const TEACHER_NOTE_LOCAL = 'ensure your local server is running at the base URL. synth auto-caps concurrency for local servers so a single GPU is not overloaded. no server-side parallelism tuning needed.';
+const TEACHER_MODEL_LIST_LABEL = "- pick a model -";
+const TEACHER_MODEL_GROUP = "connected models";
+const TEACHER_MODEL_CUSTOM = "__custom__";
+const TEACHER_CONNECTED_SUFFIX = " (connected)";
 
-const teacherState = { providers: [], current: null, pollTimer: null, jobId: null };
+const teacherState = { providers: [], current: null, pollTimer: null, jobId: null, localUp: {} };
 
 function _teacherProviderById(pid) {
   return teacherState.providers.find(p => p.id === pid) || null;
 }
 
+function _teacherConcDefault(pid) {
+  const p = _teacherProviderById(pid);
+  return (p && p.kind === TEACHER_KIND_LOCAL) ? TEACHER_LOCAL_MAX_CONC : TEACHER_DEFAULT_MAX_CONC;
+}
+
+// Effective value the synth will run: local servers are clamped to the safe cap
+// so the field never shows a number that the backend silently overrides.
+function _teacherEffectiveConc(pid, saved) {
+  const p = _teacherProviderById(pid);
+  const cap = _teacherConcDefault(pid);
+  const v = saved || cap;
+  return (p && p.kind === TEACHER_KIND_LOCAL) ? Math.min(v, cap) : v;
+}
+
+function _teacherConfigFor(pid) {
+  const cur = teacherState.current;
+  return (cur && cur.configs && cur.configs[pid]) || null;
+}
+
+function _teacherSelectedHasKey() {
+  const pid = ($("teacherProvider").value || "").trim();
+  const cfg = _teacherConfigFor(pid);
+  if (cfg) return !!cfg.has_key;
+  const cur = teacherState.current;
+  return !!(cur && pid && pid === cur.provider && cur.has_api_key);
+}
+
+// connected: API provider with a stored key, or local provider whose server answers.
+function _teacherIsConnected(pid) {
+  const prov = _teacherProviderById(pid);
+  if (prov && prov.kind === TEACHER_KIND_LOCAL) return !!teacherState.localUp[pid];
+  const cfg = _teacherConfigFor(pid);
+  if (cfg && cfg.has_key) return true;
+  const cur = teacherState.current;
+  return !!(cur && pid && pid === cur.provider && cur.has_api_key);
+}
+
+function _teacherRefreshConnectedLabels() {
+  const sel = $("teacherProvider");
+  if (!sel) return;
+  for (const o of sel.options) {
+    const p = _teacherProviderById(o.value);
+    if (p) o.textContent = (p.display_name || p.id) + (_teacherIsConnected(p.id) ? TEACHER_CONNECTED_SUFFIX : "");
+  }
+}
+
+function _teacherProbeLocalProviders() {
+  teacherState.providers.filter(p => p.kind === TEACHER_KIND_LOCAL).forEach(p => {
+    const cfg = _teacherConfigFor(p.id);
+    const body = { provider: p.id, base_url: (cfg && cfg.base_url) || p.base_url || "" };
+    fetch(TEACHER_MODELS, { method: "POST", headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(body) })
+      .then(r => r.json())
+      .then(res => {
+        const up = !!(res && res.models && res.models.length);
+        if (teacherState.localUp[p.id] === up) return;
+        teacherState.localUp[p.id] = up;
+        _teacherRefreshConnectedLabels();
+      })
+      .catch(() => {});
+  });
+}
+
 function _teacherPopulateProviderSelect() {
   const sel = $("teacherProvider");
   if (!sel) return;
+  const opt = p => `<option value="${p.id}">${p.display_name || p.id}${_teacherIsConnected(p.id) ? TEACHER_CONNECTED_SUFFIX : ""}</option>`;
   const api = teacherState.providers.filter(p => p.kind === TEACHER_KIND_API);
   const loc = teacherState.providers.filter(p => p.kind === TEACHER_KIND_LOCAL);
   let html = '<option value="">- pick a provider -</option>';
-  if (api.length) {
-    html += '<optgroup label="API">';
-    html += api.map(p => `<option value="${p.id}">${p.display_name || p.id}</option>`).join("");
-    html += '</optgroup>';
-  }
-  if (loc.length) {
-    html += '<optgroup label="Local">';
-    html += loc.map(p => `<option value="${p.id}">${p.display_name || p.id}</option>`).join("");
-    html += '</optgroup>';
-  }
+  if (api.length) html += '<optgroup label="API">' + api.map(opt).join("") + '</optgroup>';
+  if (loc.length) html += '<optgroup label="Local">' + loc.map(opt).join("") + '</optgroup>';
   sel.innerHTML = html;
 }
 
@@ -9085,20 +9702,64 @@ function _teacherApplyProviderUI(pid) {
   const apiLbl = $("teacherApiKeyLabel");
   const note = $("teacherProviderNote");
   const modelEl = $("teacherModel");
+  const modelLbl = modelEl ? modelEl.closest("label") : null;
   const baseEl = $("teacherBaseUrl");
   if (!prov) {
     if (apiLbl) apiLbl.style.display = "";
     if (note) note.textContent = "";
+    if (modelLbl) modelLbl.style.display = "";
     if (modelEl) modelEl.placeholder = "";
     if (baseEl) baseEl.placeholder = "";
     return;
   }
   const isLocal = prov.kind === TEACHER_KIND_LOCAL;
   if (apiLbl) apiLbl.style.display = isLocal ? "none" : "";
-  if (note) note.textContent = isLocal ? TEACHER_NOTE_LOCAL : TEACHER_NOTE_API;
+  if (note) note.innerHTML = isLocal ? TEACHER_NOTE_LOCAL : "";
+  // Some providers route to a fixed model via the API key; hide the model field.
+  if (modelLbl) modelLbl.style.display = (prov.model_selectable === false) ? "none" : "";
   const defModel = (prov.default_models && prov.default_models[0]) || "";
   if (modelEl) modelEl.placeholder = defModel;
   if (baseEl) baseEl.placeholder = prov.base_url || "";
+}
+
+function _teacherFillModelList(models) {
+  const sel = $("teacherModelList");
+  if (!sel) return;
+  const uniq = [...new Set(models)];
+  const cur = ($("teacherModel").value || "").trim();
+  const inList = cur && uniq.includes(cur);
+  let html = `<option value="">${TEACHER_MODEL_LIST_LABEL}</option>`;
+  if (uniq.length) {
+    html += `<optgroup label="${TEACHER_MODEL_GROUP}">`
+      + uniq.map(m => `<option value="${_trEsc(m)}"${m === cur ? " selected" : ""}>${_trEsc(m)}</option>`).join("")
+      + "</optgroup>";
+  }
+  html += `<option value="${TEACHER_MODEL_CUSTOM}"${cur && !inList ? " selected" : ""}>custom...</option>`;
+  sel.innerHTML = html;
+  _teacherSyncModelInput();
+}
+
+function _teacherSyncModelInput() {
+  const sel = $("teacherModelList");
+  const m = $("teacherModel");
+  if (!sel || !m) return;
+  m.style.display = (sel.value === TEACHER_MODEL_CUSTOM) ? "" : "none";
+}
+
+function _teacherLoadModels() {
+  const prov = ($("teacherProvider").value || "").trim();
+  if (!prov) { _teacherFillModelList([]); return; }
+  const rawKey = ($("teacherApiKey").value || "");
+  const body = {
+    provider: prov,
+    base_url: ($("teacherBaseUrl").value || "").trim(),
+    api_key: (rawKey === TEACHER_KEY_MASK) ? "" : rawKey,
+  };
+  fetch(TEACHER_MODELS, { method: "POST", headers: { "Content-Type": "application/json" },
+                         body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(res => _teacherFillModelList((res && res.models) || []))
+    .catch(() => _teacherFillModelList([]));
 }
 
 function _teacherRenderStatus(s) {
@@ -9122,12 +9783,15 @@ function _teacherApplyToForm(s) {
   if (sel) sel.value = s.provider || "";
   const m = $("teacherModel"); if (m) m.value = s.model || "";
   const b = $("teacherBaseUrl"); if (b) b.value = s.base_url || "";
-  const k = $("teacherApiKey"); if (k) k.value = "";
-  const mc = $("teacherMaxConcurrency"); if (mc) mc.value = s.max_concurrency || TEACHER_DEFAULT_MAX_CONC;
+  const k = $("teacherApiKey"); if (k) k.value = s.has_api_key ? TEACHER_KEY_MASK : "";
+  const mc = $("teacherMaxConcurrency"); if (mc) mc.value = _teacherEffectiveConc(s.provider || "", s.max_concurrency);
   const mt = $("teacherMaxTokens"); if (mt) mt.value = s.max_tokens || TEACHER_DEFAULT_MAX_TOK;
-  const tp = $("teacherTemperature"); if (tp) tp.value = (s.temperature != null ? s.temperature : TEACHER_DEFAULT_TEMP);
   _teacherApplyProviderUI(s.provider || "");
+  _teacherLoadModels();
+  _teacherProbeLocalProviders();
   _teacherRenderStatus(s);
+  const tb = $("teacherTestBtn");
+  if (tb) tb.disabled = !(s && s.configured);
   _teacherSyncSettingsCache(s);
 }
 
@@ -9153,14 +9817,13 @@ function _teacherFormPatch() {
     teacher_base_url: ($("teacherBaseUrl").value || "").trim(),
     teacher_max_concurrency: parseInt($("teacherMaxConcurrency").value, 10) || TEACHER_DEFAULT_MAX_CONC,
     teacher_max_tokens: parseInt($("teacherMaxTokens").value, 10) || TEACHER_DEFAULT_MAX_TOK,
-    teacher_temperature: parseFloat($("teacherTemperature").value) || TEACHER_DEFAULT_TEMP,
   };
 }
 
 function _saveTeacher() {
   const patch = _teacherFormPatch();
   const key = ($("teacherApiKey").value || "");
-  if (key) patch.teacher_api_key = key;
+  if (key && key !== TEACHER_KEY_MASK) patch.teacher_api_key = key;
   const lab = $("teacherTestResult");
   if (lab) { lab.textContent = "saving..."; lab.style.color = "var(--warm)"; }
   fetch(TEACHER_GET, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -9173,17 +9836,17 @@ function _saveTeacher() {
       }
       _teacherApplyToForm(s);
       if (lab) { lab.textContent = "saved"; lab.style.color = "var(--data-pos)"; }
-      const keyEl = $("teacherApiKey"); if (keyEl) keyEl.value = "";
     })
     .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } });
 }
 
 function _testTeacher() {
+  const rawKey = ($("teacherApiKey").value || "");
   const body = {
     provider: ($("teacherProvider").value || "").trim(),
     model: ($("teacherModel").value || "").trim(),
     base_url: ($("teacherBaseUrl").value || "").trim(),
-    api_key: ($("teacherApiKey").value || ""),
+    api_key: (rawKey === TEACHER_KEY_MASK) ? "" : rawKey,
   };
   const lab = $("teacherTestResult");
   if (!body.provider) { if (lab) { lab.textContent = "pick a provider"; lab.style.color = "var(--hot)"; } return; }
@@ -9193,7 +9856,7 @@ function _testTeacher() {
     .then(r => r.json())
     .then(res => {
       if (res && res.ok) {
-        if (lab) { lab.textContent = `ok, ${res.latency_ms || 0} ms`; lab.style.color = "var(--data-pos)"; }
+        if (lab) { lab.textContent = `ok: ${res.model ? res.model + " " : ""}${res.latency_ms || 0} ms`; lab.style.color = "var(--data-pos)"; }
       } else {
         const msg = (res && res.error) || "failed";
         if (lab) { lab.textContent = "error: " + msg; lab.style.color = "var(--hot)"; }
@@ -9412,7 +10075,7 @@ function _saveSettings(patch) {
   fetch("/settings", { method: "POST", headers: { "Content-Type": "application/json" },
                        body: JSON.stringify(patch) })
     .then(r => r.json())
-    .then(s => { settingsState.current = s; _applySettingsToUI(s); _sysPollEnsure(); _trUpdateAutoOptimizeVisibility(); })
+    .then(s => { settingsState.current = s; _applySettingsToUI(s); _sysPollEnsure(); _trUpdateAutoTuneVisibility(); })
     .catch(() => {})
     .finally(() => { settingsState.saving = false; });
 }
@@ -10053,11 +10716,19 @@ function _syncFileRowHtml(scope, row) {
   } else if (row.state === "orphan") {
     actions = `<button class="action" data-sync-action="adopt"
                        data-sync-path="${_syncEsc(row.path)}"
-                       title="record locally; sync ignores from now on">adopt</button>`;
+                       title="record locally; sync ignores from now on">adopt</button>`
+            + ` <button class="action" data-sync-action="delete"
+                       data-sync-path="${_syncEsc(row.path)}"
+                       data-sync-warn="1"
+                       title="remove the local file and stop tracking it">delete</button>`;
   }
 
   const parentTag = sp.parent
     ? `<span style="color:var(--dim);font-size:10px;margin-right:6px;flex-shrink:0">${_syncEsc(sp.parent)}/</span>`
+    : "";
+
+  const editNote = (row.state === "modified" || row.state === "conflict")
+    ? `<div style="color:var(--dim);font-size:10px;line-height:1.5">it looks like you may have edited this file (e.g. auto tune). leave it as is to keep your changes; "force overwrite" replaces them with the upstream version.</div>`
     : "";
 
   return `<div class="sync-row" data-sync-path="${_syncEsc(row.path)}"
@@ -10072,6 +10743,7 @@ function _syncFileRowHtml(scope, row) {
       <span style="flex:1"></span>
       <span class="inline" style="gap:4px;flex-wrap:wrap;justify-content:flex-end">${actions}</span>
     </div>
+    ${editNote}
   </div>`;
 }
 
@@ -10090,7 +10762,7 @@ function _syncRenderPanel(scope, data) {
   let header = `<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px;font-size:10.5px;color:var(--dim)">
     <span>${rows.length} file${rows.length === 1 ? "" : "s"} tracked · `
     + `${counts.current || 0} current · ${counts.update_available || 0} updates · `
-    + `${counts.missing || 0} missing · ${counts.modified || 0} modified · ${counts.conflict || 0} conflict</span>
+    + `${counts.missing || 0} missing · ${counts.modified || 0} modified · ${counts.conflict || 0} conflict · ${counts.orphan || 0} orphan</span>
     <span>branch: <code style="color:var(--text)">${_syncEsc(data.branch || "main")}</code></span>
   </div>`;
 
@@ -10147,6 +10819,9 @@ function _syncConfirmDestructive(scope, action, path, row) {
     what = `Veritate will record your local copy as the new baseline. No file ` +
            `will be overwritten; future syncs will treat this version as ` +
            `"current" until either side changes again.`;
+  } else if (action === "delete") {
+    what = `This orphaned file was removed upstream. Veritate will DELETE your ` +
+           `local copy and stop tracking it.\nThis cannot be undone from inside Veritate.`;
   }
   return confirm(
     `${action.toUpperCase()}\n\n` +
@@ -10183,6 +10858,7 @@ function _syncResultSummary(results) {
     ["updated",   pick(r.updated)],
     ["forced",    pick(r.forced)],
     ["adopted",   pick(r.adopted)],
+    ["deleted",   pick(r.deleted)],
     ["skipped",   pick(r.skipped)],
     ["errors",    pick(r.errors)],
   ].filter(([_, paths]) => paths.length > 0);
@@ -10257,6 +10933,39 @@ const CORPUS_COMING_SOON = new Set([
   "chat_500mb", "chat_5gb",
   "agent_150mb", "agent_1500mb",
 ]);
+
+// Corpus categories by purpose. Order is render order. A catalog entry maps to
+// a category by stem (CORPUS_STEM_CATEGORY), falling back to its trained_modes,
+// then "facts".
+const CORPUS_CATEGORIES = [
+  { id: "chatting",     label: "Chatting",     blurb: "teach a model to converse" },
+  { id: "autocomplete", label: "Autocomplete", blurb: "tool-use and code/doc completion" },
+  { id: "facts",        label: "Facts",        blurb: "raw text for base knowledge" },
+  { id: "statistics",   label: "Statistics",   blurb: "market time-series for the Market LLM" },
+];
+const CORPUS_STEM_CATEGORY = {
+  chat_50mb: "chatting", chat_500mb: "chatting", chat_5gb: "chatting",
+  chat_distill_v1: "chatting", chat_distill_v2: "chatting",
+  agent_15mb: "autocomplete", agent_150mb: "autocomplete", agent_1500mb: "autocomplete",
+  mcp_docs: "autocomplete", python_synth: "autocomplete", python_test: "autocomplete",
+  fineweb_edu: "facts", openwebtext10g: "facts", enwik8: "facts",
+  grounded_v1: "facts", grounded_v2: "facts", grounded_chunk: "facts", grounded_ui: "facts",
+  crypto: "statistics", stocks: "statistics",
+};
+const CORPUS_MODE_CATEGORY = { chat: "chatting", agent: "autocomplete", autocomplete: "autocomplete" };
+
+// Market LLM corpora (crypto, stocks) are now published as real raw_bytes catalog
+// entries hosted on COS, so no coming-soon placeholders are needed.
+const CORPUS_MARKET_PLACEHOLDERS = [];
+
+function _corpusCategoryOf(c) {
+  if (c.category) return c.category;
+  const byStem = CORPUS_STEM_CATEGORY[c.stem];
+  if (byStem) return byStem;
+  const modes = c.trained_modes || [];
+  for (const m of modes) { if (CORPUS_MODE_CATEGORY[m]) return CORPUS_MODE_CATEGORY[m]; }
+  return "facts";
+}
 
 function _corpusFmtBytes(n) {
   if (n == null) return "?";
@@ -10349,14 +11058,55 @@ function _corpusRenderCatalog(data) {
     }
   }
 
-  if (!data.corpora || data.corpora.length === 0) {
+  const entries = (data.corpora || []).concat(CORPUS_MARKET_PLACEHOLDERS);
+  if (entries.length === 0) {
     list.innerHTML = '<div class="meta" style="color:var(--dim);font-size:11px">no corpora in catalog yet</div>';
     return;
   }
 
-  list.innerHTML = data.corpora.map(c => {
+  // Bucket by purpose, render each category as a labeled section. Categories
+  // with no entries are skipped; an "Other" catch-all holds anything unmapped.
+  const buckets = {};
+  for (const c of entries) {
+    const cat = _corpusCategoryOf(c);
+    (buckets[cat] || (buckets[cat] = [])).push(c);
+  }
+  const sections = [];
+  for (const cat of CORPUS_CATEGORIES) {
+    const rows = buckets[cat.id];
+    if (!rows || !rows.length) continue;
+    sections.push(
+      `<div style="font-weight:600;font-size:11.5px;color:var(--accent);letter-spacing:.03em;margin:8px 0 2px;padding:0 8px">` +
+      `${_corpusEsc(cat.label)} <span class="meta" style="font-weight:400;font-size:10px;color:var(--dim);letter-spacing:0">: ${_corpusEsc(cat.blurb)}</span></div>` +
+      rows.map(_corpusRowHtml).join("")
+    );
+    delete buckets[cat.id];
+  }
+  const leftover = Object.keys(buckets).flatMap(k => buckets[k]);
+  if (leftover.length) {
+    sections.push(
+      `<div style="font-weight:600;font-size:11.5px;color:var(--accent);letter-spacing:.03em;margin:8px 0 2px;padding:0 8px">Other</div>` +
+      leftover.map(_corpusRowHtml).join("")
+    );
+  }
+  list.innerHTML = sections.join("");
+
+  list.querySelectorAll("[data-corpus-install]").forEach(b => {
+    b.addEventListener("click", () => _corpusInstallTrigger(b.getAttribute("data-corpus-install")));
+  });
+  list.querySelectorAll("[data-corpus-uninstall]").forEach(b => {
+    b.addEventListener("click", () => _corpusUninstallTrigger(b.getAttribute("data-corpus-uninstall")));
+  });
+  list.querySelectorAll("[data-corpus-remove-source]").forEach(b => {
+    b.addEventListener("click", () => _corpusRemoveSourceTrigger(b.getAttribute("data-corpus-remove-source")));
+  });
+}
+
+function _corpusRowHtml(c) {
     const installed = c.installed_train;
-    const hasUrl    = (c.format === "hf_dataset") ? !!c.hf_dataset : !!c.train_url;
+    const hasUrl    = (c.format === "hf_dataset") ? !!c.hf_dataset
+                    : (c.format === "native")     ? !!c.native_available
+                    : !!c.train_url;
     const isUser    = c.is_user_source;
     const sizeLabel = c.size_train != null ? _corpusFmtBytes(c.size_train) : null;
     const progress  = c.progress;
@@ -10374,10 +11124,12 @@ function _corpusRenderCatalog(data) {
 
     // Platform-style boxy badges (mirrors the .case badge design used elsewhere).
     const tags = [];
+    if (c.format === "native") tags.push(`<span class="corpus-tag t-info" title="ships inside Veritate; installing copies it into trainers/corpus/, no download">built-in</span>`);
     if (recLabel)  tags.push(`<span class="corpus-tag t-info" title="recommended for these model sizes">${recLabel}</span>`);
     if (sizeLabel) tags.push(`<span class="corpus-tag t-dim" title="approximate download size">~${sizeLabel}</span>`);
     if (installed) tags.push(`<span class="corpus-tag t-good">installed${c.installed_size_val ? " + val" : ""}</span>`);
     else if (downloading) tags.push(`<span class="corpus-tag t-warm">downloading</span>`);
+    else if (c.coming_soon) tags.push(`<span class="corpus-tag t-warm" title="not published yet; download link lands later">coming soon</span>`);
     else if (!hasUrl) tags.push(`<span class="corpus-tag t-hot" title="add a custom source or set a working catalog URL">no source</span>`);
     if (isUser) tags.push(`<span class="corpus-tag t-info">custom</span>`);
 
@@ -10397,7 +11149,7 @@ function _corpusRenderCatalog(data) {
     // Primary install gets accent border so it stands out from the secondary
     // "remove" button.
     let actions = "";
-    const gated = !isUser && CORPUS_COMING_SOON.has(c.stem);
+    const gated = c.coming_soon || (!isUser && CORPUS_COMING_SOON.has(c.stem));
     if (gated) {
       actions = `<button class="action" type="button" disabled title="not yet available">coming soon</button>`;
     } else if (downloading) {
@@ -10453,17 +11205,6 @@ function _corpusRenderCatalog(data) {
         ${descLine}
         ${progressLine}
       </div>`;
-  }).join("");
-
-  list.querySelectorAll("[data-corpus-install]").forEach(b => {
-    b.addEventListener("click", () => _corpusInstallTrigger(b.getAttribute("data-corpus-install")));
-  });
-  list.querySelectorAll("[data-corpus-uninstall]").forEach(b => {
-    b.addEventListener("click", () => _corpusUninstallTrigger(b.getAttribute("data-corpus-uninstall")));
-  });
-  list.querySelectorAll("[data-corpus-remove-source]").forEach(b => {
-    b.addEventListener("click", () => _corpusRemoveSourceTrigger(b.getAttribute("data-corpus-remove-source")));
-  });
 }
 
 function _corpusRefreshCatalog() {
@@ -10500,6 +11241,11 @@ function _corpusInstallTrigger(stem) {
   if (fmt === "hf_dataset" && !entry.hf_dataset) {
     const lab = $("corpusActionStatus");
     if (lab) { lab.textContent = `${stem}: hf_dataset name missing`; lab.style.color = "var(--hot)"; }
+    return;
+  }
+  if (fmt === "native" && !entry.native_available) {
+    const lab = $("corpusActionStatus");
+    if (lab) { lab.textContent = `${stem}: built-in corpus files missing from this install`; lab.style.color = "var(--hot)"; }
     return;
   }
 
@@ -10645,6 +11391,208 @@ function _corpusCloseLibraryModal() {
   document.body.classList.remove("no-scroll");
 }
 
+function _extEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+}
+
+// ---- Extension library (downloadable extensions; namespaced mkt*) ----
+const mktState = { catalog: null, busy: new Set(), inflight: false };
+const mktDataState = { datasets: {}, busy: new Set(), open: new Set() };
+
+function _mktNote(msg, color) {
+  const s = $("mktActionStatus");
+  if (s) { s.textContent = msg || ""; s.style.color = color || "var(--dim)"; }
+}
+
+function _mktFmtGb(gb) {
+  if (gb == null) return "";
+  if (gb >= 1) return gb.toFixed(gb >= 10 ? 0 : 1) + " GB";
+  return Math.round(gb * 1000) + " MB";
+}
+
+function _mktDataKey(id, source) { return id + "::" + source; }
+
+function _mktDataRowHtml(id, d) {
+  const present = !!d.present;
+  const busy = mktDataState.busy.has(_mktDataKey(id, d.source));
+  const size = d.size_gb != null && present ? d.size_gb : d.approx_gb;
+  const tags = [];
+  if (d.approx_gb != null && !present) tags.push(`<span class="corpus-tag t-dim" title="approximate size">~${_mktFmtGb(d.approx_gb)}</span>`);
+  if (present) tags.push(`<span class="corpus-tag t-good">downloaded${size ? " (" + _mktFmtGb(size) + ")" : ""}</span>`);
+  else if (!d.downloadable) tags.push(`<span class="corpus-tag t-warm" title="not hosted yet">coming soon</span>`);
+  let action;
+  if (busy) action = `<button class="action" type="button" disabled>working...</button>`;
+  else if (present) action = `<button class="action" type="button" data-mkt-data-delete="${_extEsc(d.source)}" data-mkt-data-id="${_extEsc(id)}" title="reclaim disk; re-downloadable from catalog">delete</button>`;
+  else if (d.downloadable) action = `<button class="action" type="button" data-mkt-data-download="${_extEsc(d.source)}" data-mkt-data-id="${_extEsc(id)}" style="border-color:var(--accent);color:var(--accent)">download</button>`;
+  else action = `<button class="action" type="button" disabled title="not hosted yet">coming soon</button>`;
+  const desc = d.description ? `<div style="padding:1px 8px 0 8px;font-size:10px;color:var(--dim);line-height:1.5">${_extEsc(d.description)}</div>` : "";
+  return `
+    <div style="padding:4px 0">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 8px">
+        <span style="color:var(--text);font-size:11px;flex:1;min-width:180px">${_extEsc(d.label || d.source)}</span>
+        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">${tags.join("")}</div>
+        <div style="flex-shrink:0">${action}</div>
+      </div>
+      ${desc}
+    </div>`;
+}
+
+function _mktDataRender(id) {
+  const box = document.querySelector(`[data-mkt-data="${id}"]`);
+  if (!box) return;
+  const datasets = mktDataState.datasets[id] || [];
+  if (!datasets.length) { box.innerHTML = ""; return; }
+  const open = mktDataState.open.has(id);
+  const downloaded = datasets.filter(d => d.present).length;
+  const summary = `${datasets.length} dataset${datasets.length === 1 ? "" : "s"}${downloaded ? " · " + downloaded + " downloaded" : ""}`;
+  const rows = open ? datasets.map(d => _mktDataRowHtml(id, d)).join("") : "";
+  box.innerHTML = `
+    <div style="margin:4px 8px 0;padding-top:6px;border-top:1px solid #131722">
+      <div data-mkt-data-toggle="${_extEsc(id)}" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;padding:0 8px 2px">
+        <span style="font-size:9px;color:var(--accent);width:8px">${open ? "▾" : "▸"}</span>
+        <span style="font-size:10px;color:var(--accent);letter-spacing:.04em;text-transform:uppercase">Data</span>
+        <span style="font-size:10px;color:var(--dim)">${summary}</span>
+      </div>
+      ${rows}
+    </div>`;
+  box.querySelector("[data-mkt-data-toggle]").addEventListener("click", () => {
+    if (mktDataState.open.has(id)) mktDataState.open.delete(id); else mktDataState.open.add(id);
+    _mktDataRender(id);
+  });
+  box.querySelectorAll("[data-mkt-data-download]").forEach(b =>
+    b.addEventListener("click", () => _mktDataDownload(b.getAttribute("data-mkt-data-id"), b.getAttribute("data-mkt-data-download"))));
+  box.querySelectorAll("[data-mkt-data-delete]").forEach(b =>
+    b.addEventListener("click", () => _mktDataDelete(b.getAttribute("data-mkt-data-id"), b.getAttribute("data-mkt-data-delete"))));
+}
+
+function _mktDataLoad(id) {
+  fetch(`/extensions/${encodeURIComponent(id)}/data`).then(r => r.json()).then(res => {
+    mktDataState.datasets[id] = (res && res.datasets) || [];
+    _mktDataRender(id);
+  }).catch(() => {});
+}
+
+function _mktDataDownload(id, source) {
+  const key = _mktDataKey(id, source);
+  if (!id || !source || mktDataState.busy.has(key)) return;
+  mktDataState.busy.add(key); _mktDataRender(id);
+  fetch(`/extensions/${encodeURIComponent(id)}/data/download`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })
+    .then(r => r.json()).then(res => {
+      _mktNote(res.ok ? (res.note || `${source}: downloaded`) : (res.error || "download failed"), res.ok ? "var(--data-pos)" : "var(--warm)");
+    })
+    .catch(() => _mktNote("Download failed. Try again.", "var(--hot)"))
+    .finally(() => { mktDataState.busy.delete(key); _mktDataLoad(id); });
+}
+
+function _mktDataDelete(id, source) {
+  const key = _mktDataKey(id, source);
+  if (!id || !source || mktDataState.busy.has(key)) return;
+  const d = (mktDataState.datasets[id] || []).find(x => x.source === source) || {};
+  const warn = d.downloadable ? "" : "\n\nThis dataset is not hosted yet, so deleting is PERMANENT (no re-download).";
+  if (!confirm(`Delete dataset "${d.label || source}"?` + warn)) return;
+  mktDataState.busy.add(key); _mktDataRender(id);
+  fetch(`/extensions/${encodeURIComponent(id)}/data/delete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })
+    .then(r => r.json()).then(res => {
+      let msg;
+      if (res.ok) msg = res.note || `${source}: deleted${res.reclaimed_gb ? " (" + _mktFmtGb(res.reclaimed_gb) + " freed)" : (res.unlinked ? " (link removed)" : "")}`;
+      else msg = res.error || "delete failed";
+      _mktNote(msg, res.ok ? "var(--data-pos)" : "var(--warm)");
+    })
+    .catch(() => _mktNote("Delete failed. Try again.", "var(--hot)"))
+    .finally(() => { mktDataState.busy.delete(key); _mktDataLoad(id); });
+}
+
+function _mktRowHtml(e) {
+  const busy = mktState.busy.has(e.id);
+  const meta = [e.version ? "v" + _extEsc(e.version) : "", e.author ? "by " + _extEsc(e.author) : ""].filter(Boolean).join(" · ");
+  const tags = [];
+  if (e.installed) tags.push(`<span class="corpus-tag t-good">installed</span>`);
+  let action;
+  if (busy) action = `<button class="action" type="button" disabled>working...</button>`;
+  else if (e.installed) action = `<button class="action" type="button" data-mkt-uninstall="${_extEsc(e.id)}">uninstall</button>`;
+  else action = `<button class="action" type="button" data-mkt-install="${_extEsc(e.id)}" style="border-color:var(--accent);color:var(--accent)">install</button>`;
+  const desc = e.description ? `<div style="padding:1px 8px 0 8px;font-size:10.5px;color:var(--dim);line-height:1.55">${_extEsc(e.description)}</div>` : "";
+  return `
+    <div style="border-bottom:1px solid #131722;padding:6px 0">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 8px">
+        <div style="display:flex;align-items:baseline;gap:6px;flex:1;min-width:240px">
+          <span style="color:var(--accent);font-weight:500;font-size:11.5px">${_extEsc(e.name || e.id)}</span>
+          <span style="color:var(--dim);font-size:10.5px">${meta}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">${tags.join("")}</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">${action}</div>
+      </div>
+      ${desc}
+      <div data-mkt-data="${_extEsc(e.id)}"></div>
+    </div>`;
+}
+
+function _mktRender(data) {
+  mktState.catalog = data;
+  const list = $("mktList");
+  const items = (data && data.catalog) || [];
+  if (list) list.innerHTML = items.length
+    ? items.map(_mktRowHtml).join("")
+    : `<div class="meta" style="padding:12px 8px;color:var(--dim)">Nothing in the library right now.</div>`;
+  const cb = $("mktModalCount");
+  if (cb) cb.textContent = items.length ? `${items.filter(e => e.installed).length}/${items.length} installed` : "";
+  if (list) {
+    list.querySelectorAll("[data-mkt-install]").forEach(b => b.addEventListener("click", () => _mktInstall(b.getAttribute("data-mkt-install"))));
+    list.querySelectorAll("[data-mkt-uninstall]").forEach(b => b.addEventListener("click", () => _mktUninstall(b.getAttribute("data-mkt-uninstall"))));
+  }
+  items.forEach(e => { if (e.id) { _mktDataRender(e.id); _mktDataLoad(e.id); } });
+}
+
+function _mktRefresh() {
+  if (mktState.inflight) return;
+  mktState.inflight = true;
+  if (!mktState.catalog && $("mktList")) showSkeleton("mktList", "blocks", 4);
+  fetch("/extensions/catalog").then(r => r.json()).then(_mktRender)
+    .catch(() => _mktNote("Could not load the catalog. Try again.", "var(--hot)"))
+    .finally(() => { mktState.inflight = false; });
+}
+
+function _mktInstall(id) {
+  if (!id || mktState.busy.has(id)) return;
+  mktState.busy.add(id); _mktRender(mktState.catalog);
+  fetch("/extensions/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
+    .then(r => r.json()).then(res => {
+      if (res.ok) _mktNote("Installed — restart the dashboard to activate.", "var(--data-pos)");
+      else _mktNote(res.error || "Install failed.", "var(--warm)");
+    })
+    .catch(() => _mktNote("Install failed. Try again.", "var(--hot)"))
+    .finally(() => { mktState.busy.delete(id); _mktRefresh(); });
+}
+
+function _mktUninstall(id) {
+  if (!id || mktState.busy.has(id)) return;
+  mktState.busy.add(id); _mktRender(mktState.catalog);
+  fetch("/extensions/uninstall", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
+    .then(r => r.json()).then(res => {
+      if (res.ok) _mktNote("Uninstalled — restart the dashboard to apply.", "var(--data-pos)");
+      else _mktNote(res.error || "Uninstall failed.", "var(--warm)");
+    })
+    .catch(() => _mktNote("Uninstall failed. Try again.", "var(--hot)"))
+    .finally(() => { mktState.busy.delete(id); _mktRefresh(); });
+}
+
+function _mktOpenMarketplace() {
+  const m = $("mktMarketplaceModal");
+  if (!m) return;
+  _mktNote("");
+  m.classList.remove("hidden");
+  document.body.classList.add("no-scroll");
+  _mktRefresh();
+}
+
+function _mktCloseMarketplace() {
+  const m = $("mktMarketplaceModal");
+  if (m) m.classList.add("hidden");
+  document.body.classList.remove("no-scroll");
+}
+
+window.mktOpenMarketplace = _mktOpenMarketplace;
+
 function _corpusOpenAddSourceModal() {
   const m = $("corpusAddSourceModal");
   if (!m) return;
@@ -10726,7 +11674,7 @@ function _trCorpusSizeWarning() {
     meta.parentNode.insertBefore(warnEl, meta.nextSibling);
   }
   const stem = _trCorpusBaseStem(typeof _trArgVal === "function" ? _trArgVal("corpus") : "");
-  const size = (typeof _trArgVal === "function") ? _trArgVal("size") : "";
+  const size = (typeof _trResolvedSize === "function") ? _trResolvedSize() : "";
   if (!stem || !size) { warnEl.style.display = "none"; return; }
   const data = corpusLibState.catalog;
   if (!data || !data.corpora) {
@@ -10787,10 +11735,15 @@ function _renderSysSpecs(s) {
     const vram = g.vram_total ? " &middot; " + fmtBytes(g.vram_total) + " VRAM" : "";
     return `<div>${escapeHtml(g.name || g.vendor || "GPU")} <span style="color:var(--dim)">(${tag}${vram})</span></div>`;
   }).join("") || `<div style="color:var(--dim)">no GPU detected</div>`;
+  const m = s.measured;
+  const measuredLine = (m && m.tok_per_s)
+    ? `<div style="color:var(--data-pos);margin-top:4px">auto-tuned: batch ${m.best_batch || m.max_batch} &middot; ${Math.round(m.tok_per_s).toLocaleString()} tok/s &middot; ${(m.mem_ceiling_gb || 0).toFixed(1)} GB measured (${escapeHtml(m.device || "?")})</div>`
+    : "";
   view.innerHTML = `
     <div>${escapeHtml(p.system || "?")} ${escapeHtml(p.release || "")} (${escapeHtml(p.machine || "?")}) &middot; Python ${escapeHtml(p.python || "?")}</div>
     <div>${cpu.count_logical || "?"} logical cores${cpu.count_physical ? " (" + cpu.count_physical + " physical)" : ""} &middot; ${fmtBytes(mem.total_bytes)} RAM</div>
     ${gpuLines}
+    ${measuredLine}
     <div style="color:var(--dim);margin-top:4px">captured ${new Date((s.captured_at || 0) * 1000).toLocaleString()}</div>
   `;
   view.style.color = "var(--text)";
@@ -10954,13 +11907,23 @@ document.addEventListener("DOMContentLoaded", () => {
     settingsState.loaded = true;
     _applySettingsToUI(s);
     _sysPollEnsure();
-    _trUpdateAutoOptimizeVisibility();
+    _trUpdateAutoTuneVisibility();
     if (!s.consent_modal_seen) showConsentModal({ allowDecline: false });
     else showBuildNoticesIfAny();
   }).catch(() => {});
 
-  const autoBtn = $("trainAutoOptimizeBtn");
-  if (autoBtn) autoBtn.addEventListener("click", _trAutoOptimize);
+  const autoBtn = $("trainAutoTuneBtn");
+  if (autoBtn) autoBtn.addEventListener("click", _autoTuneOpen);
+  const sysTuneBtn = $("sysAutoTuneBtn");
+  if (sysTuneBtn) sysTuneBtn.addEventListener("click", _autoTuneOpen);
+  const tuneStart = $("autoTuneStart");
+  if (tuneStart) tuneStart.addEventListener("click", _autoTuneStart);
+  const tuneStop = $("autoTuneStop");
+  if (tuneStop) tuneStop.addEventListener("click", _autoTuneStop);
+  const tuneApply = $("autoTuneApply");
+  if (tuneApply) tuneApply.addEventListener("click", _autoTuneApply);
+  const tuneClose = $("autoTuneClose");
+  if (tuneClose) tuneClose.addEventListener("click", _autoTuneClose);
 
   document.querySelectorAll('input[name="pytorchMode"]').forEach(r => {
     r.addEventListener("change", () => {
@@ -11017,11 +11980,11 @@ document.addEventListener("DOMContentLoaded", () => {
     detectBtn.textContent = "detecting…";
     fetch("/sys/detect", { method: "POST" })
       .then(r => r.json())
-      .then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoOptimizeVisibility(); _applyDevicePrefCapabilities(); })
+      .then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoTuneVisibility(); _applyDevicePrefCapabilities(); })
       .catch(() => {})
       .finally(() => { detectBtn.disabled = false; detectBtn.textContent = prev; });
   });
-  fetch("/sys/specs").then(r => r.json()).then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoOptimizeVisibility(); _applyDevicePrefCapabilities(); }).catch(() => {});
+  fetch("/sys/specs").then(r => r.json()).then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoTuneVisibility(); _applyDevicePrefCapabilities(); }).catch(() => {});
   const hbBtn = $("heartbeatSendBtn");
   if (hbBtn) hbBtn.addEventListener("click", () => {
     const lab = $("heartbeatSendStatus");
@@ -11205,7 +12168,43 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // teacher model wiring
   const tProv = $("teacherProvider");
-  if (tProv) tProv.addEventListener("change", () => _teacherApplyProviderUI(tProv.value));
+  if (tProv) tProv.addEventListener("change", () => {
+    _teacherApplyProviderUI(tProv.value);
+    const prov = _teacherProviderById(tProv.value);
+    const cfg = _teacherConfigFor(tProv.value);
+    const baseEl = $("teacherBaseUrl");
+    if (baseEl && prov) baseEl.value = (cfg && cfg.base_url) || prov.base_url || "";
+    const modelEl = $("teacherModel");
+    if (modelEl) {
+      if (prov && prov.model_selectable === false) modelEl.value = "";
+      else modelEl.value = (cfg && cfg.model) || "";
+    }
+    const keyEl = $("teacherApiKey");
+    if (keyEl) keyEl.value = _teacherSelectedHasKey() ? TEACHER_KEY_MASK : "";
+    const mcEl = $("teacherMaxConcurrency");
+    if (mcEl) mcEl.value = _teacherConcDefault(tProv.value);
+    _teacherLoadModels();
+  });
+  const tList = $("teacherModelList");
+  if (tList) tList.addEventListener("change", () => {
+    const m = $("teacherModel");
+    if (m) m.value = (tList.value === TEACHER_MODEL_CUSTOM) ? "" : tList.value;
+    _teacherSyncModelInput();
+    if (tList.value === TEACHER_MODEL_CUSTOM) { if (m) m.focus(); }
+    else _saveTeacher();
+  });
+  const tModelInput = $("teacherModel");
+  if (tModelInput) tModelInput.addEventListener("change", () => { if (tModelInput.value.trim()) _saveTeacher(); });
+  const tBase = $("teacherBaseUrl");
+  if (tBase) tBase.addEventListener("blur", _teacherLoadModels);
+  const tKey = $("teacherApiKey");
+  if (tKey) {
+    tKey.addEventListener("focus", () => { if (tKey.value === TEACHER_KEY_MASK) tKey.value = ""; });
+    tKey.addEventListener("blur", () => {
+      if (!tKey.value && _teacherSelectedHasKey()) tKey.value = TEACHER_KEY_MASK;
+      _teacherLoadModels();
+    });
+  }
   const tAdv = $("teacherAdvancedToggle");
   if (tAdv) tAdv.addEventListener("click", () => {
     const box = $("teacherAdvancedBox");
@@ -11217,11 +12216,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const tTest = $("teacherTestBtn");
   if (tTest) tTest.addEventListener("click", _testTeacher);
   _loadTeacher();
+  const AI_NO_RUN_MSG = "no training run selected: start or pick a run in live training, then ask again.";
   const askRT = $("askAiRecentTrain");
   if (askRT) askRT.addEventListener("click", () => {
     const sel = $("runPicker");
     const name = sel && sel.value ? sel.value : "";
-    if (!name) { window.ai_ask("recent_train", {}, "explain recent training"); return; }
+    if (!name) { window.ai_fail("explain recent training", AI_NO_RUN_MSG); return; }
     window.ai_ask("recent_train", { model: name }, "explain recent training");
   });
   const askLC = $("askAiLossCurve");
@@ -11229,6 +12229,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const cached = window._aiLossCurve || null;
     const sel = $("runPicker");
     const name = (cached && cached.model) || (sel && sel.value) || "";
+    if (!name) { window.ai_fail("explain loss curve", AI_NO_RUN_MSG); return; }
     const verdict = cached && cached.verdict ? cached.verdict : { state: "warming" };
     window.ai_ask("loss_curve", {
       model: name,
@@ -11243,6 +12244,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const cached = window._aiTrainHealth || null;
     const sel = $("runPicker");
     const name = (cached && cached.model) || (sel && sel.value) || "";
+    if (!name) { window.ai_fail("explain training health", AI_NO_RUN_MSG); return; }
     const verdict = cached && cached.verdict ? cached.verdict : { state: "warming" };
     const recent  = cached && cached.series ? cached.series : [];
     window.ai_ask("train_health", {
@@ -11343,6 +12345,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if (casm) casm.addEventListener("click", (e) => { if (e.target === casm) _corpusCloseAddSourceModal(); });
   _corpusRefreshCatalog();
   setInterval(() => { if (_isTabActive("settings")) _corpusRefreshCatalog(); }, 15000);
+
+  // ---- Extension library wiring ----
+  const mkc = $("mktModalClose"); if (mkc) mkc.addEventListener("click", _mktCloseMarketplace);
+  const mkm = $("mktMarketplaceModal"); if (mkm) mkm.addEventListener("click", (e) => { if (e.target === mkm) _mktCloseMarketplace(); });
 
   const srb = $("softReloadBtn");
   if (srb) srb.addEventListener("click", _lifecycleSoftReload);
@@ -11954,13 +12960,19 @@ const _AI = (() => {
     }
   }
 
+  function fail(titleText, msg) {
+    _open(titleText);
+    _renderError(msg);
+  }
+
   function applyEnabled(enabled) {
     document.body.classList.toggle("ai-disabled", !enabled);
   }
 
-  return { ask, applyEnabled };
+  return { ask, fail, applyEnabled };
 })();
 window.ai_ask = _AI.ask;
+window.ai_fail = _AI.fail;
 
 (function _emptyStateMonitor() {
   function _bodyHasRealText(body) {

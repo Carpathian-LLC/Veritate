@@ -5,7 +5,7 @@ tags: [engine, versions, semver, manifest]
 summary: How the C engine binary is versioned and how the dashboard picks which one to use.
 ---
 
-> Friendly summary. The canonical contract is `documentation/kernels/engine_versions.md`.
+> Friendly summary. The canonical contract is `developer_documentation/kernels/engine_versions.md`.
 
 The C engine (`veritate.exe`) uses simple semver. The current build is **v2.0.0**. The earlier build, historically tagged v3.4.5, has been renumbered to **v1.0.0** under this scheme.
 
@@ -15,7 +15,7 @@ The earlier 3.4.5 number conflated kernel changes, dashboard changes, and weight
 
 ## the manifest
 
-`veritate_engine/engine_versions.json` is the source of truth. It maps an exe filename in `$LOCALAPPDATA/veritate/` to a semver string and a label.
+`veritate_engine/v1/engine_versions.json` is the source of truth. It maps an exe filename in `$LOCALAPPDATA/veritate/` to a semver string and a label.
 
 ```json
 {
@@ -41,7 +41,7 @@ The MRI server reads this at startup, picks the highest-version entry whose exe 
 
 1. `build.bat` writes `veritate.exe` (the live build).
 2. To keep the previous build for A/B comparison, copy it to `veritate_v<old>.exe` **before** rebuilding.
-3. Bump the `version` of the `veritate.exe` entry in `veritate_engine/engine_versions.json` and add a new entry for the archived exe.
+3. Bump the `version` of the `veritate.exe` entry in `veritate_engine/v1/engine_versions.json` and add a new entry for the archived exe.
 4. Restart the MRI server. The dropdown auto-defaults to the new version.
 
 The user-facing UI doesn't expose engine selection. The engine is abstracted to "always the newest version with an existing binary." To run an older engine for benchmarking, pass `--c-exe <path>` to `run_serve.py`.

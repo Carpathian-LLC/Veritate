@@ -1,0 +1,45 @@
+<!-- Developed by Carpathian, LLC. Distribution Not Authorized. -->
+<!-- veritate_mri/web/login.html : dashboard login (active only when a password is set). -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veritate — sign in</title>
+<style>
+  :root { --bg:#06090f; --panel:#0d111a; --line:#1d2536; --text:#e6ecf5; --soft:#9fb0c8; --accent:#6aa6ff; --warm:#e0a060; }
+  * { box-sizing: border-box; }
+  body { margin:0; height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--text);
+         font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .card { width:340px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:28px; }
+  .brand { font-weight:700; letter-spacing:.04em; font-size:18px; margin-bottom:4px; }
+  .brand span { color:var(--accent); }
+  .sub { color:var(--soft); font-size:13px; margin-bottom:20px; }
+  label { display:block; font-size:12px; color:var(--soft); margin-bottom:6px; }
+  input { width:100%; background:#0a0c12; border:1px solid var(--line); color:var(--text);
+          padding:10px 12px; border-radius:7px; font:inherit; margin-bottom:14px; }
+  button { width:100%; background:var(--accent); color:#06121f; font-weight:600; border:none;
+           padding:11px; border-radius:7px; font-size:14px; cursor:pointer; }
+  button:hover { filter:brightness(1.08); }
+  .err { color:var(--warm); font-size:12.5px; margin-bottom:12px; min-height:16px; }
+  .home { display:block; text-align:center; margin-top:16px; color:var(--soft); font-size:12px; text-decoration:none; }
+</style>
+</head>
+<body>
+  <form class="card" method="POST" action="/login">
+    <div class="brand">VERI<span>TATE</span></div>
+    <div class="sub">Sign in to the platform</div>
+    <div class="err" id="err"></div>
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autofocus autocomplete="current-password">
+    <button type="submit">Sign in</button>
+    <a class="home" href="/">back to home</a>
+  </form>
+  <script>
+    if (new URLSearchParams(location.search).get("e")) {
+      document.getElementById("err").textContent = "Incorrect password.";
+    }
+  </script>
+</body>
+</html>

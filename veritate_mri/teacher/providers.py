@@ -21,6 +21,7 @@ DEFAULT_MAX_RETRIES = 5
 DEFAULT_BACKOFF_BASE_S = 1.0
 DEFAULT_BACKOFF_MAX_S = 30.0
 DEFAULT_MAX_CONCURRENCY = 16
+LOCAL_MAX_CONCURRENCY = 4
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_MAX_TOKENS = 2048
 ENV_KEY = "VERITATE_TEACHER_API_KEY"
@@ -30,12 +31,31 @@ OPENAI_RESPONSE_PATH = ["choices", 0, "message", "content"]
 ANTHROPIC_RESPONSE_PATH = ["content", 0, "text"]
 
 PROVIDERS = {
+    "carpathian": {
+        "id": "carpathian",
+        "display_name": "Carpathian AI",
+        "kind": "api",
+        "base_url": "https://api.carpathian.ai/ai/v1",
+        "chat_path": "/chat/completions",
+        "models_path": "/models",
+        "auth_style": "bearer",
+        "auth_header": "Authorization",
+        "auth_prefix": "Bearer ",
+        "extra_headers": {},
+        "default_models": ["default"],
+        "response_text_path": list(OPENAI_RESPONSE_PATH),
+        "messages_key": "messages",
+        "system_message_style": "inline",
+        "requires_key": True,
+        "model_selectable": False,
+    },
     "openai": {
         "id": "openai",
         "display_name": "OpenAI",
         "kind": "api",
         "base_url": "https://api.openai.com",
         "chat_path": "/v1/chat/completions",
+        "models_path": "/v1/models",
         "auth_style": "bearer",
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
@@ -52,6 +72,7 @@ PROVIDERS = {
         "kind": "api",
         "base_url": "https://api.anthropic.com",
         "chat_path": "/v1/messages",
+        "models_path": "/v1/models",
         "auth_style": "x-api-key",
         "auth_header": "x-api-key",
         "auth_prefix": "",
@@ -68,6 +89,7 @@ PROVIDERS = {
         "kind": "api",
         "base_url": "https://generativelanguage.googleapis.com",
         "chat_path": "/v1beta/openai/chat/completions",
+        "models_path": "/v1beta/openai/models",
         "auth_style": "bearer",
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
@@ -84,6 +106,7 @@ PROVIDERS = {
         "kind": "api",
         "base_url": "https://api.x.ai",
         "chat_path": "/v1/chat/completions",
+        "models_path": "/v1/models",
         "auth_style": "bearer",
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
@@ -100,6 +123,7 @@ PROVIDERS = {
         "kind": "api",
         "base_url": "https://api.deepseek.com",
         "chat_path": "/v1/chat/completions",
+        "models_path": "/v1/models",
         "auth_style": "bearer",
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
@@ -116,6 +140,7 @@ PROVIDERS = {
         "kind": "api",
         "base_url": "https://api.mistral.ai",
         "chat_path": "/v1/chat/completions",
+        "models_path": "/v1/models",
         "auth_style": "bearer",
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
@@ -132,6 +157,7 @@ PROVIDERS = {
         "kind": "api",
         "base_url": "https://api.groq.com",
         "chat_path": "/openai/v1/chat/completions",
+        "models_path": "/openai/v1/models",
         "auth_style": "bearer",
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
@@ -148,6 +174,7 @@ PROVIDERS = {
         "kind": "api",
         "base_url": "https://openrouter.ai",
         "chat_path": "/api/v1/chat/completions",
+        "models_path": "/api/v1/models",
         "auth_style": "bearer",
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
@@ -164,6 +191,9 @@ PROVIDERS = {
         "kind": "local",
         "base_url": "http://localhost:11434",
         "chat_path": "/v1/chat/completions",
+        "models_path": "/api/tags",
+        "models_array": "models",
+        "models_id": "name",
         "auth_style": "none",
         "auth_header": "",
         "auth_prefix": "",
@@ -180,6 +210,7 @@ PROVIDERS = {
         "kind": "local",
         "base_url": "http://localhost:1234",
         "chat_path": "/v1/chat/completions",
+        "models_path": "/v1/models",
         "auth_style": "none",
         "auth_header": "",
         "auth_prefix": "",
@@ -196,6 +227,7 @@ PROVIDERS = {
         "kind": "local",
         "base_url": "http://localhost:8080",
         "chat_path": "/v1/chat/completions",
+        "models_path": "/v1/models",
         "auth_style": "none",
         "auth_header": "",
         "auth_prefix": "",

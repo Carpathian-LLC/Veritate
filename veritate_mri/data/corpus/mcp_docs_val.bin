@@ -1,0 +1,1241 @@
+# Triggers and Events Charter
+
+> Charter for the MCP Triggers and Events Working Group.
+
+## Group Type
+
+**Working Group**
+
+## Mission Statement
+
+The Triggers and Events Working Group exists to define how MCP servers proactively notify clients of state changes. Today, clients learn about server-side updates by polling or holding an SSE connection open. This WG will specify a standardized callback mechanism—webhooks or similar—that lets servers push notifications when new data is available, with defined ordering guarantees that hold across all transports.
+
+## Scope
+
+### In Scope
+
+* **Specification Work**: SEPs defining the trigger/callback mechanism, subscription lifecycle, delivery semantics, and event ordering guarantees.
+* **Reference Implementations**: SDK components demonstrating server-initiated notifications and client-side callback handling.
+* **Cross-Cutting Concerns**: Coordination with the Transports WG on transport-specific delivery behavior, and with the Agents WG where task completion notifications intersect with event triggers.
+* **Documentation**: Specification sections covering event-driven patterns and migration guidance from polling-based approaches.
+
+### Out of Scope
+
+* Changes to the transport wire format or session model (owned by the Transports WG).
+* General-purpose pub/sub infrastructure beyond what the MCP protocol requires.
+* Modifications to existing notification primitives (`notifications/resources/updated`, `notifications/tools/list_changed`, etc.) that do not relate to proactive server-initiated delivery.
+
+### Related Groups
+
+* **Transports WG** — delivery and ordering guarantees depend on transport capabilities; callback semantics must be coherent across stdio, Streamable HTTP, and future transports.
+* **Agents WG** — [SEP-1686 (Tasks)](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1686) identifies webhook-style task completion notifications as a future consideration; this WG owns that mechanism.
+
+## Leadership
+
+| Role | Name            | Organization        | GitHub                                           | Term    |
+| ---- | --------------- | ------------------- | ------------------------------------------------ | ------- |
+| Lead | Clare Liguori   | Amazon Web Services | [@clareliguori](https://github.com/clareliguori) | Initial |
+| Lead | Peter Alexander | Anthropic           | [@pja-ant](https://github.com/pja-ant)           | Initial |
+
+## Authority & Decision Rights
+
+| Decision Type                       | Authority Level                                        |
+| ----------------------------------- | ------------------------------------------------------ |
+| Meeting logistics & scheduling      | WG Leads (autonomous)                                  |
+| Proposal prioritization within WG   | WG Leads (autonomous)                                  |
+| SEP triage & closure (in scope)     | WG Leads (autonomous, with documented rationale)       |
+| Technical design within scope       | WG consensus                                           |
+| Spec changes (additive)             | WG consensus → Core Maintainer approval                |
+| Spec changes (breaking/fundamental) | WG consensus → Core Maintainer approval + wider review |
+| Scope expansion                     | Core Maintainer approval required                      |
+| WG Member approval                  | WG Member sponsors                                     |
+
+## Operations
+
+| Meeting         | Frequency | Duration | Purpose                               |
+| --------------- | --------- | -------- | ------------------------------------- |
+| Working Session | Weekly    | 30 min   | Technical discussion, proposal review |
+
+## Resources
+
+* Incubation repository: [modelcontextprotocol/experimental-ext-triggers-events](https://github.com/modelcontextprotocol/experimental-ext-triggers-events)
+
+## Deliverables & Success Metrics
+
+### Active Work Items
+
+| Item                                    | Status   | Target Date | Champion |
+| --------------------------------------- | -------- | ----------- | -------- |
+| SEP: Events in MCP v1 RFC               | Ideating | End April   | TBD      |
+| Reference implementation in Tier-1 SDKs | —        | End April   | TBD      |
+
+### Success Criteria
+
+* An accepted SEP defining the trigger/callback mechanism and its subscription lifecycle.
+* Reference implementations in at least two Tier-1 SDKs.
+* Conformance test coverage for the new primitives.
+
+## Changelog
+
+| Date       | Change          |
+| ---------- | --------------- |
+| 2026-03-24 | Initial charter |
+<|endoftext|># Build an MCP App
+
+> Getting started guide for building interactive UI applications with MCP Apps
+
+## Prerequisites
+
+You'll need [Node.js](https://nodejs.org/en/download) 18 or higher. Familiarity
+with [MCP tools](/specification/latest/server/tools) and
+[resources](/specification/latest/server/resources) is recommended since MCP
+Apps combine both primitives. Experience with the
+[MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+will help you better understand the server-side patterns.
+
+## Getting started
+
+The fastest way to create an MCP App is using an AI coding agent with the MCP
+Apps skill. If you prefer to set up a project manually, skip to
+[Manual setup](#manual-setup).
+
+### Using an AI coding agent
+
+AI coding agents with Skills support can scaffold a complete MCP App project for
+you. Skills are folders of instructions and resources that your agent loads when
+relevant. They teach the AI how to perform specialized tasks like creating MCP
+Apps.
+
+The `create-mcp-app` skill includes architecture guidance, best practices, and
+working examples that the agent uses to generate your project.
+
+<Steps>
+  <Step title="Install the skill">
+    If you are using Claude Code, you can install the skill directly with:
+
+    ```
+    /plugin marketplace add modelcontextprotocol/ext-apps
+    /plugin install mcp-apps@modelcontextprotocol-ext-apps
+    ```
+
+    You can also use the [Vercel Skills CLI](https://skills.sh/) to install skills across different AI coding agents:
+
+    ```bash theme={null}
+    npx skills add modelcontextprotocol/ext-apps
+    ```
+
+    Alternatively, you can install the skill manually by cloning the ext-apps repository:
+
+    ```bash theme={null}
+    git clone https://github.com/modelcontextprotocol/ext-apps.git
+    ```
+
+    And then copying the skill to the appropriate location for your agent:
+
+    | Agent                                                                                                                                                                        | Skills directory (macOS/Linux) | Skills directory (Windows)            |
+    | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------- |
+    | [Claude Code](https://docs.anthropic.com/en/docs/claude-code/skills)                                                                                                         | `~/.claude/skills/`            | `%USERPROFILE%\.claude\skills\`       |
+    | [VS Code](https://code.visualstudio.com/docs/copilot/customization/agent-skills) and [GitHub Copilot](https://docs.github.com/en/copilot/concepts/agents/about-agent-skills) | `~/.copilot/skills/`           | `%USERPROFILE%\.copilot\skills\`      |
+    | [Gemini CLI](https://geminicli.com/docs/cli/skills/)                                                                                                                         | `~/.gemini/skills/`            | `%USERPROFILE%\.gemini\skills\`       |
+    | [Cline](https://cline.bot/blog/cline-3-48-0-skills-and-websearch-make-cline-smarter)                                                                                         | `~/.cline/skills/`             | `%USERPROFILE%\.cline\skills\`        |
+    | [Goose](https://block.github.io/goose/docs/guides/context-engineering/using-skills/)                                                                                         | `~/.config/goose/skills/`      | `%USERPROFILE%\.config\goose\skills\` |
+    | [Codex](https://developers.openai.com/codex/skills/)                                                                                                                         | `~/.codex/skills/`             | `%USERPROFILE%\.codex\skills\`        |
+    | [Cursor](https://cursor.com/docs/context/skills)                                                                                                                             | `~/.cursor/skills/`            | `%USERPROFILE%\.cursor\skills\`       |
+
+    <Note>
+      This list is not comprehensive. Other agents may support skills in different locations; check your agent's documentation.
+    </Note>
+
+    For example, with Claude Code you can install the skill globally (available in all projects):
+
+    <CodeGroup>
+      ```bash macOS/Linux theme={null}
+      cp -r ext-apps/plugins/mcp-apps/skills/create-mcp-app ~/.claude/skills/create-mcp-app
+      ```
+
+      ```powershell Windows theme={null}
+      Copy-Item -Recurse ext-apps\plugins\mcp-apps\skills\create-mcp-app $env:USERPROFILE\.claude\skills\create-mcp-app
+      ```
+    </CodeGroup>
+
+    Or install it for a single project only by copying to `.claude/skills/` in your project directory:
+
+    <CodeGroup>
+      ```bash macOS/Linux theme={null}
+      mkdir -p .claude/skills && cp -r ext-apps/plugins/mcp-apps/skills/create-mcp-app .claude/skills/create-mcp-app
+      ```
+
+      ```powershell Windows theme={null}
+      New-Item -ItemType Directory -Force -Path .claude\skills | Out-Null; Copy-Item -Recurse ext-apps\plugins\mcp-apps\skills\create-mcp-app .claude\skills\create-mcp-app
+      ```
+    </CodeGroup>
+
+    To verify the skill is installed, ask your agent "What skills do you have access to?" — you should see `create-mcp-app` as one of the available skills.
+  </Step>
+
+  <Step title="Create your app">
+    Ask your AI coding agent to build it:
+
+    ```
+    Create an MCP App that displays a color picker
+    ```
+
+    The agent will recognize the `create-mcp-app` skill is relevant, load its instructions, then scaffold a complete project with server, UI, and configuration files.
+
+    <Frame caption="Creating a new MCP App with Claude Code">
+      <img src="https://mintcdn.com/mcp/GU_E-622SLWFdCrP/images/quickstart-apps/create-mcp-app-skill.gif?s=6c3a3b8a7590b5e97b5c3d8480a9ab12" alt="Creating a new MCP App with Claude Code" width="800" height="563" data-path="images/quickstart-apps/create-mcp-app-skill.gif" />
+    </Frame>
+  </Step>
+
+  <Step title="Run your app">
+    <CodeGroup>
+      ```bash macOS/Linux theme={null}
+      npm install && npm run build && npm run serve
+      ```
+
+      ```powershell Windows theme={null}
+      npm install; npm run build; npm run serve
+      ```
+    </CodeGroup>
+
+    <Tip>
+      You might need to make sure that you are first in the **app folder** before running the commands above.
+    </Tip>
+  </Step>
+
+  <Step title="Test your app">
+    Follow the instructions in [Testing your app](#testing-your-app) below. For the color picker example, start a new chat and ask Claude to provide you a color picker.
+
+    <Frame caption="Testing the color picker in Claude">
+      <img src="https://mintcdn.com/mcp/GU_E-622SLWFdCrP/images/quickstart-apps/test-color-picker.gif?s=09413b99bc31d7edc7f9aa22df4faa6a" alt="Testing the color picker in Claude" width="800" height="544" data-path="images/quickstart-apps/test-color-picker.gif" />
+    </Frame>
+  </Step>
+</Steps>
+
+### Manual setup
+
+If you're not using an AI coding agent, or prefer to understand the setup
+process, follow these steps.
+
+<Steps>
+  <Step title="Create the project structure">
+    A typical MCP App project separates the server code from the UI code:
+
+    <Tree>
+      <Tree.Folder name="my-mcp-app" defaultOpen>
+        <Tree.File name="package.json" />
+
+        <Tree.File name="tsconfig.json" />
+
+        <Tree.File name="vite.config.ts" />
+
+        <Tree.File name="server.ts" comment="MCP server with tool + resource" />
+
+        <Tree.File name="mcp-app.html" comment="UI entry point" />
+
+        <Tree.Folder name="src" defaultOpen>
+          <Tree.File name="mcp-app.ts" comment="UI logic" />
+        </Tree.Folder>
+      </Tree.Folder>
+    </Tree>
+
+    The server registers the tool and serves the UI resource. The UI resource will eventually be rendered in a secure iframe with deny-by-default CSP configuration. If your app has CSS and JS assets, you will need to [configure CSP](https://apps.extensions.modelcontextprotocol.io/api/documents/Patterns.html#configuring-csp-and-cors), or you can bundle your assets into the HTML with a tool like `vite-plugin-singlefile`, which is what we will do in this tutorial.
+  </Step>
+
+  <Step title="Install dependencies">
+    ```bash theme={null}
+    npm install @modelcontextprotocol/ext-apps @modelcontextprotocol/sdk
+    npm install -D typescript vite vite-plugin-singlefile express cors @types/express @types/cors tsx
+    ```
+
+    The `ext-apps` package provides helpers for both the server side (registering tools and resources) and the client side (the `App` class for UI-to-host communication). Vite with the `vite-plugin-singlefile` plugin is used here to bundle your UI and assets into a single HTML file for convenience, but this is optional — you can use any bundler or serve unbundled files if you [configure CSP](https://apps.extensions.modelcontextprotocol.io/api/documents/Patterns.html#configuring-csp-and-cors).
+  </Step>
+
+  <Step title="Configure the project">
+    <Tabs>
+      <Tab title="package.json">
+        The `"type": "module"` setting enables ES module syntax. The `build` script uses the `INPUT` environment variable to tell Vite which HTML file to bundle. The `serve` script runs your server using `tsx` for TypeScript execution.
+
+        ```json theme={null}
+        {
+          "type": "module",
+          "scripts": {
+            "build": "INPUT=mcp-app.html vite build",
+            "serve": "npx tsx server.ts"
+          }
+        }
+        ```
+      </Tab>
+
+      <Tab title="tsconfig.json">
+        The TypeScript configuration targets modern JavaScript (`ES2022`) and uses ESNext modules with bundler resolution, which works well with Vite. The `include` array covers both the server code in the root and UI code in `src/`.
+
+        ```json theme={null}
+        {
+          "compilerOptions": {
+            "target": "ES2022",
+            "module": "ESNext",
+            "moduleResolution": "bundler",
+            "strict": true,
+            "esModuleInterop": true,
+            "skipLibCheck": true,
+            "outDir": "dist"
+          },
+          "include": ["*.ts", "src/**/*.ts"]
+        }
+        ```
+      </Tab>
+
+      <Tab title="vite.config.ts">
+        ```typescript theme={null}
+        import { defineConfig } from "vite";
+        import { viteSingleFile } from "vite-plugin-singlefile";
+
+        export default defineConfig({
+          plugins: [viteSingleFile()],
+          build: {
+            outDir: "dist",
+            rollupOptions: {
+              input: process.env.INPUT,
+            },
+          },
+        });
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Build the project">
+    With the project structure and configuration in place, continue to [Building an MCP App](#building-an-mcp-app) below to implement the server and UI.
+  </Step>
+</Steps>
+
+## Building an MCP App
+
+Let's build a simple app that displays the current server time. This example
+demonstrates the full pattern: registering a tool with UI metadata, serving the
+bundled HTML as a resource, and building a UI that communicates with the server.
+
+### Server implementation
+
+The server needs to do two things: register a tool that includes the
+`_meta.ui.resourceUri` field, and register a resource handler that serves the
+bundled HTML. Here's the complete server file:
+
+```typescript theme={null}
+// server.ts
+console.log("Starting MCP App server...");
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  registerAppTool,
+  registerAppResource,
+  RESOURCE_MIME_TYPE,
+} from "@modelcontextprotocol/ext-apps/server";
+import cors from "cors";
+import express from "express";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+const server = new McpServer({
+  name: "My MCP App Server",
+  version: "1.0.0",
+});
+
+// The ui:// scheme tells hosts this is an MCP App resource.
+// The path structure is arbitrary; organize it however makes sense for your app.
+const resourceUri = "ui://get-time/mcp-app.html";
+
+// Register the tool that returns the current time
+registerAppTool(
+  server,
+  "get-time",
+  {
+    title: "Get Time",
+    description: "Returns the current server time.",
+    inputSchema: {},
+    _meta: { ui: { resourceUri } },
+  },
+  async () => {
+    const time = new Date().toISOString();
+    return {
+      content: [{ type: "text", text: time }],
+    };
+  },
+);
+
+// Register the resource that serves the bundled HTML
+registerAppResource(
+  server,
+  resourceUri,
+  resourceUri,
+  { mimeType: RESOURCE_MIME_TYPE },
+  async () => {
+    const html = await fs.readFile(
+      path.join(import.meta.dirname, "dist", "mcp-app.html"),
+      "utf-8",
+    );
+    return {
+      contents: [
+        { uri: resourceUri, mimeType: RESOURCE_MIME_TYPE, text: html },
+      ],
+    };
+  },
+);
+
+// Expose the MCP server over HTTP
+const expressApp = express();
+expressApp.use(cors());
+expressApp.use(express.json());
+
+expressApp.post("/mcp", async (req, res) => {
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+  res.on("close", () => transport.close());
+  await server.connect(transport);
+  await transport.handleRequest(req, res, req.body);
+});
+
+expressApp.listen(3001, (err) => {
+  if (err) {
+    console.error("Error starting server:", err);
+    process.exit(1);
+  }
+  console.log("Server listening on http://localhost:3001/mcp");
+});
+```
+
+Let's break down the key parts:
+
+* **`resourceUri`**: The `ui://` scheme tells hosts this is an MCP App resource.
+  The path structure is arbitrary.
+* **`registerAppTool`**: Registers a tool with the `_meta.ui.resourceUri` field.
+  When the host calls this tool, the UI is fetched and rendered, and the tool result is passed to it upon arrival.
+* **`registerAppResource`**: Serves the bundled HTML when the host requests the UI resource.
+* **Express server**: Exposes the MCP server over HTTP on port 3001.
+
+### UI implementation
+
+The UI consists of an HTML page and a TypeScript module that uses the `App`
+class to communicate with the host. Here's the HTML:
+
+```html theme={null}
+<!-- mcp-app.html -->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Get Time App</title>
+  </head>
+  <body>
+    <p>
+      <strong>Server Time:</strong>
+      <code id="server-time">Loading...</code>
+    </p>
+    <button id="get-time-btn">Get Server Time</button>
+    <script type="module" src="/src/mcp-app.ts"></script>
+  </body>
+</html>
+```
+
+And the TypeScript module:
+
+```typescript theme={null}
+// src/mcp-app.ts
+import { App } from "@modelcontextprotocol/ext-apps";
+
+const serverTimeEl = document.getElementById("server-time")!;
+const getTimeBtn = document.getElementById("get-time-btn")!;
+
+const app = new App({ name: "Get Time App", version: "1.0.0" });
+
+// Establish communication with the host
+app.connect();
+
+// Handle the initial tool result pushed by the host
+app.ontoolresult = (result) => {
+  const time = result.content?.find((c) => c.type === "text")?.text;
+  serverTimeEl.textContent = time ?? "[ERROR]";
+};
+
+// Proactively call tools when users interact with the UI
+getTimeBtn.addEventListener("click", async () => {
+  const result = await app.callServerTool({
+    name: "get-time",
+    arguments: {},
+  });
+  const time = result.content?.find((c) => c.type === "text")?.text;
+  serverTimeEl.textContent = time ?? "[ERROR]";
+});
+```
+
+The key parts:
+
+* **`app.connect()`**: Establishes communication with the host. Call this once
+  when your app initializes.
+* **`app.ontoolresult`**: A callback that fires when the host pushes a tool
+  result to your app (e.g., when the tool is first called and the UI renders).
+* **`app.callServerTool()`**: Lets your app proactively call tools on the server.
+  Keep in mind that each call involves a round-trip to the server, so design your
+  UI to handle latency gracefully.
+
+The `App` class provides additional methods for logging, opening URLs, and
+updating the model's context with structured data from your app. See the full
+[API documentation](https://apps.extensions.modelcontextprotocol.io/api/).
+
+## Testing your app
+
+To test your MCP App, build the UI and start your local server:
+
+<CodeGroup>
+  ```bash macOS/Linux theme={null}
+  npm run build && npm run serve
+  ```
+
+  ```powershell Windows theme={null}
+  npm run build; npm run serve
+  ```
+</CodeGroup>
+
+In the default configuration, your server will be available at
+`http://localhost:3001/mcp`. However, to see your app render, you need an MCP
+host that supports MCP Apps. You have several options.
+
+### Testing with Claude
+
+[Claude](https://claude.ai) (web) and [Claude Desktop](https://claude.ai/download)
+support MCP Apps. For local development, you'll need to expose your server to
+the internet. You can run an MCP server locally and use tools like `cloudflared`
+to tunnel traffic through.
+
+In a separate terminal, run:
+
+```bash theme={null}
+npx cloudflared tunnel --url http://localhost:3001
+```
+
+Copy the generated URL (e.g., `https://random-name.trycloudflare.com`) and add it
+as a [custom connector](https://support.anthropic.com/en/articles/11175166-getting-started-with-custom-connectors-using-remote-mcp)
+in Claude - click on your profile, go to **Settings**, **Connectors**, and
+finally **Add custom connector**.
+
+<Note>
+  Custom connectors are available on paid Claude plans (Pro, Max, or Team).
+</Note>
+
+<Frame caption="Adding a custom connector in Claude">
+  <img src="https://mintcdn.com/mcp/GU_E-622SLWFdCrP/images/quickstart-apps/add-custom-connector.gif?s=c4ec0750413ff7575c7f9492e2713212" alt="Adding a custom connector in Claude" width="800" height="543" data-path="images/quickstart-apps/add-custom-connector.gif" />
+</Frame>
+
+### Testing with the basic-host
+
+The `ext-apps` repository includes a test host for development. Clone the repo and
+install dependencies:
+
+<CodeGroup>
+  ```bash macOS/Linux theme={null}
+  git clone https://github.com/modelcontextprotocol/ext-apps.git
+  cd ext-apps/examples/basic-host
+  npm install
+  ```
+
+  ```powershell Windows theme={null}
+  git clone https://github.com/modelcontextprotocol/ext-apps.git
+  cd ext-apps\examples\basic-host
+  npm install
+  ```
+</CodeGroup>
+
+Running `npm start` from `ext-apps/examples/basic-host/` will start the basic-host
+test interface. To connect it to a specific server (e.g., one you're developing),
+pass the `SERVERS` environment variable inline:
+
+<CodeGroup>
+  ```bash macOS/Linux theme={null}
+  SERVERS='["http://localhost:3001/mcp"]' npm start
+  ```
+
+  ```powershell Windows theme={null}
+  $env:SERVERS='["http://localhost:3001/mcp"]'; npm start
+  ```
+</CodeGroup>
+
+Navigate to `http://localhost:8080`. You'll see a simple interface where you can
+select a tool and call it. When you call your tool, the host fetches the UI
+resource and renders it in a sandboxed iframe. You can then interact with your
+app and verify that tool calls work correctly.
+
+<Frame caption="Testing the QR code MCP App with the basic host">
+  <img src="https://mintcdn.com/mcp/GU_E-622SLWFdCrP/images/quickstart-apps/qr-code-server.gif?s=48a3b47239b8394017c0949162d63de9" alt="Example of the QR code MCP App running with the basic host" width="800" height="596" data-path="images/quickstart-apps/qr-code-server.gif" />
+</Frame>
+
+## Learn more
+
+<CardGroup cols={2}>
+  <Card title="API Documentation" icon="book" href="https://apps.extensions.modelcontextprotocol.io/api/">
+    Full SDK reference and API details
+  </Card>
+
+  <Card title="GitHub Repository" icon="github" href="https://github.com/modelcontextprotocol/ext-apps">
+    Source code, examples, and issue tracker
+  </Card>
+
+  <Card title="Specification" icon="file-lines" href="https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/draft/apps.mdx">
+    Technical specification for implementers
+  </Card>
+</CardGroup>
+
+## Feedback
+
+MCP Apps is under active development. If you encounter issues or have ideas for
+improvements, open an issue on the
+[GitHub repository](https://github.com/modelcontextprotocol/ext-apps/issues).
+For broader discussions about the extension's direction, join the conversation
+in [GitHub Discussions](https://github.com/modelcontextprotocol/ext-apps/discussions).
+<|endoftext|># SEP-1034: Support default values for all primitive types in elicitation schemas
+
+> Support default values for all primitive types in elicitation schemas
+
+<div className="flex items-center gap-2 mb-4">
+  <Badge color="green" shape="pill">
+    Final
+  </Badge>
+
+  <Badge color="gray" shape="pill">
+    Standards Track
+  </Badge>
+</div>
+
+| Field         | Value                                                                           |
+| ------------- | ------------------------------------------------------------------------------- |
+| **SEP**       | 1034                                                                            |
+| **Title**     | Support default values for all primitive types in elicitation schemas           |
+| **Status**    | Final                                                                           |
+| **Type**      | Standards Track                                                                 |
+| **Created**   | 2025-07-22                                                                      |
+| **Author(s)** | Tapan Chugh (chugh.tapan[@gmail](https://github.com/gmail).com)                 |
+| **Sponsor**   | None                                                                            |
+| **PR**        | [#1034](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/1034) |
+
+***
+
+## Abstract
+
+This SEP recommends adding support for default values to all primitive types in the MCP elicitation schema (StringSchema, NumberSchema, and EnumSchema), extending the existing support that only covers BooleanSchema.
+
+## Motivation
+
+Elicitations in MCP offer a way to mitigate complex API designs: tools can request information on-demand rather than resorting to convoluted parameter handling. The challenge however is that users must manually enter obvious information that could be pre-populated for more natural interactions. Currently, only `BooleanSchema` supports default values in elicitation requests. This limitation prevents servers from providing sensible defaults for text inputs, numbers, and enum selections leading to more user overhead.
+
+### Real-World Example
+
+Consider implementing an email reply function. Without elicitation, the tool becomes unwieldy:
+
+```python theme={null}
+def reply_to_email_thread(
+    thread_id: str,
+    content: str,
+    recipient_list: List[str] = [],
+    cc_list: List[str] = []
+) -> None:
+    # Ambiguity: Does empty list mean "no recipients" or "use defaults"?
+    # Complex logic needed to handle different combinations
+```
+
+With elicitation, the tool signature itself can be much simpler
+
+```python theme={null}
+def reply_to_email_thread(
+    thread_id: str,
+    content: Optional[str] = ""
+) -> None:
+    # Code can lookup the participants from the original thread
+    # and prepare an elicitation request with the defaults setup
+```
+
+```typescript theme={null}
+const response = await client.request("elicitation/create", {
+  message: "Configure email reply",
+  requestedSchema: {
+    type: "object",
+    properties: {
+      recipients: {
+        type: "string",
+        title: "Recipients",
+        default: "alice@company.com, bob@company.com"  // Pre-filled
+      },
+      cc: {
+        type: "string",
+        title: "CC",
+        default: "john@company.com"  // Pre-filled
+      },
+      content: {
+        type: "string",
+        title: "Message"
+        default: "" // If provided in the tool above
+      }
+    }
+  }
+});
+```
+
+### Implementation
+
+A working implementation demonstrating clients require minimal changes to display defaults (\~10 lines of code):
+
+* Implementation PR: [https://github.com/chughtapan/fast-agent/pull/2](https://github.com/chughtapan/fast-agent/pull/2)
+* A demo with the above email reply workflow: [https://asciinema.org/a/X7aQZjT2B5jVwn9dJ9sqQVkOM](https://asciinema.org/a/X7aQZjT2B5jVwn9dJ9sqQVkOM)
+
+## Specification
+
+### Schema Changes
+
+Extend the elicitation primitive schemas to include optional default values:
+
+```typescript theme={null}
+export interface StringSchema {
+  type: "string";
+  title?: string;
+  description?: string;
+  minLength?: number;
+  maxLength?: number;
+  format?: "email" | "uri" | "date" | "date-time";
+  default?: string; // NEW
+}
+
+export interface NumberSchema {
+  type: "number" | "integer";
+  title?: string;
+  description?: string;
+  minimum?: number;
+  maximum?: number;
+  default?: number; // NEW
+}
+
+export interface EnumSchema {
+  type: "string";
+  title?: string;
+  description?: string;
+  enum: string[];
+  enumNames?: string[];
+  default?: string; // NEW - must be one of enum values
+}
+
+// BooleanSchema already has default?: boolean
+```
+
+### Behavior
+
+1. The `default` field is optional, maintaining full backward compatibility
+2. Default values must match the schema type
+3. For EnumSchema, the default must be one of the valid enum values
+4. Clients that support defaults SHOULD pre-populate form fields. Clients that don't support defaults MAY ignore the field entirely.
+
+## Rationale
+
+1. The high-level rationale is to follow the precedent set by BooleanSchema rather than creating new mechanisms.
+2. Making defaults optional ensures backward compatibility.
+3. This maintains the high-level intuition of keeping the client implementation simple.
+
+### Alternatives Considered
+
+1. **Server-side Templates**: Servers could maintain templates separately, but this adds complexity
+2. **New Request Type**: A separate request type for forms with defaults would fragment the API
+3. **Required Defaults**: Making defaults required would break existing implementations
+
+## Backwards Compatibility
+
+This change is fully backward compatible with no breaking changes. Clients that don't understand defaults will ignore them, and existing elicitation requests continue to work unchanged. Clients can adopt default support at their own pace
+
+## Security Implications
+
+No new security concerns:
+
+1. **No Sensitive Data**: The existing guidance against requesting sensitive information still applies
+2. **Client Control**: Clients retain full control over what data is sent to servers
+3. **User Visibility**: Default values are visible to users who can modify them before submission
+<|endoftext|># SEP-2207: OIDC-Flavored Refresh Token Guidance
+
+> OIDC-Flavored Refresh Token Guidance
+
+<div className="flex items-center gap-2 mb-4">
+  <Badge color="green" shape="pill">
+    Final
+  </Badge>
+
+  <Badge color="gray" shape="pill">
+    Standards Track
+  </Badge>
+</div>
+
+| Field         | Value                                                                           |
+| ------------- | ------------------------------------------------------------------------------- |
+| **SEP**       | 2207                                                                            |
+| **Title**     | OIDC-Flavored Refresh Token Guidance                                            |
+| **Status**    | Final                                                                           |
+| **Type**      | Standards Track                                                                 |
+| **Created**   | 2026-02-04                                                                      |
+| **Author(s)** | Wils Dawson ([@wdawson](https://github.com/wdawson))                            |
+| **Sponsor**   | Paul Carleton ([@pcarleton](https://github.com/pcarleton))                      |
+| **PR**        | [#2207](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2207) |
+
+***
+
+## Abstract
+
+This proposal provides guidance for MCP implementations regarding refresh token
+issuance and requests, particularly when Authorization Servers support the
+`offline_access` scope. The `offline_access` scope originated in OIDC but can be
+adopted by any OAuth 2.1 Authorization Server as a mechanism to let clients
+explicitly request refresh tokens. This SEP clarifies the expected behavior for
+both Authorization Servers and MCP Clients when working with this pattern.
+
+## Motivation
+
+MCP's authorization mechanism is based on OAuth 2.1, but many real-world
+deployments use Authorization Servers that also implement OpenID Connect (OIDC).
+A key difference between pure OAuth and OIDC is how refresh tokens are handled:
+
+* In **pure OAuth 2.1**, there is no standard mechanism for a client to
+  explicitly request a refresh token. The Authorization Server determines
+  whether to issue one based on the client's capabilities (e.g., the
+  `refresh_token` grant type in client metadata) and its own policies.
+* In **OIDC** (and Authorization Servers that adopt this convention), the
+  `offline_access` scope exists to allow clients to explicitly request refresh
+  tokens, in addition to the OAuth logic.
+
+This creates several problems in the MCP ecosystem:
+
+1. **Clients aren't requesting refresh tokens**: Major MCP clients (Cursor,
+   Claude, VS Code, etc.) aren't explicitly asking for refresh tokens via the
+   `offline_access` scope because they don't know whether the Authorization
+   Server supports, expects, or requires it.
+
+2. **Resource servers shouldn't specify `offline_access`**: The `offline_access`
+   scope is not a resource-specific scope—it's a concern between the client and
+   Authorization Server. Including it in the `WWW-Authenticate` header's `scope`
+   parameter or in the Protected Resource Metadata's `scopes_supported` would be
+   semantically incorrect since it implies the resource *requires* refresh
+   tokens, which it never would.
+
+3. **Authorization Servers can be inconsistent**: When processing an
+   authorization code grant, different Authorization Servers may have different
+   behavior when issuing refresh tokens to different clients, especially when
+   the client doesn't specify `refresh_token` as a grant type or request the
+   `offline_access` scope.
+
+4. **Interoperability gap**: Without this guidance, implementations may behave
+   inconsistently, leading to poor user experience (frequent re-authentication)
+   or security issues (issuing refresh tokens to clients that can't securely
+   store them).
+
+## Specification
+
+### MCP Client Requirements
+
+MCP Clients that intend to use refresh tokens and are capable of storing them
+securely **SHOULD** follow these guidelines:
+
+1. **Advertise capability**: Clients **SHOULD** include `refresh_token` in their
+   `grant_types` client metadata to indicate they support refresh tokens.
+
+2. **Scope augmentation**: When the client desires a refresh token and the
+   Authorization Server metadata contains `offline_access` in its
+   `scopes_supported` field, the client **MAY** add the `offline_access` scope
+   to the list of scopes from the resource server before making authorization
+   requests to the Authorization Server.
+
+3. **No guarantee**: Clients **MUST NOT** assume that advertising support or
+   requesting `offline_access` guarantees they will receive a refresh token. The
+   Authorization Server retains discretion based on its policies.
+
+### MCP Server (Resource Server) Requirements
+
+MCP Servers (acting as OAuth 2.0 Protected Resources):
+
+1. **SHOULD NOT** include `offline_access` in the `scope` parameter of
+   `WWW-Authenticate` headers, as refresh tokens are not a resource requirement.
+
+2. **SHOULD NOT** include `offline_access` in `scopes_supported` in Protected
+   Resource Metadata, as it is not a resource-specific scope.
+
+## Rationale
+
+### Why not require `offline_access` in the 401 response?
+
+The `offline_access` scope is fundamentally different from resource-specific
+scopes. It represents a client's desire for long-lived access, not a
+requirement of the resource. Per
+[OAuth 2.1 Section 5.3.1](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13#section-5.3.1),
+the `scope` attribute in `WWW-Authenticate` indicates "the required scope of the
+access token for accessing the requested resource." Since the resource doesn't
+require `offline_access`, including it would be semantically incorrect.
+
+### Why check client metadata for grant types? Why not always issue refresh tokens?
+
+OAuth 2.1 requires clients to register their supported grant types. A client
+that doesn't support the `refresh_token` grant either:
+
+* Cannot securely store refresh tokens
+* Has no mechanism to use them
+
+Issuing refresh tokens to such clients wastes Authorization Server resources
+(tracking tokens that will never be used) and may pose security risks if the
+tokens are leaked.
+
+### Why allow `offline_access` as an alternative signal?
+
+Some Authorization Servers—whether fully OIDC-compliant or simply adopting this
+convention—only issue refresh tokens when `offline_access` is explicitly
+requested. Supporting this pattern provides a compatible path for such
+deployments. Clients can detect Authorization Servers that support this
+convention by checking for `offline_access` in `scopes_supported` in the
+Authorization Server Metadata and adapt their behavior accordingly.
+
+### Alternative approaches considered
+
+1. **Mandate `offline_access` in resource responses**: Rejected because it
+   misrepresents the resource's requirements and creates an anti-pattern.
+
+2. **Always issue refresh tokens**: Rejected because it ignores client
+   capabilities and Authorization Server security policies.
+
+3. **Separate OIDC-specific specification**: Rejected in favor of a unified
+   approach that works for both pure OAuth and OIDC deployments.
+
+4. **Provide guidance for Authorization Servers**: Rejected in favor of
+   relying on OAuth and OIDC specs for this guidance as it can vary.
+
+## Backward Compatibility
+
+This proposal is fully backward-compatible:
+
+* Clients that already request `offline_access` continue to work
+* Authorization Servers that already check client capabilities continue to work
+* MCP Servers are not required to make any changes
+* The guidance is additive and does not change existing required behavior
+
+Implementations that don't follow this guidance may experience suboptimal
+behavior (missing refresh tokens or unnecessary token issuance) but will remain
+functional.
+
+## Security Implications
+
+### Positive security implications
+
+1. **Reduced token leakage risk**: By not issuing refresh tokens to clients that
+   don't advertise support, we reduce the risk of long-lived tokens being stored
+   insecurely.
+
+2. **Defense in depth**: The risk-based assessment step gives Authorization Servers
+   flexibility to implement additional security controls.
+
+### Considerations
+
+1. **Client metadata may not be sufficient**: Since client metadata is
+   self-reported, a malicious actor could register a client claiming
+   `refresh_token` grant support to obtain long-lived tokens. Authorization
+   Servers MAY use the risk-based assessment step (see Specification) to apply
+   additional restrictions—such as domain allowlists, reputation checks, or
+   verification requirements—rather than solely relying on client metadata
+   claims when deciding whether to issue refresh tokens.
+
+2. **Scope injection**: Clients adding `offline_access` should ensure this
+   doesn't interfere with other scope-related logic or create unexpected
+   authorization prompts.
+
+## Reference Implementation
+
+Reference implementations demonstrating this guidance will be provided in the
+official MCP SDKs:
+
+* **TypeScript SDK**: Client-side `offline_access` scope handling
+* **Python SDK**: Client-side `offline_access` scope handling
+* **Authorization Server example**: Demonstration of client capability checking
+* **Client conformance test**: Allowing for easy validation of SDK implementations
+
+Links to implementations will be added once the SEP is accepted.
+
+## Acknowledgments
+
+This proposal was developed through discussion in the MCP Discord's
+authorization channel, with input from:
+
+* Aaron Parecki (OAuth/OIDC expertise)
+* Paul Carleton (MCP authorization guidance)
+* Simon Russell (OIDC deployment experience)
+<|endoftext|># Specification Enhancement Proposals (SEPs)
+
+> Index of all MCP Specification Enhancement Proposals
+
+Specification Enhancement Proposals (SEPs) are the primary mechanism for proposing major changes to the Model Context Protocol. Each SEP provides a concise technical specification and rationale for proposed features.
+
+<Card title="Submit a SEP" icon="file-plus" href="/community/sep-guidelines">
+  Learn how to submit your own Specification Enhancement Proposal
+</Card>
+
+## Summary
+
+* **Final**: 41
+
+## All SEPs
+
+| SEP                                                                                  | Title                                                                         | Status                                          | Type             | Created    |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- | ----------------------------------------------- | ---------------- | ---------- |
+| [SEP-2663](/seps/2663-tasks-extension)                                               | Tasks Extension                                                               | <Badge color="green" shape="pill">Final</Badge> | Extensions Track | 2026-04-27 |
+| [SEP-2596](/seps/2596-spec-feature-lifecycle-and-deprecation)                        | Specification Feature Lifecycle and Deprecation Policy                        | <Badge color="green" shape="pill">Final</Badge> | Process          | 2026-04-17 |
+| [SEP-2577](/seps/2577-deprecate-roots-sampling-and-logging)                          | Deprecate Roots, Sampling, and Logging                                        | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2026-04-14 |
+| [SEP-2575](/seps/2575-stateless-mcp)                                                 | Make MCP Stateless                                                            | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-06-18 |
+| [SEP-2567](/seps/2567-sessionless-mcp)                                               | Sessionless MCP via Explicit State Handles                                    | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2026-03-11 |
+| [SEP-2549](/seps/2549-TTL-for-list-results)                                          | TTL for List Results                                                          | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2026-04-09 |
+| [SEP-2484](/seps/2484-conformance-tests-required-for-final-seps)                     | Require Conformance Tests for Standards Track SEPs to Reach Final Status      | <Badge color="green" shape="pill">Final</Badge> | Process          | 2026-03-27 |
+| [SEP-2468](/seps/2468-recommend-issuer-claim-for-auth)                               | Recommend Issuer (iss) Parameter in MCP Auth Responses                        | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2026-03-25 |
+| [SEP-2322](/seps/2322-MRTR)                                                          | Multi Round-Trip Requests                                                     | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2026-02-03 |
+| [SEP-2260](/seps/2260-Require-Server-requests-to-be-associated-with-Client-requests) | Require Server requests to be associated with a Client request.               | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2026-02-16 |
+| [SEP-2243](/seps/2243-http-standardization)                                          | HTTP Header Standardization for Streamable HTTP Transport                     | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2026-02-04 |
+| [SEP-2207](/seps/2207-oidc-refresh-token-guidance)                                   | OIDC-Flavored Refresh Token Guidance                                          | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2026-02-04 |
+| [SEP-2164](/seps/2164-resource-not-found-error)                                      | Standardize Resource Not Found Error Code                                     | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2026-01-28 |
+| [SEP-2149](/seps/2149-working-group-charter-template)                                | MCP Group Governance and Charter Template                                     | <Badge color="green" shape="pill">Final</Badge> | Process          | 2025-01-15 |
+| [SEP-2148](/seps/2148-contributor-ladder)                                            | MCP Contributor Ladder                                                        | <Badge color="green" shape="pill">Final</Badge> | Process          | 2026-01-15 |
+| [SEP-2133](/seps/2133-extensions)                                                    | Extensions                                                                    | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-01-21 |
+| [SEP-2106](/seps/2106-json-schema-2020-12)                                           | Tools `inputSchema` & `outputSchema` Conform to JSON Schema 2020-12           | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2026-01-06 |
+| [SEP-2085](/seps/2085-governance-succession-and-amendment)                           | Governance Succession and Amendment Procedures                                | <Badge color="green" shape="pill">Final</Badge> | Process          | 2025-12-05 |
+| [SEP-1865](/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp)                  | MCP Apps - Interactive User Interfaces for MCP                                | <Badge color="green" shape="pill">Final</Badge> | Extensions Track | 2025-11-21 |
+| [SEP-1850](/seps/1850-pr-based-sep-workflow)                                         | PR-Based SEP Workflow                                                         | <Badge color="green" shape="pill">Final</Badge> | Process          | 2025-11-20 |
+| [SEP-1730](/seps/1730-sdks-tiering-system)                                           | SDKs Tiering System                                                           | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-10-29 |
+| [SEP-1699](/seps/1699-support-sse-polling-via-server-side-disconnect)                | Support SSE polling via server-side disconnect                                | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-10-22 |
+| [SEP-1686](/seps/1686-tasks)                                                         | Tasks                                                                         | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-10-20 |
+| [SEP-1613](/seps/1613-establish-json-schema-2020-12-as-default-dialect-f)            | Establish JSON Schema 2020-12 as Default Dialect for MCP                      | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-10-06 |
+| [SEP-1577](/seps/1577--sampling-with-tools)                                          | Sampling With Tools                                                           | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-09-30 |
+| [SEP-1330](/seps/1330-elicitation-enum-schema-improvements-and-standards)            | Elicitation Enum Schema Improvements and Standards Compliance                 | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-08-11 |
+| [SEP-1319](/seps/1319-decouple-request-payload-from-rpc-methods-definiti)            | Decouple Request Payload from RPC Methods Definition                          | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-08-08 |
+| [SEP-1303](/seps/1303-input-validation-errors-as-tool-execution-errors)              | Input Validation Errors as Tool Execution Errors                              | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-08-05 |
+| [SEP-1302](/seps/1302-formalize-working-groups-and-interest-groups-in-mc)            | Formalize Working Groups and Interest Groups in MCP Governance                | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-08-05 |
+| [SEP-1046](/seps/1046-support-oauth-client-credentials-flow-in-authoriza)            | Support OAuth client credentials flow in authorization                        | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-07-23 |
+| [SEP-1036](/seps/1036-url-mode-elicitation-for-secure-out-of-band-intera)            | URL Mode Elicitation for secure out-of-band interactions                      | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-07-22 |
+| [SEP-1034](/seps/1034--support-default-values-for-all-primitive-types-in)            | Support default values for all primitive types in elicitation schemas         | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-07-22 |
+| [SEP-1024](/seps/1024-mcp-client-security-requirements-for-local-server-)            | MCP Client Security Requirements for Local Server Installation                | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-07-22 |
+| [SEP-994](/seps/994-shared-communication-practicesguidelines)                        | Shared Communication Practices/Guidelines                                     | <Badge color="green" shape="pill">Final</Badge> | Process          | 2025-07-17 |
+| [SEP-991](/seps/991-enable-url-based-client-registration-using-oauth-c)              | Enable URL-based Client Registration using OAuth Client ID Metadata Documents | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-07-07 |
+| [SEP-990](/seps/990-enable-enterprise-idp-policy-controls-during-mcp-o)              | Enable enterprise IdP policy controls during MCP OAuth flows                  | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-06-04 |
+| [SEP-986](/seps/986-specify-format-for-tool-names)                                   | Specify Format for Tool Names                                                 | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-07-16 |
+| [SEP-985](/seps/985-align-oauth-20-protected-resource-metadata-with-rf)              | Align OAuth 2.0 Protected Resource Metadata with RFC 9728                     | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-07-16 |
+| [SEP-973](/seps/973-expose-additional-metadata-for-implementations-res)              | Expose additional metadata for Implementations, Resources, Tools and Prompts  | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-07-15 |
+| [SEP-932](/seps/932-model-context-protocol-governance)                               | Model Context Protocol Governance                                             | <Badge color="green" shape="pill">Final</Badge> | Process          | 2025-07-08 |
+| [SEP-414](/seps/414-request-meta)                                                    | Document OpenTelemetry Trace Context Propagation Conventions                  | <Badge color="green" shape="pill">Final</Badge> | Standards Track  | 2025-04-25 |
+
+## SEP Status Definitions
+
+| Status                                                | Definition                                               |
+| ----------------------------------------------------- | -------------------------------------------------------- |
+| <Badge color="gray" shape="pill">Draft</Badge>        | SEP proposal with a sponsor, undergoing informal review  |
+| <Badge color="yellow" shape="pill">In-Review</Badge>  | SEP proposal ready for formal review by Core Maintainers |
+| <Badge color="blue" shape="pill">Accepted</Badge>     | SEP accepted, awaiting reference implementation          |
+| <Badge color="green" shape="pill">Final</Badge>       | SEP finalized with reference implementation complete     |
+| <Badge color="red" shape="pill">Rejected</Badge>      | SEP rejected by Core Maintainers                         |
+| <Badge color="red" shape="pill">Withdrawn</Badge>     | SEP withdrawn by the author                              |
+| <Badge color="purple" shape="pill">Superseded</Badge> | SEP replaced by a newer SEP                              |
+| <Badge color="orange" shape="pill">Dormant</Badge>    | SEP without a sponsor, closed after 6 months             |
+<|endoftext|># Completion
+
+<div id="enable-section-numbers" />
+
+The Model Context Protocol (MCP) provides a standardized way for servers to offer
+autocompletion suggestions for the arguments of prompts and resource templates. When
+users are filling in argument values for a specific prompt (identified by name) or
+resource template (identified by URI), servers can provide contextual suggestions.
+
+## User Interaction Model
+
+Completion in MCP is designed to support interactive user experiences similar to IDE code
+completion.
+
+For example, applications may show completion suggestions in a dropdown or popup menu as
+users type, with the ability to filter and select from available options.
+
+However, implementations are free to expose completion through any interface pattern that
+suits their needs—the protocol itself does not mandate any specific user
+interaction model.
+
+## Capabilities
+
+Servers that support completions **MUST** declare the `completions` capability:
+
+```json theme={null}
+{
+  "capabilities": {
+    "completions": {}
+  }
+}
+```
+
+## Protocol Messages
+
+### Requesting Completions
+
+To get completion suggestions, clients send a `completion/complete` request specifying
+what is being completed through a reference type:
+
+**Request:**
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "completion/complete",
+  "params": {
+    "ref": {
+      "type": "ref/prompt",
+      "name": "code_review"
+    },
+    "argument": {
+      "name": "language",
+      "value": "py"
+    }
+  }
+}
+```
+
+**Response:**
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "completion": {
+      "values": ["python", "pytorch", "pyside"],
+      "total": 10,
+      "hasMore": true
+    }
+  }
+}
+```
+
+For prompts or URI templates with multiple arguments, clients should include previous completions in the `context.arguments` object to provide context for subsequent requests.
+
+**Request:**
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "completion/complete",
+  "params": {
+    "ref": {
+      "type": "ref/prompt",
+      "name": "code_review"
+    },
+    "argument": {
+      "name": "framework",
+      "value": "fla"
+    },
+    "context": {
+      "arguments": {
+        "language": "python"
+      }
+    }
+  }
+}
+```
+
+**Response:**
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "completion": {
+      "values": ["flask"],
+      "total": 1,
+      "hasMore": false
+    }
+  }
+}
+```
+
+### Reference Types
+
+The protocol supports two types of completion references:
+
+| Type           | Description                 | Example                                             |
+| -------------- | --------------------------- | --------------------------------------------------- |
+| `ref/prompt`   | References a prompt by name | `{"type": "ref/prompt", "name": "code_review"}`     |
+| `ref/resource` | References a resource URI   | `{"type": "ref/resource", "uri": "file:///{path}"}` |
+
+### Completion Results
+
+Servers return an array of completion values ranked by relevance, with:
+
+* Maximum 100 items per response
+* Optional total number of available matches
+* Boolean indicating if additional results exist
+
+## Message Flow
+
+```mermaid theme={null}
+sequenceDiagram
+    participant Client
+    participant Server
+
+    Note over Client: User types argument
+    Client->>Server: completion/complete
+    Server-->>Client: Completion suggestions
+
+    Note over Client: User continues typing
+    Client->>Server: completion/complete
+    Server-->>Client: Refined suggestions
+```
+
+## Data Types
+
+### CompleteRequest
+
+* `ref`: A `PromptReference` or `ResourceReference`
+* `argument`: Object containing:
+  * `name`: Argument name
+  * `value`: Current value
+* `context`: Object containing:
+  * `arguments`: A mapping of already-resolved argument names to their values.
+
+### CompleteResult
+
+* `completion`: Object containing:
+  * `values`: Array of suggestions (max 100)
+  * `total`: Optional total matches
+  * `hasMore`: Additional results flag
+
+## Error Handling
+
+Servers **SHOULD** return standard JSON-RPC errors for common failure cases:
+
+* Method not found: `-32601` (Capability not supported)
+* Invalid prompt name: `-32602` (Invalid params)
+* Missing required arguments: `-32602` (Invalid params)
+* Internal errors: `-32603` (Internal error)
+
+## Implementation Considerations
+
+1. Servers **SHOULD**:
+   * Return suggestions sorted by relevance
+   * Implement fuzzy matching where appropriate
+   * Rate limit completion requests
+   * Validate all inputs
+
+2. Clients **SHOULD**:
+   * Debounce rapid completion requests
+   * Cache completion results where appropriate
+   * Handle missing or partial results gracefully
+
+## Security
+
+Implementations **MUST**:
+
+* Validate all completion inputs
+* Implement appropriate rate limiting
+* Control access to sensitive suggestions
+* Prevent completion-based information disclosure

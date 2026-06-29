@@ -17,12 +17,13 @@
 #   source of truth for what a plugin is; folder names mean nothing to the
 #   platform. ids are path-from-plugins-root with forward slashes.
 # - skips entries starting with _ or . (dunder, hidden, __pycache__, etc.)
-# veritate_mri/readers/plugins.py
+# veritate_mri/readers/trainers.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
 import json
 import os
+import re
 
 from . import paths
 
@@ -48,6 +49,7 @@ NATIVE_TRAINER_MANIFEST = {
     "name":        "Native trainer (no plugin)",
     "description": "Train, continue, or refine any size from the dashboard. Canonical Veritate (GELU FFN + RMSNorm + learned pos-emb + tied LM head); QAT-aware; same save.save / append_train_row contract as a plugin.",
     "kind":        "trainer",
+    "bench":       True,
     "flow":        ["scratch", "continue"],
     "sizes": {
         "5m":   {"layers":  6, "hidden":  256, "ffn":  1024, "heads":  4, "params":      5000000},
@@ -182,6 +184,24 @@ def _native_record():
     }
 
 
+SIZE_UNITS = {"m": 1_000_000, "b": 1_000_000_000}
+
+
+def _size_key(rec):
+    # Headline scale from the canonical id token ("10m", "1b3", "50b"), so picker
+    # order matches the displayed name regardless of which default size is set.
+    tok = (rec.get("id") or "").rsplit("/", 1)[-1].rsplit("_", 1)[-1]
+    m = re.match(r"^(\d+)([mb])(\d*)$", tok)
+    if m:
+        whole, unit, frac = m.groups()
+        scaled = float(whole) + (float(frac) / 10.0 if frac else 0.0)
+        return scaled * SIZE_UNITS[unit]
+    # Non-scale trainers (SFT, etc.): fall back to declared max param count.
+    sizes = (rec.get("manifest") or {}).get("sizes") or {}
+    vals = [(v.get("params") or v.get("active_params") or 0) for v in sizes.values()]
+    return float(max(vals)) if vals else 0.0
+
+
 def scan():
     out = []
     # Native trainer first — surfaces "no plugin needed" at the top of the picker.
@@ -189,7 +209,12 @@ def scan():
         out.append(_native_record())
     if not os.path.isdir(PLUGINS_ROOT):
         return out
-    _walk("", out)
+    plugins = []
+    _walk("", plugins)
+    # Picker order = model size (default-size param count), ascending. Stable sort
+    # keeps the alphabetical _walk order for equal-size plugins.
+    plugins.sort(key=_size_key)
+    out.extend(plugins)
     return out
 
 
@@ -220,6 +245,20 @@ def _manifest_path(plugin):
     return plugin["path"][:-3] + ".json"
 
 
+def _coerce_like(template, v):
+    # Dashboard form values arrive as strings; keep the manifest default's type
+    # so parse_args registers the correct argparse type. bool subclasses int, check first.
+    if isinstance(template, bool):
+        if isinstance(v, str):
+            return v.strip().lower() in ("1", "true", "yes", "on")
+        return bool(v)
+    if isinstance(template, int):
+        return int(v)
+    if isinstance(template, float):
+        return float(v)
+    return v
+
+
 def update_defaults(plugin_id, args):
     """Merge submitted args into the plugin manifest's `defaults` block. Only
     keys already present in defaults are overwritten so run-only fields
@@ -244,8 +283,14 @@ def update_defaults(plugin_id, args):
         return False
     changed = False
     for k, v in args.items():
-        if k in defaults and defaults[k] != v:
-            defaults[k] = v
+        if k not in defaults:
+            continue
+        try:
+            nv = _coerce_like(defaults[k], v)
+        except (TypeError, ValueError):
+            continue
+        if defaults[k] != nv:
+            defaults[k] = nv
             changed = True
     if not changed:
         return False

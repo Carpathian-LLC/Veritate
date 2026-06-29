@@ -5,7 +5,7 @@ tags: [kernels, architecture, int8, dispatch]
 summary: How Veritate is built. Three layers, INT8 weights, runtime dispatch, one matmul.
 ---
 
-> Friendly summary. The canonical contract is `documentation/kernels/architecture.md`.
+> Friendly summary. The canonical contract is `developer_documentation/kernels/architecture.md`.
 
 ## three layers
 
@@ -49,11 +49,11 @@ Weights are a flat blob `mmap()`ed at startup. Zero-copy load, demand-paged by t
 
 | kernel | one MAC takes | where |
 |---|---|---|
-| scalar reference | 3 nested loops, INT8 in, INT32 accumulator | `kernels/scalar/matmul.c` |
-| AVX2 | 32 MACs per ~3 instructions via `maddubs` + `madd` | `kernels/x86_64/matmul_avx2.c` |
-| AVX-512 + VNNI | 64 MACs per single `vpdpbusd` | `kernels/x86_64/matmul_vnni.c` |
-| NEON SDOT | 16 MACs per `sdot` | `kernels/arm64/matmul_neon_sdot.c` |
-| NEON only | scalar fallback for pre-SDOT ARM | `kernels/arm64/matmul_neon.c` |
+| scalar reference | 3 nested loops, INT8 in, INT32 accumulator | `veritate_engine/v1/kernels/scalar/matmul_scalar.c` |
+| AVX2 | 32 MACs per ~3 instructions via `maddubs` + `madd` | `veritate_engine/v1/kernels/x86_64/matmul_avx2.c` |
+| AVX-512 + VNNI | 64 MACs per single `vpdpbusd` | `veritate_engine/v1/kernels/x86_64/matmul_vnni.c` |
+| NEON SDOT | 16 MACs per `sdot` | `veritate_engine/v1/kernels/arm64/matmul_neon_sdot.c` |
+| NEON only | pre-SDOT ARM port | `veritate_engine/v1/kernels/arm64/transformer_neon.c` |
 
 Sub-millisecond matmul on the 9800X3D. A 1024×1024×1024 INT8 matmul is 2 GOps; at ~4 effective TOPS that's ~0.5 ms. Achievable, not free. Every commit benches and logs to the workbook; regressions revert.
 

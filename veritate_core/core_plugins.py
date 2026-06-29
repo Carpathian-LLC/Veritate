@@ -88,6 +88,17 @@ REGISTRY = [
         "applies_to":  [],
     },
     {
+        "id":          "neuron_prune_group",
+        "label":       "Group-lasso (prunable)",
+        "description": "Adds a group-lasso penalty (l1_lambda=5e-5, reg_mode=group) that "
+                       "drives whole FFN units to zero so they can be width-pruned away "
+                       "for a smaller, faster model. Pairs with ReLU.",
+        "group":       GROUP_REGULARIZER,
+        "default":     False,
+        "args":        {"l1_lambda": 5e-5, "reg_mode": "group"},
+        "applies_to":  [],
+    },
+    {
         "id":          "act_checkpoint",
         "label":       "Activation checkpointing",
         "description": "Recomputes the forward pass during backward instead of "
@@ -97,6 +108,28 @@ REGISTRY = [
         "default":     False,
         "args":        {"use_act_ckpt": True},
         "applies_to":  [],
+    },
+    {
+        "id":          "qat_int8",
+        "label":       "QAT (INT8 training)",
+        "description": "Quantization-aware training: weights, activations, and "
+                       "norms run under fake-quant INT8 ops, so the checkpoint "
+                       "exports straight to an INT8 engine binary. On continue, "
+                       "fine-tunes an existing model into INT8 (use lr ~1e-5).",
+        "group":       "quantization",
+        "default":     False,
+        "args":        {"qat_enabled": True},
+        "applies_to":  [],
+    },
+    {
+        "id":          "freeze_base",
+        "label":       "Freeze base (adapter only)",
+        "description": "Lock the base trunk so only the adapter (M1/M3) learns. "
+                       "Faster, smaller deltas, lower forgetting.",
+        "group":       "adapter",
+        "default":     False,
+        "args":        {"freeze_base": True},
+        "applies_to":  ["scratch"],
     },
     {
         "id":          "adam8bit",

@@ -1,0 +1,52 @@
+/* Developed by Carpathian, LLC. Distribution Not Authorized. */
+/* veritate_mri/web/prune.css */
+
+#prunePanel .prune-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+#prunePanel select,
+#prunePanel input {
+  background: #0a0c12;
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 5px 8px;
+  font: inherit;
+  border-radius: 3px;
+}
+#prunePanel select { min-width: 260px; }
+#prunePanel input.prune-step { width: 90px; }
+#prunePanel .prune-summary {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+  font-size: 12px;
+}
+#prunePanel .prune-summary b { color: var(--accent); }
+#prunePanel table.prune-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-top: 6px;
+}
+#prunePanel table.prune-table th,
+#prunePanel table.prune-table td {
+  border: 1px solid var(--line);
+  padding: 3px 7px;
+  text-align: right;
+}
+#prunePanel table.prune-table th { color: var(--soft); text-align: right; }
+#prunePanel .prune-bar {
+  display: inline-block;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 2px;
+  vertical-align: middle;
+}
+#prunePanel .prune-msg { font-size: 11px; color: var(--soft); margin-top: 8px; min-height: 14px; }
+#prunePanel .prune-msg.err { color: var(--warm, #e0a060); }
+#prunePanel .prune-msg.ok { color: var(--accent); }

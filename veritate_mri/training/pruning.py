@@ -51,7 +51,6 @@ def measure_activity(model, corpus_path, n_samples=DEFAULT_SAMPLES,
     a unit is 'alive' if its score exceeds `threshold`.
     """
     import torch
-    import torch.nn.functional as F
 
     if not os.path.isfile(corpus_path):
         raise FileNotFoundError(f"corpus not found: {corpus_path}")
@@ -70,8 +69,11 @@ def measure_activity(model, corpus_path, n_samples=DEFAULT_SAMPLES,
     cap = [None] * layers
     handles = []
     for L, blk in enumerate(model.blocks):
-        def _hook(_m, _i, o, L=L):
-            post = F.gelu(o).abs()
+        # Score with the layer's own activation, not a hardcoded GELU, so ReLU
+        # and SiLU models report faithful post-activation magnitudes.
+        act_fn = blk.ff._act_fn
+        def _hook(_m, _i, o, L=L, act_fn=act_fn):
+            post = act_fn(o).abs()
             mag  = post.amax(dim=tuple(range(post.dim() - 1)))
             cap[L] = mag if cap[L] is None else torch.maximum(cap[L], mag)
         handles.append(blk.ff.up.register_forward_hook(_hook))

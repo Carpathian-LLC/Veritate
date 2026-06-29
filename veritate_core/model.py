@@ -31,6 +31,16 @@ VOCAB_BYTE_LEVEL = 256
 ACTIVATIONS    = ("gelu", "relu", "silu")
 ACT_DEFAULT    = "gelu"
 
+# Regularization mode for the captured post-activation penalty.
+#   "l1"      mean(|post-activation|): pushes units toward zero (sparsity).
+#   "group"   sum of per-neuron RMS activation (group-lasso over units): drives
+#             whole FFN units to zero so they become prunable (structured).
+# Both ride the same model.post_l1_sum() contract; the trainer scales by
+# l1_lambda and adds to the loss without knowing which mode is active.
+REG_MODES     = ("l1", "group")
+REG_DEFAULT   = "l1"
+REG_EPS       = 1e-8
+
 # Map name -> torch.nn.functional callable. ReLU and SiLU expose post-activation
 # sparsity for the L1 penalty; GELU does not (sparsity is undefined for a smooth
 # activation, callers must use ReLU when they want l1_lambda > 0).
@@ -109,32 +119,47 @@ class CausalSelfAttention(nn.Module):
         return self.proj(out)
 
 
+def group_penalty(post):
+    """Group-lasso over FFN units: sum of per-neuron RMS activation across the
+    batch and sequence. Cheaper to drive a whole unit to zero than to shrink all,
+    so it induces structured (whole-unit) sparsity that width-pruning can remove.
+    post: [..., ffn]."""
+    dims = tuple(range(post.dim() - 1))
+    return post.pow(2).mean(dim=dims).add(REG_EPS).sqrt().sum()
+
+
 class FFN(nn.Module):
-    def __init__(self, hidden, ffn, activation=ACT_DEFAULT, capture_l1=False):
+    def __init__(self, hidden, ffn, activation=ACT_DEFAULT, capture_l1=False,
+                 reg_mode=REG_DEFAULT):
         super().__init__()
         if activation not in _ACT_FNS:
             raise ValueError(f"unknown activation: {activation!r}; expected one of {ACTIVATIONS}")
+        if reg_mode not in REG_MODES:
+            raise ValueError(f"unknown reg_mode: {reg_mode!r}; expected one of {REG_MODES}")
         self.up         = QuantLinear(hidden, ffn,    bias=False)
         self.down       = QuantLinear(ffn,    hidden, bias=False)
         self.activation = activation
         self._act_fn    = _ACT_FNS[activation]
         self.capture_l1 = bool(capture_l1)
+        self.reg_mode   = reg_mode
         self._last_l1   = None
 
     def forward(self, x):
         post = self._act_fn(self.up(x))
         if self.capture_l1:
-            self._last_l1 = post.abs().mean()
+            self._last_l1 = group_penalty(post) if self.reg_mode == "group" else post.abs().mean()
         return self.down(post)
 
 
 class Block(nn.Module):
-    def __init__(self, hidden, ffn, heads, activation=ACT_DEFAULT, capture_l1=False):
+    def __init__(self, hidden, ffn, heads, activation=ACT_DEFAULT, capture_l1=False,
+                 reg_mode=REG_DEFAULT):
         super().__init__()
         self.n1   = RMSNorm(hidden)
         self.attn = CausalSelfAttention(hidden, heads)
         self.n2   = RMSNorm(hidden)
-        self.ff   = FFN(hidden, ffn, activation=activation, capture_l1=capture_l1)
+        self.ff   = FFN(hidden, ffn, activation=activation, capture_l1=capture_l1,
+                        reg_mode=reg_mode)
         self.qat  = False
 
     def forward(self, x):
@@ -147,12 +172,14 @@ class Block(nn.Module):
 
 class Veritate(nn.Module):
     def __init__(self, vocab, hidden, layers, ffn, heads, seq,
-                 activation=ACT_DEFAULT, capture_l1=False):
+                 activation=ACT_DEFAULT, capture_l1=False, reg_mode=REG_DEFAULT):
         super().__init__()
         if vocab != VOCAB_BYTE_LEVEL:
             raise ValueError(f"vocab must be {VOCAB_BYTE_LEVEL} (byte-level only), got {vocab}")
         if activation not in _ACT_FNS:
             raise ValueError(f"unknown activation: {activation!r}; expected one of {ACTIVATIONS}")
+        if reg_mode not in REG_MODES:
+            raise ValueError(f"unknown reg_mode: {reg_mode!r}; expected one of {REG_MODES}")
         if isinstance(ffn, (list, tuple)):
             ffn_per_layer = list(ffn)
             if len(ffn_per_layer) != layers:
@@ -168,13 +195,15 @@ class Veritate(nn.Module):
         self.seq            = seq
         self.activation     = activation
         self.capture_l1     = bool(capture_l1)
+        self.reg_mode       = reg_mode
         self.qat            = False
 
         self.tok_emb = nn.Embedding(vocab, hidden)
         self.pos_emb = nn.Embedding(seq,   hidden)
         self.blocks  = nn.ModuleList([Block(hidden, f, heads,
                                             activation=activation,
-                                            capture_l1=capture_l1)
+                                            capture_l1=capture_l1,
+                                            reg_mode=reg_mode)
                                       for f in ffn_per_layer])
         self.n_out   = RMSNorm(hidden)
         self.lm_head = QuantLinear(hidden, vocab, bias=False)
@@ -185,8 +214,10 @@ class Veritate(nn.Module):
                 nn.init.normal_(p, mean=0.0, std=0.02)
 
     def post_l1_sum(self):
-        """Sum of per-block post-activation L1 means captured during the last
-        forward. Returns None when capture_l1 is off or no forward has run."""
+        """Sum of per-block captured post-activation penalties from the last
+        forward. The penalty is L1 sparsity or group-lasso per reg_mode; the
+        trainer scales it by l1_lambda blind to the mode. Returns None when
+        capture_l1 is off or no forward has run."""
         if not self.capture_l1:
             return None
         parts = [blk.ff._last_l1 for blk in self.blocks if blk.ff._last_l1 is not None]

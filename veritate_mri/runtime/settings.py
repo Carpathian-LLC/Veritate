@@ -15,6 +15,7 @@
 
 import json
 import os
+import random
 import threading
 
 from readers.paths import REPO_ROOT
@@ -26,7 +27,27 @@ SETTINGS_PATH = os.path.join(REPO_ROOT, "data", "mri_settings.json")
 
 DEVICE_NAME_MAX_LEN = 15
 
-# THE HARDCODED API KEY MUST STAY IN THIS FILE! DO NOT REMOVE IT!
+# First-run device name: adjective-noun-NN, kept short so it fits DEVICE_NAME_MAX_LEN.
+DEVICE_NAME_ADJECTIVES = ("brave", "calm", "bright", "swift", "keen", "bold", "lush",
+                          "warm", "cool", "vivid", "quiet", "sharp", "witty", "sunny", "misty")
+DEVICE_NAME_NOUNS = ("fox", "owl", "elk", "lynx", "hawk", "wolf", "otter", "crane",
+                     "bison", "heron", "ibex", "koala", "raven", "tapir", "gecko")
+
+# THE HARDCODED PUBLIC KEY MUST STAY IN THIS FILE! DO NOT REMOVE IT!
+# cai_ keys are PUBLIC shared keys, intentionally committed. The public chat
+# endpoint + key are NOT persisted to mri_settings.json: get() injects them live
+# from the constants below, so rotating the key here reaches every existing
+# install on the next load (a persisted copy would shadow the new value forever).
+# Only user-entered keys (teacher_api_key, ai_api_key_user) are secret; those
+# live in the gitignored data/mri_settings.json or env, never in tracked source.
+PUBLIC_AI_ENDPOINT = "https://api.carpathian.ai/ai/v1/chat/completions"
+PUBLIC_AI_KEY = "cai_D1swbd9sfAA6BJ8HX3yDby2J5C6ZO8zN91IKP_2iI1g"
+PUBLIC_AI_BLURB = ('Adds an "ask AI" button next to selected dashboard panels. '
+                   "Each click sends the panel's data to a remote model. "
+                   "When disabled, no buttons render and no calls are made.")
+PUBLIC_AI_DEFAULTS = {"ai_endpoint": PUBLIC_AI_ENDPOINT, "ai_api_key": PUBLIC_AI_KEY,
+                      "ai_assist_blurb": PUBLIC_AI_BLURB}
+
 DEFAULTS = {
     "pytorch_load_mode": "on_demand",
     "pytorch_idle_unload_secs": 600,
@@ -42,9 +63,8 @@ DEFAULTS = {
     "device_preference": "auto",
     "update_channel": "stable",
     "auto_reload_on_update": True,
+    "extensions": False,
     "ai_enabled": False,
-    "ai_endpoint": "https://api.carpathian.ai/ai/v1/chat/completions",
-    "ai_api_key": "cai_Laz79g9M9VtJDUI1TFzg0_2S6BERaD8zeiF2yrP79TU",
     "ai_endpoint_user": "",
     "ai_api_key_user": "",
     "last_acknowledged_build": 0,
@@ -55,17 +75,28 @@ DEFAULTS = {
     "teacher_model": "",
     "teacher_base_url": "",
     "teacher_api_key": "",
+    "teacher_configs": {},
     "teacher_max_concurrency": 16,
     "teacher_max_tokens": 2048,
     "teacher_temperature": 0.7,
+    "mesh_role": "off",
+    "mesh_hub_address": "",
+    "mesh_auth_token": "",
+    "tutorial_enabled": True,
+    "tutorial_completed": True,
 }
 
 VALID_TEMPERATURE_UNITS = ("C", "F", "K")
 
 KNOWN_TEACHER_PROVIDERS = (
-    "openai", "anthropic", "gemini", "xai", "deepseek",
+    "carpathian", "openai", "anthropic", "gemini", "xai", "deepseek",
     "mistral", "groq", "openrouter", "ollama", "lm_studio", "llama_cpp",
 )
+
+# Per-provider remembered config, keyed by provider id in teacher_configs.
+TEACHER_CONFIG_FIELDS = ("api_key", "model", "base_url")
+
+VALID_MESH_ROLES = ("off", "node", "hub", "both")
 
 # Build notices surface a modal in the dashboard for breaking-build changes the
 # user needs to act on. Add an entry only when a build introduces something the
@@ -83,10 +114,17 @@ _CACHE = None
 # ------------------------------------------------------------------------------------
 # Functions
 
+def _random_device_name():
+    name = f"{random.choice(DEVICE_NAME_ADJECTIVES)}-{random.choice(DEVICE_NAME_NOUNS)}-{random.randint(0, 99):02d}"
+    return name[:DEVICE_NAME_MAX_LEN]
+
+
 def _ensure_settings():
     if not os.path.isfile(SETTINGS_PATH):
-        _write(dict(DEFAULTS))
-        return dict(DEFAULTS)
+        fresh = dict(DEFAULTS)
+        fresh["device_name"] = _random_device_name()
+        _write(fresh)
+        return fresh
     try:
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
             cur = json.load(f)
@@ -94,8 +132,13 @@ def _ensure_settings():
             cur = {}
     except (OSError, json.JSONDecodeError):
         cur = {}
+    if "extensions" not in cur and "experimental" in cur:
+        cur["extensions"] = cur["experimental"]
     missing = {k: v for k, v in DEFAULTS.items() if k not in cur}
-    if missing:
+    legacy = [k for k in PUBLIC_AI_DEFAULTS if k in cur]
+    if missing or legacy:
+        for k in legacy:
+            cur.pop(k, None)
         cur = {**cur, **missing}
         _write(cur)
     return cur
@@ -113,7 +156,7 @@ def get():
     global _CACHE
     with _LOCK:
         if _CACHE is None:
-            _CACHE = {**DEFAULTS, **_ensure_settings()}
+            _CACHE = {**DEFAULTS, **_ensure_settings(), **PUBLIC_AI_DEFAULTS}
         return dict(_CACHE)
 
 
@@ -179,6 +222,18 @@ def _validate(patch):
         v = patch["teacher_provider"]
         if v and v not in KNOWN_TEACHER_PROVIDERS:
             raise ValueError(f"teacher_provider must be one of {KNOWN_TEACHER_PROVIDERS} or empty")
+    if "teacher_configs" in patch:
+        v = patch["teacher_configs"]
+        if v is None:
+            v = {}
+        if not isinstance(v, dict):
+            raise ValueError("teacher_configs must be a dict")
+        cleaned = {}
+        for pid, cfg in v.items():
+            if pid not in KNOWN_TEACHER_PROVIDERS or not isinstance(cfg, dict):
+                continue
+            cleaned[pid] = {f: str(cfg.get(f) or "").strip() for f in TEACHER_CONFIG_FIELDS}
+        patch["teacher_configs"] = cleaned
     if "teacher_max_concurrency" in patch:
         v = patch["teacher_max_concurrency"]
         if not isinstance(v, int) or isinstance(v, bool):
@@ -198,6 +253,30 @@ def _validate(patch):
         if v < 0.0 or v > 2.0:
             raise ValueError("teacher_temperature must be 0.0-2.0")
         patch["teacher_temperature"] = float(v)
+    if "mesh_role" in patch:
+        v = patch["mesh_role"]
+        if not isinstance(v, str):
+            raise ValueError("mesh_role must be a string")
+        v = v.strip().lower()
+        if v not in VALID_MESH_ROLES:
+            raise ValueError(f"mesh_role must be one of {VALID_MESH_ROLES}")
+        patch["mesh_role"] = v
+    if "mesh_hub_address" in patch:
+        v = patch["mesh_hub_address"]
+        if v is None:
+            patch["mesh_hub_address"] = ""
+        elif not isinstance(v, str):
+            raise ValueError("mesh_hub_address must be a string")
+        else:
+            patch["mesh_hub_address"] = v.strip().rstrip("/")
+    if "mesh_auth_token" in patch:
+        v = patch["mesh_auth_token"]
+        if v is None:
+            patch["mesh_auth_token"] = ""
+        elif not isinstance(v, str):
+            raise ValueError("mesh_auth_token must be a string")
+        else:
+            patch["mesh_auth_token"] = v.strip()
     return patch
 
 
@@ -212,5 +291,5 @@ def update(patch):
             if k in DEFAULTS:
                 cur[k] = v
         _write(cur)
-        _CACHE = cur
-        return dict(cur)
+        _CACHE = {**cur, **PUBLIC_AI_DEFAULTS}
+        return dict(_CACHE)

@@ -547,8 +547,10 @@ def register(app):
         if action == "unload":
             sub = cfg.get("C_SUBPROCESS")
             if sub is not None:
-                try: sub.close()
-                except Exception: pass
+                try:
+                    sub.close()
+                except Exception as e:
+                    logmod.error("backends", f"c subprocess close: {type(e).__name__}: {e}")
                 cfg["C_SUBPROCESS"] = None
                 cfg["C_EXE"] = None
                 cfg["C_MODEL"] = None

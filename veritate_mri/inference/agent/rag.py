@@ -249,8 +249,10 @@ def make_word_ppl_compressor(brain, keep_frac: float = 0.5, max_ctx_bytes: int =
             b = b[:max_ctx_bytes]
         try:
             nlls = _score_bytes(b)
-        except Exception:
-            return passage  # silent fallback: never break the chain
+        except Exception as e:
+            from runtime import logs as logmod
+            logmod.warn("rag", f"compressor scoring failed; passing through: {type(e).__name__}: {e}")
+            return passage
         spans = [(m.start(), m.end()) for m in _WORD_RE.finditer(b)
                  if not m.group(0).isspace()]
         if not spans:

@@ -108,16 +108,11 @@ def _snip(s):
     return s if len(s) <= RAW_LOG_CHARS else s[:RAW_LOG_CHARS] + f"... [+{len(s)-RAW_LOG_CHARS} chars]"
 
 
-def _post_chat(endpoint, key, system_prompt, user_message):
-    body = {
-        "model":    MODEL_FIELD,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_message},
-        ],
-    }
+def _post_messages(endpoint, key, messages):
+    body = {"model": MODEL_FIELD, "messages": messages}
     req_body = json.dumps(body).encode("utf-8")
-    logmod.info(LOG_SOURCE, f"POST {endpoint} bytes={len(req_body)} sys_chars={len(system_prompt)} user_chars={len(user_message)}")
+    total_chars = sum(len(m.get("content") or "") for m in messages)
+    logmod.info(LOG_SOURCE, f"POST {endpoint} bytes={len(req_body)} msgs={len(messages)} content_chars={total_chars}")
     req = urllib.request.Request(
         endpoint,
         data    = req_body,
@@ -149,6 +144,13 @@ def _post_chat(endpoint, key, system_prompt, user_message):
     else:
         logmod.ok(LOG_SOURCE, f"answer chars={len(content)} finish_reason={finish_reason}")
     return content
+
+
+def _post_chat(endpoint, key, system_prompt, user_message):
+    return _post_messages(endpoint, key, [
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": user_message},
+    ])
 
 
 def _format_row(row, fields):
@@ -375,6 +377,43 @@ KINDS = {
     "train_health": _build_train_health,
     "loss_curve":   _build_loss_curve,
 }
+
+CHAT_SYSTEM_PROMPT = (
+    "You are Veritate, a concise and helpful assistant. Answer the user directly. "
+    "No emoji, no emdash."
+)
+
+
+def chat(message, system=None, history=None):
+    """General chat turn against the configured public model (Carpathian by
+    default). Optional history is a list of prior {role, content} turns prepended
+    before the new message so the front-door chat can carry multi-turn context.
+    Availability is the presence of credentials, not the ai_enabled explainer
+    flag: the public key is injected from source, so this works out of the box. A
+    user-set ai_api_key_user overrides it. Returns {ok, answer} or {ok: False, error}."""
+    endpoint, key = _resolve_credentials()
+    if not endpoint or not key:
+        return {"ok": False, "error": "no public model key configured"}
+    messages = ([{"role": "system", "content": system or CHAT_SYSTEM_PROMPT}]
+                + list(history or []) + [{"role": "user", "content": message}])
+    try:
+        text = _post_messages(endpoint, key, messages)
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = ""
+        logmod.error(LOG_SOURCE, f"chat http {e.code} {e.reason}: {_snip(err_body)}")
+        return {"ok": False, "error": f"http {e.code}: {_snip(err_body) or e.reason}"}
+    except urllib.error.URLError as e:
+        logmod.error(LOG_SOURCE, f"chat network: {e.reason}")
+        return {"ok": False, "error": f"network: {e.reason}"}
+    except (TimeoutError, json.JSONDecodeError) as e:
+        logmod.error(LOG_SOURCE, f"chat {type(e).__name__}: {e}")
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    if not text:
+        return {"ok": False, "error": "empty response (see Logs tab for raw response)"}
+    return {"ok": True, "answer": text}
 
 
 def ask(kind, payload):

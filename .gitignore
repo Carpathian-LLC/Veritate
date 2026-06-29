@@ -34,3 +34,13 @@ veritate_trace.bin
 *.tern
 .pytest_cache
 /synth_jobs/
+
+# merged from dev
+.veritate_venv/
+veritate_mri/data/kb/
+veritate_mri/data/synth_jobs/
+dev_documentation/multimind/*.pt
+dev_documentation/multimind/affect_probe_stats.json
+trainers/multimind_poc/corpus/
+corpus_for_s3/
+extensions/installed/

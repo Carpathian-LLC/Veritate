@@ -17,9 +17,11 @@
 # ------------------------------------------------------------------------------------
 # Imports
 
+import glob
 import hashlib
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import threading
@@ -43,6 +45,7 @@ PY_MAX_TESTED    = (3, 13)
 LAUNCH_PHASE_ENV = "VERITATE_LAUNCH_PHASE"   # set on re-exec; tells phase-2 to skip bootstrap
 TIER_ENV         = "VERITATE_TIER"           # propagated to runtime so feature gates can read it
 MINIMAL_ENV      = "VERITATE_MINIMAL"        # "1" => power-save dashboard (no brain, no analytics)
+PY_REEXEC_ENV    = "VERITATE_PY_REEXEC"      # set after self-heal Python re-exec to detect loops
 
 # Hardware tier labels. The Veritate mission requires runnability on older
 # consumer hardware, so the launcher detects the host and dispatches per-tier
@@ -56,13 +59,16 @@ TIER_WINDOWS_X86 = "windows_x86"
 TIER_UNSUPPORTED = "unsupported"
 
 # (min_py, max_py) inclusive. max_py reflects what the tier's torch ceiling
-# was built against.
+# was built against. min_py reflects the floor of every pinned dep in
+# requirements.txt for that tier — notably numpy 2.4 requires 3.11+, so every
+# tier on modern torch is gated to 3.11. mac_intel stays at 3.10 because its
+# torch 2.2 / numpy <2.0 line still supports it.
 TIER_PYTHON_RANGE = {
-    TIER_MAC_ARM:     ((3, 10), (3, 13)),
-    TIER_MAC_INTEL:   ((3, 10), (3, 11)),  # torch 2.2 supports through 3.11
-    TIER_LINUX_X86:   ((3, 10), (3, 13)),
-    TIER_LINUX_ARM:   ((3, 10), (3, 13)),
-    TIER_WINDOWS_X86: ((3, 10), (3, 13)),
+    TIER_MAC_ARM:     ((3, 11), (3, 13)),
+    TIER_MAC_INTEL:   ((3, 10), (3, 11)),
+    TIER_LINUX_X86:   ((3, 11), (3, 13)),
+    TIER_LINUX_ARM:   ((3, 11), (3, 13)),
+    TIER_WINDOWS_X86: ((3, 11), (3, 13)),
 }
 
 # ------------------------------------------------------------------------------------
@@ -110,7 +116,228 @@ def _deps_satisfied() -> bool:
         return False
     if not HASH_SENTINEL.exists():
         return False
-    return HASH_SENTINEL.read_text(encoding="utf-8").strip() == _requirements_hash()
+    if HASH_SENTINEL.read_text(encoding="utf-8").strip() != _requirements_hash():
+        return False
+    tier = _detect_tier()
+    if tier == TIER_UNSUPPORTED:
+        return False
+    py_min, py_max = TIER_PYTHON_RANGE[tier]
+    vver = _interpreter_version(str(_venv_python()))
+    return vver is not None and py_min <= vver <= py_max
+
+
+def _interpreter_version(py_path: str) -> "tuple | None":
+    """Probe a Python interpreter for its (major, minor). None on failure."""
+    try:
+        out = subprocess.check_output(
+            [py_path, "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
+            text=True, stderr=subprocess.DEVNULL, timeout=15,
+        ).strip()
+        maj_s, min_s = out.split(".", 1)
+        return (int(maj_s), int(min_s))
+    except Exception:
+        return None
+
+
+def _candidate_python_paths(tier: str, version: tuple) -> list:
+    """Common on-disk locations where Python X.Y may already be installed."""
+    maj, mn = version
+    tag = f"{maj}.{mn}"
+    home = os.path.expanduser("~")
+    paths: list = []
+
+    if tier == TIER_MAC_ARM:
+        paths += [
+            f"/opt/homebrew/opt/python@{tag}/bin/python{tag}",
+            f"/opt/homebrew/bin/python{tag}",
+            f"/Library/Frameworks/Python.framework/Versions/{tag}/bin/python{tag}",
+        ]
+    elif tier == TIER_MAC_INTEL:
+        paths += [
+            f"/usr/local/opt/python@{tag}/bin/python{tag}",
+            f"/usr/local/bin/python{tag}",
+            f"/Library/Frameworks/Python.framework/Versions/{tag}/bin/python{tag}",
+        ]
+    elif tier in (TIER_LINUX_X86, TIER_LINUX_ARM):
+        paths += [
+            f"/usr/bin/python{tag}",
+            f"/usr/local/bin/python{tag}",
+            f"{home}/.local/bin/python{tag}",
+        ]
+    elif tier == TIER_WINDOWS_X86:
+        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        local_appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser(r"~\AppData\Local"))
+        ver_nodot = f"{maj}{mn}"
+        paths += [
+            f"{program_files}\\Python{ver_nodot}\\python.exe",
+            f"{local_appdata}\\Programs\\Python\\Python{ver_nodot}\\python.exe",
+        ]
+
+    # Cross-platform: pyenv, uv-managed, asdf
+    paths += sorted(glob.glob(f"{home}/.pyenv/versions/{tag}.*/bin/python{tag}"))
+    paths += sorted(glob.glob(f"{home}/.local/share/uv/python/cpython-{tag}.*/bin/python{tag}"))
+    paths += sorted(glob.glob(f"{home}/.local/share/uv/python/cpython-{tag}.*/python.exe"))
+    paths += sorted(glob.glob(f"{home}/Library/Application Support/uv/python/cpython-{tag}.*/bin/python{tag}"))
+    paths += sorted(glob.glob(f"{home}/.asdf/installs/python/{tag}.*/bin/python{tag}"))
+    return paths
+
+
+def _find_existing_python(tier: str, py_min: tuple, py_max: tuple) -> "str | None":
+    """Walk versions high→low; return the first interpreter in range that works."""
+    if py_min[0] != py_max[0]:
+        return None  # only handle a single major version range
+    for minor in range(py_max[1], py_min[1] - 1, -1):
+        version = (py_max[0], minor)
+        tag = f"{version[0]}.{version[1]}"
+        candidates: list = []
+        path_hit = shutil.which(f"python{tag}")
+        if path_hit:
+            candidates.append(path_hit)
+        candidates += _candidate_python_paths(tier, version)
+        # Windows py launcher
+        if tier == TIER_WINDOWS_X86 and shutil.which("py"):
+            try:
+                out = subprocess.check_output(
+                    ["py", f"-{tag}", "-c", "import sys; print(sys.executable)"],
+                    text=True, stderr=subprocess.DEVNULL, timeout=10,
+                ).strip()
+                if out:
+                    candidates.append(out)
+            except Exception:
+                pass
+        for cand in candidates:
+            if not cand or not os.path.exists(cand):
+                continue
+            ver = _interpreter_version(cand)
+            if ver and py_min <= ver <= py_max:
+                return cand
+    return None
+
+
+def _install_python_via_pkg_mgr(tier: str, py_target: tuple) -> "str | None":
+    """Best-effort install via the platform's native package manager."""
+    maj, mn = py_target
+    tag = f"{maj}.{mn}"
+
+    if tier in (TIER_MAC_ARM, TIER_MAC_INTEL):
+        if not shutil.which("brew"):
+            return None
+        print(f"[veritate] installing python@{tag} via Homebrew (this may take a few minutes) ...")
+        try:
+            subprocess.check_call(["brew", "install", f"python@{tag}"])
+        except subprocess.CalledProcessError:
+            return None
+        prefix = "/opt/homebrew" if tier == TIER_MAC_ARM else "/usr/local"
+        cand = f"{prefix}/opt/python@{tag}/bin/python{tag}"
+        if os.path.exists(cand):
+            return cand
+        return shutil.which(f"python{tag}")
+
+    if tier == TIER_WINDOWS_X86:
+        if not shutil.which("winget"):
+            return None
+        print(f"[veritate] installing Python.Python.{tag} via winget ...")
+        try:
+            subprocess.check_call([
+                "winget", "install", "-e", "--silent",
+                "--accept-source-agreements", "--accept-package-agreements",
+                "--id", f"Python.Python.{tag}",
+            ])
+        except subprocess.CalledProcessError:
+            return None
+        return shutil.which(f"python{tag}") or _find_existing_python(tier, py_target, py_target)
+
+    if tier in (TIER_LINUX_X86, TIER_LINUX_ARM):
+        # sudo -n: don't prompt. If passwordless sudo isn't available we silently
+        # fall through to the uv fallback instead of blocking the launcher.
+        cmd: "list | None" = None
+        if shutil.which("apt-get"):
+            cmd = ["sudo", "-n", "apt-get", "install", "-y",
+                   f"python{tag}", f"python{tag}-venv", f"python{tag}-dev"]
+        elif shutil.which("dnf"):
+            cmd = ["sudo", "-n", "dnf", "install", "-y", f"python{tag}"]
+        elif shutil.which("yum"):
+            cmd = ["sudo", "-n", "yum", "install", "-y", f"python{tag}"]
+        elif shutil.which("pacman"):
+            cmd = ["sudo", "-n", "pacman", "-S", "--noconfirm", "python"]
+        if not cmd:
+            return None
+        print(f"[veritate] installing Python {tag} via {cmd[2]} ...")
+        try:
+            subprocess.check_call(cmd)
+        except subprocess.CalledProcessError:
+            return None
+        return shutil.which(f"python{tag}")
+
+    return None
+
+
+def _install_python_via_uv(py_target: tuple) -> "str | None":
+    """Cross-platform fallback. uv ships a portable CPython without needing root."""
+    maj, mn = py_target
+    tag = f"{maj}.{mn}"
+
+    uv = shutil.which("uv")
+    if not uv:
+        print("[veritate] installing uv (portable Python manager) ...")
+        try:
+            if os.name == "nt":
+                subprocess.check_call([
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-Command", "irm https://astral.sh/uv/install.ps1 | iex",
+                ])
+            else:
+                subprocess.check_call(
+                    "curl -LsSf https://astral.sh/uv/install.sh | sh",
+                    shell=True,
+                )
+        except subprocess.CalledProcessError:
+            return None
+        for cand in [
+            os.path.expanduser("~/.local/bin/uv"),
+            os.path.expanduser("~/.cargo/bin/uv"),
+            shutil.which("uv"),
+        ]:
+            if cand and os.path.exists(cand):
+                uv = cand
+                break
+        if not uv:
+            return None
+
+    print(f"[veritate] installing Python {tag} via uv ...")
+    try:
+        subprocess.check_call([uv, "python", "install", tag])
+    except subprocess.CalledProcessError:
+        return None
+    try:
+        out = subprocess.check_output([uv, "python", "find", tag], text=True).strip()
+        if out and os.path.exists(out):
+            return out
+    except Exception:
+        pass
+    return None
+
+
+def _self_heal_python(tier: str, py_min: tuple, py_max: tuple) -> "str | None":
+    """Find or install a Python in [py_min, py_max]. None if nothing worked."""
+    found = _find_existing_python(tier, py_min, py_max)
+    if found:
+        print(f"[veritate] found compatible interpreter: {found}")
+        return found
+    print(f"[veritate] no Python {py_min[0]}.{py_min[1]}–{py_max[0]}.{py_max[1]} found; "
+          f"attempting auto-install ...")
+    installed = _install_python_via_pkg_mgr(tier, py_max)
+    if installed:
+        ver = _interpreter_version(installed)
+        if ver and py_min <= ver <= py_max:
+            return installed
+    print("[veritate] native package manager unavailable or failed; falling back to uv ...")
+    installed = _install_python_via_uv(py_max)
+    if installed:
+        ver = _interpreter_version(installed)
+        if ver and py_min <= ver <= py_max:
+            return installed
+    return None
 
 
 def _ensure_venv_and_deps() -> None:
@@ -128,20 +355,48 @@ def _ensure_venv_and_deps() -> None:
 
     py_min, py_max = TIER_PYTHON_RANGE[tier]
     cur = sys.version_info
-    if (cur.major, cur.minor) < py_min:
-        sys.exit(
-            f"[veritate] tier={tier}: Python {py_min[0]}.{py_min[1]}+ required, "
-            f"got {cur.major}.{cur.minor}."
-        )
-    if (cur.major, cur.minor) > py_max:
-        hint = _tier_install_hint(tier, py_max)
-        sys.exit(
-            f"[veritate] tier={tier}: Python {py_max[0]}.{py_max[1]} is the newest "
-            f"supported on this hardware (you're on {cur.major}.{cur.minor}).\n"
-            f"This tier's torch ceiling doesn't have wheels for newer Python.\n"
-            f"To fix: {hint}"
-        )
+    cur_ver = (cur.major, cur.minor)
+
+    if cur_ver < py_min or cur_ver > py_max:
+        # Self-heal: locate or install a compatible interpreter, then re-exec.
+        # The PY_REEXEC sentinel guards against an infinite loop if the installer
+        # claims success but the new interpreter still doesn't match.
+        if os.environ.get(PY_REEXEC_ENV) == "1":
+            sys.exit(
+                f"[veritate] self-heal already ran but the interpreter is still "
+                f"Python {cur.major}.{cur.minor} (need {py_min[0]}.{py_min[1]}–"
+                f"{py_max[0]}.{py_max[1]}).\n"
+                f"Manual fix: {_tier_install_hint(tier, py_max)}"
+            )
+        print(f"[veritate] tier={tier}: current Python {cur.major}.{cur.minor} outside "
+              f"supported range {py_min[0]}.{py_min[1]}–{py_max[0]}.{py_max[1]}; "
+              f"attempting self-heal ...")
+        better = _self_heal_python(tier, py_min, py_max)
+        if not better:
+            sys.exit(
+                f"[veritate] could not locate or auto-install a compatible Python.\n"
+                f"Manual fix: {_tier_install_hint(tier, py_max)}"
+            )
+        print(f"[veritate] re-executing under {better}")
+        env = os.environ.copy()
+        env[PY_REEXEC_ENV] = "1"
+        argv = [better, str(Path(__file__).resolve())] + sys.argv[1:]
+        try:
+            os.execve(better, argv, env)
+        except OSError as e:
+            # Some shells (e.g. cmd.exe with .exe handlers) prefer spawn over exec.
+            rc = subprocess.call(argv, env=env)
+            sys.exit(rc)
+
     print(f"[veritate] tier={tier} python={cur.major}.{cur.minor}")
+
+    # If a venv exists but was built with an interpreter no longer in range
+    # (e.g. system upgrade rendered it stale), rebuild it from scratch.
+    if _venv_python().exists():
+        vver = _interpreter_version(str(_venv_python()))
+        if vver is None or vver < py_min or vver > py_max:
+            print(f"[veritate] existing venv Python {vver} out of supported range; rebuilding ...")
+            shutil.rmtree(VENV_DIR, ignore_errors=True)
 
     if not _venv_python().exists():
         print(f"[veritate] creating virtual environment at {VENV_DIR} ...")
@@ -212,6 +467,52 @@ def _wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
     return False
 
 
+def _reclaim_orphan_on_port(port: int) -> int:
+    """Terminate any Veritate-owned process listening on `port`. "Ours" means
+    the process's cmdline or cwd references this repo's path — anything else
+    is left alone with a printed warning so the user can decide. Tries SIGTERM
+    first, escalates to SIGKILL after 3s. Returns the number reclaimed."""
+    try:
+        import psutil  # type: ignore
+    except ImportError:
+        return 0
+    here_str = str(HERE)
+    reclaimed = 0
+    for proc in psutil.process_iter(attrs=["pid", "cmdline"]):
+        try:
+            conns = proc.net_connections(kind="inet")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if not any(c.laddr and c.laddr.port == port and c.status == psutil.CONN_LISTEN
+                   for c in conns):
+            continue
+        pid     = proc.info["pid"]
+        cmdline = proc.info.get("cmdline") or []
+        cmd     = " ".join(cmdline)
+        try:
+            cwd = proc.cwd()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            cwd = ""
+        is_ours = (here_str in cmd) or (cwd == here_str)
+        if not is_ours:
+            print(f"[veritate] port {port} held by foreign PID {pid} "
+                  f"({cmd[:80]}); not killing", flush=True)
+            continue
+        print(f"[veritate] reclaiming port {port} from orphan Veritate PID {pid}",
+              flush=True)
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3.0)
+            except psutil.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2.0)
+            reclaimed += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+            print(f"[veritate] could not kill PID {pid}: {e}", flush=True)
+    return reclaimed
+
+
 def _parse_launch_args():
     import argparse
     ap = argparse.ArgumentParser(
@@ -274,9 +575,13 @@ def _launch_dashboard() -> int:
 
     import app as mri_app  # noqa: E402
     mri_app.app.config["LAUNCH_CMD"] = relaunch_cmd
-    if not _wait_for_port_free(args.port, timeout=10.0):
-        logmod.error("veritate", f"port {args.port} still bound after 10s — aborting launch")
-        return 3
+    if not _wait_for_port_free(args.port, timeout=0.5):
+        _reclaim_orphan_on_port(args.port)
+        if not _wait_for_port_free(args.port, timeout=10.0):
+            msg = f"port {args.port} still bound after reclaim attempt — aborting launch"
+            logmod.error("veritate", msg)
+            print(f"[veritate] {msg}", flush=True)
+            return 3
     mri_app.main()
     return 0
 

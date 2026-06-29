@@ -46,6 +46,19 @@ SHA256_CHUNK = 1024 * 1024
 # capability update is a no-op in that case.
 PLUGIN_ID_ENV = "VERITATE_PLUGIN_ID"
 
+# Set by trainer_runner from the dashboard's model_type (the --model_type flag is
+# dropped by trainers' parse_known_args, so it cannot arrive via parsed args).
+MODEL_TYPE_ENV = "VERITATE_MODEL_TYPE"
+
+# Dumps that only make sense for a text model. Skipped when training_args.model_type
+# is code/statistical/other, so a non-language model never accrues meaningless
+# language scores. The architecture probes (probe/lens, classroom, surprise,
+# quant_kl) and the checkpoint itself always run, model_type agnostic.
+LANGUAGE_DUMPS = frozenset({
+    "grades", "reading_comprehension", "math", "grammar",
+    "reasoning", "concepts", "writing_health", "generation",
+})
+
 # canonical dump filenames inside hooks/step_<N>/. dump_* in
 # training/checkpoint_probe.py emit prefixed names; we rename to these.
 RENAME_MAP_TEMPLATE = {
@@ -160,12 +173,22 @@ def sha256_file(path):
 
 
 def hash_corpus(stem):
-    train, val = resolve_corpus(stem)
-    out = {"stem": stem, "train_sha256": sha256_file(train), "train_bytes": os.path.getsize(train)}
-    if val is not None:
-        out["val_sha256"] = sha256_file(val)
-        out["val_bytes"]  = os.path.getsize(val)
-    return out
+    from veritate_core.plugin import multicorpus
+    members = [s for s, _ in multicorpus.parse_spec(stem)]
+    if len(members) == 1:
+        train, val = resolve_corpus(members[0])
+        out = {"stem": stem, "train_sha256": sha256_file(train), "train_bytes": os.path.getsize(train)}
+        if val is not None:
+            out["val_sha256"] = sha256_file(val)
+            out["val_bytes"]  = os.path.getsize(val)
+        return out
+    digests, total = [], 0
+    for s in members:
+        train, _ = resolve_corpus(s)
+        digests.append(s + "=" + sha256_file(train))
+        total += os.path.getsize(train)
+    mix = hashlib.sha256("\n".join(digests).encode("utf-8")).hexdigest()
+    return {"stem": stem, "train_sha256": mix, "train_bytes": total, "members": digests}
 
 
 def _auto_description(name, args):
@@ -261,6 +284,35 @@ def _sync_capabilities(name, step, args):
                          total_steps=total_steps)
     except (OSError, ValueError) as e:
         logmod.warn("save", f"capability mark failed: {e}")
+
+
+def _sync_model_meta(name, args):
+    """Promote model_type (from the launch env) into config.json's training_args. The
+    trainer drops --model_type (not a manifest key, so parse_known_args discards it),
+    so it never lands in config.json on its own, leaving the dashboard, the eval-deep
+    gate, and resumed runs reading a stale "language" default. No-op when already
+    synced. Codec-specific metadata (e.g. the market series stride) is owned by the
+    extension that consumes it, not stamped here."""
+    cfg_path = paths.config_path(name)
+    if not os.path.isfile(cfg_path):
+        return
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(data.get("training_args"), dict):
+        return
+    ta = data["training_args"]
+    mt = os.environ.get(MODEL_TYPE_ENV) or ta.get("model_type")
+    if ta.get("model_type") == mt:
+        return
+    if mt:
+        ta["model_type"] = mt
+    tmp = cfg_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, cfg_path)
 
 
 def _sync_qat_flag(name, args):
@@ -400,7 +452,19 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     )
 
     _validate_name(name)
+    # Stamp the run's model_type (from the launch env) into the config that gets
+    # written, so the eval gate, the eval_deep route, and the dashboard panels all
+    # agree on what kind of model this is. New-run env wins; an existing config keeps
+    # whatever it already has.
+    _env_mt = os.environ.get(MODEL_TYPE_ENV)
+    if _env_mt and isinstance(args, dict):
+        ta = args.get("training_args")
+        if isinstance(ta, dict):
+            ta.setdefault("model_type", _env_mt)
+        else:
+            args.setdefault("model_type", _env_mt)
     _ensure_config(name, args)
+    _sync_model_meta(name, args)
     _validate_description(name, args)
     _sync_capabilities(name, step, args)
 
@@ -450,6 +514,15 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     corpus_path = paths.corpus_train_path(corpus_stem) if corpus_stem else None
 
     skip = set(dump_set or [])
+    # Model-type gate: language probes (fluency, reading, math, grammar, reasoning,
+    # concepts, writing) are meaningless for a code/statistical/other model, so skip
+    # them. New runs carry model_type in the launch env; resumed runs read it from
+    # the saved config.
+    mtype = os.environ.get(MODEL_TYPE_ENV)
+    if not mtype:
+        mtype = ((cfg_reader.load(name) or {}).get("training_args") or {}).get("model_type")
+    if (mtype or "language").lower() != "language":
+        skip |= LANGUAGE_DUMPS
     if "generation" not in skip:
         if not corpus_stem:
             logmod.error("save", (

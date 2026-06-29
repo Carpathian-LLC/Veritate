@@ -857,5 +857,19 @@ def load_specs():
 
 def detect_and_save():
     specs = detect_specs()
+    prev = load_specs()
+    if prev and isinstance(prev.get("measured"), dict):
+        specs["measured"] = prev["measured"]
+    save_specs(specs)
+    return specs
+
+
+def save_measured(measured):
+    """Merge an auto-tune probe result into the saved specs. `measured` is the
+    summary dict the probe emits (device, max_batch, mem_ceiling_gb, tok_per_s)."""
+    if not isinstance(measured, dict):
+        return None
+    specs = load_specs() or {}
+    specs["measured"] = measured
     save_specs(specs)
     return specs

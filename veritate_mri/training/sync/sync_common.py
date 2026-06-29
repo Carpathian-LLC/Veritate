@@ -44,9 +44,10 @@ ACTION_INSTALL  = "install"   # write remote bytes (only valid for missing)
 ACTION_UPDATE   = "update"    # overwrite local with remote, record new state
 ACTION_FORCE    = "force"     # overwrite even when modified/conflict
 ACTION_ADOPT    = "adopt"     # keep local as-is, record current SHA as the baseline
+ACTION_DELETE   = "delete"    # remove local file + untrack (only valid for orphan)
 ACTION_SKIP     = "skip"      # do nothing this round
 
-VALID_ACTIONS = {ACTION_INSTALL, ACTION_UPDATE, ACTION_FORCE, ACTION_ADOPT, ACTION_SKIP}
+VALID_ACTIONS = {ACTION_INSTALL, ACTION_UPDATE, ACTION_FORCE, ACTION_ADOPT, ACTION_DELETE, ACTION_SKIP}
 
 
 # ------------------------------------------------------------------------------------
@@ -264,7 +265,7 @@ def default_action_for_state(file_state):
 def action_is_destructive(action, file_state):
     """Returns True if the action would overwrite user changes that haven't been
     explicitly accepted. Used by callers to require an extra confirmation."""
-    if action == ACTION_FORCE: return True
+    if action in (ACTION_FORCE, ACTION_DELETE): return True
     if action == ACTION_UPDATE and file_state in (STATE_MODIFIED, STATE_CONFLICT):
         return True
     return False

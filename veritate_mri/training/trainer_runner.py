@@ -6,7 +6,7 @@
 # Notes:
 # - spawn a plugin script as a subprocess. one at a time globally.
 # - stdout streams into the in-memory log ring. status exposed via state().
-# veritate_mri/training/plugin_runner.py
+# veritate_mri/training/trainer_runner.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
@@ -44,6 +44,11 @@ PYTORCH_ALLOC_ENV_DEFAULT = "expandable_segments:True"
 # runner's import graph (save.py imports torch lazily; the runner runs in
 # the parent process and shouldn't pay that cost).
 PLUGIN_ID_ENV = "VERITATE_PLUGIN_ID"
+
+# Carries the dashboard's model_type to save() so it can gate language probes.
+# Needed because trainers parse_known_args() and drop the --model_type flag (it is
+# not in any manifest), so it cannot ride in through the CLI / parsed args.
+MODEL_TYPE_ENV = "VERITATE_MODEL_TYPE"
 
 # Trainer device override. The settings-tab "Device preference" dropdown
 # writes this; trainers' pick_device() reads it. "auto" or unset = historical
@@ -278,25 +283,25 @@ def _run(plugin, args):
     env = os.environ.copy()
     env.setdefault(PYTORCH_ALLOC_ENV_KEY, PYTORCH_ALLOC_ENV_DEFAULT)
     env[PLUGIN_ID_ENV] = str(plugin["id"])
+    _mt = (args or {}).get("model_type")
+    if _mt:
+        env[MODEL_TYPE_ENV] = str(_mt)
     pref = (settings_mod.get().get("device_preference") or "auto").strip().lower()
     if pref and pref != "auto":
         env[DEVICE_ENV] = pref
-    else:
-        # auto: platform overrides only where we know the trainer's torch-based
-        # detection would mislead it. Specifically: macOS x86_64 (Intel Mac)
-        # reports torch.backends.mps.is_available() == True, but MPS only
-        # really works on Apple Silicon — using it crashes mid-step. Force
-        # CPU on that tier. Apple Silicon and Linux/Windows hosts get full
-        # auto-detect by the trainer.
-        import platform as _plat
-        if _plat.system() == "Darwin" and _plat.machine().lower() != "arm64":
-            env[DEVICE_ENV] = "cpu"
+    # macOS x86_64 (Intel Mac) reports torch.backends.mps.is_available() == True,
+    # but MPS only works on Apple Silicon and crashes mid-step there. Force CPU on
+    # that tier regardless of preference (incl. an explicit mps pick), since the
+    # synced trainer pick_device() copies do not all arch-guard MPS yet.
+    import platform as _plat
+    if _plat.system() == "Darwin" and _plat.machine().lower() != "arm64":
+        env[DEVICE_ENV] = "cpu"
     # Match BLAS and OpenMP thread budgets to the physical-core count so libtorch
     # and oneDNN parallelize across the same number of cores the trainer asks for.
     # Caller-set values win; we only fill in when the user hasn't already.
     try:
-        import psutil as _ps
-        _phys = int(_ps.cpu_count(logical=False) or 0)
+        from veritate_core.plugin import hardware as _hw
+        _phys = _hw.physical_cores()
     except (ImportError, ValueError):
         _phys = 0
     if _phys:
@@ -350,13 +355,26 @@ def _run(plugin, args):
 
 
 def start(plugin_id, args=None):
+    # Atomic claim: test-and-set status under the lock so two near-simultaneous
+    # starts cannot both pass the guard (the worker thread only sets RUNNING
+    # later, leaving a race window otherwise).
     with _LOCK:
         if _STATE["status"] == STATUS_RUNNING:
             return {"ok": False, "error": f"already running: {_STATE['plugin_id']}"}
+        _STATE["status"] = STATUS_RUNNING
+        _STATE["plugin_id"] = plugin_id
     plugins = plugins_reader.scan()
     plugin = next((p for p in plugins if p["id"] == plugin_id), None)
     if plugin is None:
+        with _LOCK:
+            _STATE["status"] = STATUS_IDLE
         return {"ok": False, "error": f"plugin not found: {plugin_id}"}
+    # A trainer without --bench silently drops the flag (parse_known_args) and
+    # starts a real run. Only manifests declaring bench may launch bench mode.
+    if (args or {}).get("bench") and not (plugin.get("manifest") or {}).get("bench"):
+        with _LOCK:
+            _STATE["status"] = STATUS_IDLE
+        return {"ok": False, "error": f"trainer does not implement bench mode: {plugin_id}"}
     if plugins_reader.update_defaults(plugin_id, args or {}):
         logmod.info("plugin", f"manifest defaults updated: {plugin_id}")
     a = args or {}

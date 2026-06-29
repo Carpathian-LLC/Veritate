@@ -18,6 +18,7 @@
 # Imports:
 
 import argparse
+import json
 import math
 import os
 import sys
@@ -40,6 +41,7 @@ from readers import paths as paths_mod, models as models_mod   # noqa: E402
 from training import save as save_mod                          # noqa: E402
 from veritate_core import model as veritate_model              # noqa: E402
 from veritate_core import qat as veritate_qat                  # noqa: E402
+from veritate_core.plugin import mem_planner, mem_executor     # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -49,6 +51,11 @@ PRECISIONS        = ("fp32", "bf16")
 LR_SCHEDULES      = ("cosine", "linear", "constant", "wsd")
 WSD_DECAY_KINDS   = ("sqrt", "linear", "cosine")
 QAT_MODES         = ("int8", "int4", "ternary")
+
+# fp32 weights+grads+Adam moments (autocast keeps fp32 masters), so the memory
+# planner sizes its buckets in fp32; paged optimizer state lives under the model dir.
+PLAN_DTYPE        = "fp32"
+PAGED_STATE_DIR   = "optim_state"
 
 CKPT_PREFIX       = "step_"
 CKPT_SUFFIX       = ".pt"
@@ -81,27 +88,8 @@ SIZE_PRESETS = {
 # Functions
 
 def _pick_device(requested):
-    # CLI --device wins. When --device=auto, consult VERITATE_DEVICE env var
-    # (set by dashboard's Device preference) before falling through to auto-detect.
-    if requested == "auto":
-        forced = (os.environ.get("VERITATE_DEVICE") or "auto").strip().lower()
-        if forced in ("cuda", "mps", "cpu"):
-            requested = forced
-    if requested == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA requested but torch.cuda.is_available() is False")
-        return "cuda"
-    if requested == "mps":
-        if not (getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() and paths.current_arch() == paths.ARCH_ARM64):
-            raise RuntimeError("MPS requested but unavailable")
-        return "mps"
-    if requested == "cpu":
-        return "cpu"
-    if torch.cuda.is_available():
-        return "cuda"
-    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() and paths.current_arch() == paths.ARCH_ARM64:
-        return "mps"
-    return "cpu"
+    from veritate_core.plugin import hardware
+    return hardware.pick_device(requested)
 
 
 def _lr_at(step, total, warmup, base_lr, min_lr, schedule, wsd_decay_frac, wsd_decay_kind):
@@ -272,6 +260,7 @@ def _parse_args():
     # path / identity
     ap.add_argument("--name",        type=str, default="")
     ap.add_argument("--resume",      type=str, default="")
+    ap.add_argument("--bench",       action="store_true")
     ap.add_argument("--description", type=str, default="")
     ap.add_argument("--version",     type=str, default="")
     ap.add_argument("--variant",     type=str, default="")
@@ -330,17 +319,20 @@ def _parse_args():
 def main():
     args = _parse_args()
     _resolve_shape(args)
-    _resolve_corpus(args)
-    name = _resolve_output_dir(args)
+    name = None
+    if not args.bench:
+        _resolve_corpus(args)
+        name = _resolve_output_dir(args)
 
     device_type = _pick_device(args.device)
     device = torch.device(device_type)
     amp_dtype = torch.bfloat16 if (args.precision == "bf16" and device_type == "cuda") else None
 
     print(f"[native] device={device_type} amp={amp_dtype}", flush=True)
-    print(f"[native] output={args.output_dir}", flush=True)
+    if not args.bench:
+        print(f"[native] output={args.output_dir}", flush=True)
+        print(f"[native] corpus_bin={args.corpus_bin}", flush=True)
     print(f"[native] shape h={args.hidden} L={args.layers} ffn={args.ffn} heads={args.heads} seq={args.seq}", flush=True)
-    print(f"[native] corpus_bin={args.corpus_bin}", flush=True)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -348,11 +340,34 @@ def main():
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[native] params: {n_params:,} ({n_params/1e6:.1f}M)", flush=True)
 
-    opt = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.base_lr, betas=(args.beta1, args.beta2),
-        eps=1e-6, weight_decay=args.weight_decay, foreach=True,
-    )
+    plan_batch = 1 if args.bench else args.batch_size
+    mem_plan = mem_planner.plan_training_memory(
+        n_params, args.hidden, args.layers, args.ffn, plan_batch, args.seq, PLAN_DTYPE)
+    print("[native] mem plan: " + mem_planner.format_plan(mem_plan), flush=True)
+    if mem_plan.tier in mem_executor.CHECKPOINT_TIERS:
+        mem_executor.enable_grad_checkpoint(model)
+        print("[native] activation checkpointing: ENABLED (tier " + mem_plan.tier + ")", flush=True)
+
+    if args.bench:
+        from veritate_core.plugin import bench
+        result = bench.run(model, device_type, args.seq, args.vocab, plan=mem_plan,
+                           on_progress=lambda s: print("bench: " + s, flush=True))
+        print("BENCH_RESULT " + json.dumps(result), flush=True)
+        return
+
+    if mem_plan.tier in mem_executor.OFFLOAD_TIERS:
+        print("[native] optimizer state paged to NVMe (" + mem_plan.tier + ")", flush=True)
+        opt = mem_executor.make_optimizer(
+            model.parameters(), mem_plan,
+            lr=args.base_lr, betas=(args.beta1, args.beta2), eps=1e-6,
+            weight_decay=args.weight_decay,
+            state_dir=os.path.join(args.output_dir, PAGED_STATE_DIR))
+    else:
+        opt = torch.optim.AdamW(
+            model.parameters(),
+            lr=args.base_lr, betas=(args.beta1, args.beta2),
+            eps=1e-6, weight_decay=args.weight_decay, foreach=True,
+        )
     start_step = _maybe_resume(model, opt, args, device)
     if start_step:
         print(f"[native] resumed from step {start_step}", flush=True)

@@ -5,7 +5,7 @@ tags: [hooks, contract, transformer, mamba2]
 summary: Which TFRM frame fields each architecture and engine path actually emit.
 ---
 
-> Friendly summary. The canonical table is `documentation/hooks/brain_hooks.md`.
+> Friendly summary. The canonical table is `developer_documentation/hooks/brain_hooks.md`.
 
 Field shapes are identical across paths so the dashboard renders one shape regardless of source. The full field index lives in the hooks contract.
 
@@ -13,8 +13,8 @@ Field shapes are identical across paths so the dashboard renders one shape regar
 
 | path | what it is | typical use |
 |---|---|---|
-| pytorch | `Brain.stream` with forward hooks on each block | full activation capture, slow (~20 – 30 ms/token) |
-| engine | `engine/src/model.c::forward_decode` writing `trace_record_t` slices | INT8 inference, fast (~3 ms/token with full trace) |
+| pytorch | `veritate_mri/inference/backends/pytorch.py::Brain.stream` with forward hooks on each block | full activation capture, slow (~20 – 30 ms/token) |
+| engine | `veritate_engine/v1/src/model.c::forward_decode` writing `trace_record_t` slices | INT8 inference, fast (~3 ms/token with full trace) |
 
 ## architecture coverage
 
@@ -31,12 +31,12 @@ Field shapes are identical across paths so the dashboard renders one shape regar
 | `ffn_full`, `ffn_top`, `ffn_argmax` | `ffn_up` post-hook + `F.gelu` | `trace->ffn_neurons[L][pos]` (int8, post-GELU) |
 | `attn` | `qkv` hook + softmax recompute | `trace->attention_scores` dequantized from int16 |
 | `lens` | `embed @ residual_post[L]` (fp32) | `lens_project` inline scalar dot in `model.c` (int32) |
-| `dla_picked`, `dla_argmax`, `decisiveness` | `brain.py` fp32 from `cap_ffn` + `byte_direction` | `byte_direction_build` at model load + `dla_top` + `decisiveness_compute` (int16 / int32) |
+| `dla_picked`, `dla_argmax`, `decisiveness` | `pytorch.py` fp32 from `cap_ffn` + `byte_direction` | `byte_direction_build` at model load + `dla_top` + `decisiveness_compute` (int16 / int32) |
 | `dla_cand` (v8) | fp32 over each top-K candidate | engine: `dla_top` invoked once per candidate against the same neuron projection used for `dla_picked` |
 | `ablation` (v8) | hook in `Brain.stream` zeros `ffn_neurons[L][index]` pre-`ffn_down` | engine: `ablation_mask[V_FFN]` int8 multiplier passed into `ffn_down`. Null pointer = no-op. |
 | `saturation` | per-layer fraction over INT8 budget | not emitted (depends on QAT scale the engine doesn't track) |
 | `memory` | `brain.memory` probe lookup | not emitted |
-| confidence (`margin`, `entropy`, `lens_consistency`, `residual_stab`, `confidence`) | computed in `brain.py` | computed by the server from engine fields |
+| confidence (`margin`, `entropy`, `lens_consistency`, `residual_stab`, `confidence`) | computed in `pytorch.py` | computed by the server from engine fields |
 
 ### mamba-2 field availability
 
@@ -54,16 +54,16 @@ Kernel selection affects perf only. Trace field shape is kernel-agnostic.
 
 | kernel | path | architectures it serves |
 |---|---|---|
-| scalar | `engine/kernels/scalar/` | reference oracle for every architecture; parity bar for x86_64 / arm64 ports |
-| x86_64 AVX-512 + VNNI | `engine/kernels/x86_64/` | transformer matmul; mamba-2 ssd kernel prototype |
-| arm64 NEON | `engine/kernels/arm64/` | planned, transformer matmul first |
+| scalar | `veritate_engine/v1/kernels/scalar/` | reference oracle for every architecture; parity bar for x86_64 / arm64 ports |
+| x86_64 AVX-512 + VNNI | `veritate_engine/v1/kernels/x86_64/` | transformer matmul; mamba-2 ssd kernel prototype |
+| arm64 NEON | `veritate_engine/v1/kernels/arm64/` | planned, transformer matmul first |
 
 ## adding a hook
 
 1. Add the field to the canonical hooks contract (this commit is the gate).
-2. Emit from the producer on every supported path: `checkpoint_probe.py::dump_generation`, the engine forward, and `Brain.stream`. All in the same commit.
+2. Emit from the producer on every supported path: `veritate_mri/training/checkpoint_probe.py::dump_generation`, the engine forward, and `Brain.stream`. All in the same commit.
 3. Add the dashboard render path. The render must gate on field presence so older runs don't break.
-4. If the field changes the TFRM frame size, bump the trace version in `engine/src/veritate.h` and update the parser.
+4. If the field changes the TFRM frame size, bump the trace version in `veritate_engine/v1/src/veritate.h` and update the parser.
 
 ## interpretability layer (v8)
 
@@ -71,7 +71,7 @@ Five capabilities sit above the per-token frame. They are not new hooks: they ar
 
 | capability | tier | path | input fields | new TFRM field |
 |---|---|---|---|---|
-| concept → neuron atlas | 1 | server-side aggregation in `atlas.py` | `dla_picked` across many frames keyed by output substring | none |
+| concept → neuron atlas | 1 | server-side aggregation in `veritate_mri/training/atlas.py` | `dla_picked` across many frames keyed by output substring | none |
 | neuron lifetime across training | 1 | server walks `probe_step_<N>.json` per model | `probe_step_<N>::layers[].neurons[]` ID + magnitude per step | none |
 | neuron → concept inversion | 1 | server inverts `concepts_step_<N>.json::top_neurons` | `concepts_step_<N>::concepts[].top_neurons` | none |
 | static circuit graph | 1 | computed once at model load: `W_down[L] @ W_up[L+1]` | model weights only | none |

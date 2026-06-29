@@ -34,10 +34,6 @@ ADDON_CLASS_NAME  = "Addon"
 # ------------------------------------------------------------------------------------
 # Functions
 
-def addons_dir():
-    return HERE
-
-
 def list_addons():
     """returns [{name, manifest}], one entry per discovered addon directory."""
     out = []

@@ -9,6 +9,9 @@
 <meta charset="utf-8">
 <title>Veritate</title>
 <link rel="stylesheet" href="/static/index.css">
+<link rel="stylesheet" href="/static/tutorial.css">
+<link rel="stylesheet" href="/static/prune.css">
+<link rel="stylesheet" href="/static/rag_train.css">
 </head>
 <body>
 
@@ -30,11 +33,21 @@
   </div>
 </div>
 
+<div id="confirmModal" class="hidden" role="dialog" aria-labelledby="confirmModalMsg">
+  <div class="confirm-box">
+    <div id="confirmModalMsg" class="confirm-msg">Are you sure?</div>
+    <div class="confirm-actions">
+      <button id="confirmModalCancel" type="button" class="confirm-cancel">Cancel</button>
+      <button id="confirmModalOk" type="button" class="confirm-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <div id="hud" class="hud">
-  <div class="hud-bar cpu"><span class="lbl">CPU</span><div class="track"><div class="fill" id="hudCpuFill" style="width:0%"></div></div><span class="val" id="hudCpuVal">—</span><span class="detail" id="hudCpuDetail"></span></div>
-  <div class="hud-bar mem"><span class="lbl">MEM</span><div class="track"><div class="fill" id="hudMemFill" style="width:0%"></div></div><span class="val" id="hudMemVal">—</span><span class="detail" id="hudMemDetail"></span></div>
-  <div class="hud-bar tmp-cpu" id="hudCpuTempBar" style="display:none"><span class="lbl">CPU°</span><div class="track"><div class="fill" id="hudCpuTempFill" style="width:0%"></div></div><span class="val" id="hudCpuTempVal">—</span><span class="detail" id="hudCpuTempDetail"></span></div>
-  <div class="hud-bar tmp-gpu"><span class="lbl">GPU°</span><div class="track"><div class="fill" id="hudGpuTempFill" style="width:0%"></div></div><span class="val" id="hudGpuTempVal">—</span><span class="detail" id="hudGpuTempDetail"></span></div>
+  <div class="hud-bar cpu"><span class="lbl">CPU</span><div class="track"><div class="fill" id="hudCpuFill" style="width:0%"></div></div><span class="val" id="hudCpuVal">-</span><span class="detail" id="hudCpuDetail"></span></div>
+  <div class="hud-bar mem"><span class="lbl">MEM</span><div class="track"><div class="fill" id="hudMemFill" style="width:0%"></div></div><span class="val" id="hudMemVal">-</span><span class="detail" id="hudMemDetail"></span></div>
+  <div class="hud-bar tmp-cpu" id="hudCpuTempBar" style="display:none"><span class="lbl">CPU°</span><div class="track"><div class="fill" id="hudCpuTempFill" style="width:0%"></div></div><span class="val" id="hudCpuTempVal">-</span><span class="detail" id="hudCpuTempDetail"></span></div>
+  <div class="hud-bar tmp-gpu"><span class="lbl">GPU°</span><div class="track"><div class="fill" id="hudGpuTempFill" style="width:0%"></div></div><span class="val" id="hudGpuTempVal">-</span><span class="detail" id="hudGpuTempDetail"></span></div>
   <div id="hudGpus"></div>
 </div>
 
@@ -123,7 +136,7 @@
         <span id="liveStats" class="stats"></span>
       </div>
       <details id="advancedWrap" style="margin-top:8px;border:1px solid var(--line);border-radius:4px;padding:6px 8px">
-      <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600">advanced <span style="color:var(--dim);font-weight:400;font-size:11px">— decode, RAG, tools, addons</span></summary>
+      <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600">advanced <span style="color:var(--dim);font-weight:400;font-size:11px">- decode, RAG, tools, addons</span></summary>
       <div id="decodeRow" style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
         <span style="color:var(--text);font-weight:600" title="Decode speed mode + output shape constraint.">decode</span>
         <label title="Decode speed mode. Skips telemetry for raw speed.">
@@ -180,7 +193,7 @@
         <label class="agentToolBox" title="Search a local folder of text files for relevant snippets.">
           <input type="checkbox" class="agentTool" data-tool="retrieve" checked> search local docs
         </label>
-        <label class="agentToolBox" title="Fetch a URL (safe — blocks internal addresses).">
+        <label class="agentToolBox" title="Fetch a URL (safe - blocks internal addresses).">
           <input type="checkbox" class="agentTool" data-tool="fetch"> open a web page
         </label>
         <label class="agentToolBox" title="Read a file under the folder set in 'files folder' below.">
@@ -226,9 +239,9 @@
       <details class="more">
         <summary>what these knobs do</summary>
         <div class="more-content">
-          <p><b>temperature</b> — sharpens (&lt;1) or flattens (&gt;1) the next-byte distribution. 0.6–0.9 for coherent prose; 0.1 nearly deterministic; 1.5+ noisy.</p>
-          <p><b>top_k</b> — only the K highest-logit bytes are sampleable. <code>k=1</code> = greedy. <code>k=256</code> = no filter. Default 40 cuts the long tail without losing variety.</p>
-          <p><b>max bytes</b> — bytes to generate before stopping. One forward pass per byte.</p>
+          <p><b>temperature</b> - sharpens (&lt;1) or flattens (&gt;1) the next-byte distribution. 0.6-0.9 for coherent prose; 0.1 nearly deterministic; 1.5+ noisy.</p>
+          <p><b>top_k</b> - only the K highest-logit bytes are sampleable. <code>k=1</code> = greedy. <code>k=256</code> = no filter. Default 40 cuts the long tail without losing variety.</p>
+          <p><b>max bytes</b> - bytes to generate before stopping. One forward pass per byte.</p>
           <p>top_k wins ties: <code>top_k=1</code> is greedy regardless of temperature. Sweep temperature with top_k held to compare variants.</p>
         </div>
       </details>
@@ -262,11 +275,11 @@
       <h2>letter timing <em>ms per generated byte. scrub the slider above to inspect any frame.</em></h2>
       <div class="body">
         <div id="letterStats" class="stats" style="margin-bottom:8px;gap:24px">
-          <span class="stat">letter <b id="lsByte" style="font-size:15px">—</b></span>
-          <span class="stat">ms <b id="lsMs" style="color:var(--accent);font-size:15px">—</b></span>
-          <span class="stat">surprise <b id="lsSurp" style="color:var(--hot)">—</b></span>
-          <span class="stat">uncertainty <b id="lsEnt" style="color:var(--cool)">—</b></span>
-          <span class="stat">frame <b id="lsFrame">—</b></span>
+          <span class="stat">letter <b id="lsByte" style="font-size:15px">-</b></span>
+          <span class="stat">ms <b id="lsMs" style="color:var(--accent);font-size:15px">-</b></span>
+          <span class="stat">surprise <b id="lsSurp" style="color:var(--hot)">-</b></span>
+          <span class="stat">uncertainty <b id="lsEnt" style="color:var(--cool)">-</b></span>
+          <span class="stat">frame <b id="lsFrame">-</b></span>
         </div>
         <canvas id="cLetMs" height="120"></canvas>
       </div>
@@ -300,7 +313,7 @@
 
           <h4>patterns over time (the shape of a generation)</h4>
           <p><b class="lead">Spikes trend lower as the text gets longer.</b> The dominant pattern across almost every generation. Early on, the model has very little context to work with: just the prompt. Lots of valid continuations exist, so both <b class="red">red</b> and <b class="blue">blue</b> spike high. As more bytes accumulate, the context narrows what's plausible. The model commits to a topic, a tense, a character, a sentence rhythm. Each next byte has fewer reasonable options, so the prediction sharpens and the spikes flatten out. By the time you're 100 bytes deep, the model is mostly auto-piloting through clauses it can finish on rails.</p>
-          <p><b class="lead">Periodic bumps that aren't decay.</b> Even mid-generation, you'll see small <b class="blue">blue</b> bumps right after spaces, periods, and newlines. These are sentence-level branch points — many words could start the next clause. They don't mean the model is "losing it," they mean the language naturally has more freedom at those positions.</p>
+          <p><b class="lead">Periodic bumps that aren't decay.</b> Even mid-generation, you'll see small <b class="blue">blue</b> bumps right after spaces, periods, and newlines. These are sentence-level branch points - many words could start the next clause. They don't mean the model is "losing it," they mean the language naturally has more freedom at those positions.</p>
           <p><b class="lead">The inverse (rising spikes late) is a warning.</b> If <b class="blue">uncertainty</b> drifts upward late in generation, the model is starting to lose the thread. Two usual causes: the prompt has scrolled out of the 256-byte context window so it's predicting from generated bytes only, or temperature is high enough that random sampling has steered the story somewhere the model wasn't trained for. If you see this consistently, lower temperature, lower top_k, or shorten <code>max bytes</code>.</p>
 
           <h4>latency (gray)</h4>
@@ -387,11 +400,11 @@
       <div class="body">
         <div class="dla-grid">
           <div class="dla-side picked">
-            <h3>top contributors to picked byte <span class="dla-byte" id="dlaPickedByte">—</span></h3>
+            <h3>top contributors to picked byte <span class="dla-byte" id="dlaPickedByte">-</span></h3>
             <div id="dlaPickedTable"></div>
           </div>
           <div class="dla-side argmax">
-            <h3>top contributors to expected byte <span class="dla-byte" id="dlaArgmaxByte">—</span></h3>
+            <h3>top contributors to expected byte <span class="dla-byte" id="dlaArgmaxByte">-</span></h3>
             <div id="dlaArgmaxTable"></div>
           </div>
         </div>
@@ -422,7 +435,7 @@
     <div class="panel">
       <h2>confidence <em>four-component calibrated probability</em></h2>
       <div class="body">
-        <div id="confValue" style="font-size:13px;color:var(--dim);margin-bottom:6px">confidence: —</div>
+        <div id="confValue" style="font-size:13px;color:var(--dim);margin-bottom:6px">confidence: -</div>
         <canvas id="cConfBar" height="22"></canvas>
         <div id="confComponents" style="margin-top:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px"></div>
         <canvas id="cConfTrend" height="80" style="margin-top:10px"></canvas>
@@ -648,11 +661,11 @@
       <div class="body">
         <div class="dla-grid">
           <div class="dla-side picked">
-            <h3>top contributors to picked byte <span class="dla-byte" id="dlaPickedByteL">—</span></h3>
+            <h3>top contributors to picked byte <span class="dla-byte" id="dlaPickedByteL">-</span></h3>
             <div id="dlaPickedTableL"></div>
           </div>
           <div class="dla-side argmax">
-            <h3>top contributors to expected byte <span class="dla-byte" id="dlaArgmaxByteL">—</span></h3>
+            <h3>top contributors to expected byte <span class="dla-byte" id="dlaArgmaxByteL">-</span></h3>
             <div id="dlaArgmaxTableL"></div>
           </div>
         </div>
@@ -683,7 +696,7 @@
   <div class="panel">
     <h2>model size meter <em>params and weight bytes at each precision</em></h2>
     <div class="body"><div id="learnSizeMeter">no timeline selected</div></div>
-    <p class="desc">Parameter count broken down by component, plus the weight footprint at fp32 / bf16 / int8 / int4. Pure weight bytes only — optimizer state and activations are training-time costs and show up in the training-form memory estimator.</p>
+    <p class="desc">Parameter count broken down by component, plus the weight footprint at fp32 / bf16 / int8 / int4. Pure weight bytes only - optimizer state and activations are training-time costs and show up in the training-form memory estimator.</p>
   </div>
 
   <div class="panel" data-expandable="true">
@@ -752,7 +765,7 @@
     </div></details>
   </div>
 
-  <div class="panel" data-expandable="true">
+  <div class="panel" data-expandable="true" data-eval="language">
     <h2>deep eval <em>real accuracy on MMLU&nbsp;/&nbsp;HellaSwag&nbsp;/&nbsp;IFEval, on-demand</em></h2>
     <div class="body">
       <div class="controls" style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
@@ -899,7 +912,7 @@
 <div class="tab-body" data-tab="training">
 
   <div class="panel train-panel" style="margin-bottom: 16px; padding: 22px 24px;">
-    <h2>train a model <em>new, continue, distill, or export</em></h2>
+    <h2>train a model <em>new, continue, or export</em></h2>
     <div class="body">
 
       <div id="trainStep1Row">
@@ -916,9 +929,14 @@
 
       <div id="synthPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
         <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Synthetic Corpus</div>
-        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Run the configured teacher over selected seed prompts. Output writes to <code>synth_jobs/&lt;job_id&gt;/samples.jsonl</code>.</div>
+        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Run the configured teacher over selected seed prompts. Output writes to <code>veritate_mri/data/synth_jobs/&lt;job_id&gt;/samples.jsonl</code>. When the job finishes, build a corpus from it, then train any model on that corpus via Start new / Continue.</div>
         <div id="synthSeedList" class="synth-seed-list"></div>
-        <div class="inline" style="gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
+        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
+          <label>destination
+            <select id="synthJobSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:240px">
+              <option value="">&mdash; new job &mdash;</option>
+            </select>
+          </label>
           <label>format
             <select id="synthFormat" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px">
               <option value="text">text</option>
@@ -926,10 +944,39 @@
             </select>
           </label>
           <button id="synthStartBtn" class="action" type="button">Start Synthesis</button>
-          <button id="synthStopPollBtn" class="action" type="button" style="display:none">Cancel</button>
-          <span id="synthStatusLine" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+          <button id="synthStopPollBtn" class="action" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
+          <span id="synthStatusLine" class="meta" style="flex-basis:100%;font-size:10.5px;color:var(--dim);margin-top:2px;word-break:break-word"></span>
         </div>
         <div id="synthJobInfo" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:6px;display:none"></div>
+        <div id="synthBuildRow" class="inline" style="gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;display:none">
+          <label>corpus name
+            <input type="text" id="synthCorpusStem" placeholder="teacher_synth" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+          </label>
+          <button id="synthBuildBtn" class="action" type="button">Build corpus</button>
+          <span id="synthBuildStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+        </div>
+        <div id="synthLiveWrap" style="display:none;margin-top:12px">
+          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:4px">live output <span id="synthLiveCount"></span></div>
+          <div id="synthLiveOutput" style="max-height:340px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:8px;font:11px monospace;white-space:pre-wrap;word-break:break-word"></div>
+        </div>
+      </div>
+
+      <div id="ragTrainPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
+        <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Answer from context (RAG)</div>
+        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Fine-tune a saved model so it answers from supplied context. Training auto-generates a small question/answer corpus from your configured Teacher Model the first time, then fine-tunes. One job runs at a time; the log below tails it.</div>
+        <div class="rag-controls">
+          <label>base model <select id="ragModel"><option value="">loading&hellip;</option></select></label>
+          <label>new name <input id="ragName" type="text" placeholder="rag_300m"></label>
+        </div>
+        <div class="rag-controls">
+          <label>facts <input class="rag-num" id="ragFacts" type="number" min="1" value="200"></label>
+          <label>steps <input class="rag-num" id="ragSteps" type="number" min="1" value="1500"></label>
+          <button id="ragTrain" type="button">Train model</button>
+          <button id="ragStop" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
+        </div>
+        <div class="rag-status" id="ragJob"></div>
+        <pre class="rag-log" id="ragLog"></pre>
+        <div class="rag-msg" id="ragMsg"></div>
       </div>
 
       <div id="trainPickerRow" class="controls" style="display:none;margin-bottom:14px;gap:8px;flex-wrap:wrap;align-items:center">
@@ -951,22 +998,21 @@
         <div id="trainFormIntro" style="color:var(--dim);font-size:10.5px;margin-bottom:10px;line-height:1.5"></div>
         <div id="trainCoreTrainersWrap" class="core-trainers-wrap" style="display:none">
           <div class="core-trainers-head">
-            <span class="core-trainers-title">Core Trainers</span>
-            <span class="core-trainers-sub">research knobs that mutate the training recipe. boxes in the same group are mutually exclusive.</span>
+            <span class="core-trainers-title">Additional options</span>
+            <span class="core-trainers-sub">optional recipe choices &mdash; one pick per group.</span>
           </div>
           <div id="trainCoreTrainersGrid" class="core-trainers-grid"></div>
         </div>
         <div id="trainArgs"></div>
         <div id="trainEstimateRow" style="margin-top:14px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:10px 12px;background:#0a0c12;border:1px solid var(--line);border-radius:4px">
           <div id="trainVramEst" style="font-size:11px;color:var(--dim);flex:1 1 280px;min-width:0;line-height:1.5"></div>
-          <div id="trainAutoOptimizeRow" style="display:none;align-items:center;gap:8px;flex-wrap:wrap">
-            <button id="trainAutoOptimizeBtn" class="action" type="button"
-                    title="Apply training settings tuned for your detected hardware. Sets batch size, learning rate, activation checkpointing, and (if total_steps is filled) warmup / log / eval / checkpoint cadence."
-                    style="border-color:var(--accent);color:var(--accent);font-weight:600">auto optimize</button>
-            <span id="trainAutoOptimizeStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+          <div id="trainAutoTuneRow" style="display:none;align-items:center;gap:8px;flex-wrap:wrap">
+            <button id="trainAutoTuneBtn" class="action" type="button"
+                    title="Run a short measured benchmark on this trainer (throwaway weights, ~2-5 min). Finds your real RAM ceiling and throughput sweet spot, then writes batch size, learning rate, and cadence into the trainer."
+                    style="border-color:var(--accent);color:var(--accent);font-weight:600">auto tune</button>
           </div>
         </div>
-        <div id="trainAutoOptimizeHelp" style="display:none;font-size:10.5px;color:var(--dim);margin-top:4px;line-height:1.45" title="Sets batch size, learning rate, activation checkpointing, and cadence to fit your detected hardware budget. Review the values before starting.">auto optimize fits training settings to your hardware (hover for details).</div>
+        <div id="trainAutoTuneHelp" style="display:none;font-size:10.5px;color:var(--dim);margin-top:4px;line-height:1.45" title="Runs quick throwaway training steps at increasing batch sizes to measure real memory use and speed on your machine. Nothing is saved; your models are untouched.">auto tune benchmarks this trainer on your hardware and applies measured settings (hover for details).</div>
         <div id="trainCorpusMeta" style="display:none;margin-top:10px;padding:6px 8px;background:#0a0c12;border:1px solid var(--line);border-radius:3px;font-size:11px;color:var(--dim);font-family:monospace"></div>
       </div>
 
@@ -998,6 +1044,16 @@
     <p class="desc" title="Trainers live in trainers/ as <name>.py or a bundle (<name>/trainer.py + optional corpus/). They read a corpus from trainers/corpus/ and write to models/<name>/."><code>trainers/</code> &rarr; <code>trainers/corpus/</code> &rarr; <code>models/&lt;name&gt;/</code> (hover for full layout)</p>
   </div>
 
+  <div class="panel" id="trainFilesPanel" style="margin-bottom:16px;display:none">
+    <h2>training files <em>delete old synth job output you no longer need</em></h2>
+    <div class="body">
+      <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Each synth run writes to <code>veritate_mri/data/synth_jobs/&lt;job_id&gt;/</code> (samples, cache, state). Deleting one removes those files from disk. Built corpora and trained models are not touched.</div>
+      <div id="trainFilesList" class="meta" style="font-size:11px;color:var(--dim)">loading&hellip;</div>
+      <button id="trainFilesRefresh" type="button" style="margin-top:10px">refresh</button>
+    </div>
+  </div>
+
+  <div id="trainMetricsSection">
   <div class="panel" style="margin-bottom: 10px;">
     <h2>live training <em>loss curve from train.csv. brain-scan rows appear when the trainer publishes them.</em><span id="trainStreamStatus" class="stat" style="margin-left:auto;font-size:10.5px;color:var(--dim)"></span></h2>
     <div class="body">
@@ -1102,7 +1158,7 @@
         <p><b class="lead">Sudden drops:</b> something else used the GPU. A game, video encoding, another training job, or a screen recorder. Throughput recovers when that other workload stops.</p>
         <p><b class="lead">Slow downward drift over hours:</b> usually thermal throttling (the GPU is hot enough that the firmware reduced clock speed) or VRAM fragmentation. Sustained drops below 80% of peak are worth investigating.</p>
         <h4>what affects the absolute number</h4>
-        <p>Batch size, sequence length, model size, and quantisation mode all affect tok/s. Bigger batches help (more parallelism per step). Bigger models hurt (more compute per token). The number is most useful as a relative signal — compare to itself over time, not to other runs.</p>
+        <p>Batch size, sequence length, model size, and quantisation mode all affect tok/s. Bigger batches help (more parallelism per step). Bigger models hurt (more compute per token). The number is most useful as a relative signal - compare to itself over time, not to other runs.</p>
       </div></details>
     </div>
     <div class="panel">
@@ -1136,7 +1192,7 @@
   <div class="panel minimal-hide">
     <h2>model size meter <em>params and weight bytes at each precision</em></h2>
     <div class="body"><div id="trainSizeMeter">no run selected</div></div>
-    <p class="desc">Parameter count broken down by component, plus the weight footprint at fp32 / bf16 / int8 / int4. Pure weight bytes only — optimizer state and activations are training-time costs and show up in the training-form memory estimator.</p>
+    <p class="desc">Parameter count broken down by component, plus the weight footprint at fp32 / bf16 / int8 / int4. Pure weight bytes only - optimizer state and activations are training-time costs and show up in the training-form memory estimator.</p>
   </div>
 
   <div class="panel minimal-hide">
@@ -1150,7 +1206,7 @@
   </div>
 
   <div class="panel collapsible collapsed minimal-hide">
-    <h2>lens-logit drift <em>per-byte snapshot — usually not what you want on the Training tab</em></h2>
+    <h2>lens-logit drift <em>per-byte snapshot - usually not what you want on the Training tab</em></h2>
     <div class="body"><div id="trainLensDrift" style="max-height: 320px; overflow: auto">no lens data</div></div>
     <p class="desc">Each cell asks <i>if the model stopped at this layer, what byte would it predict?</i> for ONE specific byte sampled from the corpus at probe time. Rows = layers (bottom → top), columns = checkpoints. Brighter cell = higher top-1 probability. The gold-bordered row marks the first layer that already matched the final-layer prediction (where the decision was "committed"). Best read on the Classroom tab against a specific probe prompt; on the Training tab it's a single byte's evolution, which is mostly noise.</p>
   </div>
@@ -1210,6 +1266,7 @@
     </div>
     <p class="desc">A 50-probe quiz that asks: given a short preamble, how many guesses does the model need to land on the right next byte? Tier counts at the top show how many concepts are mastered (under 1 bit), still learning, or struggling. The grouped strips below split the 50 probes by topic. Click any concept for its full trajectory.</p>
   </div>
+  </div>
 
 </div>
 
@@ -1254,8 +1311,8 @@
     </div>
     <p class="desc">Updates every second while this tab is visible (or whenever the HUD overlay is on).
        <b style="color:var(--cool,#5dc8ff)">CPU</b> is this process, normalized so 100% = one full core.
-       <b style="color:#3b5dd9">Memory</b> is RSS — physical RAM held by this process, including PyTorch.
-       <b style="color:#b58aff">GPU</b> rows show one entry per detected adapter (integrated + discrete). Per-adapter utilization is reported where the OS exposes it cheaply: NVIDIA via <code>nvidia-smi</code>, Apple Silicon via <code>ioreg</code>, AMD on Linux via <code>/sys</code>. Other vendors show as detected with no live load number — vendor SDKs would be needed and aren't worth the per-poll cost.</p>
+       <b style="color:#3b5dd9">Memory</b> is RSS - physical RAM held by this process, including PyTorch.
+       <b style="color:#b58aff">GPU</b> rows show one entry per detected adapter (integrated + discrete). Per-adapter utilization is reported where the OS exposes it cheaply: NVIDIA via <code>nvidia-smi</code>, Apple Silicon via <code>ioreg</code>, AMD on Linux via <code>/sys</code>. Other vendors show as detected with no live load number - vendor SDKs would be needed and aren't worth the per-poll cost.</p>
   </div>
 
 </div>
@@ -1278,10 +1335,6 @@
               <label class="opt" data-channel="stable" style="padding:6px 8px">
                 <input type="radio" name="updateChannel" value="stable">
                 <span><span class="opt-title" style="margin:0;font-size:11.5px">Stable <span style="color:var(--dim);font-weight:400">(main)</span></span></span>
-              </label>
-              <label class="opt" data-channel="experimental" style="padding:6px 8px">
-                <input type="radio" name="updateChannel" value="experimental">
-                <span><span class="opt-title" style="margin:0;font-size:11.5px">Experimental <span style="color:var(--dim);font-weight:400">(experimental)</span></span></span>
               </label>
               <label class="opt" data-channel="development" style="padding:6px 8px">
                 <input type="radio" name="updateChannel" value="development">
@@ -1379,6 +1432,26 @@
       </div>
 
       <div class="settings-row">
+        <div class="label">Training</div>
+        <div class="desc">Settings that apply to training runs.</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:8px">
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Compute device <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">override</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Forces trainers to use a specific device regardless of what's available. <b>Auto</b> picks the best supported device for your host (CUDA &rarr; MPS &rarr; CPU). Options your hardware can't support are greyed out.</div>
+            <select id="devicePreferenceSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;margin-top:4px">
+              <option value="auto">Auto (recommended)</option>
+              <option value="cpu">CPU</option>
+              <option value="cuda" data-cap="can_use_cuda">CUDA (NVIDIA GPU)</option>
+              <option value="mps" data-cap="can_use_mps">MPS (Apple Silicon)</option>
+            </select>
+            <div id="devicePreferenceHint" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:2px"></div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="settings-row">
         <div class="label">Analytics</div>
         <div class="desc">Anonymous data that tells us Veritate is alive in the wild and what hardware to support next. Aggregated counts (no machine ids, no IPs) appear at <a href="https://carpathian.ai/veritate" target="_blank" style="color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)">carpathian.ai/veritate</a>.</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:8px">
@@ -1386,16 +1459,18 @@
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Detect system <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">local only</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">Snapshot CPU, RAM, GPU, OS &rarr; <code>data/system_specs.json</code>. Powers the training memory estimator. Re-run after hardware changes.</div>
-            <div class="meta" style="font-size:10.5px;color:var(--warm)">With Advanced on, also enables <b>Auto-pick</b> on the Training tab.</div>
+            <div class="meta" style="font-size:10.5px;color:var(--warm)">With Advanced on, also enables <b>Auto tune</b> on the Training tab.</div>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="sysDetectBtn" class="action" type="button">Detect now</button>
+              <button id="sysAutoTuneBtn" class="action" type="button"
+                      title="Run a short measured benchmark (throwaway weights). Finds your real RAM ceiling and throughput, saves the results here and into the trainer.">Auto tune</button>
             </div>
             <div id="sysSpecsView" class="meta" style="font-size:10.5px;color:var(--dim);line-height:1.55">not detected yet</div>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
-            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Heartbeat <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">minimum &middot; every 6h</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Hashed id, uptime, restart/error counts, training-active flag. No prompts or checkpoints.</div>
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Heartbeat <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">always on</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">A minimal presence ping: hashed id, uptime, restart/error counts, training-active flag. No prompts or checkpoints. Your device name is auto-generated; rename it below.</div>
             <div class="meta" id="heartbeatStatusLine" style="font-size:10.5px;color:var(--dim);line-height:1.55">
               machine id: <span id="heartbeatMachineId">.</span><br>
               device id: <span id="heartbeatDeviceId">.</span><br>
@@ -1403,7 +1478,7 @@
               total runtime: <span id="heartbeatRuntime">0s</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">
-              <label for="deviceNameInput" class="meta" style="font-size:10.5px;color:var(--dim)">device name <span style="color:var(--dim)">(optional, max 15 chars)</span></label>
+              <label for="deviceNameInput" class="meta" style="font-size:10.5px;color:var(--dim)">device name <span style="color:var(--dim)">(max 15 chars)</span></label>
               <div class="inline" style="gap:6px;flex-wrap:wrap">
                 <input type="text" id="deviceNameInput" maxlength="15" placeholder="e.g. lab-rig-01"
                        style="flex:1 1 100px;min-width:0;width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:inherit">
@@ -1418,46 +1493,22 @@
           </div>
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
-            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Error reports <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">on by default</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Source tag + truncated message per heartbeat. Max 20/ping, 240 chars. No tracebacks or paths.</div>
-            <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
-              <input type="checkbox" id="heartbeatSendErrorsEnable">
-              <span class="opt-title" style="margin:0;font-size:11.5px">Send error detail</span>
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Advanced <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">opt-in &middot; all off by default</span></div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Extra telemetry on top of the presence ping. Each is off until you turn it on. Review exactly what gets sent before deciding.</div>
+            <label class="opt" style="max-width:none;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;margin-top:2px">
+              <span style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="analyticsAdvancedEnable"><span class="opt-title" style="margin:0;font-size:11.5px">Hardware &amp; training details</span></span>
+              <span class="opt-sub" style="font-size:10px;color:var(--dim);line-height:1.4">Once per machine: CPU/RAM/GPU. Per active run: name, params, shape, plugin. No weights or metrics.</span>
             </label>
-          </div>
-
-          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
-            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Advanced <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">opt-in</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Once per machine: CPU/RAM/GPU. Per active run: name, params, shape, plugin. No weights or metrics.</div>
-            <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
-              <input type="checkbox" id="analyticsAdvancedEnable">
-              <span class="opt-title" style="margin:0;font-size:11.5px">Send hardware &amp; training details</span>
+            <label class="opt" style="max-width:none;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px">
+              <span style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="heartbeatSendErrorsEnable"><span class="opt-title" style="margin:0;font-size:11.5px">Error detail</span></span>
+              <span class="opt-sub" style="font-size:10px;color:var(--dim);line-height:1.4">Source tag + truncated message per heartbeat. Max 20/ping, 240 chars. No tracebacks or paths.</span>
+            </label>
+            <label class="opt" style="max-width:none;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px">
+              <span style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="diagnosticsLogsEnable"><span class="opt-title" style="margin:0;font-size:11.5px">Diagnostic logs &amp; full hardware dump</span></span>
+              <span class="opt-sub" style="font-size:10px;color:var(--dim);line-height:1.4">For debugging crashes: full hardware dump, recent dashboard logs with tracebacks, per-trainer stderr tails. Paths redacted.</span>
             </label>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="reviewConsentBtn" class="action" type="button">review what gets sent</button>
-            </div>
-          </div>
-
-          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
-            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Training device <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">override</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Forces trainers to use a specific device regardless of what's available. <b>Auto</b> picks the best supported device for your host (CUDA &rarr; MPS &rarr; CPU). Options below your hardware can't support are greyed out.</div>
-            <select id="devicePreferenceSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;margin-top:4px">
-              <option value="auto">Auto (recommended)</option>
-              <option value="cpu">CPU</option>
-              <option value="cuda" data-cap="can_use_cuda">CUDA (NVIDIA GPU)</option>
-              <option value="mps" data-cap="can_use_mps">MPS (Apple Silicon)</option>
-            </select>
-            <div id="devicePreferenceHint" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:2px"></div>
-          </div>
-
-          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
-            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Diagnostics <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">opt-in &middot; debugging</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Helps us debug crashes on your hardware. Sends the full hardware dump (CPU brand + features, OS version, GPU details), recent dashboard log entries with tracebacks, and per-trainer stderr tails. Only sent when this box is on.</div>
-            <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
-              <input type="checkbox" id="diagnosticsLogsEnable">
-              <span class="opt-title" style="margin:0;font-size:11.5px">Send diagnostic logs &amp; full hardware dump</span>
-            </label>
-            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="diagPreviewBtn" class="action" type="button">preview the payload</button>
             </div>
             <div id="diagPreviewBox" class="meta" style="display:none;font-size:10.5px;color:var(--dim);line-height:1.55;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:6px 8px;margin-top:4px;max-height:280px;overflow:auto;font-family:monospace;white-space:pre-wrap"></div>
@@ -1501,7 +1552,7 @@
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">AI assist <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">panel explainer</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Adds an &ldquo;ask AI&rdquo; button next to selected dashboard panels. Each click sends the panel's data to a remote model. When disabled, no buttons render and no calls are made.</div>
+            <div class="meta" id="aiAssistBlurb" style="font-size:10.5px;color:var(--dim)"></div>
             <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
               <input type="checkbox" id="aiEnable">
               <span class="opt-title" style="margin:0;font-size:11.5px">Enable AI assist</span>
@@ -1540,7 +1591,10 @@
               </select>
             </label>
             <label style="font-size:10.5px;color:var(--dim)">model
-              <input type="text" id="teacherModel" placeholder="" style="width:100%;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;margin-top:2px;font-size:11px;box-sizing:border-box">
+              <select id="teacherModelList" style="width:100%;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;margin-top:2px;font-size:11px;box-sizing:border-box">
+                <option value="">- pick a model -</option>
+              </select>
+              <input type="text" id="teacherModel" placeholder="" style="display:none;width:100%;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;margin-top:2px;font-size:11px;box-sizing:border-box">
             </label>
             <label style="font-size:10.5px;color:var(--dim)">base url
               <input type="text" id="teacherBaseUrl" placeholder="" style="width:100%;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;margin-top:2px;font-size:11px;box-sizing:border-box">
@@ -1559,20 +1613,18 @@
               <label style="font-size:10.5px;color:var(--dim)">max_tokens
                 <input type="number" id="teacherMaxTokens" min="1" max="32768" style="width:100%;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;margin-top:2px;font-size:11px;box-sizing:border-box">
               </label>
-              <label style="font-size:10.5px;color:var(--dim)">temperature
-                <input type="number" id="teacherTemperature" min="0" max="2" step="0.05" style="width:100%;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;margin-top:2px;font-size:11px;box-sizing:border-box">
-              </label>
             </div>
           </div>
           <div class="inline" style="gap:8px;flex-wrap:wrap;align-items:center">
-            <button id="teacherTestBtn" class="action" type="button">Test connection</button>
             <button id="teacherSaveBtn" class="action" type="button">Save</button>
+            <button id="teacherTestBtn" class="action" type="button" disabled title="Save the configuration first">Test connection</button>
             <span id="teacherTestResult" class="meta" style="font-size:10.5px"></span>
           </div>
         </div>
       </div>
 
-      <div id="minimalModeRow" class="settings-row" style="margin-top: 14px; padding: 8px 10px; border: 1px solid var(--line); border-left: 2px solid var(--highlight); border-radius: 3px; font-size: 11px; transition: background .12s, border-color .12s">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:14px;align-items:start">
+      <div id="minimalModeRow" class="settings-row" style="padding: 8px 10px; border: 1px solid var(--line); border-left: 2px solid var(--highlight); border-radius: 3px; font-size: 11px; transition: background .12s, border-color .12s">
         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
           <span style="color: var(--highlight); font-weight: 600; letter-spacing: .03em">Power save</span>
           <span id="minimalModeStateChip" style="font-size:9.5px;letter-spacing:.05em;padding:1px 6px;border:1px solid var(--dim);border-radius:2px;color:var(--dim);text-transform:uppercase">full</span>
@@ -1580,6 +1632,46 @@
         </div>
         <div class="desc" id="minimalModeSub" style="margin-top: 4px; font-size: 10.5px; color: var(--dim); line-height: 1.4">re-execs the dashboard without brain / heartbeat / sync / sys-warm. frees ~10 GB. training keeps running. inference / generation / wiki / models tabs go inert; training tab shows only train.csv metrics.</div>
         <span id="minimalModeStatus" class="meta" style="font-size:10px;color:var(--dim);display:block;margin-top:3px"></span>
+      </div>
+
+      <div id="tutorialRow" class="settings-row" style="padding: 8px 10px; border: 1px solid var(--line); border-left: 2px solid var(--accent); border-radius: 3px; font-size: 11px">
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+          <span style="color: var(--accent); font-weight: 600; letter-spacing: .03em">Tutorial</span>
+          <span id="tutorialStateChip" style="font-size:9.5px;letter-spacing:.05em;padding:1px 6px;border:1px solid var(--dim);border-radius:2px;color:var(--dim);text-transform:uppercase">on</span>
+          <button id="tutorialToggleBtn" class="action" type="button" style="border-color: var(--accent); color: var(--accent); padding: 2px 8px; font-size: 10.5px; margin-left: auto">disable</button>
+          <button id="tutorialRestartBtn" class="action" type="button" style="border-color: var(--accent); color: var(--accent); padding: 2px 8px; font-size: 10.5px">restart tutorial</button>
+        </div>
+        <div class="desc" style="margin-top: 4px; font-size: 10.5px; color: var(--dim); line-height: 1.4">guided walkthrough of the dashboard. shows once for new users; restart it any time.</div>
+      </div>
+      </div>
+      <script>
+      (function () {
+        const chip = document.getElementById("tutorialStateChip");
+        const toggle = document.getElementById("tutorialToggleBtn");
+        const restart = document.getElementById("tutorialRestartBtn");
+        function paint(on) {
+          chip.textContent = on ? "on" : "off";
+          chip.style.color = on ? "var(--highlight)" : "var(--dim)";
+          chip.style.borderColor = on ? "var(--highlight)" : "var(--dim)";
+          toggle.textContent = on ? "disable" : "enable";
+        }
+        fetch("/settings").then(r => r.json()).then(s => paint(s.tutorial_enabled !== false)).catch(() => {});
+        toggle.addEventListener("click", () => {
+          const on = toggle.textContent === "enable";
+          if (window.Tutorial) window.Tutorial.set_enabled(on);
+          paint(on);
+        });
+        restart.addEventListener("click", () => { if (window.Tutorial) window.Tutorial.restart(); });
+      })();
+      </script>
+
+      <div class="settings-row" id="extensionsRow">
+        <div class="label">Extensions</div>
+        <div class="desc">Optional add-on modules that sit alongside the dashboard and integrate through its published REST API. Add or remove them from the extension library.</div>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer">
+          <input type="checkbox" id="extToggle" style="accent-color:var(--accent)">
+          <span style="font-size:12px;color:var(--text)">Enable extensions</span>
+        </label>
       </div>
 
       <div class="settings-row" style="border-top: 1px solid var(--hot); margin-top: 18px; padding-top: 18px">
@@ -1636,10 +1728,10 @@
   <p><span class="case b-assoc">L4 - L8</span><b class="lead">Association.</b> Top-1 starts to sharpen. Probabilities climb as syntactic and semantic context feeds in. If the model "knows" the answer cheaply, you'll often see the commit-row land here.</p>
   <p><span class="case b-out">L9 - L11</span><b class="lead">Output.</b> Top-1 is locked in and probabilities peak. The byte you actually sampled almost always shows up here as top-1; if it didn't, your temperature/top_k pulled a non-argmax byte (look at the surprise stat).</p>
   <h4>shapes worth flagging</h4>
-  <p><b class="lead">Early commit (L4–L5):</b> the model decided the byte before it even reached the late layers. Common for high-predictability bytes (mid-word continuations, common bigrams). Late layers just confirmed.</p>
-  <p><b class="lead">Late commit (L10–L11):</b> earlier layers had a different top-1. The output region overrode the middle layers. These are the interpretively interesting tokens — usually sentence-boundary or branching-point bytes.</p>
+  <p><b class="lead">Early commit (L4-L5):</b> the model decided the byte before it even reached the late layers. Common for high-predictability bytes (mid-word continuations, common bigrams). Late layers just confirmed.</p>
+  <p><b class="lead">Late commit (L10-L11):</b> earlier layers had a different top-1. The output region overrode the middle layers. These are the interpretively interesting tokens - usually sentence-boundary or branching-point bytes.</p>
   <p><b class="lead">No commit row:</b> no layer's top-1 matched the sampled byte. The sampler reached past the argmax into the runner-ups (high temperature or top_k > 1). Surprise will be high; the candidates panel shows what was actually in the running.</p>
-  <p><b class="lead">Flat through the stack:</b> same top-1 at every layer, all at low confidence. The model is locked into a single prediction it isn't very sure about — usually a safe default like a space or a common letter.</p>
+  <p><b class="lead">Flat through the stack:</b> same top-1 at every layer, all at low confidence. The model is locked into a single prediction it isn't very sure about - usually a safe default like a space or a common letter.</p>
 </div></details></template>
 
 <template id="detail-candidates"><details class="more"><summary>top candidates and confidence</summary><div class="more-content">
@@ -1705,7 +1797,7 @@
   <p><b class="lead">No match (empty list):</b> the probe doesn't have data for this checkpoint, or these neurons are too generic to map to specific stories.</p>
   <h4>caveats</h4>
   <p>For the Learning tab, the probe is rebuilt for each checkpoint, so matches are meaningful at every step. For the Generation tab, the probe is built once on the final 80M checkpoint, so it's most accurate for the loaded model.</p>
-  <p>This is a v1 of the deja-vu detector. v2 (in `docs/IDEAS.md`) would log neuron firing during training itself for true provenance tracing.</p>
+  <p>This is a v1 of the deja-vu detector. v2 would log neuron firing during training itself for true provenance tracing.</p>
 </div></details></template>
 
 <div id="neuronModal" class="modal-backdrop hidden">
@@ -1715,6 +1807,48 @@
       <button id="modalClose">×</button>
     </div>
     <div id="modalBody"></div>
+  </div>
+</div>
+
+<div id="autoTuneModal" class="modal-backdrop hidden">
+  <div class="modal-box" style="max-width:560px">
+    <div class="modal-header">
+      <h3>Auto tune</h3>
+      <button id="autoTuneClose">×</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--dim);line-height:1.55;margin-bottom:6px">
+      Runs short throwaway training steps at increasing batch sizes to measure what your
+      machine can really do. No checkpoints are written and your models are untouched.
+    </div>
+    <div style="font-size:11px;color:var(--warm);line-height:1.5;margin-bottom:10px">
+      Heads up: this intentionally pushes memory to its limit, so your computer may slow
+      down or stutter while it runs (usually 2&ndash;5 minutes). You can stop it at any time.
+    </div>
+    <div class="inline" style="gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--dim)">trainer <b id="autoTuneTrainerName" style="color:var(--text)">&mdash;</b></span>
+      <button id="autoTuneStart" class="go" type="button">start benchmark</button>
+      <button id="autoTuneStop" type="button" style="display:none;background:var(--hot);color:#000">stop</button>
+    </div>
+    <div id="autoTuneLog" style="display:none;background:#0a0c12;border:1px solid var(--line);border-radius:4px;padding:8px 10px;font-family:monospace;font-size:10.5px;line-height:1.6;max-height:180px;overflow-y:auto;color:var(--text)"></div>
+    <div id="autoTuneResults" style="display:none;margin-top:12px">
+      <div style="font-size:11.5px;font-weight:600;color:var(--data-pos);margin-bottom:6px">measured on this machine</div>
+      <div style="display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-size:11.5px">
+        <span style="color:var(--dim)">RAM ceiling</span><span id="autoTuneRam">&mdash;</span>
+        <span style="color:var(--dim)">largest batch that fits</span><span id="autoTuneMaxBatch">&mdash;</span>
+        <span style="color:var(--dim)">fastest batch</span><span id="autoTuneBestBatch">&mdash;</span>
+        <span style="color:var(--dim)">throughput at fastest</span><span id="autoTuneTokS">&mdash;</span>
+        <span style="color:var(--dim)">memory strategy</span><span id="autoTuneTier">&mdash;</span>
+      </div>
+      <div id="autoTuneRecs" style="margin-top:10px;padding:8px 10px;background:#0f1218;border-radius:3px;font-size:11.5px;line-height:1.6"></div>
+      <div class="inline" style="gap:8px;margin-top:12px">
+        <button id="autoTuneApply" class="go" type="button">apply to trainer</button>
+        <span id="autoTuneApplyStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+      </div>
+    </div>
+    <div id="autoTuneInfeasible" style="display:none;margin-top:12px">
+      <div style="font-size:11.5px;font-weight:600;color:var(--hot);margin-bottom:6px">this size cannot train on this machine</div>
+      <div id="autoTuneInfeasibleBody" style="font-size:11.5px;line-height:1.6;padding:8px 10px;background:#16100f;border:1px solid var(--hot);border-radius:3px"></div>
+    </div>
   </div>
 </div>
 
@@ -1731,56 +1865,40 @@
 <div id="trainFlowModal" class="modal-backdrop hidden">
   <div class="modal-box" style="max-width:720px">
     <div class="modal-header">
-      <h3>What do you want to do with a model?</h3>
+      <h3>What do you want to do?</h3>
       <button id="trainFlowModalClose">&times;</button>
     </div>
-    <div class="train-flow-tabs">
-      <button class="train-flow-tab active" data-flow-tab="pipeline" type="button">pipeline</button>
-      <button class="train-flow-tab" data-flow-tab="scratch" type="button">from scratch</button>
-      <button class="train-flow-tab" data-flow-tab="continue" type="button">continue saved</button>
-      <button class="train-flow-tab" data-flow-tab="distill" type="button">distill</button>
-      <button class="train-flow-tab" data-flow-tab="synth" type="button">synthetic corpus</button>
-      <button class="train-flow-tab" data-flow-tab="export" type="button">export .bin</button>
-    </div>
-    <div class="train-flow-panes">
-      <div class="train-flow-pane active" data-flow-pane="pipeline">
-        <p><b class="train-flow-lead">Models train in stages. Each stage is its own run.</b></p>
-        <p>The trainer you pick declares which stage it teaches. Once a stage is <code>trained</code>, it stays trained when you add the next stage on top.</p>
-        <ol class="train-flow-stages">
-          <li><span class="train-flow-hi">autocomplete</span> &mdash; byte pretraining. The foundation; required for everything above.</li>
-          <li><span class="train-flow-hi">chat</span> &mdash; chat-format SFT on an autocomplete model.</li>
-          <li><span class="train-flow-hi">agent</span> &mdash; tool-use SFT on a chat model.</li>
-        </ol>
-        <p class="train-flow-effect"><b>Read the other tabs</b> to pick the action that matches what you want to do next.</p>
+    <p class="train-flow-intro">Models train in stages: <span class="train-flow-hi">autocomplete</span> &rarr; <span class="train-flow-hi">chat</span> &rarr; <span class="train-flow-hi">agent</span>. Each stage is its own run, built on top of the last. Pick an action below.</p>
+    <div class="train-flow-groups">
+      <div class="train-flow-group">
+        <div class="train-flow-group-title">Train a model</div>
+        <button class="train-flow-card" data-flow="scratch" type="button">
+          <span class="train-flow-card-title">Start a new model</span>
+          <span class="train-flow-card-desc">Train from random weights.</span>
+        </button>
+        <button class="train-flow-card" data-flow="continue" type="button">
+          <span class="train-flow-card-title">Continue a saved model</span>
+          <span class="train-flow-card-desc">Resume training or add the next stage.</span>
+        </button>
+        <button class="train-flow-card" data-flow="rag" type="button">
+          <span class="train-flow-card-title">Answer from context (RAG)</span>
+          <span class="train-flow-card-desc">Fine-tune to answer from supplied text.</span>
+        </button>
       </div>
-      <div class="train-flow-pane" data-flow-pane="scratch">
-        <p><b class="train-flow-lead">Train a new model from random weights.</b></p>
-        <p>The trainer you pick determines architecture and the capability tier it teaches (usually <span class="train-flow-hi">autocomplete</span>).</p>
-        <p class="train-flow-effect"><b>Effect.</b> Creates <code>models/&lt;name&gt;/</code>. Loss begins near <span class="train-flow-hi">5.55 nats</span>. The trainer's tier moves to <code>in_progress</code>, then <code>trained</code> at the final step.</p>
+      <div class="train-flow-group">
+        <div class="train-flow-group-title">Prepare data</div>
+        <button class="train-flow-card" data-flow="synth" type="button">
+          <span class="train-flow-card-title">Generate training data</span>
+          <span class="train-flow-card-desc">Run the teacher to build a corpus. Needs a teacher in Settings.</span>
+        </button>
       </div>
-      <div class="train-flow-pane" data-flow-pane="continue">
-        <p><b class="train-flow-lead">Resume from a saved model's latest checkpoint.</b></p>
-        <p>Same trainer keeps training. A <span class="train-flow-hi">different trainer adds a new tier</span> on top: autocomplete to chat to agent.</p>
-        <p class="train-flow-effect"><b>Effect.</b> Appends to the model's history from the latest step. Tiers already <code>trained</code> stay <code>trained</code>; the new trainer's tier moves to <code>in_progress</code>.</p>
+      <div class="train-flow-group">
+        <div class="train-flow-group-title">Deploy</div>
+        <button class="train-flow-card" data-flow="export" type="button">
+          <span class="train-flow-card-title">Export to .bin</span>
+          <span class="train-flow-card-desc">Convert a checkpoint for the C engine.</span>
+        </button>
       </div>
-      <div class="train-flow-pane" data-flow-pane="distill">
-        <p><b class="train-flow-lead">Train a small student model against a larger teacher's outputs.</b></p>
-        <p>Compresses a capable model to fit the engine's hardware budget. <span class="train-flow-hi">Teacher endpoint is set in Settings.</span></p>
-        <p class="train-flow-effect"><b>Effect.</b> Same model output as <i>from scratch</i>, but the loss signal comes from the teacher's logits, not raw corpus bytes. The run cannot start without a teacher provider.</p>
-      </div>
-      <div class="train-flow-pane" data-flow-pane="synth">
-        <p><b class="train-flow-lead">Generate training data with the teacher. No model is trained.</b></p>
-        <p>The teacher runs over seed prompts and writes sample sequences as JSONL. Use it to assemble a <span class="train-flow-hi">chat or agent corpus</span> before a chat or agent training run.</p>
-        <p class="train-flow-effect"><b>Effect.</b> Writes <code>synth_jobs/&lt;job_id&gt;/samples.jsonl</code>. No model is created and no capability tier moves. Pick the file up in a later <i>continue saved</i> run.</p>
-      </div>
-      <div class="train-flow-pane" data-flow-pane="export">
-        <p><b class="train-flow-lead">Convert a trained PyTorch checkpoint to the engine's <code>.bin</code> format.</b></p>
-        <p>Run this after training is done. <span class="train-flow-hi">The C engine loads <code>.bin</code> only.</span></p>
-        <p class="train-flow-effect"><b>Effect.</b> Writes the file the C engine reads at inference. Requires INT8 QAT weights and a canonical Veritate trunk (no RoPE-only, no MTP variants).</p>
-      </div>
-    </div>
-    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">
-      <button id="trainFlowUseBtn" class="action" type="button" style="border-color:var(--accent);color:var(--accent);font-weight:600">use this</button>
     </div>
   </div>
 </div>
@@ -1827,6 +1945,20 @@
   </div>
 </div>
 
+<div id="mktMarketplaceModal" class="modal-backdrop hidden">
+  <div class="modal-box" style="max-width:820px;max-height:88vh;display:flex;flex-direction:column">
+    <div class="modal-header">
+      <h3>Extension library <span id="mktModalCount" class="meta" style="font-size:11px;color:var(--dim);font-weight:400;margin-left:6px"></span></h3>
+      <button id="mktModalClose">×</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;overflow:hidden;flex:1;min-height:0">
+      <div class="meta" style="font-size:11px;color:var(--dim);line-height:1.5">Optional add-on modules that sit alongside the dashboard and integrate through its published REST API. Anything you add becomes active after the dashboard restarts.</div>
+      <span id="mktActionStatus" class="meta" style="font-size:10.5px"></span>
+      <div id="mktList" style="display:flex;flex-direction:column;gap:2px;overflow-y:auto;flex:1;min-height:0;padding-right:4px"></div>
+    </div>
+  </div>
+</div>
+
 <div id="corpusAddSourceModal" class="modal-backdrop hidden">
   <div class="modal-box" style="max-width:560px">
     <div class="modal-header">
@@ -1834,7 +1966,7 @@
       <button id="corpusAddSourceModalClose">×</button>
     </div>
     <div style="font-size:12px;line-height:1.55;color:var(--text);display:flex;flex-direction:column;gap:8px">
-      <div style="color:var(--dim);font-size:11px">Add a corpus by direct URL. The stem is the file basename — for <code>foo_train.bin</code> use <code>foo</code>. SHA-256 fields are optional; if provided, the install will verify them and abort on mismatch.</div>
+      <div style="color:var(--dim);font-size:11px">Add a corpus by direct URL. The stem is the file basename - for <code>foo_train.bin</code> use <code>foo</code>. SHA-256 fields are optional; if provided, the install will verify them and abort on mismatch.</div>
       <label style="display:flex;flex-direction:column;gap:3px">
         <span style="font-size:11px;color:var(--dim)">stem (filename basename, no extension)</span>
         <input type="text" id="corpusSourceStem" placeholder="e.g. mycorpus" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:monospace">
@@ -1882,7 +2014,7 @@
     <div style="font-size:12px;line-height:1.55;color:var(--text);display:flex;flex-direction:column;gap:10px">
       <div id="forkModelSummary" style="color:var(--text);font-size:12px"></div>
       <div style="color:var(--dim);font-size:11px;line-height:1.5">
-        Forking copies the <b>latest checkpoint only</b> from the source model into a new training root. Older checkpoints, train.csv, and hook captures are not copied — the new model starts a fresh loss curve from that step. The source model is left untouched.
+        Forking copies the <b>latest checkpoint only</b> from the source model into a new training root. Older checkpoints, train.csv, and hook captures are not copied - the new model starts a fresh loss curve from that step. The source model is left untouched.
       </div>
       <label style="display:flex;flex-direction:column;gap:3px">
         <span style="font-size:11px;color:var(--dim)">new model name</span>
@@ -1904,5 +2036,55 @@
 </footer>
 
 <script src="/static/index.js"></script>
+<script src="/static/tutorial.js"></script>
+<script src="/static/prune.js"></script>
+<script src="/static/rag_train.js"></script>
+<script>
+/* Extensions gate. Self-contained: unique IDs, no overlap with index.js.
+   Drives the toggle + a single Extensions menu that collapses installed
+   extensions and the library link (index.js modal) into one tab entry. */
+(function(){
+  var tog=document.getElementById('extToggle');
+  var tabs=document.querySelector('.tabs');
+  function clearMenu(){
+    if(!tabs)return;
+    tabs.querySelectorAll('[data-ext-nav]').forEach(function(el){el.parentNode.removeChild(el);});
+  }
+  function buildMenu(list){
+    if(!tabs)return;
+    var lib=document.createElement('div');
+    lib.className='ext-library';lib.setAttribute('data-ext-nav','1');lib.textContent='Extension library';
+    lib.addEventListener('click',function(){if(window.mktOpenMarketplace)window.mktOpenMarketplace();});
+    tabs.appendChild(lib);
+    if(!list.length)return;
+    var menu=document.createElement('div');
+    menu.className='ext-menu';menu.setAttribute('data-ext-nav','1');
+    var trigger=document.createElement('div');
+    trigger.className='ext-trigger';trigger.textContent='Active Extensions ▾';
+    var pop=document.createElement('div');pop.className='ext-pop';
+    list.forEach(function(e){
+      if(!e||!e.route)return;
+      var a=document.createElement('a');
+      a.href=e.route;a.textContent=e.nav_label||e.name||e.id;pop.appendChild(a);
+    });
+    trigger.addEventListener('click',function(ev){ev.stopPropagation();menu.classList.toggle('open');});
+    menu.appendChild(trigger);menu.appendChild(pop);tabs.appendChild(menu);
+  }
+  function renderExtensions(on){
+    clearMenu();
+    if(!on||!tabs)return;
+    fetch('/extensions').then(function(r){return r.json();}).then(function(d){
+      buildMenu((d&&d.extensions)||[]);
+    }).catch(function(){buildMenu([]);});
+  }
+  function apply(on){if(tog)tog.checked=!!on;renderExtensions(!!on);}
+  fetch('/settings').then(function(r){return r.json();}).then(function(s){apply(!!s.extensions);}).catch(function(){});
+  if(tog)tog.addEventListener('change',function(){var on=tog.checked;apply(on);
+    fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({extensions:on})}).catch(function(){});});
+  document.addEventListener('click',function(){
+    var m=tabs&&tabs.querySelector('.ext-menu.open');if(m)m.classList.remove('open');
+  });
+})();
+</script>
 </body>
 </html>
