@@ -44,10 +44,11 @@ extension code.
   installed canonical extension. They do not need a catalog entry to run; the
   catalog is only the marketplace listing.
 
-There is no remote download in v1. `install` resolves an `id` to
-`canonical/<id>` and copies it; if there is no canonical source it raises and the
-endpoint returns `404` (`extensions/registry.py:136`). Remote-URL download is a
-documented future capability, not present today.
+There is no remote download of extension **code**: `install` resolves an `id` to
+`canonical/<id>` and copies it; if there is no canonical source and no existing
+`installed/<id>` it raises and the endpoint returns `404`. (Extension **datasets**
+are a separate concern and DO download from a hosted url: see per-extension
+supplemental data below.)
 
 ## endpoints
 
@@ -57,8 +58,8 @@ Full request/response detail lives in [../api/rest_api.md](../api/rest_api.md).
 |---|---|
 | `GET /extensions` | list installed extensions (`id`, `name`, `version`, `nav_label`, `route`, `experimental`) |
 | `GET /extensions/catalog` | the marketplace catalog, each entry annotated with `installed` |
-| `POST /extensions/install` | body `{ "id": "<id>" }`; copy `canonical/<id>` → `installed/<id>`. `400` if `id` missing, `404` if no canonical source |
-| `POST /extensions/uninstall` | body `{ "id": "<id>" }`; remove `installed/<id>`. `400` if `id` missing |
+| `POST /extensions/install` | body `{ "id": "<id>" }`; clear the disabled flag and copy `canonical/<id>` → `installed/<id>`. `400` if `id` missing, `404` if no source at all |
+| `POST /extensions/uninstall` | body `{ "id": "<id>" }`; disable the id (live) and remove `installed/<id>` code, keeping `data/`. `400` if `id` missing |
 | `GET /extensions/<id>/data` | the extension's supplemental-dataset catalog, annotated with local presence |
 | `POST /extensions/<id>/data/download` | body `{ "source": "<source>" }`; download a dataset archive |
 | `POST /extensions/<id>/data/delete` | body `{ "source": "<source>" }`; delete a downloaded dataset |
@@ -70,10 +71,12 @@ with the noted status on failure (`veritate_mri/routes/extensions_routes.py:22`)
 
 1. The marketplace UI reads `GET /extensions/catalog` and shows each entry with its
    `installed` state.
-2. Install posts `{id}` to `POST /extensions/install`. The registry copies
-   `canonical/<id>` into `installed/<id>` (`extensions/registry.py:134`).
-3. Uninstall posts `{id}` to `POST /extensions/uninstall`. The registry removes
-   `installed/<id>` (`extensions/registry.py:145`).
+2. Install posts `{id}` to `POST /extensions/install`. The registry clears any
+   disabled flag and, for a builtin, copies `canonical/<id>` into `installed/<id>`.
+3. Uninstall posts `{id}` to `POST /extensions/uninstall`. The registry adds the
+   `id` to `disabled.json` (so even a canonical builtin, which cannot be physically
+   deleted, is deactivated) and removes any `installed/<id>` code, **preserving the
+   `data/` cache**. A reinstall clears the flag and re-adds the code beside the data.
 
 ## per-extension supplemental data
 
@@ -84,8 +87,11 @@ itself.
 
 - **Catalog.** `GET /extensions/<id>/data` returns the extension's datasets, each
   annotated with local presence (`present`, `files`, `size_gb`, `downloadable`).
-- **Download.** `POST /extensions/<id>/data/download` with `{source}` fetches the
-  dataset's archive into `extensions/installed/<id>/data/extension_data/<source>`.
+- **Download.** `POST /extensions/<id>/data/download` with `{source}` streams the
+  dataset's single hosted archive (the `url` in `data_catalog.json`, a `.tar.gz` or
+  `.zip` whose CSVs sit at the **top level**) and extracts it into
+  `extensions/installed/<id>/data/extension_data/<source>`, then removes the temp
+  archive (`extensions/data.py`). A `null` url is a placeholder (`downloadable:false`).
 - **Delete.** `POST /extensions/<id>/data/delete` with `{source}` removes the local
   copy to reclaim disk.
 
@@ -101,18 +107,23 @@ downloads, and deletes for any extension. The **catalog** (which datasets exist 
 where they are hosted) is owned by each extension via its `data_catalog.json`.
 Request/response detail is in [../api/rest_api.md](../api/rest_api.md).
 
-## restart to activate
+## live activation (no restart)
 
-Installs and uninstalls change disk **immediately**, but routes and pages are
-mounted only at server start, in `register_all` (`veritate_mri/app.py:158`). So:
+Install and uninstall take effect **immediately**, without a server restart:
 
-- A freshly installed extension's page and routes appear on the **next server
-  start**, not on the install request.
-- An uninstalled extension's routes stay live until the next restart (its files are
-  gone, but the already-registered route objects remain in the running process).
+- Uninstall records the `id` in `extensions/disabled.json`. `discover()` filters
+  disabled ids, so the nav and catalog `installed` flag update on the next request.
+- Flask routes cannot be unregistered from a running app, so a `before_request`
+  **gate** (`extensions/registry.py`, installed by `register_all`) returns `404` for
+  any request whose matched route belongs to a disabled extension. `register_all`
+  records each extension's URL rules in `_OWNED` as it registers them, so the gate
+  knows which routes to block.
+- Reinstall clears the disabled flag; the gate stops blocking and the routes serve
+  again. No re-registration is needed because the route objects were never removed.
 
-Surface this to the operator: an install/uninstall is staged, and a restart
-activates it.
+Limitation: a brand-new extension that was disabled (or absent) at the last server
+start has no registered routes for the gate to re-enable, so its routes appear only
+on the next restart. Toggling an extension that was active at start is fully live.
 
 ## the extensions settings flag
 

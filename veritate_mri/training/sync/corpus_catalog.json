@@ -254,6 +254,34 @@
       "size_val": 1073741824,
       "recommended_min_params": 10000000000,
       "recommended_max_params": null
+    },
+    {
+      "stem": "crypto",
+      "label": "Crypto byte corpus (1m OHLCV, 200 pairs)",
+      "description": "1-minute OHLCV across 200 major Binance USDT pairs, encoded as a byte stream for the Market LLM (statistics corpus, not language).",
+      "format": "raw_bytes",
+      "train_url": "https://api.carpathian.ai/cos/2f0093fe9c91a5d05987e6785a160e2a1f8cdc1f9126905e0a47845c110863c6/7a111e7584b70bfcb1e3ddb8cbb3f7cc60bf702479f64c6321cb231550340152aec8061ac122232c355107e68b5538c2a05cb887c8adf575698ba3840e9d85ec",
+      "val_url":   "https://api.carpathian.ai/cos/26fdc8c0a6e9636db957f73baa0c07c23d6d1752a5be0b8dc90a1aa688c66ef3/55067bfbbd1134cdee91b6b6e251bc7c5a89fed4209eec03bedb9150f7bbfa4c3dfe1197b689a2988aea2a0b6cc4c8920e1db9c9e81c9c5efc076c264a1ca7eb",
+      "size_train":   2181055195,
+      "size_val":     242340160,
+      "sha256_train": "fc7261f98d5058adaf88a70819a61acb9bdc16ad40d7e39cae008c9e88481313",
+      "sha256_val":   "bba40f678941deed2fdb4a8407abaa5934cc70fb3b290d74250ba20ec38b9408",
+      "recommended_min_params": null,
+      "recommended_max_params": null
+    },
+    {
+      "stem": "stocks",
+      "label": "Stocks byte corpus (daily OHLCV, S&P 500)",
+      "description": "Daily adjusted OHLCV for ~503 S&P 500 tickers, encoded as a byte stream for the Market LLM (statistics corpus, not language).",
+      "format": "raw_bytes",
+      "train_url": "https://api.carpathian.ai/cos/6a75873f37fddebaed2caa5a8ed75c8b4b2cb2c45c376e18dfd9270283d06184/7fbed05ec821d36bb137eee735a2a977b93860a31d1015b1b7da4c2acc6ee28bd61e08c0df9f5b7adacb226af6ca3ee584f6a1e2a5cd10707a72419534a17aa6",
+      "val_url":   "https://api.carpathian.ai/cos/6f9c07e6a5ec21409c14f143ddf1f2d898d65e780e107d3586e1a7ade3586913/138d9b457ef7267e1d4f19afde955ef6dbfd7de35e4e587676b6b0df05f1e52edfdd3b6249f70117944d09d0b401a74ce4b25f340f4b971ddd84d259b3644c05",
+      "size_train":   19408485,
+      "size_val":     2158130,
+      "sha256_train": "01ffad196e12c52bf76727f09b25ab05493e4f6abd1e6049c30545bd883c9bf8",
+      "sha256_val":   "bbf493680c12b95600769346ea548cc35986a9acc3b09781ed3b7d763e07ea4d",
+      "recommended_min_params": null,
+      "recommended_max_params": null
     }
   ]
 }

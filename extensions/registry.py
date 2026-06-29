@@ -19,7 +19,7 @@ import os
 import shutil
 import sys
 
-from flask import send_from_directory
+from flask import request, send_from_directory
 
 from runtime import logs as logmod
 
@@ -30,19 +30,36 @@ EXTENSIONS_ROOT = os.path.dirname(os.path.abspath(__file__))
 INSTALLED_ROOT  = os.path.join(EXTENSIONS_ROOT, "installed")
 CANONICAL_ROOT  = os.path.join(EXTENSIONS_ROOT, "canonical")
 CATALOG_PATH    = os.path.join(EXTENSIONS_ROOT, "catalog.json")
+DISABLED_PATH   = os.path.join(EXTENSIONS_ROOT, "disabled.json")
 
 LOG_SOURCE  = "extensions"
 MANIFEST    = "manifest.json"
 SERVER_DIR  = "server"
 REGISTER_FN = "register"
 
+_OWNED = {}                               # url rule string -> ext id, for the live disable gate
+
 # ------------------------------------------------------------------------------------
 # Functions
 
+def _disabled():
+    try:
+        with open(DISABLED_PATH, "r", encoding="utf-8") as f:
+            return set(json.load(f) or [])
+    except (OSError, ValueError):
+        return set()
+
+
+def _write_disabled(ids):
+    with open(DISABLED_PATH, "w", encoding="utf-8") as f:
+        json.dump(sorted(ids), f)
+
+
 def discover():
-    """Installed extensions, from both roots. Canonical (first-party, shipped, trusted)
-    is always active; installed/ holds downloaded third-party ones and overrides a
-    canonical of the same id. One unreadable manifest is logged and skipped."""
+    """Active extensions, from both roots. Canonical (first-party, shipped, trusted) and installed/
+    (downloaded third-party, overrides a canonical of the same id) are both active, EXCEPT ids the
+    user has uninstalled (recorded in disabled.json) which are filtered out. One unreadable manifest
+    is logged and skipped."""
     found = {}
     for root, source in ((CANONICAL_ROOT, "canonical"), (INSTALLED_ROOT, "installed")):
         if not os.path.isdir(root):
@@ -61,7 +78,8 @@ def discover():
             manifest["_dir"] = ext_dir
             manifest["_source"] = source
             found[manifest.get("id", ext_id)] = manifest
-    return list(found.values())
+    disabled = _disabled()
+    return [m for ext_id, m in found.items() if ext_id not in disabled]
 
 
 def manifest_for(ext_id):
@@ -70,6 +88,7 @@ def manifest_for(ext_id):
 
 def _register_one(app, manifest):
     ext_dir = manifest["_dir"]
+    before = {r.rule for r in app.url_map.iter_rules()}
     server_dir = os.path.join(ext_dir, SERVER_DIR)
     if os.path.isdir(server_dir) and server_dir not in sys.path:
         sys.path.insert(0, server_dir)
@@ -86,6 +105,21 @@ def _register_one(app, manifest):
     if route and page_file:
         endpoint = f"ext_page_{manifest['id']}"
         app.add_url_rule(route, endpoint, _page_view(ext_dir, page_file))
+    for rule in app.url_map.iter_rules():
+        if rule.rule not in before:
+            _OWNED[rule.rule] = manifest["id"]
+
+
+def _gate():
+    """Live disable: 404 any request whose matched route belongs to an uninstalled extension, so
+    uninstall/reinstall take effect without a server restart (Flask routes cannot be unregistered)."""
+    rule = request.url_rule
+    if rule is None:
+        return None
+    ext_id = _OWNED.get(rule.rule)
+    if ext_id is not None and ext_id in _disabled():
+        return ("extension uninstalled", 404)
+    return None
 
 
 def _page_view(ext_dir, page_file):
@@ -95,6 +129,7 @@ def _page_view(ext_dir, page_file):
 
 
 def register_all(app):
+    app.before_request(_gate)
     registered = []
     for manifest in discover():
         try:
@@ -132,19 +167,31 @@ def load_catalog():
 
 
 def install(ext_id):
+    """Activate an extension: clear any disabled flag, and for a builtin copy its canonical source
+    into installed/ (re-adding the code beside a kept data/ cache). Third-party extensions already
+    present in installed/ just get re-enabled."""
+    disabled = _disabled()
+    if ext_id in disabled:
+        disabled.discard(ext_id)
+        _write_disabled(disabled)
     src = os.path.join(CANONICAL_ROOT, ext_id)
-    if not os.path.isdir(src):
-        raise ValueError(f"no canonical source for extension {ext_id!r}")
-    dst = os.path.join(INSTALLED_ROOT, ext_id)
-    os.makedirs(INSTALLED_ROOT, exist_ok=True)
-    shutil.copytree(src, dst, dirs_exist_ok=True)
+    if os.path.isdir(src):
+        dst = os.path.join(INSTALLED_ROOT, ext_id)
+        os.makedirs(INSTALLED_ROOT, exist_ok=True)
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    elif not os.path.isdir(os.path.join(INSTALLED_ROOT, ext_id)):
+        raise ValueError(f"no source for extension {ext_id!r}")
     logmod.ok(LOG_SOURCE, f"installed {ext_id}")
     return {"id": ext_id, "installed": True}
 
 
 def uninstall(ext_id):
-    """Remove the extension's code but preserve its data/ cache (downloaded datasets,
-    recorded history). A reinstall re-adds the code beside the kept data."""
+    """Deactivate an extension (recorded in disabled.json so it stays off, even a canonical builtin
+    that cannot be physically deleted) and remove any installed/ code, preserving its data/ cache.
+    A reinstall clears the flag and re-adds the code beside the kept data."""
+    disabled = _disabled()
+    disabled.add(ext_id)
+    _write_disabled(disabled)
     dst = os.path.join(INSTALLED_ROOT, ext_id)
     if os.path.isdir(os.path.join(dst, "data")):
         for name in os.listdir(dst):
@@ -155,7 +202,7 @@ def uninstall(ext_id):
                 shutil.rmtree(p, ignore_errors=True)
             else:
                 os.remove(p)
-    else:
+    elif os.path.isdir(dst):
         shutil.rmtree(dst, ignore_errors=True)
     logmod.ok(LOG_SOURCE, f"uninstalled {ext_id}")
     return {"id": ext_id, "installed": False}

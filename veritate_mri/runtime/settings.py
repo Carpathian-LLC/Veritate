@@ -83,7 +83,7 @@ DEFAULTS = {
     "mesh_hub_address": "",
     "mesh_auth_token": "",
     "tutorial_enabled": True,
-    "tutorial_completed": False,
+    "tutorial_completed": True,
 }
 
 VALID_TEMPERATURE_UNITS = ("C", "F", "K")

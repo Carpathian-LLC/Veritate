@@ -10954,14 +10954,9 @@ const CORPUS_STEM_CATEGORY = {
 };
 const CORPUS_MODE_CATEGORY = { chat: "chatting", agent: "autocomplete", autocomplete: "autocomplete" };
 
-// Market LLM data not published yet; rendered as disabled "coming soon" rows
-// under Statistics. Install links land once the bins are hosted.
-const CORPUS_MARKET_PLACEHOLDERS = [
-  { stem: "crypto", label: "Crypto byte corpus", category: "statistics", coming_soon: true,
-    description: "1m crypto OHLCV as a byte stream (trainers/corpus/crypto_{train,val}.bin), plus its training set and raw data." },
-  { stem: "stocks", label: "Stocks (daily OHLCV, 503 S&P tickers) - market time-series", category: "statistics", coming_soon: true,
-    description: "503 S&P daily-OHLCV tickers as a byte stream (trainers/corpus/stocks_{train,val}.bin), plus its built training set and raw per-ticker CSVs. Hosted on S3 soon." },
-];
+// Market LLM corpora (crypto, stocks) are now published as real raw_bytes catalog
+// entries hosted on COS, so no coming-soon placeholders are needed.
+const CORPUS_MARKET_PLACEHOLDERS = [];
 
 function _corpusCategoryOf(c) {
   if (c.category) return c.category;

@@ -25,6 +25,8 @@ from .client import (
 # ------------------------------------------------------------------------------------
 # Constants
 
+__test__ = False                          # production connection probe, not a pytest module
+
 _PING_MESSAGES = [{"role": "user", "content": "Reply with the single word: pong"}]
 # Cap output so the probe returns fast instead of generating a full reply, which
 # against a large local model can outlast the timeout. No retries; the timeout is

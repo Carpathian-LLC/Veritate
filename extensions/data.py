@@ -18,6 +18,12 @@
 import json
 import os
 import shutil
+import ssl
+import tarfile
+import urllib.request
+import zipfile
+
+import certifi
 
 from runtime import logs as logmod
 
@@ -31,6 +37,11 @@ DATA_CATALOG = "data_catalog.json"
 
 EXTENSIONS_ROOT = os.path.dirname(os.path.abspath(__file__))
 INSTALLED_ROOT  = os.path.join(EXTENSIONS_ROOT, "installed")
+
+DOWNLOAD_CTX     = ssl.create_default_context(cafile=certifi.where())
+DOWNLOAD_UA      = "Mozilla/5.0"
+DOWNLOAD_TIMEOUT = 120
+TMP_BASENAME     = "_download"
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -93,13 +104,43 @@ def catalog(ext_id):
     return out
 
 
+def _extract(archive, target):
+    if archive.lower().endswith(".zip"):
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(target)
+    else:
+        with tarfile.open(archive) as t:
+            t.extractall(target, filter="data")
+
+
 def download(ext_id, source):
+    """Fetch the dataset's single hosted archive (tar.gz or zip) from its catalog url and extract the
+    CSVs into installed/<id>/data/extension_data/<source>. The url is a bucket object; the archive
+    holds the dataset's CSVs at top level."""
     entry = next((e for e in _entries(ext_id) if e.get("source") == source), None)
     if entry is None:
         return {"ok": False, "error": f"unknown dataset: {source!r}"}
-    if not entry.get("url"):
+    url = entry.get("url")
+    if not url:
         return {"ok": False, "error": f"{entry.get('label', source)} is not hosted yet (placeholder)."}
-    return {"ok": False, "error": "download wiring pending: set the catalog url + fetch implementation."}
+    target = _source_path(ext_id, source)
+    if not target:
+        return {"ok": False, "error": f"invalid dataset source: {source!r}"}
+    os.makedirs(target, exist_ok=True)
+    tmp = os.path.join(target, TMP_BASENAME + (".zip" if url.lower().endswith(".zip") else ".tgz"))
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": DOWNLOAD_UA})
+        with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT, context=DOWNLOAD_CTX) as r, open(tmp, "wb") as f:
+            shutil.copyfileobj(r, f)
+        _extract(tmp, target)
+    except Exception as e:
+        return {"ok": False, "error": f"download failed: {e}"}
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    present, files, nbytes = _dir_stats(target)
+    logmod.ok(LOG_SOURCE, f"downloaded {ext_id}/{source}: {files} files, {round(nbytes / 1e9, 3)} GB")
+    return {"ok": present, "source": source, "files": files, "size_gb": round(nbytes / 1e9, 3)}
 
 
 def delete(ext_id, source):
