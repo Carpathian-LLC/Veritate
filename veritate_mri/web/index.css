@@ -838,12 +838,12 @@
   .synth-seed-row.group { font-weight: 600; }
   .synth-seed-row.child { padding-left: 18px; }
 
-  body.training-active #trainStep1Row,
   body.training-active #teacherGate,
   body.training-active #synthPanel,
   body.training-active #trainPickerRow,
   body.training-active #trainDesc,
   body.training-active #trainFormWrap,
-  body.training-active #exportPickerRow,
   body.training-active #trainRun,
   body.training-active #trainFormToggle { display: none !important; }
+  body.training-active .train-flow-card:not([data-flow="export"]) { opacity: 0.35; pointer-events: none; }
+  body.training-active .train-flow-card[data-flow="export"] .train-flow-card-desc::after { content: " Works while a run is training."; color: var(--data-pos); }

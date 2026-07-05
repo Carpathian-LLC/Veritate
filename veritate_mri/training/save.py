@@ -560,6 +560,9 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         try:
             fn()
         except Exception as e:
+            # print too: trainer subprocesses only persist stdout (.plugin_run.log);
+            # the logmod ring buffer dies with the process and hides dump failures.
+            print(f"DUMP FAILED: {label}: {type(e).__name__}: {e}", flush=True)
             logmod.error("save", f"dump {label} failed: {e}")
         finally:
             if cuda_avail:

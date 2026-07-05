@@ -1,8 +1,8 @@
 # fetch.py: on-demand crypto backfill for the market page
 
 Server module of the **market canonical extension**
-(`extensions/canonical/market/server/fetch.py`). Makes the `/market` page work on a fresh
-install with no manual data. `extensions/installed/market/data/` is gitignored and ships empty; when the data
+(`extensions/canonical/trading/server/fetch.py`). Makes the model-analytics page (`/ext/trading/models`) work on a fresh
+install with no manual data. `extensions/installed/trading/data/market/` is gitignored and ships empty; when the data
 layer needs a crypto symbol that is not cached, `fetch.py` pulls it from Binance and writes
 it in the schema `data.py` reads.
 

@@ -1,10 +1,10 @@
-# paper_trade sentiment layer + /teacher/complete
+# trading news-sentiment layer + /teacher/complete
 
-The Paper Trading extension is now a standalone extension with its own server
-(`extensions/canonical/paper_trade/server/`): a free news scraper, an LLM sentiment
-scorer that calls a user-added model, and the routes that serve them. It reuses the
-Market LLM extension's `/market/*` API for the chart-model forecast; this server owns the
-sentiment side only.
+The news-sentiment side of the Trading extension (`extensions/canonical/trading/server/`,
+see [trading_extension.md](trading_extension.md)): the shared channel-driven news scraper,
+an LLM sentiment scorer that calls a user-added model, the autonomous news paper trader,
+and the `/ext/trading/paper/*` routes that serve them. The chart-model forecast comes from
+the same extension's `/ext/trading/market/*` route group.
 
 ## /teacher/complete (platform endpoint)
 
@@ -16,16 +16,31 @@ Thin wrapper over `teacher.complete(provider, model, [{role:user,content:prompt}
 This is the programmatic surface an extension uses to score text with the user's model
 (Ollama, or any configured provider) without importing platform internals.
 
-## scraper.py
+## scraper.py (shared channel registry)
 
-Free crypto headlines + sentiment context, stdlib + certifi only (no key, no feedparser):
-- `scrape(limit, focus=None)` — recent headlines across `NEWS_FEEDS` (CoinTelegraph, Decrypt,
-  CryptoSlate, Bitcoin Magazine RSS), deduped by title, newest first. When `focus` is a ticker
-  (e.g. `SOL`), it ALSO pulls a token-specific Google News search RSS (`gnews()` via
-  `TOKEN_NAMES`) and ranks headlines mentioning that coin to the top — so choosing a coin in the
-  UI automatically focuses the news the model reads. One unreachable feed is skipped, never fatal.
-- `fear_greed()` — current alternative.me fear-greed index `{value 0..100, label}` or None.
-- `fetch_rss`, `_ts` (RFC-822 pubDate -> unix, fallback to now).
+Free headlines + sentiment context, stdlib + certifi only (no key, no feedparser). The one
+scraping surface of the extension: news sentiment AND the intel briefs read through it.
+- **Channel registry.** Headlines come from a user-editable channel list persisted in
+  `extensions/installed/trading/data/settings.json`: `{id, type, value, enabled}` with types
+  `rss` (feed URL), `reddit` (subreddit name -> `old.reddit.com/r/<sub>/hot.json`, stickied
+  posts skipped, 403/429 marks the channel `blocked`), `gnews` (Google News search query),
+  `index` (the alternative.me fear-greed feed). Defaults: the four crypto RSS feeds, three
+  general-financial RSS feeds, and fear-greed. `normalize_channels` validates + dedupes ids;
+  `channel_health()` annotates each channel with in-memory fetch health
+  (`ok`/`blocked`/`error`/`unknown` + last_fetch + item count).
+- **Settings owner.** `load_settings`/`save_settings` own `settings.json` wholesale
+  (`model`, `news_interval`, `intel_interval`, `news_fee_bps`, `channels`), merged over
+  `DEFAULT_SETTINGS`, written atomically. `GET/POST /ext/trading/settings` is a thin wrapper.
+- `scrape(limit, focus=None, market="crypto")` — recent headlines across every enabled
+  non-index channel, deduped by title, newest first. When `focus` is a ticker (e.g. `SOL`),
+  it ALSO pulls a token-specific Google News search RSS (`gnews()` via `TOKEN_NAMES` /
+  `STOCK_NAMES`; `market` picks the name table + query qualifier) and ranks headlines
+  mentioning that name to the top. The channel list itself is market-agnostic: the sentiment
+  layer tags assets and only universe names ever trade. One unreachable channel is skipped,
+  never fatal.
+- `fear_greed()` — current fear-greed index `{value 0..100, label}`, or None when
+  unreachable or the index channel is disabled.
+- `fetch_rss`, `fetch_reddit`/`parse_reddit`, `_ts` (RFC-822 pubDate -> unix, fallback to now).
 
 ## sentiment.py
 
@@ -58,33 +73,33 @@ news and not at all when quiet, and never churns small drift into fees (the cost
 that makes the signal tradable). FAKE money only (a JSON account file, no
 broker, no keys). Sentiment supplies DIRECTION (the chart model is a coin flip there); the
 optional `--use_chart` gate vetoes entries the byte model sees no tradable move in (via
-`/market/paper_decide`). `--once` runs a single tick and prints the result; default loops
+`/ext/trading/market/paper_decide`). `--once` runs a single tick and prints the result; default loops
 every `--interval` seconds, accumulating a forward (out-of-sample) track record — the only
-honest validation. Ledger at `extensions/installed/paper_trade/data/account.json`.
+honest validation. Ledger at `extensions/installed/trading/data/paper/account.json`.
 
-Run: `python extensions/canonical/paper_trade/server/news_trader.py --model qwen2.5:7b-instruct`
-(needs the dashboard up for `/teacher/complete` scoring; `--use_chart` also needs the Market
-LLM extension).
+Run: `python extensions/canonical/trading/server/news_trader.py --model qwen2.5:7b-instruct`
+(needs the dashboard up for `/teacher/complete` scoring and, with `--use_chart`, for
+`/ext/trading/market/paper_decide`).
 
-## routes (register.py, under /ext/paper_trade)
+## routes (register.py, under /ext/trading)
 
-- `GET /ext/paper_trade/sentiment?n&model&provider` — scrape -> score -> aggregate; returns
+- `GET /ext/trading/paper/sentiment?n&model&provider` — scrape -> score -> aggregate; returns
   `{ok, fear_greed, signal, scored, n}`. Scoring n headlines costs ~n x model latency. The
   page's "News it's reading" panel calls this (shows source, headline, asset, sentiment).
-- `GET /ext/paper_trade/feed?n` — scrape only (fast), `{ok, fear_greed, items}`.
-- `GET /ext/paper_trade/account` — the live paper ledger: `{ok, running, equity, cash,
+- `GET /ext/trading/paper/feed?n` — scrape only (fast), `{ok, fear_greed, items}`.
+- `GET /ext/trading/paper/account` — the live paper ledger: `{ok, running, equity, cash,
   start_cash, positions, signal, curve, bench, series, recent}`. `bench` is the BTC buy-hold
   benchmark aligned to `curve` (start_cash marked to BTC from tick 0) — the page overlays it as
   a dashed line so the only honest question ("are we beating just holding BTC?") is always on
   screen. Each tick records `btc` price for this. Polled every 30s.
-- `POST /ext/paper_trade/trader/start` — start the news trader as a managed in-process
+- `POST /ext/trading/paper/trader/start` — start the news trader as a managed in-process
   thread (`news_trader.start_thread`); body `{model, provider, gate, interval, fee_bps,
   source, use_chart, focus}`, defaults to `sentiment.DEFAULT_MODEL`. `POST .../trader/stop` stops
   it; `GET .../trader/status` -> `{running, model, interval, focus, ...}`. The page's Start/End
   session buttons + status poll drive these. This is the "main" run (label `main`,
   `account.json`).
 
-### multi-run + A/B (BTC vs DOGE)
+### multi-run
 
 `news_trader` supports concurrent named runs: `_RUNS` is a registry keyed by label, and
 `ledger_for(label)` maps each to its own ledger (`main` -> `account.json`, else
@@ -95,16 +110,27 @@ LLM extension).
 
 **Live config update (no restart):** each run's tick reads its config from a shared mutable
 `_RUNS[label]["cfg"]` dict, so `update_run(label, model=/gate=/band=/interval=/focus=...)` changes
-take effect on the next tick with the ledger untouched. Routes: `POST .../trader/update` (main),
-`POST .../ab/update` (both arms). The page applies model/sensitivity/scan-rate/token edits live
-while a run is active instead of forcing stop/start.
+take effect on the next tick with the ledger untouched. Route: `POST .../trader/update` (main);
+the experiment applies shared changes through `POST .../exp/update`. The page applies
+model/sensitivity/scan-rate/token edits live while a run is active instead of forcing stop/start.
 
 **Holdings:** `_holdings(led, eq, last_prices)` marks each position to the last tick price ->
-`{asset, qty, price, value, weight}`; `/account` and `/ab/accounts` return `holdings` +
+`{asset, qty, price, value, weight}`; `/account` and `/exp/accounts` return `holdings` +
 `cash_weight` (and the arms return `recent` trades) so the page shows how the capital is allocated
 and spent, not just a curve.
 
-The legacy 2-arm A/B (`/ab/*`, fixed BTC vs DOGE) is superseded by the generic N-arm experiment.
+The legacy 2-arm A/B (`/ab/*`, fixed BTC vs DOGE) was removed 2026-07-03 (superseded by the
+generic N-arm experiment; its frozen ledgers `account_btc.json`/`account_doge.json` remain on disk).
+
+### page placement
+
+The Trading page's Strategies tab stacks the news card (live trader + an advanced
+sub-section with the insight charts, experiment arms, and news feed), the xsmom card
+(see `paper_trade_xsmom.md`), and the eqmom card (see `paper_trade_eqmom.md`); the
+byte-model backtest lives on the Research tab (see
+`../frontend/trading_page.md`). Running strategies keep trading when not displayed
+(polling is unconditional). The two quant books share one parameterized render path
+(`BOOKS` / `pollBook` in the page script).
 
 ### markets: crypto + stocks
 
@@ -131,7 +157,7 @@ on) is the one documented drawdown-reducer: when broad `MARKET` sentiment <= -0.
 target exposure to 25% (toward cash); Fade arms ignore it. These are the levers the tool exists to
 search over.
 
-`POST /ext/paper_trade/exp/start` body `{model, arms:[{market, focus, aggr, mode}], interval, risk_off, reset}`
+`POST /ext/trading/paper/exp/start` body `{model, arms:[{market, focus, aggr, mode}], interval, risk_off, reset}`
 launches up to `EXP_MAX_ARMS` parallel arms — each a `{market, focus}` slice (focus=None => broad)
 on its own ledger, all scored by ONE shared model. Arm specs are normalized to stable labels
 (`_arm_spec`) and persisted to `experiment.json`, so the experiment + its ledgers resume across
@@ -152,24 +178,24 @@ the signal mean-reverts (buy the spike, eat the reversal); crypto adds spread + 
 Realistic expectation: arms **track or slightly underperform** their own buy-and-hold. This is a
 research instrument for measuring signal honestly, not a money-maker — the UI says so on the panel.
 
-## page cockpit (page/index.html)
+## page cockpit (page/index.html, Strategies tab)
 
-Two clearly separated sections: **LIVE TRADING (forward)** — the news bot: sentiment-model
-picker (from `POST /teacher/models` provider=ollama), a **Trade-token selector** (`#pt-nt-token`:
-Auto or one coin — single-token mode focuses both the news pull and the positions on that coin),
-scan interval, trade sensitivity (band), gate, Start/End session buttons, the live ledger panel
-(equity curve with the dashed BTC buy-hold benchmark), and the "News it's reading" feed —
-and **BACKTEST (past data)** — the chart-model Historical/Replay tooling, which is **hidden
-entirely while a live session runs** (`pollTraderStatus` toggles `#pt-bt-banner` + `#pt-bt` on
-the running-state transition only, so a manual show/hide sticks).
+The news strategy card: sentiment-model picker (from `POST /teacher/models`
+provider=ollama), a **Trade-token selector** (`#t-nt-token`: Auto or one coin —
+single-token mode focuses both the news pull and the positions on that coin), scan
+interval, trade sensitivity (band), gate, Start/End session buttons, the live ledger panel
+(equity curve with the dashed BTC buy-hold benchmark), and — inside the card's ADVANCED
+sub-section — the insight charts, the experiment arms, and the "News it's reading" feed.
+The chart-model Historical/Replay tooling lives on the Research tab.
 
 The **"Is the news actually predicting?"** panel is a 6-chart grid (`drawInsights(series, focus)`),
 the live costed version of the historical +0.48 probe: (1) sentiment-vs-next-move scatter
 (green=direction right), (2) sentiment over time per coin, (3) sentiment-vs-price overlay for the
 focus coin (lead/lag), (4) directional hit-rate bars by coin vs 50%, (5) rolling accuracy (is the
 edge holding), (6) follow-signal-vs-hold cumulative return (before fees). Live controls + status
-are wired to the `/trader/*` + `/account` + `/sentiment` routes; the token choice rides on
-`start` (`focus`), `sentiment` (`token`), and is echoed back by `/account` (`focus`).
+are wired to the `/ext/trading/paper/trader/*` + `.../account` + `.../sentiment` routes; the
+token choice rides on `start` (`focus`), `sentiment` (`token`), and is echoed back by
+`/ext/trading/paper/account` (`focus`).
 
 ## dependencies + honest status
 

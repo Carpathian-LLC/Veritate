@@ -1,0 +1,16 @@
+{
+  "id": "trading",
+  "name": "Trading",
+  "version": "1.0.0",
+  "author": "veritate",
+  "kind": "extension",
+  "description": "Paper trading with simulated capital: news-sentiment, momentum, and byte-model strategies, market surveillance radar, and chart-model research tools. No real money, no broker, no keys.",
+  "experimental": true,
+  "page": {
+    "route": "/ext/trading",
+    "file": "page/index.html",
+    "nav_label": "Trading"
+  },
+  "api_prefix": "/ext/trading",
+  "register": "server/register.py"
+}

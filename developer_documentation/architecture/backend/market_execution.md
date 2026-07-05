@@ -2,7 +2,7 @@
 
 The execution layer turns a policy decision into broker orders and runs the full
 autonomous loop. It is the **test rig** for taking a strategy live-in-simulation; it does
-not create an edge. Lives in the market extension's `server/` beside the model serving it
+not create an edge. Lives in the Trading extension's `server/` beside the model serving it
 consumes.
 
 ## what it is
@@ -33,9 +33,11 @@ consumes.
   `loop(...)` repeats every `interval`, bails after `MAX_ERRORS` consecutive failures.
   Closed-bar rule: forecasts off `df.iloc[:-1]`, never the forming candle.
 
-Run: `python extensions/canonical/market/server/autotrader.py --model <name> --symbol BTCUSDT`
+Run: `python extensions/canonical/trading/server/autotrader.py --model <name> --symbol BTCUSDT`
 (paper by default; `--dry_run` to log-only; `--live` is the only path to real money and
-needs real keys).
+needs real keys). CLI defaults: `--mode directional` (the only mode this spot venue can
+execute; `vol_harvest` straddles collapse to flat here) and `--fee_bps 20` round-trip
+(spot taker, matching `veritate.ROUND_TRIP_FEE` and `policy.DEFAULTS`).
 
 ## dependencies
 

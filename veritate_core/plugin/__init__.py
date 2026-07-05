@@ -31,6 +31,11 @@ from veritate_core.plugin import hardware      # noqa: E402  shared device/core 
 from veritate_core.plugin import mem_planner   # noqa: E402  unified-memory plan
 from veritate_core.plugin import mem_executor  # noqa: E402  applies the plan
 from veritate_core.plugin import bench         # noqa: E402  empirical mem/throughput benchmark
+from veritate_core.plugin import optim         # noqa: E402  shared optimizer builder (muon)
+from veritate_core import model_patched        # noqa: E402  boundary-patched trunk variant
+from veritate_core import model_recurrent      # noqa: E402  constant-state trunk variant
+from veritate_core import model_memory         # noqa: E402  surprise-gated memory trunk variant
+from veritate_core.plugin import slm           # noqa: E402  selective language modeling (RHO-1)
 
 
 def get_teacher_client(provider_override=None, model_override=None):

@@ -1,10 +1,10 @@
 # market policy.py: trading-policy layer
 
-`extensions/canonical/market/server/policy.py` converts the byte model's per-bar
+`extensions/canonical/trading/server/policy.py` converts the byte model's per-bar
 forecast into trade decisions and scores them with fees. It is **model-agnostic**: it
 operates on a signal series (`price`, `p_up`, `conf`, `exp_move`, `vol`, `ret_next`),
 not the model. `veritate.signal_series` (`server/veritate.py`) produces that series;
-`policy` scores it. The Paper Trading extension is the consumer, over the
+`policy` scores it. The Trading page's Research tab is the consumer, over the
 `/market/paper_*` routes (see [market_routes.md](market_routes.md)).
 
 ## what it is
@@ -44,7 +44,7 @@ realized-|z| correlates ~0.25 to 0.30 (rising with horizon), while direction is 
 
 - `numpy` only. No model, no I/O, no network. `veritate.signal_series` /
   `veritate.predict_next` + `veritate.trailing_premium` supply the inputs.
-- Consumed by `register.py` (`/market/paper_backtest`, `/market/paper_decide`).
+- Consumed by `register.py` (`/ext/trading/market/paper_backtest`, `/ext/trading/market/paper_decide`).
 
 ## pitfalls
 

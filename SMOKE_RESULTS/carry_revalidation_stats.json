@@ -1,0 +1,653 @@
+{
+  "errors": [],
+  "data": {
+    "pairs": 40,
+    "events": 7029,
+    "start": "2020-01-01 00:00:00",
+    "end": "2026-05-31 16:00:00"
+  },
+  "backtest_yield_on_capital": {
+    "k1_fee2bp": {
+      "2020": {
+        "return_on_capital_pct": 14.463,
+        "annualized_pct": 14.424,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 28.253,
+        "annualized_pct": 28.253,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": 1.834,
+        "annualized_pct": 1.834,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": 3.446,
+        "annualized_pct": 3.446,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": 6.808,
+        "annualized_pct": 6.79,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": 3.148,
+        "annualized_pct": 3.148,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": 0.477,
+        "annualized_pct": 1.153,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -0.876,
+      "worst_30d_end": "2020-04-10",
+      "avg_legs_per_week": 3.05
+    },
+    "k1_fee5bp": {
+      "2020": {
+        "return_on_capital_pct": 11.793,
+        "annualized_pct": 11.761,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 25.973,
+        "annualized_pct": 25.973,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": -0.866,
+        "annualized_pct": -0.866,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": 0.806,
+        "annualized_pct": 0.806,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": 4.168,
+        "annualized_pct": 4.157,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": 1.588,
+        "annualized_pct": 1.588,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": -0.303,
+        "annualized_pct": -0.732,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -1.116,
+      "worst_30d_end": "2020-04-10",
+      "avg_legs_per_week": 3.05
+    },
+    "k1_fee10bp": {
+      "2020": {
+        "return_on_capital_pct": 7.343,
+        "annualized_pct": 7.323,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 22.173,
+        "annualized_pct": 22.173,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": -5.366,
+        "annualized_pct": -5.366,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": -3.594,
+        "annualized_pct": -3.594,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": -0.232,
+        "annualized_pct": -0.231,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": -1.012,
+        "annualized_pct": -1.012,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": -1.603,
+        "annualized_pct": -3.875,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -1.516,
+      "worst_30d_end": "2020-04-10",
+      "avg_legs_per_week": 3.05
+    },
+    "k3_fee2bp": {
+      "2020": {
+        "return_on_capital_pct": 14.043,
+        "annualized_pct": 14.004,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 27.498,
+        "annualized_pct": 27.498,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": 1.615,
+        "annualized_pct": 1.615,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": 4.293,
+        "annualized_pct": 4.293,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": 6.641,
+        "annualized_pct": 6.622,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": 2.232,
+        "annualized_pct": 2.232,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": 0.499,
+        "annualized_pct": 1.207,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -0.357,
+      "worst_30d_end": "2020-10-15",
+      "avg_legs_per_week": 7.8
+    },
+    "k3_fee5bp": {
+      "2020": {
+        "return_on_capital_pct": 12.193,
+        "annualized_pct": 12.159,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 25.598,
+        "annualized_pct": 25.598,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": -0.465,
+        "annualized_pct": -0.465,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": 2.213,
+        "annualized_pct": 2.213,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": 4.201,
+        "annualized_pct": 4.189,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": 0.232,
+        "annualized_pct": 0.232,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": -0.181,
+        "annualized_pct": -0.437,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -0.577,
+      "worst_30d_end": "2020-10-15",
+      "avg_legs_per_week": 7.8
+    },
+    "k3_fee10bp": {
+      "2020": {
+        "return_on_capital_pct": 9.109,
+        "annualized_pct": 9.084,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 22.431,
+        "annualized_pct": 22.431,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": -3.931,
+        "annualized_pct": -3.931,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": -1.254,
+        "annualized_pct": -1.254,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": 0.134,
+        "annualized_pct": 0.133,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": -3.102,
+        "annualized_pct": -3.102,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": -1.314,
+        "annualized_pct": -3.176,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -0.944,
+      "worst_30d_end": "2020-10-15",
+      "avg_legs_per_week": 7.8
+    },
+    "k5_fee2bp": {
+      "2020": {
+        "return_on_capital_pct": 13.084,
+        "annualized_pct": 13.048,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 26.175,
+        "annualized_pct": 26.175,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": 1.663,
+        "annualized_pct": 1.663,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": 4.392,
+        "annualized_pct": 4.392,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": 6.709,
+        "annualized_pct": 6.69,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": 1.526,
+        "annualized_pct": 1.526,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": 0.295,
+        "annualized_pct": 0.713,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -0.253,
+      "worst_30d_end": "2025-04-23",
+      "avg_legs_per_week": 11.61
+    },
+    "k5_fee5bp": {
+      "2020": {
+        "return_on_capital_pct": 11.65,
+        "annualized_pct": 11.618,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 24.459,
+        "annualized_pct": 24.459,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": -0.053,
+        "annualized_pct": -0.053,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": 2.532,
+        "annualized_pct": 2.532,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": 4.501,
+        "annualized_pct": 4.488,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": -0.466,
+        "annualized_pct": -0.466,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": -0.413,
+        "annualized_pct": -0.999,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -0.47,
+      "worst_30d_end": "2022-06-08",
+      "avg_legs_per_week": 11.61
+    },
+    "k5_fee10bp": {
+      "2020": {
+        "return_on_capital_pct": 9.26,
+        "annualized_pct": 9.234,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 21.599,
+        "annualized_pct": 21.599,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": -2.913,
+        "annualized_pct": -2.913,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": -0.568,
+        "annualized_pct": -0.568,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": 0.821,
+        "annualized_pct": 0.819,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": -3.786,
+        "annualized_pct": -3.786,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": -1.593,
+        "annualized_pct": -3.851,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -0.85,
+      "worst_30d_end": "2022-06-08",
+      "avg_legs_per_week": 11.61
+    },
+    "static_BTCUSDT_fee2bp": {
+      "2020": {
+        "return_on_capital_pct": 8.6,
+        "annualized_pct": 8.576,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 15.304,
+        "annualized_pct": 15.304,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": 2.082,
+        "annualized_pct": 2.082,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": 3.933,
+        "annualized_pct": 3.933,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": 5.978,
+        "annualized_pct": 5.962,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": 2.563,
+        "annualized_pct": 2.563,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": 0.178,
+        "annualized_pct": 0.43,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -0.656,
+      "worst_30d_end": "2020-04-11"
+    },
+    "static_ETHUSDT_fee2bp": {
+      "2020": {
+        "return_on_capital_pct": 13.725,
+        "annualized_pct": 13.687,
+        "days_covered": 366
+      },
+      "2021": {
+        "return_on_capital_pct": 18.769,
+        "annualized_pct": 18.769,
+        "days_covered": 365
+      },
+      "2022": {
+        "return_on_capital_pct": 0.394,
+        "annualized_pct": 0.394,
+        "days_covered": 365
+      },
+      "2023": {
+        "return_on_capital_pct": 4.13,
+        "annualized_pct": 4.13,
+        "days_covered": 365
+      },
+      "2024": {
+        "return_on_capital_pct": 6.498,
+        "annualized_pct": 6.481,
+        "days_covered": 366
+      },
+      "2025": {
+        "return_on_capital_pct": 2.464,
+        "annualized_pct": 2.464,
+        "days_covered": 365
+      },
+      "2026": {
+        "return_on_capital_pct": 0.081,
+        "annualized_pct": 0.197,
+        "days_covered": 151
+      },
+      "worst_30d_pct": -0.889,
+      "worst_30d_end": "2022-09-25"
+    }
+  },
+  "hyperliquid_current": {
+    "live_snapshot_count": 176,
+    "live_top10_by_funding": [
+      {
+        "coin": "GRAM",
+        "funding_1h": 0.0,
+        "ann_pct": 138.395,
+        "day_vol_usd": 5492868.833,
+        "open_interest_usd": 5318007.762
+      },
+      {
+        "coin": "GRASS",
+        "funding_1h": 0.0,
+        "ann_pct": 133.906,
+        "day_vol_usd": 2543828.706,
+        "open_interest_usd": 12035121.199
+      },
+      {
+        "coin": "BIO",
+        "funding_1h": 0.0,
+        "ann_pct": 82.225,
+        "day_vol_usd": 929647.229,
+        "open_interest_usd": 2754192.732
+      },
+      {
+        "coin": "SPX",
+        "funding_1h": 0.0,
+        "ann_pct": 80.726,
+        "day_vol_usd": 4129169.623,
+        "open_interest_usd": 6135941.96
+      },
+      {
+        "coin": "FARTCOIN",
+        "funding_1h": 0.0,
+        "ann_pct": 68.334,
+        "day_vol_usd": 17731090.809,
+        "open_interest_usd": 23243396.172
+      },
+      {
+        "coin": "LIT",
+        "funding_1h": 0.0,
+        "ann_pct": 63.862,
+        "day_vol_usd": 114901746.092,
+        "open_interest_usd": 110279197.924
+      },
+      {
+        "coin": "ZRO",
+        "funding_1h": 0.0,
+        "ann_pct": 62.781,
+        "day_vol_usd": 3420320.364,
+        "open_interest_usd": 25734943.3
+      },
+      {
+        "coin": "APEX",
+        "funding_1h": 0.0,
+        "ann_pct": 56.312,
+        "day_vol_usd": 103897.865,
+        "open_interest_usd": 1415643.863
+      },
+      {
+        "coin": "JTO",
+        "funding_1h": 0.0,
+        "ann_pct": 31.534,
+        "day_vol_usd": 7786791.017,
+        "open_interest_usd": 15312658.179
+      },
+      {
+        "coin": "AERO",
+        "funding_1h": 0.0,
+        "ann_pct": 17.764,
+        "day_vol_usd": 2364093.419,
+        "open_interest_usd": 11610935.95
+      }
+    ],
+    "live_majors": [
+      {
+        "coin": "BTC",
+        "funding_1h": 0.0,
+        "ann_pct": 10.95,
+        "day_vol_usd": 3409482786.879,
+        "open_interest_usd": 2197532867.4
+      },
+      {
+        "coin": "ETH",
+        "funding_1h": 0.0,
+        "ann_pct": 10.95,
+        "day_vol_usd": 1076001831.877,
+        "open_interest_usd": 1263325175.409
+      },
+      {
+        "coin": "SOL",
+        "funding_1h": 0.0,
+        "ann_pct": 15.476,
+        "day_vol_usd": 559054413.452,
+        "open_interest_usd": 489580808.866
+      },
+      {
+        "coin": "DOGE",
+        "funding_1h": 0.0,
+        "ann_pct": 10.95,
+        "day_vol_usd": 14745020.316,
+        "open_interest_usd": 23334738.438
+      }
+    ],
+    "realized_30d": {
+      "BTC": {
+        "n_hours": 720,
+        "mean_1h": 6.55079125e-06,
+        "ann_30d_realized_pct": 5.738
+      },
+      "ETH": {
+        "n_hours": 720,
+        "mean_1h": 3.6754545833333345e-06,
+        "ann_30d_realized_pct": 3.22
+      },
+      "SOL": {
+        "n_hours": 720,
+        "mean_1h": -2.322322777777777e-06,
+        "ann_30d_realized_pct": -2.034
+      },
+      "DOGE": {
+        "n_hours": 720,
+        "mean_1h": 1.7070359722222229e-06,
+        "ann_30d_realized_pct": 1.495
+      },
+      "GRAM": {
+        "n_hours": 4,
+        "mean_1h": 5.9023950000000006e-05,
+        "ann_30d_realized_pct": 51.705
+      },
+      "FARTCOIN": {
+        "n_hours": 720,
+        "mean_1h": 1.2549743611111112e-05,
+        "ann_30d_realized_pct": 10.994
+      },
+      "LIT": {
+        "n_hours": 720,
+        "mean_1h": 1.9732429722222226e-05,
+        "ann_30d_realized_pct": 17.286
+      },
+      "JTO": {
+        "n_hours": 720,
+        "mean_1h": 2.465815277777779e-06,
+        "ann_30d_realized_pct": 2.16
+      },
+      "BNB": {
+        "n_hours": 720,
+        "mean_1h": 4.926469166666667e-06,
+        "ann_30d_realized_pct": 4.316
+      },
+      "SUI": {
+        "n_hours": 720,
+        "mean_1h": 6.714622638888891e-06,
+        "ann_30d_realized_pct": 5.882
+      },
+      "kPEPE": {
+        "n_hours": 720,
+        "mean_1h": 4.1861655555555566e-06,
+        "ann_30d_realized_pct": 3.667
+      },
+      "CRV": {
+        "n_hours": 720,
+        "mean_1h": 4.593662500000001e-06,
+        "ann_30d_realized_pct": 4.024
+      },
+      "LINK": {
+        "n_hours": 720,
+        "mean_1h": 1.0045536666666669e-05,
+        "ann_30d_realized_pct": 8.8
+      },
+      "XRP": {
+        "n_hours": 720,
+        "mean_1h": -2.394649722222222e-06,
+        "ann_30d_realized_pct": -2.098
+      }
+    },
+    "top3_basket": {
+      "coins": [
+        "LIT",
+        "FARTCOIN",
+        "LINK"
+      ],
+      "basket_ann_on_notional_pct": 12.36
+    },
+    "projection_10k_top3_weekly": {
+      "maker": {
+        "gross_yr_on_capital_pct": 6.18,
+        "net_yr_on_capital_pct": 5.502,
+        "usd_per_day_per_10k": 1.51
+      },
+      "taker": {
+        "gross_yr_on_capital_pct": 6.18,
+        "net_yr_on_capital_pct": 3.807,
+        "usd_per_day_per_10k": 1.04
+      }
+    },
+    "tbill_usd_per_day_per_10k": 1.23,
+    "caveats": [
+      "live snapshot rates pinned at HL baseline (0.00125%/h = 10.95%/yr) when premium ~0; 30d realized is the anchor, not the snapshot",
+      "delta-neutral needs a spot leg; small alts (LIT/FARTCOIN) may lack a liquid spot market on the same venue -> cross-venue execution + basis risk not priced here",
+      "projection assumes 30d realized funding persists; funding mean-reverts and top-of-book alts decay fastest"
+    ]
+  },
+  "wall_clock_s": 11.9
+}

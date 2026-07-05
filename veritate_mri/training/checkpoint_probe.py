@@ -251,13 +251,17 @@ def dump_probe(model, prompt: str, out_dir: str, step: int):
     return json_path, npz_path
 
 
-def _capture_full(model):
+def _capture_full(model, ffn_width):
     cap_ffn       = [None] * model.layers
     cap_block_in  = [None] * model.layers
     cap_block_out = [None] * model.layers
     handles = []
     for L, blk in enumerate(model.blocks):
-        def _ffn(_m, _i, o, L=L): cap_ffn[L] = o.detach()
+        def _ffn(_m, _i, o, L=L):
+            o = o.detach()
+            if o.shape[-1] < ffn_width:
+                o = F.pad(o, (0, ffn_width - o.shape[-1]))
+            cap_ffn[L] = o
         handles.append(blk.ff.up.register_forward_hook(_ffn))
         def _pre(_m, inp, L=L): cap_block_in[L] = inp[0].detach()
         handles.append(blk.register_forward_pre_hook(_pre))
@@ -421,14 +425,15 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
     # ff.down.weight has shape (hidden, ffn); we want (ffn, hidden) @ (hidden,) per byte.
     # precompute the (layers, ffn, vocab) tensor once; for 80m this is 12*3072*256*4 = 36 MB.
     ffn_down_T = torch.stack(
-        [blk.ff.down.weight.detach().float().t().contiguous() for blk in model.blocks],
+        [F.pad(w.t(), (0, 0, 0, ffn - w.shape[1]))
+         for w in (blk.ff.down.weight.detach().float() for blk in model.blocks)],
         dim=0,
     )  # (layers, ffn, hidden)
     bd_full = ffn_down_T @ embed_w.t()  # (layers, ffn, vocab)
 
     w_M, w_E, w_L, w_S, w_b, cw_loaded = confidence_mod.load_weights(out_dir)
 
-    cap_ffn, cap_block_in, cap_block_out, handles = _capture_full(model)
+    cap_ffn, cap_block_in, cap_block_out, handles = _capture_full(model, ffn)
     frames = []
     n_params = sum(p.numel() for p in model.parameters())
     cpath = _resolve_corpus(corpus_path)

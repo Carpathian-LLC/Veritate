@@ -1,14 +1,14 @@
-# Market LLM: experimental price-forecasting page
+# market platform: byte-model price forecasting (Trading extension)
 
-Market LLM is a **canonical extension** at `extensions/canonical/market/`, auto-registered by
-the extension registry. The `/market` page is driven by the **byte-level Veritate model**: a
-model trained on raw price tape (no news, no labels) that forecasts the next bar's return
-bucket. The page tests whether that model can read price. It is byte-model-only; an earlier
-GBDT (gradient-boosted trees) baseline has been removed.
+The market group of the **Trading** canonical extension (`extensions/canonical/trading/`).
+The model-analytics page is driven by the **byte-level Veritate model**: a model trained on
+raw price tape (no news, no labels) that forecasts the next bar's return bucket. The page
+tests whether that model can read price. It is byte-model-only; an earlier GBDT
+(gradient-boosted trees) baseline has been removed.
 
-Reachable at **`/market`**. The registry mounts the page from `manifest.page`
-(`page/index.html`) and `register.py` adds the `/market/*` API routes; only the dashboard nav
-link is hidden unless the experimental settings toggle is on. The `/market` route itself is
+Reachable at **`/ext/trading/models`** (added by `register.py` beside the main
+`/ext/trading` page). `register.py` adds the `/ext/trading/market/*` API routes; only the
+dashboard nav link is hidden unless the experimental settings toggle is on. The routes stay
 reachable regardless of the toggle.
 
 ## Scope of state it touches
@@ -18,18 +18,18 @@ reachable regardless of the toggle.
   `readers.models`, `veritate_core.load.load_from_state_dict`). It never mutates canonical
   training, chat, or RAG state and never writes into their directories. `list_models()`
   surfaces canonical byte models that have at least one checkpoint.
-- **Data layer** (`data.py`): reads `installed/market/data/<source>/*.csv` (byte-tail for large files)
+- **Data layer** (`data.py`): reads `installed/trading/data/market/<source>/*.csv` (byte-tail for large files)
   and resamples with no lookahead. On a cache miss for a crypto symbol it backfills on demand
-  via `fetch.py` (Binance 1m klines, cached to `installed/market/data/crypto/`), so a fresh install needs
+  via `fetch.py` (Binance 1m klines, cached to `installed/trading/data/market/crypto/`), so a fresh install needs
   no manual data. Writes raw OHLCV CSVs only, never model artifacts. `source_dir(source)`
-  resolves a source under `installed/market/data/<source>` or, for downloadable add-ons,
-  `installed/market/data/extension_data/<source>` (declared in the extension's `data_catalog.json`,
+  resolves a source under `installed/trading/data/market/<source>` or, for downloadable add-ons,
+  `installed/trading/data/extension_data/<source>` (declared in the extension's `data_catalog.json`,
   served by the generic per-extension data routes; see
   [../../documentation/extensions/authoring.md](../../documentation/extensions/authoring.md)),
   so moving a dataset into the extension cache is transparent. For crypto sources
   (`CRYPTO_SOURCES`) `join_context` forward-fills two external context channels onto each bar:
-  perp funding (`installed/market/data/funding/<SYM>.csv`) and the fear-greed index
-  (`installed/market/data/sentiment/fng.csv`), no lookahead. The serving page is
+  perp funding (`installed/trading/data/market/funding/<SYM>.csv`) and the fear-greed index
+  (`installed/trading/data/market/sentiment/fng.csv`), no lookahead. The serving page is
   crypto-only (per-second and stocks dropped from the UI); the corpus builder still uses all
   sources for training.
 
@@ -50,17 +50,17 @@ it loses money.
 
 ## Byte corpus
 
-Built by `extensions/canonical/market/server/build_series_corpus.py` from
-`installed/market/data/<source>/*.csv` into `trainers/corpus/<source>_{train,val}.bin`. Three sources,
+Built by `extensions/canonical/trading/server/build_series_corpus.py` from
+`installed/trading/data/market/<source>/*.csv` into `trainers/corpus/<source>_{train,val}.bin`. Three sources,
 one corpus each (`build_series_corpus.py:LOADERS`): `stocks` (daily), `crypto` (1-minute),
 `crypto_1s` (1-second tape, the largest). Instruments are anonymous (no ticker label)
 so the model learns one instrument-agnostic tape dynamic. Per-instrument time split
 (oldest `1-val_ratio` train, newest val). No pair or bar caps.
 
 ```
-python extensions/canonical/market/server/build_series_corpus.py --source crypto
-python extensions/canonical/market/server/build_series_corpus.py --source stocks
-python extensions/canonical/market/server/build_series_corpus.py --source crypto_1s
+python extensions/canonical/trading/server/build_series_corpus.py --source crypto
+python extensions/canonical/trading/server/build_series_corpus.py --source stocks
+python extensions/canonical/trading/server/build_series_corpus.py --source crypto_1s
 ```
 
 Current build: crypto (1m) ~1.31B tokens across 200 pairs; stocks ~0.012B tokens

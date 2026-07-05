@@ -5,9 +5,9 @@ future codec channel / v2 model can train on them once enough has accumulated.
 
 ## what it is
 
-A standalone loop ([recorder.py](../../../extensions/canonical/market/server/recorder.py)),
+A standalone loop ([recorder.py](../../../extensions/canonical/trading/server/recorder.py)),
 a server module of the market canonical extension, that polls OKX public endpoints on a fixed
-interval and appends one snapshot row per pair to `extensions/installed/market/data/live/<SYM>.csv`. `<SYM>` is
+interval and appends one snapshot row per pair to `extensions/installed/trading/data/market/live/<SYM>.csv`. `<SYM>` is
 the same stem the corpus builder uses
 (e.g. `DOGEUSDT`), so a later merge lines up by symbol the way `join_context` already
 merges funding/sentiment.
@@ -29,12 +29,12 @@ going forward. Funding and the fear-greed index have downloadable history (see
 - Public data only; no auth. OKX 403s the default urllib User-Agent, so a browser UA is
   sent; the bundled Python lacks CA certs, so an unverified TLS context is used (read-only
   public endpoints).
-- run: `python extensions/canonical/market/server/recorder.py` from the repo root (loops until killed).
+- run: `python extensions/canonical/trading/server/recorder.py` from the repo root (loops until killed).
 
 ## dependencies
 
 - OKX public REST (reachable from US IPs; Binance/Bybit are geo-blocked here).
-- `extensions/installed/market/data/live/` output (gitignored, local only).
+- `extensions/installed/trading/data/market/live/` output (gitignored, local only).
 
 ## pitfalls
 

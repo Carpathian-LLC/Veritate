@@ -1,0 +1,12 @@
+{
+  "errors": [],
+  "checkpoint": "models/e4bmem_10m_qat/checkpoints/step_12000.pt",
+  "n_facts": 12,
+  "distractor_bytes": 4096,
+  "mean_bpb_memory_on": 5.7302,
+  "mean_bpb_memory_off": 5.5201,
+  "bpb_win_rate_on_vs_off": 0.167,
+  "exact_match_on": 0,
+  "exact_match_off": 0,
+  "recall_lift_points": 0.0
+}

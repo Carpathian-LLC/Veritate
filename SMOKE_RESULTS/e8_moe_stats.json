@@ -1,0 +1,135 @@
+{
+  "errors": [],
+  "shape": {
+    "hidden": 320,
+    "layers": 8,
+    "ffn": 1280,
+    "heads": 8,
+    "seq": 512,
+    "bs": 32
+  },
+  "moe": {
+    "n_routed": 8,
+    "top_k": 2
+  },
+  "unit": {
+    "combine_max_abs_diff": 1.1920928955078125e-07,
+    "combine_ok": true,
+    "capacity_at_seq": 1024,
+    "static_shape_ok": true,
+    "aux_finite": true,
+    "share_finite": true,
+    "share_sum": 1.0,
+    "n_experts": 8,
+    "pass": true
+  },
+  "bias_balance": {
+    "dead_experts_initial": 4,
+    "early_min_share": 0.0,
+    "late_avg_min_share": 0.07311,
+    "late_avg_max_share": 0.18524,
+    "late_share": [
+      0.1852,
+      0.0882,
+      0.1211,
+      0.1829,
+      0.1368,
+      0.076,
+      0.1367,
+      0.0731
+    ],
+    "bias_spread": 1.0,
+    "trajectory": [
+      {
+        "step": 0,
+        "min_share": 0.0
+      },
+      {
+        "step": 100,
+        "min_share": 0.0
+      },
+      {
+        "step": 200,
+        "min_share": 0.0
+      },
+      {
+        "step": 300,
+        "min_share": 0.0
+      },
+      {
+        "step": 400,
+        "min_share": 0.0
+      },
+      {
+        "step": 500,
+        "min_share": 0.0
+      },
+      {
+        "step": 600,
+        "min_share": 0.0
+      },
+      {
+        "step": 700,
+        "min_share": 0.0
+      }
+    ],
+    "pass": true
+  },
+  "real_width": {
+    "device": "mps",
+    "n_params_moe": 24123584,
+    "moe_losses": [
+      5.696,
+      5.7555,
+      5.7281,
+      5.6921,
+      5.6896,
+      5.6751,
+      5.6646,
+      5.6583
+    ],
+    "moe_all_finite": true,
+    "moe_tok_per_s": 32017.6,
+    "n_params_hybrid": 15911104,
+    "hybrid_tok_per_s": 44761.6,
+    "throughput_ratio_moe_over_hybrid": 0.715,
+    "param_ratio_moe_over_hybrid": 1.516,
+    "pass": true
+  },
+  "dump_suite": {
+    "device": "mps",
+    "corpus": "/Users/mirach-00-usc1/Development/Veritate/trainers/corpus/fineweb_edu_train.bin",
+    "n_artifacts": 13,
+    "artifacts": [
+      "classroom_step_100.json",
+      "concepts_step_100.json",
+      "grades_step_100.json",
+      "grammar_step_100.json",
+      "lens_step_100.npz",
+      "math_step_100.json",
+      "probe_step_100.json",
+      "quant_kl_step_100.json",
+      "reading_comprehension_step_100.json",
+      "reasoning_step_100.json",
+      "step_100.json",
+      "surprise_step_100.json",
+      "writing_health_step_100.json"
+    ],
+    "dumps": {
+      "probe": "ok",
+      "classroom": "ok",
+      "grades": "ok",
+      "reading_comprehension": "ok",
+      "math": "ok",
+      "grammar": "ok",
+      "reasoning": "ok",
+      "concepts": "ok",
+      "surprise": "ok",
+      "quant_kl": "ok",
+      "writing_health": "ok",
+      "generation": "ok"
+    },
+    "failed": [],
+    "pass": true
+  }
+}

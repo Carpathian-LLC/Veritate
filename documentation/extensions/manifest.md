@@ -10,24 +10,24 @@ skipped (`extensions/registry.py:53`).
 
 ```json
 {
-  "id": "market",
-  "name": "Market LLM",
+  "id": "trading",
+  "name": "Trading",
   "version": "1.0.0",
   "author": "veritate",
   "kind": "extension",
-  "description": "Byte-LLM market forecasting: hindcast, benchmark, and live decision support over price-series corpora.",
+  "description": "Paper trading with simulated capital: strategies, surveillance radar, and chart-model research tools.",
   "experimental": true,
   "page": {
-    "route": "/market",
+    "route": "/ext/trading",
     "file": "page/index.html",
-    "nav_label": "Market LLM"
+    "nav_label": "Trading"
   },
-  "api_prefix": "/market",
+  "api_prefix": "/ext/trading",
   "register": "register.py"
 }
 ```
 
-This is the shipped canonical Market manifest (`extensions/canonical/market/manifest.json`).
+This is the shipped canonical Trading manifest (`extensions/canonical/trading/manifest.json`), abridged.
 New extensions should pick an unused `api_prefix` and page `route` (e.g.
 `/ext/<id>`) to avoid colliding with platform routes.
 
@@ -86,7 +86,7 @@ where hosted) is owned by the extension.
 `files:int`, `size_gb:float` (measured locally), and `downloadable:bool`
 (`bool(url)`) (`extensions/data.py:79`). These are runtime fields; do not write them
 into the file. The full annotated response shape is in
-[../api/rest_api.md](../api/rest_api.md). The market extension's
+[../api/rest_api.md](../api/rest_api.md). The Trading extension's
 `data_catalog.json` is the reference example.
 
 ## minimal manifests

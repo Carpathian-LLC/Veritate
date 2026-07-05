@@ -11,7 +11,7 @@ Complete HTTP contract for the Veritate platform server (`veritate_mri/app.py`).
 
 ## endpoints an extension will typically use
 
-The canonical Market extension (`extensions/canonical/market/`) demonstrates the pattern. Most extensions need only this subset:
+The canonical Trading extension (`extensions/canonical/trading/`) demonstrates the pattern. Most extensions need only this subset:
 
 | purpose | endpoint |
 |---|---|
@@ -237,7 +237,7 @@ Authoring detail in [../extensions/marketplace.md](../extensions/marketplace.md)
 | `POST /extensions/<id>/data/download` | `extensions_routes.py:54` | body `source:str` (required) | `{ok:true, source, files:int, size_gb:float}` on success, else `{ok:false, error}` (`source` required → `400`; unknown source, unhosted placeholder url, or fetch/extract failure → `ok:false`) | stream the dataset's single hosted archive (`.tar.gz`/`.zip`, CSVs at top level) from its catalog url and extract into `extensions/installed/<id>/data/extension_data/<source>` |
 | `POST /extensions/<id>/data/delete` | `extensions_routes.py:61` | body `source:str` (required) | `{ok, source, deleted:true, reclaimed_gb\|unlinked, note?}` or `{ok:false, error}` (`source` required → `400`; unknown / not-downloaded → `ok:false`) | delete a downloaded dataset to reclaim disk; a symlinked dataset is unlinked, leaving the external archive intact |
 
-An installed extension also contributes its own routes under the `api_prefix` from its manifest, registered at startup by `extensions/registry.py::register_all` (`veritate_mri/app.py:158`). These appear at runtime, not in this static reference. The canonical Market extension serves `/market` (its page) plus `/market/*` (its API, e.g. `/market/veritate_hindcast`, `/market/veritate_benchmark`, `/market/veritate_live`, `/market/instruments`); see `extensions/canonical/market/register.py`.
+An installed extension also contributes its own routes under the `api_prefix` from its manifest, registered at startup by `extensions/registry.py::register_all` (`veritate_mri/app.py:158`). These appear at runtime, not in this static reference. The canonical Trading extension serves `/ext/trading` (its page) plus `/ext/trading/*` (its API in three groups: `/ext/trading/market/*` model serving, `/ext/trading/paper/*` paper traders, `/ext/trading/intel/*` surveillance, plus `/ext/trading/settings` and `/ext/trading/system`); see `extensions/canonical/trading/server/register.py`.
 
 ## static and auth
 

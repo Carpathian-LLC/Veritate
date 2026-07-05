@@ -13,11 +13,11 @@ disk work; the HTTP routes (`veritate_mri/routes/extensions_routes.py`) expose i
 {
   "extensions": [
     {
-      "id": "market",
-      "name": "Market LLM",
+      "id": "trading",
+      "name": "Trading",
       "version": "1.0.0",
       "author": "veritate",
-      "description": "Byte-LLM market forecasting: hindcast, benchmark, and live decision support over price-series corpora.",
+      "description": "Paper trading with simulated capital: strategies, surveillance radar, and chart-model research tools.",
       "experimental": true,
       "builtin": true
     }
@@ -34,8 +34,8 @@ extension code.
 
 - **Canonical extensions** ship bundled under `extensions/canonical/<id>/`. This is
   the install source: `install` copies `canonical/<id>` into `installed/<id>`
-  (`extensions/registry.py:134`). Authored by `veritate`. The Market LLM extension
-  (`extensions/canonical/market/`) is the reference canonical extension. Canonical
+  (`extensions/registry.py:134`). Authored by `veritate`. The Trading extension
+  (`extensions/canonical/trading/`) is the reference canonical extension. Canonical
   extensions are discovered and active without an explicit install
   (`extensions/registry.py:42`); install copies one into `installed/` so a user
   edit overrides the bundled copy.

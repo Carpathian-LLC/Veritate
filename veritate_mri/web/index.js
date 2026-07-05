@@ -7152,6 +7152,10 @@ const TRAINER_SCHEMA = {
     { name: "version",      type: "str",                     label: "version tag (optional)",   help: "free-form revision label (v1, v2a, ...); shows up in the description, not the folder name." },
     { name: "description",  type: "text",                    label: "what this model is for",   help: "saved into the model config. If left blank, auto-filled from corpus/size/precision/version/variant." },
     { name: "model_type",   type: "str",                     label: "model type",               help: "what this model is for. Controls which checkpoint evaluations run: 'language' runs the full language probe suite (fluency, reading, grammar, reasoning, concepts, writing); 'code', 'statistical', and 'other' skip the language tests because they are meaningless for non-text models.", choices: ["language","code","statistical","other"] },
+    // ---- recipe + research-validated knobs ----
+    { name: "recipe",       type: "str",    uiOnly: true,    label: "training recipe",          help: "one pick fills the training knobs with a lab-validated combination (see developer_documentation/training/research_successes.md for the measurements behind each). 'custom' leaves everything as you set it.", choices: ["balanced","efficient byte-native","long-conversation","classic","custom"] },
+    { name: "optimizer",    type: "str",                     label: "optimizer",                help: "muon = measured 1.60x fewer training bytes to the same quality vs adamw on this platform (research ledger 2026-07-03). adamw = the classic default.", choices: ["adamw","muon"] },
+    { name: "trunk",        type: "str",                     label: "architecture",             help: "dense = canonical transformer. patched = global compute per ~4-byte patch: measured 1.82x faster to the same quality, more parameters at the same speed. recurrent = constant-state: quality parity with attention and stays fast/light no matter how long the conversation gets. hybrid = patched + recurrent global path: best measured quality of all variants (1.70x vs dense). looped = weight-tied depth: beats dense at equal parameters but loses to patched/hybrid, and thinking longer at test time did not help (research ledger 2026-07-05). memory = long-context device, not a knowledge store (ledger 2026-07-05).", choices: ["dense","patched","recurrent","hybrid","looped","memory"] },
     // ---- standard training loop ----
     { name: "total_steps",  type: "int",   required: true,   label: "total training steps",     help: "the training loop stops when it reaches this many steps. More = longer training, lower final loss, more wall-clock and disk." },
     { name: "batch_size",   type: "int",   required: true,   label: "batch size",               help: "rows processed per step. Higher = faster wall-clock and smoother gradients but more VRAM." },
@@ -7881,6 +7885,37 @@ function _trRestoreFormState() {
   }
 }
 
+// Named knob combinations validated by measured A/B runs on this platform.
+// Sources: developer_documentation/training/research_successes.md (per-entry
+// run dirs + numbers). "custom" applies nothing.
+const TRAIN_RECIPES = {
+  "balanced":              { optimizer: "muon", trunk: "dense",     lr_schedule: "wsd" },
+  "efficient byte-native": { optimizer: "muon", trunk: "patched",   lr_schedule: "wsd" },
+  "long-conversation":     { optimizer: "muon", trunk: "recurrent", lr_schedule: "wsd" },
+  "classic":               { optimizer: "adamw", trunk: "dense",    lr_schedule: "cosine" },
+};
+
+function _trApplyRecipe(name) {
+  const rec = TRAIN_RECIPES[name];
+  if (!rec) return;
+  for (const [k, v] of Object.entries(rec)) {
+    const el = _trArgEl(k);
+    if (el) el.value = String(v);
+  }
+  _trUpdateComposedName(); _trUpdateStepCascades(); _trUpdateVramEstimate();
+  _trSaveFormState(); _trUpdateKnobVisibility();
+}
+
+// Simple mode: the run form shows only the fields a first run needs; the rest
+// stay behind the "show all settings" toggle (research-validated recipes carry
+// the hidden knobs). Required fields always render.
+const SIMPLE_FIELDS = new Set(["name", "corpus", "size", "precision", "description",
+                               "model_type", "recipe", "resume", "total_steps"]);
+
+function _trShowAll() {
+  return localStorage.getItem("tr_show_all") === "1";
+}
+
 // Knobs that only matter under another knob's setting stay hidden otherwise.
 const ARG_VISIBLE_WHEN = {
   wsd_decay_frac: () => _trArgVal("lr_schedule") === "wsd",
@@ -7892,9 +7927,13 @@ const ARG_VISIBLE_WHEN = {
 };
 
 function _trUpdateKnobVisibility() {
+  const showAll = _trShowAll();
+  document.querySelectorAll('#trainArgs .cell[data-cell]').forEach(cell => {
+    cell.style.display = (showAll || SIMPLE_FIELDS.has(cell.dataset.cell)) ? "" : "none";
+  });
   for (const [name, visible] of Object.entries(ARG_VISIBLE_WHEN)) {
     const cell = document.querySelector(`#trainArgs .cell[data-cell="${name}"]`);
-    if (cell) cell.style.display = visible() ? "" : "none";
+    if (cell && cell.style.display === "") cell.style.display = visible() ? "" : "none";
   }
 }
 
@@ -7905,6 +7944,9 @@ function _trWireArgListeners() {
     el.addEventListener("input",  fn);
     if (el.dataset.arg === "resume") {
       el.addEventListener("change", () => _trApplyResumeConfig(el.value));
+    }
+    if (el.dataset.arg === "recipe") {
+      el.addEventListener("change", () => _trApplyRecipe(el.value));
     }
   });
   document.querySelectorAll('#trainArgs .corpus-picker').forEach(picker => {
@@ -8433,9 +8475,20 @@ function _trRenderForm() {
     }
   }
   html += `</div>`;
+  html = `<div style="display:flex;justify-content:flex-end;margin-bottom:4px;">
+      <label style="font-size:11px;color:var(--dim);cursor:pointer;display:flex;align-items:center;gap:5px;">
+        <input type="checkbox" id="trShowAllKnobs" ${_trShowAll() ? "checked" : ""} style="margin:0;">
+        show all settings
+      </label>
+    </div>` + html;
   if (argsEl) argsEl.innerHTML = html;
   if (wrap)   wrap.style.display = "block";
   if (runRow) runRow.style.display = "flex";
+  const showAllEl = document.getElementById("trShowAllKnobs");
+  if (showAllEl) showAllEl.addEventListener("change", () => {
+    localStorage.setItem("tr_show_all", showAllEl.checked ? "1" : "0");
+    _trUpdateKnobVisibility();
+  });
   _trWireArgListeners();
   _trApplyDefaults();
   _trUpdateKnobVisibility();
@@ -8452,6 +8505,7 @@ function _trCollectArgs() {
   if (!p) return null;
   const out = {};
   for (const a of _trArgsForPlugin(p)) {
+    if (a.uiOnly) continue;
     const el = _trArgEl(a.name);
     if (!el) continue;
     if (a.type === "bool") { out[a.name] = !!el.checked; continue; }
@@ -9063,6 +9117,8 @@ document.addEventListener("DOMContentLoaded", () => {
     document.body.style.overflow = "";
   };
   const flowPick = (flow) => {
+    const busy = trainState.running && trainState.running.status === "running";
+    if (busy && flow !== "export") return;
     trainState.flow = flow;
     trainState.selected = null;
     _trStore(flow);
