@@ -662,6 +662,7 @@ def register(app):
         return {
             "checkpoint": brain.checkpoint if brain else None,
             "n_params":   brain.n_params if brain else 0,
+            "pytorch_device": str(brain.device) if brain and getattr(brain, "device", None) is not None else None,
             "layers": brain.model.layers if brain else 0,
             "heads":  brain.model.heads if brain else 0,
             "ffn":    brain.model.ffn if brain else 0,

@@ -1562,10 +1562,15 @@ function setMeta(m) {
   const cPrecChip = cPrec
     ? `<span class="stat">c-precision <b style="color:${cPrecColor}" title="bin v${m.c_model_bin_version || '?'} ${m.c_model_training || ''} ${m.c_model_activation || ''}">${cPrec}</b></span>`
     : "";
+  const dev = m.pytorch_device || null;
+  const devChip = dev
+    ? `<span class="stat">device <b style="color:${dev.startsWith("mps") || dev.startsWith("cuda") ? "var(--data-pos)" : "var(--dim)"}" title="PyTorch inference device (mps = Apple GPU)">${dev.startsWith("mps") ? "GPU (mps)" : dev}</b></span>`
+    : "";
   $("modelMeta").innerHTML = `
     ${cEngineChip}
     ${cModelChip}
     ${cPrecChip}
+    ${devChip}
     <span class="stat">precision <b style="color:${precColor}">${prec}</b></span>
     <span class="stat">params <b>${m.n_params.toLocaleString()}</b></span>
     <span class="stat">layers <b>${m.layers}</b></span>

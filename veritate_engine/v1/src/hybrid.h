@@ -79,6 +79,8 @@ typedef struct {
     float*  gate_buf;       // [H]
     float*  tmp;            // [H]
     float*  logits;         // [vocab] fp32, valid after each step
+    float*  lens_u;         // [H] scratch: logit-lens norm output (trace only)
+    float*  lens_f;         // [vocab] scratch: logit-lens fp logits (trace only)
 } hybrid_t;
 
 // matvec kernel contract: out[j] = dot(w_row_j, x). w is fp32 or fp16 by

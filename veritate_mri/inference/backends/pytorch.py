@@ -19,6 +19,11 @@ import time
 from runtime import logs as logmod
 from training import confidence as confidence_mod
 
+# Any op without an MPS kernel falls back to CPU instead of raising. Set before
+# the first MPS dispatch; harmless on non-Apple hosts. The hybrid recurrent
+# forward uses only MPS-native ops today, so this is a safety net, not a hot path.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 # ------------------------------------------------------------------------------------
 # Constants
 
@@ -40,6 +45,21 @@ INT8_SAT_THRESHOLD    = 127.0 / ACTIVATION_INT8_SCALE  # ~3.97
 
 # ------------------------------------------------------------------------------------
 # Functions
+
+def _pick_infer_device(torch):
+    """Inference device from VERITATE_INFER_DEVICE (auto|cpu|mps). 'auto' takes
+    MPS when the platform offers it (Apple Silicon GPU), else CPU. Values run in
+    fp32 on either device so greedy decodes match; MPS wins on any non-trivial
+    model because the per-byte forward is FLOP-bound."""
+    pref = (os.environ.get("VERITATE_INFER_DEVICE", "auto") or "auto").strip().lower()
+    if pref == "cpu":
+        return torch.device("cpu")
+    mps = getattr(torch.backends, "mps", None)
+    have_mps = bool(mps) and mps.is_available()
+    if pref == "mps":
+        return torch.device("mps") if have_mps else torch.device("cpu")
+    return torch.device("mps") if have_mps else torch.device("cpu")
+
 
 def load_memory(path):
     if not path or not os.path.isfile(path):
@@ -84,6 +104,19 @@ class Brain:
         del sd
         self.model.eval()
         self.n_params = sum(p.numel() for p in self.model.parameters())
+        # Move weights to the inference device before the derived tables below are
+        # built, so byte_direction / W_E_T land on the same device. Fall back to
+        # CPU if the move fails (e.g. an op the driver rejects at load time).
+        self.device = _pick_infer_device(torch)
+        if self.device.type != "cpu":
+            try:
+                self.model = self.model.to(self.device)
+                if memory is not None and hasattr(memory, "to"):
+                    memory = memory.to(self.device)
+            except Exception as e:
+                logmod.warn("backends.pytorch", f"{self.device} move failed, using cpu: {e}")
+                self.device = torch.device("cpu")
+                self.model = self.model.to(self.device)
 
         # pick a downsample factor so V_FFN / ds is close to FFN_BUCKET_TARGET
         # and divides evenly. for pruned models with per-layer ffn, pick a ds
@@ -115,15 +148,19 @@ class Brain:
         # = (ffn_down weight column for n) dotted with (embed row for b).
         # = (W_down.T @ W_E.T)[n, b]
         # used for direct logit attribution and per-neuron byte affinity profiles.
+        # These telemetry tables are computed on the model device (fast) but kept
+        # on CPU: per-token frame building runs on CPU (many small ops + .item()
+        # syncs are faster there than stalling the GPU), so captures and tables
+        # must live together on CPU while the forward runs on the device.
         with torch.no_grad():
             W_E = self.model.tok_emb.weight  # (vocab, hidden)
             self.byte_direction = []
             for blk in self.model.blocks:
                 W_down = blk.ff.down.weight  # (hidden, ffn)
-                table = (W_down.t() @ W_E.t()).contiguous()  # (ffn, vocab)
+                table = (W_down.t() @ W_E.t()).contiguous().to("cpu")  # (ffn, vocab)
                 self.byte_direction.append(table)
             # also project the embedding once for per-layer logit-delta computations
-            self.W_E_T = W_E.t().contiguous()  # (hidden, vocab)
+            self.W_E_T = W_E.t().contiguous().to("cpu")  # (hidden, vocab)
 
         self.lock = threading.Lock()
         self.memory = memory
@@ -386,6 +423,19 @@ class Brain:
                     out["current_pct"] = round(out["current_act"] / pmax * 100, 1)
         return out
 
+    def _captures_to_cpu(self):
+        """Batch-move this forward's captured activations to CPU in one shot.
+        Called once after the forward (not inside the hooks) so the device runs
+        the whole forward without a per-block sync. No-op on CPU; cheap on Apple
+        unified memory. Non-tensor captures (recurrent slot state) pass through."""
+        if self.device.type == "cpu":
+            return
+        for buf in (self.cap_ffn, self.cap_qkv, self.cap_block_in, self.cap_block_out):
+            for L in range(len(buf)):
+                t = buf[L]
+                if hasattr(t, "to"):
+                    buf[L] = t.to("cpu")
+
     @staticmethod
     def _hook(buf, L):
         def hook(_m, _i, out): buf[L] = out
@@ -425,7 +475,7 @@ class Brain:
         if not prompt:
             prompt = " "
         prompt_bytes = prompt.encode("utf-8")
-        ids = torch.tensor([b for b in prompt_bytes], dtype=torch.long).unsqueeze(0)
+        ids = torch.tensor([b for b in prompt_bytes], dtype=torch.long, device=self.device).unsqueeze(0)
         if ids.size(1) >= seq:
             ids = ids[:, -(seq - 1):]
 
@@ -457,7 +507,7 @@ class Brain:
         }
 
         head_dim = m.hidden // m.heads
-        emb_w = m.tok_emb.weight
+        emb_w = m.tok_emb.weight.detach().to("cpu")
 
         for _ in range(max_new):
             t0 = time.perf_counter()
@@ -465,7 +515,10 @@ class Brain:
                 logits, *_ = m(ids)
             fwd_ms = (time.perf_counter() - t0) * 1000
             T = ids.size(1)
-            last_logits = logits[0, -1]
+            # Forward ran on the device; pull this token's activations and logits
+            # to CPU so the per-token telemetry below runs CPU-side.
+            self._captures_to_cpu()
+            last_logits = logits[0, -1].detach().to("cpu")
 
             ffn_full, ffn_top, ffn_argmax, saturation = [], [], [], []
             ds = self.ffn_downsample
@@ -642,7 +695,7 @@ class Brain:
                 if constraint.done():
                     yield {"kind": "stop", "reason": "constraint complete"}
                     return
-            ids = torch.cat([ids, torch.tensor([[nxt]])], dim=1)
+            ids = torch.cat([ids, torch.tensor([[nxt]], device=ids.device)], dim=1)
             if ids.size(1) >= seq:
                 ids = ids[:, -(seq - 1):]
 
@@ -1017,7 +1070,7 @@ class Brain:
 
         while produced < max_new:
             window = ids_full[-seq:]
-            ids = torch.tensor([window], dtype=torch.long)
+            ids = torch.tensor([window], dtype=torch.long, device=self.device)
             t0 = time.perf_counter()
 
             with torch.no_grad():
