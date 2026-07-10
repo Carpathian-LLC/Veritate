@@ -72,24 +72,44 @@ _STOP_PRESETS = {
     "eos":              b"</s>",
 }
 
-CHATML_IM_END  = b"<|im_end|>"
-CHATML_IM_START = b"<|im_start|>"
+CHATML_IM_END      = b"<|im_end|>"
+CHATML_IM_START    = b"<|im_start|>"
+CHAT_END_TAG       = b"<|end|>"
+CHAT_USER_TAG      = b"<|user|>"
+CHAT_ASSISTANT_TAG = b"<|assistant|>"
+PLATFORM_STOP_MARKERS = (CHAT_END_TAG, CHAT_USER_TAG, CHAT_ASSISTANT_TAG)
+CHATML_STOP_MARKERS   = (CHATML_IM_END, CHATML_IM_START)
 
 def _is_chatml_prompt(prompt):
     if not isinstance(prompt, str):
         return False
     return "<|im_start|>" in prompt
 
-def _stop_on_bytes(gen, stop_bytes):
+def _chat_stop_seq(prompt):
+    """Turn-stop markers for a framed chat prompt. A reply never contains a turn
+    marker, so platform prompts stop at the first of end/user/assistant tags,
+    legacy ChatML at im_end / im_start; plain prompts stream to max_new (None)."""
+    if not isinstance(prompt, str):
+        return None
+    if "<|im_start|>" in prompt:
+        return CHATML_STOP_MARKERS
+    if "<|assistant|>" in prompt:
+        return PLATFORM_STOP_MARKERS
+    return None
+
+def _stop_on_bytes(gen, stop_markers):
     """Wrap an SSE-event generator and halt after the byte stream from
-    token/fast_byte events ends with `stop_bytes`. Emits a synthetic
-    {kind:'stop', reason:'chatml'} just before returning."""
-    if not stop_bytes:
+    token/fast_byte events ends with ANY sequence in `stop_markers`. Emits a
+    synthetic {kind:'stop', reason:<marker>} carrying which marker fired, then
+    returns. One rolling tail sized to the longest marker."""
+    if not stop_markers:
         for ev in gen:
             yield ev
         return
+    if isinstance(stop_markers, bytes):
+        stop_markers = (stop_markers,)
+    cap = max(len(m) for m in stop_markers)
     tail = bytearray()
-    cap = len(stop_bytes)
     for ev in gen:
         yield ev
         k = ev.get("kind") if isinstance(ev, dict) else None
@@ -99,9 +119,10 @@ def _stop_on_bytes(gen, stop_bytes):
                 tail.append(b & 0xff)
                 if len(tail) > cap:
                     del tail[:len(tail) - cap]
-                if len(tail) == cap and bytes(tail) == stop_bytes:
-                    yield {"kind": "stop", "reason": "chatml_im_end"}
-                    return
+                for m in stop_markers:
+                    if tail.endswith(m):
+                        yield {"kind": "stop", "reason": m.decode("ascii", "replace")}
+                        return
 
 _RAG_TOOL_CACHE = {}
 _RAG_CACHE_LOCK = threading.Lock()
@@ -248,7 +269,8 @@ def _build_c_mri_frame(raw, fwd_ms, shape):
 
 
 def _c_engine_stream(cfg, prompt, max_new, temperature=0.7, top_k=40,
-                     ablate_layer=-1, ablate_neuron=-1, addons_csv=""):
+                     ablate_layer=-1, ablate_neuron=-1, addons_csv="",
+                     rep_window=0, rep_penalty=0.0, no_repeat_ngram=0):
     sub = cfg["C_SUBPROCESS"]
     if sub is None:
         yield {"kind": "error", "message": "c chat_traced subprocess not running"}
@@ -279,7 +301,8 @@ def _c_engine_stream(cfg, prompt, max_new, temperature=0.7, top_k=40,
         last = time.perf_counter()
         for raw in sub.stream(prompt, temperature, top_k, max_new,
                               ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
-                              addons_csv=addons_csv):
+                              addons_csv=addons_csv, rep_window=rep_window,
+                              rep_penalty=rep_penalty, no_repeat_ngram=no_repeat_ngram):
             now = time.perf_counter()
             fwd_ms = (now - last) * 1000.0
             last = now
@@ -334,7 +357,17 @@ def ensure_c_loaded(cfg, model_override=None):
             cfg["C_PENDING"] = False
             return
         exe   = paths.engine_binary_path()
-        model = model_override or _brain.resolve_c_model_bin(None)
+        # model_override is a bin path or a model NAME; resolve names explicitly
+        # rather than falling back to some other model's newest bin.
+        if model_override:
+            model = model_override if os.path.isfile(model_override) \
+                else (paths.bin_path(model_override) if binr.exists(model_override) else None)
+            if not model:
+                logmod.error("backends", f"no veritate.bin under models/{model_override}; export it first")
+                cfg["C_PENDING"] = False
+                return
+        else:
+            model = _brain.resolve_c_model_bin(None)
         if not model or not os.path.isfile(model):
             logmod.error("backends", "no veritate.bin under any model; train + export one first")
             cfg["C_PENDING"] = False
@@ -684,6 +717,14 @@ def register(app):
         except ValueError:
             adaptive_threshold = 0.8
         adaptive_threshold = max(0.0, min(1.0, adaptive_threshold))
+        # Repetition control (chat decode). Absent params default OFF, so
+        # autocomplete and the C-vs-PyTorch parity path are unchanged.
+        try:
+            rep_window = max(0, int(request.args.get("rep_window", "0")))
+            rep_penalty = max(0.0, float(request.args.get("rep_penalty", "0")))
+            no_repeat_ngram = max(0, int(request.args.get("no_repeat_ngram", "0")))
+        except ValueError:
+            rep_window, rep_penalty, no_repeat_ngram = 0, 0.0, 0
 
         if backend == "c":
             if cfg.get("C_SUBPROCESS") is None:
@@ -703,8 +744,10 @@ def register(app):
                 try:
                     base = _c_engine_stream(cfg, prompt, max_new, temperature=temperature, top_k=top_k,
                                             ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
-                                            addons_csv=",".join(addons_sel))
-                    stop_seq = CHATML_IM_END if _is_chatml_prompt(prompt) else None
+                                            addons_csv=",".join(addons_sel),
+                                            rep_window=rep_window, rep_penalty=rep_penalty,
+                                            no_repeat_ngram=no_repeat_ngram)
+                    stop_seq = _chat_stop_seq(prompt)
                     for ev in _stop_on_bytes(base, stop_seq):
                         yield f"data: {json.dumps(ev)}\n\n"
                     yield "event: done\ndata: {}\n\n"
@@ -823,11 +866,15 @@ def register(app):
                                                 temperature=temperature,
                                                 top_k_sample=top_k, max_new=max_new,
                                                 addons_chain=chain, constraint=constraint,
-                                                adaptive_threshold=adaptive_threshold)
+                                                adaptive_threshold=adaptive_threshold,
+                                                rep_window=rep_window, rep_penalty=rep_penalty,
+                                                no_repeat_ngram=no_repeat_ngram)
                     else:
                         gen = brain.stream(effective_prompt, temperature, top_k, max_new,
-                                           addons_chain=chain, constraint=constraint)
-                    stop_seq = CHATML_IM_END if _is_chatml_prompt(effective_prompt) else None
+                                           addons_chain=chain, constraint=constraint,
+                                           rep_window=rep_window, rep_penalty=rep_penalty,
+                                           no_repeat_ngram=no_repeat_ngram)
+                    stop_seq = _chat_stop_seq(effective_prompt)
                     for ev in _stop_on_bytes(gen, stop_seq):
                         ev["backend"] = "pytorch"
                         yield f"data: {json.dumps(ev)}\n\n"

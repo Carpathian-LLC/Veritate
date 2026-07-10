@@ -8,6 +8,8 @@
 # - per-tensor symmetric maxabs for matmul weights, fixed scale 64 for RMSNorm.
 # - scale_q24 sentinel 0 lets the engine derive RMS-based requant at load time.
 # - PTQ on a non-QAT model trades off some accuracy. acceptable as a baseline.
+# - v13 hybrid export (trunk=hybrid): fp32/fp16/int8 tensors, PyTorch [out, in] layout,
+#   spec at developer_documentation/engine/engine_v13_hybrid.md.
 # veritate_mri/training/export.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -33,7 +35,14 @@ VERITATE_MODEL_MAGIC      = b"VRTE"
 VERITATE_MODEL_VERSION    = 9    # legacy: INT8 non-MoE checkpoints (BOOST format, no header extension)
 VERITATE_MODEL_VERSION_QAT = 11  # unified: header carries quant_mode + n_experts + router_topk
 VERITATE_MODEL_VERSION_MTP = 12  # v11 + optional MTP byte-0 head (mtp.norms[0], mtp.transforms[0]) + untied lm_head
+VERITATE_MODEL_VERSION_HYBRID = 13  # hybrid trunk: local attn + recurrent global slots, fp32/fp16/int8 tensors
 HEADER_FMT                = "<4sIIIIIII"
+HYBRID_HEADER_EXT_FMT     = "<iiiiiiii"  # dtype, n_local_enc, n_global, n_local_dec, patch_stride, slots, conv_kernel, state_rule
+HYBRID_DTYPES             = {"fp32": 0, "fp16": 1, "int8": 2}
+HYBRID_NP_DTYPES          = {"fp32": "<f4", "fp16": "<f2", "int8": "<f4"}  # int8: small tensors stay fp32
+HYBRID_DTYPE_DEFAULT      = "fp16"  # parity + bpb gates passed vs fp32; half the bin
+HYBRID_STATE_RULE_GLA     = 0
+HYBRID_I8_SCALE_EPS       = 1e-8
 LN_FIXED_SCALE            = 64.0
 INT8_MAX                  = 127
 ACT_INT8_SCALE            = 32.0
@@ -300,10 +309,24 @@ def write_block_ternary(f, sd, layer):
     f.write(ffd.tobytes()); f.write(struct.pack("<i", ffd_g))
 
 
-def export_checkpoint(name, step):
+def export_checkpoint(name, step, dtype=None):
     ckpt_path = paths.checkpoint_path(name, step)
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
+
+    with open(paths.config_path(name), "r", encoding="utf-8") as f:
+        cfg_ta = (json.load(f).get("training_args")) or {}
+    trunk = str(cfg_ta.get("trunk") or "dense")
+    if trunk == "hybrid":
+        return _export_checkpoint_hybrid(name, step, ckpt_path,
+                                         str(cfg_ta.get("state_rule") or "gla"),
+                                         dtype or HYBRID_DTYPE_DEFAULT)
+    if trunk != "dense":
+        raise ValueError(
+            f"export not supported: model '{name}' has trunk '{trunk}'. v13 covers "
+            f"trunk=hybrid; patched/recurrent/looped trunks have no engine format "
+            f"yet. Chat with this model on the PyTorch backend."
+        )
 
     shape = shape_from_config(name)
     n_experts, router_topk, quant_mode = moe_config(name)
@@ -460,6 +483,124 @@ def _export_checkpoint_mtp(name, step, ckpt_path, shape, sd, base_prefix, quant_
     }
 
 
+def _hybrid_block_kinds(sd):
+    """Ordered block kinds from checkpoint keys: 'recurrent' iff the block has a
+    conv tensor. Validates the enc/global/dec sandwich the engine expects."""
+    from veritate_core.model_patched import N_LOCAL_ENC, N_LOCAL_DEC
+    idx = sorted({int(k.split(".")[1]) for k in sd if k.startswith("blocks.")})
+    if idx != list(range(len(idx))):
+        raise ValueError(f"non-contiguous block indices in checkpoint: {idx}")
+    kinds = ["recurrent" if f"blocks.{i}.attn.conv.weight" in sd else "attn" for i in idx]
+    n_total = len(kinds)
+    n_global = n_total - N_LOCAL_ENC - N_LOCAL_DEC
+    expected = ["attn"] * N_LOCAL_ENC + ["recurrent"] * n_global + ["attn"] * N_LOCAL_DEC
+    if n_global < 1 or kinds != expected:
+        raise ValueError(
+            f"hybrid export: block layout {kinds} is not "
+            f"{N_LOCAL_ENC} attn + N recurrent + {N_LOCAL_DEC} attn")
+    return kinds, N_LOCAL_ENC, n_global, N_LOCAL_DEC
+
+
+def _write_f(f, arr, np_dtype, shape):
+    a = np.asarray(arr)
+    if a.shape != shape:
+        raise ValueError(f"hybrid export: tensor shape {a.shape} != {shape}")
+    f.write(np.ascontiguousarray(a, dtype=np_dtype).tobytes())
+
+
+def _write_big(f, arr, dtype, np_dtype, shape):
+    """big matmul tensor. fp modes write raw np_dtype; int8 writes per-output-row
+    symmetric q[n, k] then fp32 scale[n] (same recipe as the quality-validated
+    PyTorch simulation: s = absmax_row/127, q = round(w/s) clipped)."""
+    if dtype != "int8":
+        _write_f(f, arr, np_dtype, shape)
+        return
+    a = np.asarray(arr, dtype=np.float32)
+    if a.shape != shape:
+        raise ValueError(f"hybrid export: tensor shape {a.shape} != {shape}")
+    s = np.maximum(np.abs(a).max(axis=1, keepdims=True), HYBRID_I8_SCALE_EPS) / INT8_MAX
+    q = np.clip(np.round(a / s), -INT8_MAX, INT8_MAX).astype(np.int8)
+    f.write(q.tobytes())
+    f.write(np.ascontiguousarray(s.reshape(-1), dtype="<f4").tobytes())
+
+
+def _export_checkpoint_hybrid(name, step, ckpt_path, state_rule, dtype):
+    """v13 binary: hybrid trunk (local attn + recurrent global slots). fp32/fp16/int8
+    tensors in PyTorch [out, in] row-major, tied lm_head, baked boundary table.
+    Layout spec: developer_documentation/engine/engine_v13_hybrid.md."""
+    from veritate_core.model_patched import PATCH_STRIDE, _boundary_table
+
+    if state_rule != "gla":
+        raise ValueError(
+            f"hybrid export: state_rule '{state_rule}' not supported; v13 encodes "
+            f"the gla recurrence only (delta/pinned carry extra state tensors).")
+    if dtype not in HYBRID_DTYPES:
+        raise ValueError(f"hybrid export: dtype must be one of {sorted(HYBRID_DTYPES)}, got {dtype!r}")
+    np_dtype = HYBRID_NP_DTYPES[dtype]
+
+    shape = shape_from_config(name)
+    V, H, F_, NH, S = shape["vocab"], shape["hidden"], shape["ffn"], shape["heads"], shape["seq"]
+    D = H // NH
+    sd = load_state_dict(ckpt_path)
+    kinds, n_enc, n_global, n_dec = _hybrid_block_kinds(sd)
+    n_total = len(kinds)
+    if n_global != shape["layers"]:
+        raise ValueError(
+            f"hybrid export: checkpoint has {n_global} global blocks but config "
+            f"shape.layers is {shape['layers']}")
+
+    tok = fetch(sd, "tok_emb.weight")
+    if not np.array_equal(fetch(sd, "lm_head.weight"), tok):
+        raise ValueError("hybrid export: lm_head is not tied to tok_emb; v13 encodes tied heads only")
+    slots = int(sd["slot_pos_emb.weight"].shape[0])
+    if slots != S // PATCH_STRIDE:
+        raise ValueError(f"hybrid export: slot_pos_emb rows {slots} != seq/{PATCH_STRIDE} = {S // PATCH_STRIDE}")
+    conv_kernel = int(sd[f"blocks.{n_enc}.attn.conv.weight"].shape[-1])
+    boundary = _boundary_table().numpy().astype(np.uint8)
+
+    out_path = paths.bin_path(name)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "wb") as f:
+        f.write(struct.pack(HEADER_FMT, VERITATE_MODEL_MAGIC,
+                            VERITATE_MODEL_VERSION_HYBRID, V, H, n_total, F_, NH, S))
+        f.write(struct.pack(HYBRID_HEADER_EXT_FMT, HYBRID_DTYPES[dtype],
+                            n_enc, n_global, n_dec, PATCH_STRIDE, slots,
+                            conv_kernel, HYBRID_STATE_RULE_GLA))
+        f.write(boundary.tobytes())
+        _write_f(f, tok, np_dtype, (V, H))
+        _write_f(f, fetch(sd, "pos_emb.weight"), np_dtype, (S, H))
+        _write_f(f, fetch(sd, "slot_pos_emb.weight"), np_dtype, (slots, H))
+        for i, kind in enumerate(kinds):
+            p = f"blocks.{i}"
+            _write_f(f, fetch(sd, f"{p}.n1.weight"), np_dtype, (H,))
+            _write_big(f, fetch(sd, f"{p}.attn.qkv.weight"), dtype, np_dtype, (3 * H, H))
+            if kind == "recurrent":
+                conv = fetch(sd, f"{p}.attn.conv.weight").reshape(3 * H, conv_kernel)
+                _write_f(f, conv, np_dtype, (3 * H, conv_kernel))
+                _write_f(f, fetch(sd, f"{p}.attn.a_proj.weight"), np_dtype, (NH, H))
+                _write_f(f, fetch(sd, f"{p}.attn.a_proj.bias"), np_dtype, (NH,))
+                _write_f(f, fetch(sd, f"{p}.attn.o_norm.weight"), np_dtype, (D,))
+                _write_big(f, fetch(sd, f"{p}.attn.gate.weight"), dtype, np_dtype, (H, H))
+            _write_big(f, fetch(sd, f"{p}.attn.proj.weight"), dtype, np_dtype, (H, H))
+            _write_f(f, fetch(sd, f"{p}.n2.weight"), np_dtype, (H,))
+            _write_big(f, fetch(sd, f"{p}.ff.up.weight"), dtype, np_dtype, (F_, H))
+            _write_big(f, fetch(sd, f"{p}.ff.down.weight"), dtype, np_dtype, (H, F_))
+        _write_f(f, fetch(sd, "n_out.weight"), np_dtype, (H,))
+
+    return {
+        "name":       name,
+        "step":       int(step),
+        "path":       out_path,
+        "bytes":      os.path.getsize(out_path),
+        "shape":      {**shape, "layers": n_total},
+        "act_boost":  1,
+        "version":    VERITATE_MODEL_VERSION_HYBRID,
+        "dtype":      dtype,
+        "n_global":   n_global,
+        "format":     "v13-hybrid",
+    }
+
+
 def export_checkpoint_ternary(name, step, out_path=None):
     """v11 ternary export. Writes a unified-format .bin: VRTE magic + version 11
     + shape + act_boost + (quant_mode=TERNARY, n_experts=1, router_topk=1) +
@@ -477,6 +618,13 @@ def export_checkpoint_ternary(name, step, out_path=None):
     ckpt_path = paths.checkpoint_path(name, step)
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
+
+    with open(paths.config_path(name), "r", encoding="utf-8") as f:
+        trunk = str(((json.load(f).get("training_args")) or {}).get("trunk") or "dense")
+    if trunk != "dense":
+        raise ValueError(
+            f"ternary export not supported: model '{name}' has trunk '{trunk}'. "
+            f"The v11 ternary format encodes the canonical dense trunk only.")
 
     shape = shape_from_config(name)
     sd = load_state_dict(ckpt_path)

@@ -43,7 +43,7 @@ if ! command -v "$CC" >/dev/null 2>&1; then
   exit 1
 fi
 
-CFLAGS_COMMON="-O3 -flto=full -Wall -Wextra -Wno-unused-parameter -DVERITATE_VERIFY_DECODE -DVERITATE_GELU_ZERO_THRESH=4"
+CFLAGS_COMMON="-O3 -flto=full -Wall -Wextra -Wno-unused-parameter -DVERITATE_VERIFY_DECODE -DVERITATE_GELU_ZERO_THRESH=4 -DV_SEQ=1024"
 LDFLAGS_COMMON="-lm -lpthread"
 
 # Files compiled with baseline ISA flags. Safe to run on any CPU that satisfies
@@ -102,6 +102,10 @@ compile_kernel() {
   OBJS="$OBJS $obj"
 }
 
+# v13 hybrid fp32 path. -ffp-contract=off pins scalar mul+add so the NEON
+# matvec lanes stay bitwise-identical to the scalar reference (rule 24).
+compile_kernel "$ROOT/src/hybrid.c" "-ffp-contract=off"
+
 case "$ARCH_DIR" in
   x86_64)
     compile_kernel "$ROOT/kernels/x86_64/matmul_avx2.c"          "-mavx2"
@@ -122,6 +126,7 @@ case "$ARCH_DIR" in
     compile_kernel "$ROOT/kernels/arm64/matmul_neon_sdot.c"      "$SDOT_FLAGS"
     compile_kernel "$ROOT/kernels/arm64/matmul_int4_neon.c"      "$SDOT_FLAGS"
     compile_kernel "$ROOT/kernels/arm64/transformer_neon.c"      "$SDOT_FLAGS"
+    compile_kernel "$ROOT/kernels/arm64/matvec_f32_neon.c"       "$SDOT_FLAGS -ffp-contract=off"
     ;;
 esac
 

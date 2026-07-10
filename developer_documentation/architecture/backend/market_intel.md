@@ -8,7 +8,7 @@ and records; it never emits trade signals. The intel group of the Trading extens
 
 ## why a radar, not a signal
 
-The 2026-06-26 pump probe (`overnight_run_log.md`) showed buying detected pumps
+The 2026-06-26 pump probe (`worklog.md`) showed buying detected pumps
 MEAN-REVERTS: vol-z>3 flagged spikes lost gross before fees at every horizon
 (-0.43% h1 to -1.32% h24) and every public spike (volume, search, social) is
 visible to everyone at once, so the actor arriving on the signal is the exit
@@ -62,6 +62,7 @@ with its metrics, timestamped at detection, no hindsight reconstruction.
 | `GET /ext/trading/intel/trending` | trending searches + meme board + scored movers, cached briefs attached |
 | `GET /ext/trading/intel/pumps?n=` | recent events newest first, cached briefs attached, total count |
 | `GET /ext/trading/intel/brief?symbol=&model=` | on-demand brief for one symbol |
+| `GET /ext/trading/intel/candles?symbol=&bar=&limit=` | OHLCV chart rows for one USDT pair (`scanner.candles()`: OKX proxy, bars `1H/4H/1Dutc`, ≤300 rows, 60s TTL cache per (sym, bar), stale cache served on feed failure); 404 when no data |
 | `GET /ext/trading/intel/status` | last scan ts, event count, watching, model state |
 | `POST /ext/trading/intel/watch/start` | body `{interval?, model?}`; starts the background scan |
 | `POST /ext/trading/intel/watch/stop` | stops it and clears the resume stamp |
@@ -81,7 +82,9 @@ API, Google News RSS: all keyless and US-reachable.
   and its disk cache. Two calls per refresh maximum.
 - z-scores are 0 until `BASELINE_MIN` snapshots exist (fresh install shows a
   quiet board for the first few scans) and 0 on a flat baseline by design.
-- OKX `volCcy24h` is the quote (USD) volume for spot; `vol24h` is base units.
+- OKX `volCcy24h` is the quote (USD) volume for spot; `vol24h` is base units. In
+  candle rows the quote-USD volume is index 7 (`volCcyQuote`), and daily bars
+  must be `1Dutc` (plain `1D` is UTC+8-aligned).
 - The watch thread and request-path scans share `_LOCK`; scan work stays inside
   it so concurrent snapshot writes cannot race.
 - Tests must monkeypatch the `DATA_DIR`-family module constants to `tmp_path`;

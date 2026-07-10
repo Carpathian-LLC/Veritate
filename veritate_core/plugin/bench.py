@@ -61,7 +61,8 @@ def _device_high_water(device):
     if device == "cuda":
         torch.cuda.synchronize()
         return torch.cuda.max_memory_allocated()
-    return 0
+    from veritate_core.plugin import hardware
+    return hardware.process_peak_rss_bytes()
 
 
 def _reset_high_water(device):
@@ -71,15 +72,14 @@ def _reset_high_water(device):
 
 
 def _memory_budget(device):
-    """Usable training memory in bytes for the ramp's stop condition. None on cpu
-    (no device ceiling to guard). Unified memory uses total RAM; cuda uses VRAM."""
+    """Usable training memory in bytes for the ramp's stop condition. Unified
+    memory and cpu use total RAM (cpu compares this process's peak RSS against it,
+    which holds when the box is dedicated to the run); cuda uses VRAM."""
     import torch
-    if device == "mps":
-        from veritate_core.plugin import hardware
-        return int(hardware.unified_memory_bytes() * BUDGET_FRACTION)
     if device == "cuda":
         return int(torch.cuda.get_device_properties(0).total_memory * BUDGET_FRACTION)
-    return None
+    from veritate_core.plugin import hardware
+    return int(hardware.unified_memory_bytes() * BUDGET_FRACTION)
 
 
 def _free(device):
@@ -158,12 +158,20 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
     ramp = []
     last_mem = None
     for batch in batch_ramp:
-        # Stop BEFORE attempting a rung once the previous one reached the budget: the
-        # next allocation is what gets SIGKILLed, and a kill loses the whole result.
-        if budget and last_mem is not None and last_mem >= budget:
-            emit(f"batch {batch}: would exceed the {budget / GB:.0f} GB budget; "
-                 f"stopping at batch {ramp[-1]['batch']} (ceiling found)")
-            break
+        # Stop BEFORE attempting a rung whose projected footprint exceeds the budget.
+        # On unified/cpu memory the over-budget allocation is SIGKILLed (uncatchable),
+        # so waiting for a completed rung to cross the line is not enough: a single
+        # ramp jump can leap the whole [budget, kill] gap. Project the next rung's peak
+        # linearly from the last measured rung (conservative: baseline scales too) and
+        # stop if it clears the budget. A kill loses the whole result.
+        if budget and last_mem is not None:
+            prev_batch = ramp[-1]["batch"]
+            projected = last_mem * batch / prev_batch
+            if projected >= budget:
+                emit(f"batch {batch}: projected ~{projected / GB:.1f} GB exceeds the "
+                     f"{budget / GB:.0f} GB budget; stopping at batch {prev_batch} "
+                     f"(ceiling found)")
+                break
         try:
             mem, tok_per_s = _measure_batch(model, opt, batch, seq, vocab, device)
         except RuntimeError as exc:

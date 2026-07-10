@@ -17,6 +17,7 @@ The launcher detects the host and dispatches per-tier dependency pins. Veritate'
 - **Detection:** [veritate.py:_detect_tier](../../veritate.py) — returns the tier label from `sys.platform` and `platform.machine()`.
 - **Python gate:** [veritate.py:_ensure_venv_and_deps](../../veritate.py) — refuses to proceed if `sys.version_info` is outside the tier's `TIER_PYTHON_RANGE`. Prints the exact `brew install python@X.Y` (or distro equivalent) command to fix.
 - **Dependency pin:** [requirements.txt](../../requirements.txt) — uses pip environment markers (`sys_platform`, `platform_machine`) so the right torch and numpy lines activate per host.
+- **Torch wheel index:** [veritate.py:_torch_index_url](../../veritate.py) — macOS installs PyPI wheels (arm64 mps / x86 cpu); Linux and Windows install the CUDA build (`cu128`) when `nvidia-smi -L` lists a GPU, else the CPU build (`cpu`). The index is passed to pip at install time, so a GPU-less box takes the lean CPU wheel automatically instead of pulling the multi-GB CUDA runtime.
 - **Runtime tier flag:** the launcher exports `VERITATE_TIER` into the re-exec env. Runtime code that needs to feature-gate reads `os.environ.get("VERITATE_TIER")`.
 
 ## Why `mac_intel` is special

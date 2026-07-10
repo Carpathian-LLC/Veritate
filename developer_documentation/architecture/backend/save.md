@@ -62,6 +62,16 @@ Returns the absolute path of the `.pt` written. It writes:
 
 The dump files are produced by [checkpoint_probe.py](checkpoint_probe.md) and renamed per `RENAME_MAP_TEMPLATE` at [save.py:51](../../../veritate_mri/training/save.py#L51). Each dump runs under its own try/except, so one failed probe logs and continues without aborting the checkpoint. The `generation` dump is skipped (with a logged reason) when the model has no resolvable corpus stem.
 
+### Corpus-stem resolution
+
+The `generation` and `writing_health` dumps need a prepped corpus bin. `save()` resolves it from `training_args.corpus` ([save.py:504](../../../veritate_mri/training/save.py#L504)):
+
+- Plain stem `"chat_v1"` — used as-is.
+- Multicorpus mix `"stem1:w1,stem2:w2,..."` — the highest-weight stem wins (first on ties).
+- Single `"prefix:stem"` (no numeric tail) — the part after the last `:`.
+
+The stem resolves to `trainers/corpus/<stem>_train.bin`; if that file is missing, `generation` is skipped with a logged error.
+
 ### Model-type gate
 
 The language probes in `LANGUAGE_DUMPS` (`probe`, `grades`, `reading_comprehension`, `math`, `grammar`, `reasoning`, `concepts`, `writing_health`, `generation`) are meaningless for a non-text model, so `save()` adds them to `skip` when the run's `model_type` is not `language`. The architecture probes (`classroom`, `surprise`, `quant_kl`) and the checkpoint itself always run. `model_type` comes from the `VERITATE_MODEL_TYPE` env that `trainer_runner` sets from the dashboard's selector — it cannot ride in through the parsed args because trainers `parse_known_args()` and drop the unknown `--model_type` flag. `_sync_model_meta()` (mirroring `_sync_qat_flag`) promotes both `model_type` (from the env) and `bar_stride` (from the live `series_codec.BAR_STRIDE`) into `config.json`'s `training_args` on every save, so the `/run/<name>/eval_deep` route, the dashboard panels, and resumed runs read the same values the checkpoint already carries. Without it neither lands in `config.json` (the trainer drops `--model_type` and never sees the codec stride), leaving a stale `language` default. Resumed runs (no env) read `model_type` from the existing config.
@@ -77,4 +87,5 @@ The language probes in `LANGUAGE_DUMPS` (`probe`, `grades`, `reading_comprehensi
 - Trainers must not write `.pt` files or `train.csv` directly. Every write goes through this module so the format and the dump suite stay consistent.
 - Adding a new CSV column breaks `train_csv.py` and every consumer. Coordinate the schema change across reader + every dashboard chart + the heartbeat fallback in the same commit.
 - The dump suite runs synchronously at checkpoint time and can take seconds to minutes on large models. Don't add per-step calls to anything in the dump pipeline.
+- A skipped dump is not a failed dump: skip reasons (missing corpus stem, model-type gate) go to the server log via `logmod.error`, never as a `DUMP FAILED:` line in the run log. A bad stem resolution once skipped `generation` for an entire run with nothing to grep in the run log. Verifying a run's dumps means checking the artifact SET in `hooks/step_<N>/` against the canonical filenames, not just grepping `DUMP FAILED`.
 - `_validate_name` (via `models.is_valid_name`) gates every write. Name format: `<slug>_<size>` or legacy `<corpus>_<size>_<precision>_<version>`.

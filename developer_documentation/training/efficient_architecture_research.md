@@ -1,6 +1,6 @@
 # efficient architecture research program
 
-Research map for a byte-level model that is foundationally cheaper to train and run, holds full conversations, and writes knowledge into memory at inference time instead of via full-corpus gradient re-feed. Outcomes land in `research_successes.md` / `research_failures.md`. Nothing here is declared impossible; every lever carries a falsifier and gets tested.
+Research map for a byte-level model that is foundationally cheaper to train and run, holds full conversations, and writes knowledge into memory at inference time instead of via full-corpus gradient re-feed. Outcomes land in the root ledgers `../../successes.md` / `../../failures.md` (indexed by `../../research.md`). Nothing here is declared impossible; every lever carries a falsifier and gets tested.
 
 ## ranked levers (2026-07-03 literature pass, citations at bottom)
 

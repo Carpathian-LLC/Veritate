@@ -33,9 +33,9 @@ Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 t
 | | Requirement | Notes |
 |---|---|---|
 | **1** | **Git** | Already on macOS (via Xcode CLT) and most Linux distros. On Windows install [Git for Windows](https://git-scm.com/download/win) or run `winget install Git.Git`. |
-| **2** | **Python 3.10+** | The launcher handles everything else (venv, pip install, dashboard launch). On Windows: `winget install Python.Python.3.12`. |
+| **2** | **Python 3.10+** | The launcher handles everything else (venv, pip install, dashboard launch). On Windows: `winget install Python.Python.3.12`. On Debian/Ubuntu also install the venv package: `sudo apt install python3-venv`. |
 | **3** | **A C compiler** *(optional)* | Only needed for the hand-tuned C engine. The PyTorch backend works without it. See [Compiling the C engine](#compiling-the-c-engine-optional) below. |
-| **4** | **CUDA toolkit** *(optional)* | Only for GPU training on NVIDIA. CPU and Apple Silicon work without it. |
+| **4** | **CUDA toolkit** *(optional)* | Only for GPU on NVIDIA. The launcher installs the CUDA `torch` build only when it detects an NVIDIA GPU; a CPU-only box (including Apple Silicon) gets the lean CPU/MPS wheel automatically. |
 
 [`models/`](./) is gitignored. A fresh clone ships **no weights**. You'll train your first model from the dashboard's [**Training**](#tabs) tab in step 3.
 
@@ -62,7 +62,7 @@ That's the only manual install step. The launcher in step 2 handles the rest.
 
 ## Step 2 &nbsp;·&nbsp; Launch the dashboard
 
-Double-click the launcher for your OS, or run it from a terminal. First launch creates the venv and installs all Python dependencies (this can take a few minutes — `torch` is ~2 GB). Re-launches are instant.
+Double-click the launcher for your OS, or run it from a terminal. First launch creates the venv and installs all Python dependencies (this can take a few minutes — the `torch` wheel is ~2 GB with CUDA, a few hundred MB CPU-only). Re-launches are instant.
 
 | OS | Double-click | From terminal |
 |---|---|---|

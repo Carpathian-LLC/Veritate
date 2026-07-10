@@ -44,12 +44,16 @@ KB_CHUNK_PREVIEW = 480
 UPLOAD_MAX_BYTES = 64 * 1024 * 1024
 TOP_K          = 3
 MAX_NEW        = 256
+LOCAL_FACT_MIN_CHARS = 80   # below this a truncated fact is useless; drop it instead
 PROMPT_TMPL    = "context: {ctx}\n<|user|>\n{msg}\n<|assistant|>\n"
 PLAIN_TMPL     = "<|user|>\n{msg}\n<|assistant|>\n"
-STOP_MARKERS   = ("<|end|>", "<|user|>", "\ncontext:")
+STOP_MARKERS   = ("<|end|>", "<|user|>", "<|assistant|>", "\ncontext:")
+WIRE_NEWLINE    = "\x01"       # c chat_traced encodes prompt/reply newlines as 0x01
+KEEP_CTRL_CHARS = ("\t", "\n")  # every other control byte is dropped from the answer
 
 CHAT_SYSTEM    = ("You are Veritate, a concise, helpful assistant. Use the conversation so far and any "
                   "provided facts to answer the user directly. No emoji, no emdash.")
+LOCAL_PERSONA  = "You are Veritate, a helpful assistant made by Carpathian."
 SUMMARY_SYSTEM = ("Condense the conversation into a brief note preserving facts, names, decisions, and "
                   "the user's goal. Plain text, no preamble.")
 HISTORY_MAX_TURNS       = 60
@@ -197,7 +201,16 @@ def collect(events):
     return bytes(out).decode("utf-8", "replace")
 
 
+def _sanitize_text(answer):
+    """Restore wire-encoded newlines, then drop control bytes a byte-level model
+    can emit (except tab/newline) so the answer is clean text and valid JSON."""
+    answer = answer.replace(WIRE_NEWLINE, "\n")
+    return "".join(c for c in answer
+                   if c in KEEP_CTRL_CHARS or (ord(c) >= 0x20 and ord(c) != 0x7f))
+
+
 def _trim(answer):
+    answer = _sanitize_text(answer)
     for stop in STOP_MARKERS:
         answer = answer.split(stop)[0]
     return answer.strip()
@@ -241,12 +254,18 @@ def _ensure_c(cfg, name):
 
 
 def _generate_local(cfg, backend, prompt):
+    from .backends_routes import _chat_stop_seq, _stop_on_bytes
+    from inference.decode import (
+        NO_REPEAT_NGRAM_DEFAULT, REP_PENALTY_DEFAULT, REP_WINDOW_DEFAULT,
+    )
+    rep = dict(rep_window=REP_WINDOW_DEFAULT, rep_penalty=REP_PENALTY_DEFAULT,
+               no_repeat_ngram=NO_REPEAT_NGRAM_DEFAULT)
     if backend == "c":
         from .backends_routes import _c_engine_stream
-        events = _c_engine_stream(cfg, prompt, MAX_NEW)
+        events = _c_engine_stream(cfg, prompt, MAX_NEW, **rep)
     else:
-        events = cfg["BRAIN"].stream(prompt, max_new=MAX_NEW)
-    return _trim(collect(events))
+        events = cfg["BRAIN"].stream(prompt, max_new=MAX_NEW, **rep)
+    return _trim(collect(_stop_on_bytes(events, _chat_stop_seq(prompt))))
 
 
 class ChatUnavailable(Exception):
@@ -319,10 +338,11 @@ def _render_local(messages, system):
 
 def _system_text(kind, summary, facts):
     """Preamble for one turn. Remote models get the chat system prompt plus
-    framed summary + facts; local byte models get only the raw summary + facts
-    (rendered as a `context:` block by _render_local, matching their training)."""
+    framed summary + facts; local byte models get the persona line plus raw
+    summary + facts (rendered as a `context:` block by _render_local). Without
+    the persona a byte model invents an identity (measured 0/8 correct name)."""
     if kind == "local":
-        parts = []
+        parts = [LOCAL_PERSONA]
         if summary:
             parts.append(summary)
         if facts:
@@ -334,6 +354,29 @@ def _system_text(kind, summary, facts):
     if facts:
         parts.append("Relevant facts from the knowledge base:\n" + "\n".join(f"- {f}" for f in facts))
     return "\n\n".join(parts)
+
+
+def _fit_local_system(model, messages, summary, facts):
+    """System text for a local byte model, budgeted so the rendered prompt fits
+    the model's trained seq minus the MAX_NEW reply headroom. Over budget:
+    shrink fact previews evenly, drop the lowest-scoring facts (retrieve()
+    returns best-first), then tail-trim the summary. The persona, chat markers,
+    history, and user message are never trimmed."""
+    budget = _local_seq(model) - MAX_NEW
+    facts = list(facts)
+    def overflow():
+        return len(_render_local(messages, _system_text("local", summary, facts))) - budget
+    while facts and overflow() > 0:
+        total = sum(len(f) for f in facts)
+        cap = (total - overflow()) // len(facts)
+        if cap >= LOCAL_FACT_MIN_CHARS:
+            facts = [f[:cap] for f in facts]
+            break
+        facts.pop()
+    over = overflow()
+    if over > 0 and summary:
+        summary = summary[:max(0, len(summary) - over)]
+    return _system_text("local", summary, facts)
 
 
 def _resolve_route(cfg, model, backend):
@@ -512,8 +555,9 @@ def register(app):
         complete, label, resp_backend, kind, char_limit = _resolve_route(cfg, model, backend)
         if docs_mode:
             label = "Veritate (platform docs)"
-        system = _system_text(kind, summary, facts)
         messages = history + [{"role": "user", "content": message}]
+        system = (_fit_local_system(model, messages, summary, facts)
+                  if kind == "local" else _system_text(kind, summary, facts))
         try:
             answer = (complete(messages, system) or "").strip()
         except ChatUnavailable as e:

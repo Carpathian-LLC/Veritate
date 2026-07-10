@@ -42,6 +42,8 @@ DEFAULT_THREADS  = 0   # 0 = auto: physical cores capped at 16. Was 8.
 BROWSER_DELAY_S  = 3.0
 PY_MIN           = (3, 10)
 PY_MAX_TESTED    = (3, 13)
+TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
+TORCH_CPU_INDEX  = "https://download.pytorch.org/whl/cpu"
 LAUNCH_PHASE_ENV = "VERITATE_LAUNCH_PHASE"   # set on re-exec; tells phase-2 to skip bootstrap
 TIER_ENV         = "VERITATE_TIER"           # propagated to runtime so feature gates can read it
 MINIMAL_ENV      = "VERITATE_MINIMAL"        # "1" => power-save dashboard (no brain, no analytics)
@@ -340,6 +342,28 @@ def _self_heal_python(tier: str, py_min: tuple, py_max: tuple) -> "str | None":
     return None
 
 
+def _has_nvidia_gpu() -> bool:
+    """True when a usable NVIDIA GPU is present. `nvidia-smi -L` listing a device
+    is the ground truth; a bare driver stub with no GPU returns false."""
+    if shutil.which("nvidia-smi"):
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "-L"], text=True, stderr=subprocess.DEVNULL, timeout=10,
+            )
+            return "GPU" in out
+        except Exception:
+            return False
+    return os.path.exists("/dev/nvidia0")
+
+
+def _torch_index_url(tier: str) -> "str | None":
+    """Wheel index for torch. macOS rides PyPI (arm64 mps / x86 cpu); Linux and
+    Windows take the CUDA build when an NVIDIA GPU is present, else the CPU build."""
+    if tier in (TIER_MAC_ARM, TIER_MAC_INTEL):
+        return None
+    return TORCH_CUDA_INDEX if _has_nvidia_gpu() else TORCH_CPU_INDEX
+
+
 def _ensure_venv_and_deps() -> None:
     """Idempotent. Silent when nothing needs doing."""
     if _deps_satisfied():
@@ -413,11 +437,16 @@ def _ensure_venv_and_deps() -> None:
     if not REQUIREMENTS.exists():
         return
 
-    print("[veritate] installing python dependencies (first run can take several "
-          "minutes — torch is ~2 GB) ...")
     py = str(_venv_python())
+    index = _torch_index_url(tier)
+    build = "CUDA" if index == TORCH_CUDA_INDEX else "CPU"
+    print(f"[veritate] installing python dependencies ({build} torch build; "
+          f"first run can take several minutes) ...")
+    pip_install = [py, "-m", "pip", "install"]
+    if index is not None:
+        pip_install += ["--extra-index-url", index]
     subprocess.check_call([py, "-m", "pip", "install", "--upgrade", "pip", "--quiet"])
-    subprocess.check_call([py, "-m", "pip", "install", "-r", str(REQUIREMENTS)])
+    subprocess.check_call(pip_install + ["-r", str(REQUIREMENTS)])
     HASH_SENTINEL.write_text(_requirements_hash(), encoding="utf-8")
     print("[veritate] dependencies ready.")
 

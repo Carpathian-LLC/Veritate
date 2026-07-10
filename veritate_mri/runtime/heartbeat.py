@@ -73,6 +73,7 @@ MACHINE_ID_LEN = 16
 MODELS_HASH_LEN = 12
 DEVICE_ID_DEFAULT_LEN = 8
 HOST_TOKEN_LEN = 12
+FINGERPRINT_LEN = 16
 
 PROTOCOL_VERSION = 2
 TRAINING_EVENTS_PER_PING_MAX = 32
@@ -93,6 +94,7 @@ _PROCESS_START = time.monotonic()
 _STATE_CACHE = None
 _THREAD      = None
 _TRAINING_FN = None
+_FINGERPRINT_CACHE = None
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -133,35 +135,59 @@ def _update_state(patch):
         return dict(cur)
 
 
-def _machine_id():
+def _hw_fingerprint():
+    """Cached per-process hash of this machine's stable hardware key. The device
+    id is bound to it so a copied install (state carrying another box's id)
+    re-derives its own on next read."""
+    global _FINGERPRINT_CACHE
+    if _FINGERPRINT_CACHE is None:
+        seed = "|".join([
+            sys_metrics.stable_machine_key(),
+            platform.system() or "",
+            platform.machine() or "",
+        ]).encode("utf-8")
+        _FINGERPRINT_CACHE = hashlib.sha256(seed).hexdigest()[:FINGERPRINT_LEN]
+    return _FINGERPRINT_CACHE
+
+
+def _ensure_identity():
+    """Reconcile persisted identity with this machine's fingerprint. Returns
+    (machine_id, host_token). Adopts an existing id that matches this machine
+    (or a pre-fingerprint legacy id, stamping the fingerprint so future clones
+    of it will mismatch); regenerates when the state is fresh or was copied from
+    another box (fingerprint present but different)."""
+    fp = _hw_fingerprint()
     s = _state()
-    mid = s.get("machine_id")
-    if isinstance(mid, str) and len(mid) == MACHINE_ID_LEN:
-        return mid
-    parts = [
-        platform.node() or "",
-        platform.system() or "",
-        platform.machine() or "",
-        platform.processor() or "",
-        str(uuid.getnode()),
-    ]
-    seed = "|".join(parts).encode("utf-8")
-    mid = hashlib.sha256(seed).hexdigest()[:MACHINE_ID_LEN]
-    _update_state({"machine_id": mid})
-    return mid
+    mid  = s.get("machine_id")
+    host = s.get("host_token")
+    stored_fp = s.get("machine_fingerprint")
+    valid = (isinstance(mid, str) and len(mid) == MACHINE_ID_LEN
+             and isinstance(host, str) and len(host) == HOST_TOKEN_LEN)
+    if valid and (stored_fp == fp or stored_fp is None):
+        if stored_fp is None:
+            _update_state({"machine_fingerprint": fp})
+        return mid, host
+    mid  = hashlib.sha256(("machine|" + fp).encode("utf-8")).hexdigest()[:MACHINE_ID_LEN]
+    host = uuid.uuid4().hex[:HOST_TOKEN_LEN]
+    _update_state({"machine_id": mid, "host_token": host, "machine_fingerprint": fp})
+    return mid, host
+
+
+def _machine_id():
+    return _ensure_identity()[0]
 
 
 def _host_token():
-    """Random per-install token persisted in state. Replaces the OS hostname
-    in the payload so we never ship platform.node() (which on macOS reveals
-    the user's name, e.g. 'Sams-MacBook-Pro.local')."""
-    s = _state()
-    h = s.get("host_token")
-    if isinstance(h, str) and len(h) == HOST_TOKEN_LEN:
-        return h
-    h = uuid.uuid4().hex[:HOST_TOKEN_LEN]
-    _update_state({"host_token": h})
-    return h
+    """Random per-install token that stands in for the OS hostname in the
+    payload, so platform.node() (which can reveal the user's name) never ships."""
+    return _ensure_identity()[1]
+
+
+def reconcile_identity():
+    """Public hook for the 'detect system' action: re-check the device identity
+    against this machine's hardware and regenerate it when the persisted id came
+    from another box. Returns the current machine_id."""
+    return _ensure_identity()[0]
 
 
 def _default_device_id():

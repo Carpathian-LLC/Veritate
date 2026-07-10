@@ -32,7 +32,13 @@ VERSION_LABELS = {
     9:  "INT8-boost",
     11: "QAT-unified",
     12: "MTP",
+    13: "HYBRID-fp",
 }
+
+# v13 carries no act_boost: the first extension field is the weight dtype and
+# the numeric path is fp32/fp16, so the boost/QAT gibberish heuristic does not
+# apply. act_boost() returns None for these versions.
+NO_ACT_BOOST_VERSIONS = frozenset({13})
 
 # v10 was assigned twice on different branches (MoE-on-dev vs ternary-on-
 # experimental) and was retired during the v11 unification. Any .bin with
@@ -70,7 +76,7 @@ def act_boost(name):
             if magic != VERITATE_MODEL_MAGIC:
                 return None
             (version,) = struct.unpack("<I", f.read(4))
-            if int(version) < 9:
+            if int(version) < 9 or int(version) in NO_ACT_BOOST_VERSIONS:
                 return None
             f.seek(struct.calcsize("<4sIIIIIII"))
             (boost,) = struct.unpack("<i", f.read(4))

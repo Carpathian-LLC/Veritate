@@ -57,6 +57,14 @@ CONFIDENCE_BYTES    = 5 * 4
 # we kill + respawn instead.
 DRAIN_MAX_FRAMES    = 4096
 DRAIN_WALL_S        = 2.0
+# A stream holds self.lock for the whole generation to serialize the one stateful
+# subprocess. If an SSE client vanishes while its generator is suspended at a
+# yield inside the lock, that generator is never closed and the lock is never
+# released, wedging every later request (they emit meta, then block on the lock
+# forever). A new stream that cannot take the lock within this window declares the
+# holder dead and reclaims the backend (kill+respawn+fresh lock) instead of
+# hanging. Sized well above a normal full-length generation.
+STREAM_LOCK_TIMEOUT_S = 30.0
 # v8 tail: u16 cand_count + u8[CAND_TOPK] cand_bytes + dla_entry[CAND_TOPK][DLA_TOPK]
 # + i16 ablation_layer + i16 ablation_neuron.
 V8_TAIL_BYTES       = 2 + CAND_TOPK + CAND_TOPK * DLA_TOPK * DLA_ENTRY_BYTES + 2 + 2
@@ -122,6 +130,10 @@ class CTracedSubprocess:
         self.exe = exe
         self.model_path = model_path
         self.lock = threading.Lock()
+        # Bumped whenever the backend is reclaimed from a wedged stream. A
+        # generator captures the epoch at start; its cleanup no-ops if the epoch
+        # moved on, so an abandoned stream cannot drain frames off the fresh proc.
+        self._epoch = 0
         self.proc = None
         # shape comes from the bin header. all frame-size math derives from it.
         self.shape = _read_bin_shape(model_path)
@@ -212,18 +224,42 @@ class CTracedSubprocess:
             self._spawn()
 
     def stream(self, prompt, temperature, top_k, max_new,
-               ablate_layer=-1, ablate_neuron=-1, addons_csv=""):
-        with self.lock:
+               ablate_layer=-1, ablate_neuron=-1, addons_csv="",
+               rep_window=0, rep_penalty=0.0, no_repeat_ngram=0):
+        if not self.lock.acquire(timeout=STREAM_LOCK_TIMEOUT_S):
+            # Prior stream wedged (client vanished at a yield inside the lock, so
+            # it was never closed). Reclaim rather than block forever: kill its
+            # subprocess, bump the epoch so that stream's cleanup no-ops, and swap
+            # in a fresh lock so this and later requests proceed.
+            logmod.error("c_engine",
+                         f"stream lock stuck >{STREAM_LOCK_TIMEOUT_S:.0f}s; reclaiming backend")
+            try:
+                if self.proc is not None:
+                    self.proc.kill()
+            except Exception:
+                pass
+            self._epoch += 1
+            self.lock = threading.Lock()
+            self.lock.acquire()
+            self.proc = None
+        my_lock = self.lock
+        my_epoch = self._epoch
+        try:
             self._ensure_alive()
-            p = prompt.replace("\r", "").replace("\n", " ")
+            # newlines ride the line-based protocol as 0x01; chat_traced maps
+            # them back so chat-template prompts keep their trained framing.
+            p = prompt.replace("\r", "").replace("\n", "\x01")
             # addons token: empty -> use whatever chain was set at spawn time
             # (env var path); "-" -> clear any prior chain; otherwise comma-
             # separated id list. token must contain no whitespace.
             csv_token = (addons_csv or "").strip().replace(" ", "")
             if not csv_token:
                 csv_token = "-"  # explicit clear when caller passed nothing
+            # rep_* tail is optional in the protocol; 0/0 leaves the engine
+            # sampler bitwise-identical to pre-repetition-control behavior.
             header = (f"{float(temperature):.4f} {int(top_k)} {int(max_new)} "
-                      f"{int(ablate_layer)} {int(ablate_neuron)} {csv_token}\n").encode("ascii")
+                      f"{int(ablate_layer)} {int(ablate_neuron)} {csv_token} "
+                      f"{int(rep_window)} {float(rep_penalty):.4f} {int(no_repeat_ngram)}\n").encode("ascii")
             try:
                 self.proc.stdin.write(header)
                 self.proc.stdin.write(p.encode("latin-1", "replace") + b"\n")
@@ -298,12 +334,18 @@ class CTracedSubprocess:
 
                     yield parsed
             finally:
-                t_stream_end = time.perf_counter_ns()
-                self.last_trace = trace
-                self.last_total_wall_ms = (t_stream_end - t_stream_start) / 1e6
-                self.last_total_bytes = sum(f["frame_size_bytes"] for f in trace)
-                if not saw_tend:
-                    self._drain_to_tend()
+                # If this stream was reclaimed by a later request (epoch moved
+                # on), the subprocess is no longer ours: skip the drain so we do
+                # not steal frames off the fresh proc.
+                if my_epoch == self._epoch:
+                    t_stream_end = time.perf_counter_ns()
+                    self.last_trace = trace
+                    self.last_total_wall_ms = (t_stream_end - t_stream_start) / 1e6
+                    self.last_total_bytes = sum(f["frame_size_bytes"] for f in trace)
+                    if not saw_tend:
+                        self._drain_to_tend()
+        finally:
+            my_lock.release()
 
     def _kill_and_respawn(self):
         """Hard-kill the subprocess and start a fresh one. Used when the pipe is

@@ -4,8 +4,8 @@ The first SCALED model, built to actually be chatted with (the 10M runs were arc
 
 ## architecture (decided, measured)
 
-- Trunk: `hybrid` (patched local attention + constant-state recurrent global mixer). Best of all 10M arms (val 0.9707, 1.70x vs dense, O(1) global decode state). See `research_successes.md` 2026-07-04.
-- Optimizer: `muon` (1.60x fewer bytes to target). See `research_successes.md` 2026-07-03.
+- Trunk: `hybrid` (patched local attention + constant-state recurrent global mixer). Best of all 10M arms (val 0.9707, 1.70x vs dense, O(1) global decode state). See `successes.md` 2026-07-04.
+- Optimizer: `muon` (1.60x fewer bytes to target). See `successes.md` 2026-07-03.
 - Shape: veritate_80m manifest (`layers=12` GLOBAL blocks, hidden=768, ffn=3072, heads=12, seq=1024). At the hybrid trunk this is **121.8M params** (12 global + 2 enc + 2 dec = 16 blocks + recurrent gating); params are cheap on 256GB, FLOPs are the wall, so more params/FLOP is the intended trade.
 - Pre-launch gate (preflight 24d): hybrid at 80M shape passed CPU shape+finite smoke (loss/grad finite at T=1024 and T=37). MPS stability smoke (bs12/seq1024, several fwd/bwd, no NaN) MUST run right before launch — the E4 NaN-at-real-width lesson.
 
@@ -32,4 +32,4 @@ Chat template is present from pretrain step 0 (10% chat in the mix) so the model
 
 ## honest ceiling
 
-One M3 Ultra will not produce an Opus-level model — a documented compute wall (`research_failures.md` 2026-06-27), not a tuning gap. Target: a small, fast, genuinely conversational byte model, made the best-possible-per-FLOP by the efficiency stack. If the 80M base converses, scale to 160-200M and fold in the DeepSeek levers (MoE for capacity-per-FLOP, MTP for byte-signal density) at the scale where their evidence begins (`efficient_architecture_research.md` wave 3).
+One M3 Ultra will not produce an Opus-level model — a documented compute wall (`failures.md` 2026-06-27), not a tuning gap. Target: a small, fast, genuinely conversational byte model, made the best-possible-per-FLOP by the efficiency stack. If the 80M base converses, scale to 160-200M and fold in the DeepSeek levers (MoE for capacity-per-FLOP, MTP for byte-signal density) at the scale where their evidence begins (`efficient_architecture_research.md` wave 3).

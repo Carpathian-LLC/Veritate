@@ -9,6 +9,7 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import ipaddress
 import os
 import platform
 import subprocess
@@ -69,6 +70,19 @@ def user_error(e, prefix=None):
     becomes 'rag retrieve failed: {e}'."""
     body = str(e).strip() or "unknown error"
     return f"{prefix} failed: {body}" if prefix else body
+
+
+def is_loopback(remote_addr):
+    """True when the request originates from the loopback interface. Guards
+    privileged local-only actions (toolchain install) against a dashboard bound
+    to a routable interface (app.run binds 0.0.0.0). Missing or unparseable addr
+    is non-loopback. X-Forwarded-For is intentionally ignored: it is spoofable."""
+    if not remote_addr:
+        return False
+    try:
+        return ipaddress.ip_address(remote_addr).is_loopback
+    except ValueError:
+        return False
 
 
 def open_folder(folder):

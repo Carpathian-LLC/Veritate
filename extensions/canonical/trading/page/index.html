@@ -82,6 +82,14 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
 .t-aggr .lab{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);display:flex;align-items:center}
 .t-aggr .ends{display:flex;justify-content:space-between;font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim)}
 .t-aggr .read{font-size:11.5px;color:var(--soft)}
+.t-coin{cursor:pointer;border-bottom:1px dotted #3a4358}
+.t-coin:hover{color:var(--accent);border-bottom-color:var(--accent)}
+.t-cmodal{display:none;position:fixed;inset:0;background:rgba(2,3,6,.78);z-index:70;align-items:center;justify-content:center;padding:18px}
+.t-cmodal.on{display:flex}
+.t-cbox{background:var(--panel);border:1px solid var(--line);border-radius:6px;width:min(900px,100%);max-height:92vh;overflow:auto;padding:14px 16px}
+.t-cbox .hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.t-cbox .hd b.sym{font-size:16px;color:#fff}
+.t-cbox .tfs{display:flex;gap:2px;margin-left:auto}
 .t-cw{position:relative;min-height:60px}
 canvas{display:block;width:100%;background:var(--canvas);border:1px solid var(--line);border-radius:3px}
 .t-big{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
@@ -534,6 +542,19 @@ th{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em
   </div>
 </div>
 
+<div class="t-cmodal" id="t-cm">
+  <div class="t-cbox">
+    <div class="hd">
+      <b class="sym" id="t-cm-sym"></b>
+      <span id="t-cm-info" style="font-size:11.5px"></span>
+      <span class="tfs" id="t-cm-tfs"></span>
+      <button class="opt" onclick="closeCoin()" style="margin-left:6px">Close</button>
+    </div>
+    <div class="t-cw" style="margin-top:10px"><canvas id="t-cm-c"></canvas></div>
+    <div class="t-note">Live OKX spot candles (USDT pair). Wicks are the bar's high/low, bodies open-to-close; the bottom strip is dollar volume per bar. Click any coin name on this page to open its chart.</div>
+  </div>
+</div>
+
 <script>
 const $=id=>document.getElementById(id);
 const pct=x=>x==null||isNaN(x)?'n/a':(100*x).toFixed(1)+'%';
@@ -853,11 +874,13 @@ async function pollAccount(){
   if($('t-sum-news'))$('t-sum-news').innerHTML='&middot; '+usd(d.equity)+' <span class="'+(pl>=0?'pos':'neg')+'">'+usdSign(pl)+'</span>'+(nvs==null?'':' &middot; <span class="'+(nvs>=0?'pos':'neg')+'">'+usdSign(nvs)+' vs hold</span>');
   $('t-nt-status').innerHTML='last tick '+(d.last_t?fmtT(d.last_t):'-');
   const invested=d.equity-d.cash, iw=d.equity?invested/d.equity*100:0, cw=d.equity?d.cash/d.equity*100:0;
+  const altD=d.equity_alt!=null?d.equity_alt-d.equity:null;
   $('t-nt-cards').innerHTML=[
     card('Equity',usd(d.equity),'simulated account','',true),
     card('Profit / loss',usdSign(pl),(pc>=0?'+':'')+pc.toFixed(2)+'%',pl>=0?'pos':'neg',true),
     card('Cash',usd(d.cash),cw.toFixed(0)+'% of account','',true),
     card('Invested',usd(invested),iw.toFixed(0)+'% in '+(d.holdings||[]).length+' assets',invested>0.5?'pos':'',true),
+    altD!=null?card('Fee saved @'+(d.alt_fee_bps||10)+'bp',usdSign(altD),'vs '+(d.fee_bps_live||20)+'bp/side, trades since instrumented','pos',true):'',
   ].join('');
   drawNTEquity('t-nt-eq',d.curve,d.bench,'BTC');
   drawInsights(d.series, d.focus||focusToken());
@@ -865,11 +888,11 @@ async function pollAccount(){
   const hold=d.holdings||[];
   $('t-nt-pos').innerHTML=hold.length
     ?'<tr><th>asset</th><th>qty</th><th>price</th><th>value</th><th>% acct</th></tr>'
-      +hold.map(h=>`<tr><td>${h.asset}</td><td>${(+h.qty).toLocaleString(undefined,{maximumFractionDigits:4})}</td><td>${h.price?usd(h.price):'-'}</td><td>${h.value!=null?usd(h.value):'-'}</td><td>${h.weight!=null?(h.weight*100).toFixed(0)+'%':'-'}</td></tr>`).join('')
+      +hold.map(h=>`<tr><td>${coinL(h.asset)}</td><td>${(+h.qty).toLocaleString(undefined,{maximumFractionDigits:4})}</td><td>${h.price?usd(h.price):'-'}</td><td>${h.value!=null?usd(h.value):'-'}</td><td>${h.weight!=null?(h.weight*100).toFixed(0)+'%':'-'}</td></tr>`).join('')
       +`<tr><td class="dim">cash</td><td></td><td></td><td class="dim">${usd(d.cash)}</td><td class="dim">${d.cash_weight!=null?(d.cash_weight*100).toFixed(0)+'%':''}</td></tr>`
     :`<tr><td class="t-note">all cash &middot; ${usd(d.cash)}</td></tr>`;
   const sig=Object.entries(d.signal||{}).sort((a,b)=>b[1]-a[1]);
-  $('t-nt-sig').innerHTML=sig.length?'<tr><th>asset</th><th>score</th></tr>'+sig.map(([a,v])=>`<tr><td>${a}</td><td class="${v>=0?'pos':'neg'}">${(+v).toFixed(2)}</td></tr>`).join(''):'<tr><td class="t-note">-</td></tr>';
+  $('t-nt-sig').innerHTML=sig.length?'<tr><th>asset</th><th>score</th></tr>'+sig.map(([a,v])=>`<tr><td>${coinL(a)}</td><td class="${v>=0?'pos':'neg'}">${(+v).toFixed(2)}</td></tr>`).join(''):'<tr><td class="t-note">-</td></tr>';
   const rec=d.recent||[];
   $('t-nt-recent').innerHTML=rec.length?'<tr><th>when</th><th>equity</th><th>actions</th></tr>'+rec.map(h=>`<tr><td>${fmtT(h.t)}</td><td>${usd(h.equity)}</td><td>${(h.acts||[]).map(a=>a.side+' '+a.sym).join(', ')||'hold'}</td></tr>`).join(''):'';
 }
@@ -1148,10 +1171,10 @@ function renderTabs(arms){
 }
 function renderDetail(arms){
   const a=arms[expActive]; if(!a){$('t-exp-detail').innerHTML='';return;}
-  const vs=armVsHold(a),hit=armHit(a),benchName=a.bench_asset||(a.market==='stocks'?'SPY':'BTC');
+  const vs=armVsHold(a),hit=armHit(a),benchName=a.bench_asset||(a.market==='stocks'?'SPY':'BTC'),cl=s=>a.market==='stocks'?s:coinL(s);
   const trades=(a.recent||[]).flatMap(h=>(h.acts||[]).map(x=>({t:h.t,...x})));
-  const tradeRows=trades.length?trades.slice(0,8).map(x=>`<tr><td>${fmtT(x.t)}</td><td class="${x.side==='buy'?'pos':'neg'}">${x.side}</td><td>${(+x.qty<0?-x.qty:x.qty).toLocaleString(undefined,{maximumFractionDigits:3})} ${(''+x.sym).replace('USDT','')}</td><td>${usd(x.price)}</td></tr>`).join(''):'<tr><td class="t-note">No trades yet.</td></tr>';
-  const holdRows=(a.holdings||[]).length?a.holdings.map(h=>`<tr><td>${h.asset}</td><td>${(+h.qty).toLocaleString(undefined,{maximumFractionDigits:4})}</td><td>${h.value!=null?usd(h.value):'-'}</td><td>${h.weight!=null?(h.weight*100).toFixed(0)+'%':'-'}</td></tr>`).join(''):'<tr><td class="t-note">All cash - no positions.</td></tr>';
+  const tradeRows=trades.length?trades.slice(0,8).map(x=>`<tr><td>${fmtT(x.t)}</td><td class="${x.side==='buy'?'pos':'neg'}">${x.side}</td><td>${(+x.qty<0?-x.qty:x.qty).toLocaleString(undefined,{maximumFractionDigits:3})} ${cl((''+x.sym).replace('USDT',''))}</td><td>${usd(x.price)}</td></tr>`).join(''):'<tr><td class="t-note">No trades yet.</td></tr>';
+  const holdRows=(a.holdings||[]).length?a.holdings.map(h=>`<tr><td>${cl(h.asset)}</td><td>${(+h.qty).toLocaleString(undefined,{maximumFractionDigits:4})}</td><td>${h.value!=null?usd(h.value):'-'}</td><td>${h.weight!=null?(h.weight*100).toFixed(0)+'%':'-'}</td></tr>`).join(''):'<tr><td class="t-note">All cash - no positions.</td></tr>';
   $('t-exp-detail').innerHTML=`<div class="t-bookgrid">
     <div>
       <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:5px">${a.title} equity vs holding ${benchName}</div>
@@ -1225,10 +1248,10 @@ function renderBookTabs(bk){
 }
 function renderBookDetail(bk){
   const B=BOOKS[bk],a=B.arms[B.active]; if(!a){$(B.idp+'-detail').innerHTML='';return;}
-  const vs=armVsHold(a),ex=bookExposure(a);
+  const vs=armVsHold(a),ex=bookExposure(a),cl=s=>bk==='eqm'?s:coinL(s);
   const trades=(a.recent||[]).flatMap(h=>(h.acts||[]).map(x=>({t:h.t,...x})));
-  const tradeRows=trades.length?trades.slice(0,10).map(x=>`<tr><td>${fmtT(x.t)}</td><td class="${x.side==='buy'?'pos':'neg'}">${x.side}</td><td>${(+x.qty<0?-x.qty:x.qty).toLocaleString(undefined,{maximumFractionDigits:3})} ${(''+x.sym).replace('USDT','')}</td><td>${usd(x.price)}</td></tr>`).join(''):'<tr><td class="t-note">No trades yet.</td></tr>';
-  const holdRows=(a.holdings||[]).length?a.holdings.map(h=>`<tr><td>${h.asset}</td><td class="${+h.qty>=0?'pos':'neg'}">${+h.qty>=0?'long':'short'}</td><td>${Math.abs(+h.qty).toLocaleString(undefined,{maximumFractionDigits:4})}</td><td>${h.value!=null?usd(Math.abs(h.value)):'-'}</td></tr>`).join(''):'<tr><td class="t-note">All cash - no positions.</td></tr>';
+  const tradeRows=trades.length?trades.slice(0,10).map(x=>`<tr><td>${fmtT(x.t)}</td><td class="${x.side==='buy'?'pos':'neg'}">${x.side}</td><td>${(+x.qty<0?-x.qty:x.qty).toLocaleString(undefined,{maximumFractionDigits:3})} ${cl((''+x.sym).replace('USDT',''))}</td><td>${usd(x.price)}</td></tr>`).join(''):'<tr><td class="t-note">No trades yet.</td></tr>';
+  const holdRows=(a.holdings||[]).length?a.holdings.map(h=>`<tr><td>${cl(h.asset)}</td><td class="${+h.qty>=0?'pos':'neg'}">${+h.qty>=0?'long':'short'}</td><td>${Math.abs(+h.qty).toLocaleString(undefined,{maximumFractionDigits:4})}</td><td>${h.value!=null?usd(Math.abs(h.value)):'-'}</td></tr>`).join(''):'<tr><td class="t-note">All cash - no positions.</td></tr>';
   $(B.idp+'-detail').innerHTML=`<div class="t-bookgrid">
     <div>
       <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:5px">${a.title} equity vs holding ${B.bench}</div>
@@ -1407,7 +1430,7 @@ function renderIntelBoard(rows){
   $('t-mi-board').innerHTML='<tr><th>Coin</th><th>Price</th><th>1h</th><th>24h</th><th>Vol z'
     +'<span class="t-help" data-tip="How unusual the current 24h dollar volume is versus this coin\'s own trailing baseline, in standard deviations. 3+ means volume is exploding: the pump ingredient.">?</span></th>'
     +'<th>Score</th><th style="text-align:left">Why it\'s moving (local model)</th></tr>'
-    +top.map(r=>`<tr><td><b style="color:#fff">${r.sym}</b>${itags(r)}</td><td>${ipx(r.px)}</td>`
+    +top.map(r=>`<tr><td><b style="color:#fff">${coinL(r.sym)}</b>${itags(r)}</td><td>${ipx(r.px)}</td>`
       +`<td class="${icls(r.ret_1h)}">${ipct(r.ret_1h)}</td><td class="${icls(r.ret_24h)}">${ipct(r.ret_24h)}</td>`
       +`<td class="${r.vol_z>=3?'warm':''}">${if2(r.vol_z)}</td><td>${iscoreBar(r.score,max)}</td>`
       +`<td class="why">${iwhy(r)}</td></tr>`).join('');
@@ -1415,12 +1438,12 @@ function renderIntelBoard(rows){
 function renderTrendChips(trending){
   $('t-mi-trend-chips').innerHTML=(trending||[]).map(t=>{
     const m=t.okx?` &middot; <span class="${icls(t.okx.ret_24h)}">${ipct(t.okx.ret_24h)}</span>`:'';
-    return `<span class="t-ichip"><b>${t.sym}</b> ${t.name||''}${t.rank?' &middot; #'+t.rank:''}${m}</span>`;
+    return `<span class="t-ichip"><b>${coinL(t.sym)}</b> ${t.name||''}${t.rank?' &middot; #'+t.rank:''}${m}</span>`;
   }).join('')||'<span class="t-iempty">trending feed unreachable</span>';
 }
 function renderMeme(meme){
   $('t-mi-meme').innerHTML=(meme&&meme.length)?'<tr><th>Coin</th><th>Price</th><th>1h</th><th>24h</th><th>7d</th><th>24h volume</th></tr>'
-    +meme.map(m=>`<tr><td><b style="color:#fff">${m.sym}</b> <span class="dim">${m.name||''}</span></td><td>${ipx(m.px)}</td>`
+    +meme.map(m=>`<tr><td><b style="color:#fff">${coinL(m.sym)}</b> <span class="dim">${m.name||''}</span></td><td>${ipx(m.px)}</td>`
       +`<td class="${icls(m.ret_1h)}">${ipctd(m.ret_1h)}</td><td class="${icls(m.ret_24h)}">${ipctd(m.ret_24h)}</td>`
       +`<td class="${icls(m.ret_7d)}">${ipctd(m.ret_7d)}</td><td>${iusd(m.vol_usd)}</td></tr>`).join('')
     :'';
@@ -1439,7 +1462,7 @@ function ivCard(ev){
   const b=ev.brief;
   const caution=b?b.caution:(MODEL_STATE==='offline'?'model offline: metrics-only record':'no model read yet');
   const risk=b?b.pump_risk:'high';
-  return `<div class="t-iev"><div class="h"><span class="sym">${ev.sym}</span>`
+  return `<div class="t-iev"><div class="h"><span class="sym">${coinL(ev.sym)}</span>`
     +`<span class="t-irisk ${risk}">${risk} risk</span><span class="t">${fmtT(ev.ts)}</span></div>`
     +`<div class="m">price z <b>${if2(ev.price_z)}</b> &middot; vol z <b>${if2(ev.vol_z)}</b> &middot; range x${if2(ev.range_x)}`
     +` &middot; 1h <span class="${icls(ev.ret_1h)}">${ipct(ev.ret_1h)}</span>`
@@ -1455,7 +1478,7 @@ async function pollIntelPumps(){
     $('t-mi-pump-r').textContent=evs.length?('latest '+Math.min(evs.length,IPUMP_CARDS)+' of '+j.count+' recorded'):'';
     $('t-mi-ev-count').textContent=j.count+' events recorded';
     $('t-mi-events').innerHTML=evs.length?'<tr><th>Time</th><th>Coin</th><th>Price</th><th>1h</th><th>24h</th><th>Price z</th><th>Vol z</th><th>Score</th></tr>'
-      +evs.map(e=>`<tr><td>${fmtT(e.ts)}</td><td><b style="color:#fff">${e.sym}</b></td><td>${ipx(e.px)}</td>`
+      +evs.map(e=>`<tr><td>${fmtT(e.ts)}</td><td><b style="color:#fff">${coinL(e.sym)}</b></td><td>${ipx(e.px)}</td>`
         +`<td class="${icls(e.ret_1h)}">${ipct(e.ret_1h)}</td><td class="${icls(e.ret_24h)}">${ipct(e.ret_24h)}</td>`
         +`<td>${if2(e.price_z)}</td><td>${if2(e.vol_z)}</td><td>${if2(e.score)}</td></tr>`).join('')
       :'';
@@ -1491,6 +1514,45 @@ $('t-mi-scan-now').onclick=async()=>{
   try{await jget('/ext/trading/intel/scan?refresh=1');}finally{$('t-mi-scan-now').disabled=false;}
   pollIntelScan();pollIntelPumps();pollIntelStatus();
 };
+
+// ---- coin chart modal (click any coin name) ----
+const CM_TF=[['24H','1H',24],['7D','1H',168],['1M','4H',180],['3M','1Dutc',90],['10M','1Dutc',300]];
+let CM={sym:null,tf:1,rows:null};
+const coinL=s=>`<span class="t-coin" onclick="openCoin('${s}')">${s}</span>`;
+function openCoin(sym){CM.sym=String(sym).toUpperCase().replace(/-?USDT?$/,'');CM.rows=null;$('t-cm').classList.add('on');loadCoin();}
+function closeCoin(){$('t-cm').classList.remove('on');CM.sym=null;CM.rows=null;}
+function cmTf(i){CM.tf=i;if(CM.sym)loadCoin();}
+async function loadCoin(){
+  const sym=CM.sym,[lab,bar,lim]=CM_TF[CM.tf];
+  $('t-cm-sym').textContent=sym+'-USDT';
+  $('t-cm-tfs').innerHTML=CM_TF.map((t,i)=>`<button class="t-tab${i===CM.tf?' on':''}" onclick="cmTf(${i})">${t[0]}</button>`).join('');
+  $('t-cm-info').innerHTML='<span class="dim">loading...</span>';CM.rows=null;drawCoin();
+  let j;try{j=await jget('/ext/trading/intel/candles?symbol='+encodeURIComponent(sym)+'&bar='+bar+'&limit='+lim);}catch(e){}
+  if(sym!==CM.sym)return;
+  if(!j||!j.ok||!(j.candles||[]).length){$('t-cm-info').innerHTML='<span class="dim">no OKX price data for '+sym+'-USDT</span>';return;}
+  CM.rows=j.candles;
+  const r=CM.rows,cN=r[r.length-1].c,ch=cN/r[0].o-1,hi=Math.max(...r.map(k=>k.h)),lo=Math.min(...r.map(k=>k.l)),vol=r.reduce((a,k)=>a+k.v,0);
+  $('t-cm-info').innerHTML=`<b style="color:#fff">${ipx(cN)}</b> <b class="${icls(ch)}">${ipct(ch)}</b> ${lab.toLowerCase()} &middot; hi ${ipx(hi)} &middot; lo ${ipx(lo)} &middot; ${iusd(vol)} traded`;
+  drawCoin();
+}
+function drawCoin(){
+  const cv=$('t-cm-c'),r=CM.rows,[x,w,h]=dpr(cv,340);
+  if(!r||r.length<2){if(CM.sym){x.fillStyle=C.dim;x.font='11px ui-monospace,monospace';x.fillText('fetching candles...',12,h/2);}return;}
+  const PL=64,PR=10,PT=12,VH=54,PB=20,ph=h-PT-VH-PB;
+  const hi=Math.max(...r.map(k=>k.h)),lo=Math.min(...r.map(k=>k.l)),vmax=Math.max(...r.map(k=>k.v),1);
+  const X=i=>PL+(i+0.5)*(w-PL-PR)/r.length,Y=v=>PT+(hi-v)/(hi-lo||1)*ph,bw=Math.max(1,Math.min(9,(w-PL-PR)/r.length*0.66));
+  x.strokeStyle=C.grid;x.fillStyle=C.dim;x.font='10px ui-monospace,monospace';
+  for(let i=0;i<=4;i++){const vv=hi-(hi-lo)*i/4,yy=Y(vv);x.beginPath();x.moveTo(PL,yy);x.lineTo(w-PR,yy);x.stroke();x.fillText(ipx(vv),3,yy-2);}
+  r.forEach((k,i)=>{const cl=k.c>=k.o?C.pos:C.neg,xx=X(i);
+    x.strokeStyle=cl;x.beginPath();x.moveTo(xx,Y(k.h));x.lineTo(xx,Y(k.l));x.stroke();
+    x.fillStyle=cl;const y1=Y(Math.max(k.o,k.c));x.fillRect(xx-bw/2,y1,bw,Math.max(1,Y(Math.min(k.o,k.c))-y1));
+    x.globalAlpha=.5;x.fillRect(xx-bw/2,h-PB-(k.v/vmax)*(VH-8),bw,(k.v/vmax)*(VH-8));x.globalAlpha=1;});
+  const yl=Y(r[r.length-1].c);x.strokeStyle=C.ref;x.setLineDash([4,4]);x.beginPath();x.moveTo(PL,yl);x.lineTo(w-PR,yl);x.stroke();x.setLineDash([]);
+  x.fillStyle=C.dim;[0,Math.floor(r.length/2),r.length-1].forEach(i=>{const d=new Date(r[i].t*1000);
+    x.fillText(d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+(CM_TF[CM.tf][1]==='1H'?' '+String(d.getHours()).padStart(2,'0')+':00':''),Math.min(X(i),w-92),h-6);});
+}
+$('t-cm').onclick=e=>{if(e.target.id==='t-cm')closeCoin();};
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&CM.sym)closeCoin();});
 
 // ---- settings ----
 let SETTINGS=null;
@@ -1585,7 +1647,8 @@ $('t-objective').onchange=saveControls;
 $('t-speed').onchange=()=>{if(replayTimer&&SIM)startReplay(SIM);};
 $('t-reset').onclick=()=>{setLedger(freshLedger());$('t-ledger').innerHTML='';$('t-liver').textContent='';drawEquity([],capital(),usd);setStatus('Ledger reset.','ok');};
 window.addEventListener('resize',()=>{if(mode()==='live'){const L=getLedger();if(L)renderLiveFromCap(L);}else if(SIM){drawEquity(toDollars(SIM.equity),capital(),usd);drawPrice(SIG.price,SIM.gate,SIM.lean,SIM.mode);}
-  Object.keys(BOOKS).forEach(bk=>{if(BOOKS[bk].arms.length){drawBookOverlay(bk);renderBookDetail(bk);}});});
+  Object.keys(BOOKS).forEach(bk=>{if(BOOKS[bk].arms.length){drawBookOverlay(bk);renderBookDetail(bk);}});
+  if(CM.sym&&CM.rows)drawCoin();});
 
 function saveControls(){const o={};['mode','model','source','res','symbol','bars','strategy','fee','conf','move','sizing','maxsize','capital','aggr','objective'].forEach(k=>o[k]=$('t-'+k).value);lset('ctl',o);}
 function loadCtl(){return lget('ctl')||{};}

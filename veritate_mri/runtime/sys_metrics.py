@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 from readers.paths import REPO_ROOT
 
@@ -37,6 +38,7 @@ except ImportError:
 _PROC = psutil.Process(os.getpid()) if _PSUTIL_OK else None
 if _PROC is not None:
     _PROC.cpu_percent(None)
+    psutil.cpu_percent(None)   # prime system-wide baseline so the first poll reads real load, not 0
 
 _CPU_COUNT = (psutil.cpu_count(logical=True) if _PSUTIL_OK else 1) or 1
 
@@ -423,22 +425,65 @@ def _win_adapters():
     return rows
 
 
+_GPU_CLASS_RE = re.compile(
+    r"^(\S+)\s+(?:VGA compatible controller|3D controller|Display controller):\s*(.+)$",
+    re.IGNORECASE,
+)
+_GPU_MODEL_BRACKET_RE = re.compile(r"\[([^\]]+)\]")
+_GPU_REV_RE = re.compile(r"\s*\(rev [0-9a-fA-F]+\)\s*$")
+_DRM_CARD_RE = re.compile(r"^card\d+$")
+_PCI_VENDOR_NAMES = {"0x1002": "AMD", "0x10de": "NVIDIA", "0x8086": "Intel"}
+
+
+def _clean_gpu_name(desc):
+    """Short model name from an lspci controller description.
+    'Intel Corporation CoffeeLake-S GT2 [UHD Graphics 630] (rev 02)' ->
+    'Intel UHD Graphics 630'. Falls back to the trimmed description."""
+    desc = _GPU_REV_RE.sub("", desc).strip()
+    brackets = _GPU_MODEL_BRACKET_RE.findall(desc)
+    model = brackets[-1].strip() if brackets else desc
+    low = desc.lower()
+    vendor = ("Intel"  if "intel" in low else
+              "NVIDIA" if ("nvidia" in low or "geforce" in low) else
+              "AMD"    if ("amd" in low or "radeon" in low or "advanced micro" in low) else
+              "")
+    if vendor and vendor.lower() not in model.lower():
+        return f"{vendor} {model}"
+    return model
+
+
+def _lspci_gpu_names():
+    """Map PCI slot (domain:bus:dev.fn) -> model name via lspci. {} if lspci absent."""
+    out = _run(["lspci", "-D"], timeout=2.0)
+    names = {}
+    if not out:
+        return names
+    for line in out.splitlines():
+        m = _GPU_CLASS_RE.match(line.strip())
+        if m:
+            names[m.group(1)] = _clean_gpu_name(m.group(2))
+    return names
+
+
 def _linux_adapters():
     rows = []
     drm = "/sys/class/drm"
     if not os.path.isdir(drm):
         return rows
+    names = _lspci_gpu_names()
     for entry in sorted(os.listdir(drm)):
-        if not re.match(r"^card\d+$", entry):
+        if not _DRM_CARD_RE.match(entry):
             continue
         dev = os.path.join(drm, entry, "device")
         vendor = "?"
         try:
             with open(os.path.join(dev, "vendor"), "r") as f:
                 vid = f.read().strip()
-            vendor = {"0x1002": "AMD", "0x10de": "NVIDIA", "0x8086": "Intel"}.get(vid, vid)
+            vendor = _PCI_VENDOR_NAMES.get(vid, vid)
         except OSError:
             pass
+        slot = os.path.basename(os.path.realpath(dev))
+        name = names.get(slot) or (f"{vendor} GPU" if vendor not in ("?", "") else entry)
         load = None
         try:
             with open(os.path.join(dev, "gpu_busy_percent"), "r") as f:
@@ -446,7 +491,7 @@ def _linux_adapters():
         except OSError:
             pass
         rows.append({
-            "name": entry,
+            "name": name,
             "vendor": vendor,
             "integrated": vendor == "Intel",
             "load_pct": load,
@@ -750,6 +795,38 @@ def _os_version():
     return {"product": None, "build": None}
 
 
+_MAC_UUID_RE = re.compile(r'"IOPlatformUUID"\s*=\s*"([^"]+)"')
+_WIN_GUID_RE = re.compile(r"MachineGuid\s+REG_SZ\s+(\S+)")
+_LINUX_MACHINE_ID_PATHS = ("/etc/machine-id", "/var/lib/dbus/machine-id")
+
+
+def stable_machine_key():
+    """Per-machine identifier that survives reboots but differs across machines.
+    Linux: `/etc/machine-id`. macOS: `IOPlatformUUID`. Windows: registry
+    `MachineGuid`. Falls back to hostname + NIC MAC. Lets the heartbeat bind its
+    device id to this box so a copied install re-derives its own instead of
+    colliding."""
+    if sys.platform.startswith("linux"):
+        for p in _LINUX_MACHINE_ID_PATHS:
+            try:
+                with open(p, "r") as f:
+                    v = f.read().strip()
+                if v:
+                    return v
+            except OSError:
+                pass
+    elif sys.platform == "darwin":
+        m = _MAC_UUID_RE.search(_run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], timeout=2.0) or "")
+        if m:
+            return m.group(1)
+    elif sys.platform.startswith("win"):
+        m = _WIN_GUID_RE.search(_run(
+            ["reg", "query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"], timeout=2.0) or "")
+        if m:
+            return m.group(1)
+    return f"{platform.node() or ''}|{uuid.getnode()}"
+
+
 def _disk_free_at_repo():
     try:
         s = os.statvfs(REPO_ROOT) if hasattr(os, "statvfs") else None
@@ -861,6 +938,8 @@ def detect_and_save():
     if prev and isinstance(prev.get("measured"), dict):
         specs["measured"] = prev["measured"]
     save_specs(specs)
+    from runtime import heartbeat
+    heartbeat.reconcile_identity()
     return specs
 
 

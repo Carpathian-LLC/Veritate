@@ -108,7 +108,12 @@ def compose_name(*args, **kwargs):
             raise ValueError("compose_name: empty user name after slugify")
         if not isinstance(size, str) or not size.strip():
             raise ValueError("compose_name: size required (e.g. '85m', '1b')")
-        return NAME_SEP.join([slug, size.strip()])
+        size = size.strip()
+        # Size is auto-appended; if the name already carries it (e.g.
+        # name='chat200m', size='200m'), do not produce 'chat200m_200m'.
+        if slug == size or slug.endswith(NAME_SEP + size) or slug.endswith(size):
+            return slug
+        return NAME_SEP.join([slug, size])
     # Legacy 4-arg form.
     corpus, size, precision, version = args
     leaf = corpus.rsplit(":", 1)[-1] if ":" in corpus else corpus
@@ -510,7 +515,21 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         if isinstance(ta, dict) and isinstance(ta.get("corpus"), str) and ta["corpus"].strip():
             corpus_stem = ta["corpus"].strip()
     if corpus_stem and ":" in corpus_stem:
-        corpus_stem = corpus_stem.rsplit(":", 1)[-1]
+        # Multicorpus mix spec "stem1:w1,stem2:w2,...": use the highest-weight
+        # stem (first on ties). A single "prefix:stem" form keeps the old rsplit.
+        if "," in corpus_stem or corpus_stem.rsplit(":", 1)[-1].replace(".", "").isdigit():
+            best, best_w = None, -1.0
+            for part in corpus_stem.split(","):
+                stem, _, w = part.strip().partition(":")
+                try:
+                    wf = float(w) if w else 1.0
+                except ValueError:
+                    continue
+                if stem and wf > best_w:
+                    best, best_w = stem, wf
+            corpus_stem = best
+        else:
+            corpus_stem = corpus_stem.rsplit(":", 1)[-1]
     corpus_path = paths.corpus_train_path(corpus_stem) if corpus_stem else None
 
     skip = set(dump_set or [])

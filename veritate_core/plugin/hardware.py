@@ -13,6 +13,7 @@
 # Imports:
 
 import os
+import sys
 
 from readers import paths
 
@@ -21,6 +22,7 @@ from readers import paths
 
 DEVICE_ENV   = "VERITATE_DEVICE"
 VALID_FORCED = ("cuda", "mps", "cpu")
+KIB          = 1024
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -92,3 +94,13 @@ def unified_memory_bytes():
     page = os.sysconf("SC_PAGE_SIZE")
     count = os.sysconf("SC_PHYS_PAGES")
     return int(page) * int(count)
+
+
+def process_peak_rss_bytes():
+    """Peak resident memory of this process in bytes: the high-water mark since
+    start. Monotonic, no OS reset exists. ru_maxrss units differ by platform:
+    bytes on darwin, KiB on linux. Used as the cpu memory-ceiling probe where no
+    device allocator counter exists."""
+    import resource
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return int(peak) if sys.platform == "darwin" else int(peak) * KIB

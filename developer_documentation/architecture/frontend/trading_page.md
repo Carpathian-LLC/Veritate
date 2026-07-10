@@ -56,6 +56,14 @@ the top badge and per-strategy section lines say so on every money number.
 
 - Charts are hand-rolled canvas (`drawEquity`, `drawPrice`, `drawNTEquity`, `gridY`,
   `poly`, `dpr`); no chart library, no CDN.
+- **Coin chart modal.** Every crypto symbol on the page (intel board/trending/meme/pump
+  cards/event log, news holdings + sentiment tables, xsmom/ml7 books, crypto experiment
+  arms) renders through `coinL()` as a clickable `.t-coin` span; `openCoin(sym)` opens
+  the `#t-cm` overlay and `drawCoin()` renders OHLC candles + a dollar-volume strip from
+  `GET /ext/trading/intel/candles`. Timeframes in `CM_TF` (24H/7D/1M/3M/10M -> bar+limit
+  pairs; 10M = 300 daily bars, the OKX single-call cap). Equity holdings (eqmom, stock
+  experiment arms) stay plain text: no OKX pair. Esc, backdrop click, or Close dismisses;
+  the window resize handler redraws an open modal.
 - Polling is unconditional (strategies keep trading when their tab is hidden); switching
   tabs re-runs the relevant pollers so canvases redraw at real widths.
 - Panel collapse (`setupPanels`) applies to the Strategies + Research tabs only; primary

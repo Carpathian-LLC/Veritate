@@ -519,8 +519,13 @@ def register(app):
                 last_btc = _bpx(h) or last_btc
                 v = round(start_cash * last_btc / b0, 2) if (b0 and last_btc) else None
                 bench.append({"t": h["t"], "equity": v})
+            cum_notional = led.get("cum_notional", 0.0)
+            fee_side = led.get("fee_side", nt.FEE)
+            equity_alt = eq + (fee_side - nt.ALT_FEE) * cum_notional   # same tape, documented 10bp/side
             return {"ok": True, "running": bool(hist), "start_cash": start_cash,
                     "focus": nt.status().get("focus"),
+                    "cum_notional": round(cum_notional, 2), "fee_bps_live": round(fee_side * 1e4, 1),
+                    "alt_fee_bps": round(nt.ALT_FEE * 1e4, 1), "equity_alt": round(equity_alt, 2),
                     "cash": led.get("cash", 0.0), "equity": eq,
                     "cash_weight": round(led.get("cash", 0.0) / eq, 4) if eq else None,
                     "positions": {k: round(v, 6) for k, v in led.get("positions", {}).items() if v},
@@ -781,6 +786,18 @@ def register(app):
             return {"ok": True, "symbol": sym, "brief": b, "model_state": intel.model_state()}
         return _safe(_do)
 
+    @app.route("/ext/trading/intel/candles")
+    def trading_intel_candles():
+        def _do():
+            import scanner
+            sym = (request.args.get("symbol") or "").upper()
+            bar = request.args.get("bar", "1H")
+            rows = scanner.candles(sym, bar, int(request.args.get("limit", scanner.CANDLE_MAX)))
+            if rows is None:
+                return ({"ok": False, "error": f"no OKX candles for {sym} ({bar})"}, 404)
+            return {"ok": True, "symbol": sym, "bar": bar, "candles": rows}
+        return _safe(_do)
+
     @app.route("/ext/trading/intel/status")
     def trading_intel_status():
         def _do():
@@ -857,11 +874,13 @@ def register(app):
     try:
         import eqmom_trader as eq
         import ml7_trader as mt
+        import news_trader as nt
         import scanner
         import xsmom_trader as xt
         xt.resume()
         eq.resume()
         mt.resume()
+        nt.resume()
         scanner.resume()
     except Exception as e:
         from runtime import logs as logmod

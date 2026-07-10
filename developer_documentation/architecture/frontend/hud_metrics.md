@@ -32,10 +32,11 @@ The HUD's live counters come from one HTTP poll.
 |---|---|---|---|
 | `cpu_pct`, `rss`, mem | psutil | psutil | psutil |
 | `cpu_temp_c` | psutil `sensors_temperatures` (coretemp / k10temp / cpu_thermal) | Apple Silicon: `macmon pipe -s 1` (JSON `temp.cpu_temp_avg`). Intel: `osx-cpu-temp -c`. Homebrew. | LibreHardwareMonitor WMI |
-| GPU list | `/sys/class/drm` | `system_profiler SPDisplaysDataType -json` | `Get-CimInstance Win32_VideoController` |
+| GPU list + names | `/sys/class/drm/card*`; model names from `lspci -D` matched by PCI slot | `system_profiler SPDisplaysDataType -json` | `Get-CimInstance Win32_VideoController` |
 | Apple SoC GPU load | n/a | `ioreg -c IOAccelerator` → `Device Utilization %` | n/a |
 | Apple SoC GPU temp | n/a | `macmon pipe -s 1` (JSON `temp.gpu_temp_avg`) | n/a |
 | NVIDIA load / VRAM / temp | `nvidia-smi` | `nvidia-smi` | `nvidia-smi` |
+| Non-NVIDIA GPU load | AMD: `gpu_busy_percent` sysfs. Intel: none (needs PMU / `intel_gpu_top`) → `null` | Apple: `ioreg` (above) | none → `null` |
 | Non-NVIDIA GPU temp | none | Apple Silicon: `macmon`. Intel: none. | LibreHardwareMonitor WMI |
 
 ## macOS CPU temperature
@@ -68,6 +69,6 @@ NVIDIA cards on Mac (rare; historic only) report their own temperature via `nvid
 To add a new field:
 1. Compute it in a small helper (`_foo()`) inside `sys_metrics.py` with platform guards.
 2. Surface it from `snapshot()` (and from the `available: false` branch as `null`).
-3. Read it in the HUD render in `index.js`. Treat `null` as "no data" — never `NaN`, never `0`.
+3. Read it in the HUD render in `index.js`. Treat `null` as "no data" — never `NaN`, never `0`. A `null` metric disables its own display (the GPU load meter renders a greyed `.track.na` with an `N/A` value; the CPU-temp bar sets `display:none`) so the adapter still shows every metric it *can* read. Never fabricate a 0.
 
 Keep the field name the same across all OSes; the OS-difference belongs inside the helper, not in the consumer.

@@ -13,9 +13,9 @@
 #       stable        -> main
 #       experimental  -> experimental
 #       development   -> dev
-# - Repo URL comes from env VERITATE_REPO_URL (e.g.
-#   https://github.com/carpathian/veritate). When unset the module imports
-#   cleanly and surfaces a useful error at update time.
+# - Repo URL resolves env VERITATE_REPO_URL -> git remote origin -> the canonical
+#   public repo default, so the updater works zero-config on any checkout, even one
+#   that was not `git clone`d. The env var still lets a fork or test branch override.
 # - User data dirs (data/, models/, trainers/, experiments/) plus .git and
 #   .venv are preserved across updates.
 # - urllib + tarfile + shutil only. No requests, no gitpython.
@@ -75,8 +75,11 @@ DEFAULT_SKIP_DIRS = tuple(sorted(set(
     + ["data", "experiments", ".git", ".venv", "venv", "__pycache__"]
 )))
 
-_REPO_URL_ENV         = "VERITATE_REPO_URL"
-_REPO_URL_PLACEHOLDER = "https://github.com/<owner>/<repo>"
+_REPO_URL_ENV     = "VERITATE_REPO_URL"
+# Canonical public repo. Final fallback so a checkout with no origin remote and
+# no env override still resolves an update source instead of going dead.
+_REPO_URL_DEFAULT = "https://github.com/Carpathian-LLC/Veritate"
+GITHUB_API_BASE   = "https://api.github.com"
 
 _LOCK         = threading.RLock()
 _STATE_CACHE  = None
@@ -159,6 +162,39 @@ def _local_git_branch():
     return None
 
 
+def _local_head_sha():
+    """Resolve the local HEAD commit SHA from `.git` without shelling out.
+    Follows `.git/HEAD` to its branch ref, reading the loose ref file and
+    falling back to `.git/packed-refs`. Returns the SHA, or None on a detached
+    or unreadable HEAD with no resolvable ref."""
+    git_dir = os.path.join(REPO_DIR, ".git")
+    try:
+        with open(os.path.join(git_dir, "HEAD"), "r", encoding="utf-8", errors="replace") as f:
+            head = f.read().strip()
+    except OSError:
+        return None
+    if not head.startswith("ref:"):
+        return head or None
+    ref = head.partition(":")[2].strip()
+    try:
+        with open(os.path.join(git_dir, *ref.split("/")), "r", encoding="utf-8", errors="replace") as f:
+            return f.read().strip() or None
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(git_dir, "packed-refs"), "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(("#", "^")):
+                    continue
+                sha, _, name = line.partition(" ")
+                if name == ref:
+                    return sha or None
+    except OSError:
+        return None
+    return None
+
+
 def _active_branch():
     """Branch the updater should actually track. In a git checkout the locally
     checked-out branch wins — developers may be testing on a branch and must
@@ -209,11 +245,12 @@ def _git_remote_url():
 
 
 def _repo_url_base():
-    """Return the GitHub repo base URL. Prefers `VERITATE_REPO_URL` env var;
-    falls back to the git remote `origin` URL so the in-app updater works
-    zero-config on any checkout. Returns None only if both are unavailable."""
+    """Return the GitHub repo base URL. Resolves `VERITATE_REPO_URL` env var ->
+    git remote `origin` -> the canonical public repo default, so the in-app
+    updater works zero-config on any checkout, including one that was not
+    `git clone`d. The env var lets a fork or test branch override the default."""
     return _normalize_github_url(
-        os.environ.get(_REPO_URL_ENV, "") or _git_remote_url()
+        os.environ.get(_REPO_URL_ENV, "") or _git_remote_url() or _REPO_URL_DEFAULT
     )
 
 
@@ -226,6 +263,41 @@ def _tarball_url(branch):
 
 def _tarball_urls():
     return {ch: _tarball_url(br) for ch, br in CHANNEL_BRANCHES.items()}
+
+
+def _repo_slug():
+    """`owner/repo` from the resolved repo URL, or None."""
+    base = _repo_url_base()
+    parts = (base or "").rstrip("/").split("/")
+    return f"{parts[-2]}/{parts[-1]}" if len(parts) >= 2 else None
+
+
+def _remote_ahead_behind(branch, local_sha):
+    """Commits the remote `branch` tip has that the local HEAD lacks, via the
+    GitHub compare API (base=local, head=remote). Returns (behind, error).
+    `behind` is 0 when identical or when local is ahead of the remote, so a
+    developer's own pushes never read as an update; None means undetermined and
+    the caller should fall back to the tarball ETag. A 404 (GitHub doesn't know
+    the local SHA: unpushed commits) means local is the source of truth -> 0."""
+    slug = _repo_slug()
+    if not slug or not local_sha:
+        return None, "no slug/sha"
+    url = f"{GITHUB_API_BASE}/repos/{slug}/compare/{local_sha}...{branch}"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("User-Agent", "veritate-http-updater/1")
+    req.add_header("Accept", "application/vnd.github+json")
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECS,
+                                     context=_ssl_context()) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return (0, None) if e.code == 404 else (None, f"HTTP {e.code} on compare")
+    except urllib.error.URLError as e:
+        return None, f"network error on compare: {e.reason}"
+    except Exception as e:
+        return None, f"compare failed: {e}"
+    ahead_by = data.get("ahead_by")
+    return (ahead_by, None) if isinstance(ahead_by, int) else (None, "compare missing ahead_by")
 
 
 # ------------------------------------------------------------------------------------
@@ -540,7 +612,7 @@ def status():
         "is_git_checkout":  _is_git_checkout(),
         "head_short":       (last.get("etag") or "")[:7] or None,
         "remote_url":       url_base,
-        "behind":           1 if last.get("update_available") else 0,
+        "behind":           last.get("behind", 1 if last.get("update_available") else 0),
         "ahead":            0,
         "dirty":            False,
         "update_available": bool(last.get("update_available")),
@@ -550,26 +622,22 @@ def status():
 
 
 def check_update():
-    """HEAD the tarball URL for the active branch (locally checked-out branch
-    in a git checkout, channel branch otherwise). Flags `update_available`
-    when ETag/Last-Modified differs from values recorded at the last pull on
-    the same branch. In a git checkout with no prior pull baseline, silently
-    records the current remote head as the baseline rather than claiming an
-    update — the developer's working tree is the source of truth, and we only
-    surface a banner when the remote actually moves away from what we've seen."""
+    """Decide whether the active branch has commits the local tree lacks.
+
+    In a git checkout the local HEAD is the source of truth: compare it to the
+    remote branch tip (GitHub compare API) and treat the remote-ahead count as
+    `behind`. This is what makes the banner intelligent: a commit the developer
+    made and pushed from this machine leaves local HEAD == remote tip, so
+    `behind` is 0 and no banner shows; unpushed local commits (local ahead) are
+    0 too. Only commits the remote genuinely has beyond local raise the banner,
+    with the real count.
+
+    The opaque tarball ETag can't tell "remote moved ahead" from "I pushed my
+    own commit", so it is only the fallback: for tarball installs (no `.git`),
+    or when the compare can't be reached. HEAD the tarball either way to keep
+    the ETag baseline and `head_short` fresh."""
     branch = _active_branch()
     url = _tarball_url(branch)
-    if not url:
-        msg = (f"no repo URL: set {_REPO_URL_ENV} or check that .git/config "
-               f"has a `remote.origin.url` pointing at the Veritate repo")
-        logmod.warn("http-updater", msg)
-        _update_state({
-            "last_check_ts":  time.time(),
-            "last_check_ok":  False,
-            "last_check_msg": msg,
-        })
-        return {"ok": False, "error": msg, "status": status()}
-
     etag, last_modified, err = _etag_cached(url)
     if err:
         logmod.error("http-updater", f"check failed: {err}")
@@ -594,8 +662,23 @@ def check_update():
 
     git_checkout = _is_git_checkout()
     baseline_patch = {}
+    behind = None
 
-    if etag and pulled_etag:
+    # Git checkout: local HEAD vs remote tip is authoritative.
+    if git_checkout:
+        behind, _cmp_err = _remote_ahead_behind(branch, _local_head_sha())
+
+    if behind is not None:
+        update_available = behind > 0
+        # Refresh the etag baseline only when in sync, so the fallback path
+        # still detects a difference if a later compare can't be reached.
+        if not update_available:
+            baseline_patch = {
+                "pulled_etag":          etag,
+                "pulled_last_modified": last_modified,
+                "pulled_branch":        branch,
+            }
+    elif etag and pulled_etag:
         update_available = (etag != pulled_etag)
     elif last_modified and pulled_lm:
         update_available = (last_modified != pulled_lm)
@@ -615,6 +698,9 @@ def check_update():
         # until the user pulls once.
         update_available = True
 
+    if behind is None:
+        behind = 1 if update_available else 0
+
     patch = {
         "last_check_ts":      time.time(),
         "last_check_ok":      True,
@@ -622,6 +708,7 @@ def check_update():
         "etag":               etag,
         "last_modified":      last_modified,
         "update_available":   update_available,
+        "behind":             behind,
         "remote_branch":      branch,
         "tarball_url":        url,
     }
@@ -671,11 +758,6 @@ def pull_update(reload=False, force=False, ignore_training=False):
 
     branch = _active_branch()
     url = _tarball_url(branch)
-    if not url:
-        msg = f"{_REPO_URL_ENV} is not set; cannot pull updates"
-        logmod.warn("http-updater", msg)
-        return {"ok": False, "error": msg}
-
     tmp_fd, tmp_path = tempfile.mkstemp(prefix="veritate-tarball-", suffix=".tar.gz")
     os.close(tmp_fd)
     try:

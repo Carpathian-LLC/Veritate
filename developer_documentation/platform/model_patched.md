@@ -17,12 +17,17 @@
 - `trunk=hybrid_moe` = `global_mixer="recurrent"` + `global_ffn="moe"`: the global RecurrentBlocks keep the constant-state mixer but swap their dense FFN for `MoEFFN` (DeepSeekMoE fine-grained MoE, see `model_moe.md`). Constructor default `global_ffn="dense"` keeps existing checkpoints loading `strict=True`; the swap happens before parameter init. Aux-loss surfaced via `moe_aux_sum()` (trainer adds it in the backward path), per-expert share via `moe_expert_share()`. Dump battery verified at real shape (`SMOKE_RESULTS/e8_moe_smoke.py`).
 - Looped verdict (E7, 2026-07-05, failures ledger): beats dense at matched params (0.9920 vs 0.9990, 1.63x) but loses to patched and hybrid on quality and wall-clock; test-time R sweep peaks at the training-mean depth and degrades beyond it (no think-longer effect); random-R training makes single val evals noisy (tail stdev ~0.009). Not the trunk to scale.
 
+## streaming (state carry across windows)
+
+`forward_streaming(tokens, states=None) -> (logits, states)` runs one fixed-shape `[B, window]` window and carries each global `RecurrentBlock`'s recurrence state (see `model_recurrent.md`, streaming section) across windows; `states` is a flat list in invocation order (loop iterations included), opaque to the caller. `supports_streaming()` returns True only for `global_mixer="recurrent"`. The training `forward` is a separate, untouched path (bit-identity verified against the pre-edit code, max_abs_diff 0.0). Approximations: `pos_emb` and `slot_pos_emb` are window-local, local attention stays within-window, and the per-window slot budget resets: only the constant-size global state crosses window boundaries. Requires the slot count (`seq / PATCH_STRIDE`) to be a CHUNK (64) multiple, i.e. `seq >= 256`. Consumers: `experiments/v2/longctx/needle_bench.py` (past-window needle distances) and the trainer's opt-in `state_carry=chunks` train-time chunk carry (contract in `model_recurrent.md`).
+
 ## dependencies
 
 `veritate_core/model.py` (Block, RMSNorm, QuantLinear, constants), `veritate_core/qat.py`.
 
 ## pitfalls
 
-- Not `.bin`-exportable (non-canonical trunk, preflight 40b) and no Brain/load branch: training + checkpoint evals only.
+- PyTorch-backend servable: `veritate_core/load.py::load_from_state_dict` dispatches on `training_args.trunk` and builds this class (`state_rule` threaded, `strict=True`), so checkpoints serve through `/generate` on the brain. Still not `.bin`-exportable (non-canonical trunk, preflight 40b); `export_checkpoint` refuses trunk != dense.
+- Attention panels are empty for the global blocks when the mixer is recurrent: no per-position attention weights exist (blocks pad to CHUNK=64 internally), and the brain's telemetry loop emits empty per-layer entries for them.
 - `dump_generation` per-layer telemetry reconstructs a dense pipeline; per-layer panels are not meaningful for the global blocks (checkpoints and bpb metrics are unaffected).
 - QAT rides along (all blocks carry the `qat` flag), but INT8 export claims should not be made until an engine path exists.

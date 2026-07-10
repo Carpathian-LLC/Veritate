@@ -78,7 +78,7 @@ def test_register_mounts_intel_settings_system_routes(app):
     """register(app) adds intel, settings, system, and models-page routes."""
     rules = {r.rule for r in app.url_map.iter_rules()}
     want = {"/ext/trading/intel/scan", "/ext/trading/intel/trending", "/ext/trading/intel/pumps",
-            "/ext/trading/intel/brief", "/ext/trading/intel/status",
+            "/ext/trading/intel/brief", "/ext/trading/intel/status", "/ext/trading/intel/candles",
             "/ext/trading/intel/watch/start", "/ext/trading/intel/watch/stop",
             "/ext/trading/settings", "/ext/trading/system", "/ext/trading/system/stop",
             "/ext/trading/system/stop_all", "/ext/trading/models"}
@@ -104,6 +104,16 @@ def test_system_stop_unknown_id_rejected(app):
     """POST /ext/trading/system/stop with an unknown id returns ok=false."""
     j = app.test_client().post("/ext/trading/system/stop", json={"id": "nope"}).get_json()
     assert j["ok"] is False
+
+
+def test_intel_candles_route_serves_and_404s(app, monkeypatch):
+    """GET /ext/trading/intel/candles returns scanner.candles rows; 404 when None."""
+    monkeypatch.setattr(sc, "candles", lambda sym, bar, limit: [
+        {"t": 1, "o": 1.0, "h": 1.0, "l": 1.0, "c": 1.0, "v": 2.0}])
+    j = app.test_client().get("/ext/trading/intel/candles?symbol=btc&bar=1H").get_json()
+    assert j["ok"] is True and j["symbol"] == "BTC" and len(j["candles"]) == 1
+    monkeypatch.setattr(sc, "candles", lambda sym, bar, limit: None)
+    assert app.test_client().get("/ext/trading/intel/candles?symbol=zzz").status_code == 404
 
 
 def test_settings_get_returns_defaults(app):

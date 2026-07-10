@@ -416,9 +416,12 @@ class Brain:
         ranked = sorted(scores.items(), key=lambda x: -x[1])[:MEMORY_TOP_N]
         return [{"text": t[:120], "score": round(s, 2)} for t, s in ranked]
 
-    def stream(self, prompt, temperature=0.7, top_k_sample=40, max_new=200, addons_chain=None, constraint=None):
+    def stream(self, prompt, temperature=0.7, top_k_sample=40, max_new=200, addons_chain=None,
+               constraint=None, rep_window=0, rep_penalty=0.0, no_repeat_ngram=0):
+        from inference.decode.repetition import RepetitionController
         m = self.model
         seq = m.seq
+        rep = RepetitionController(m.vocab, rep_window, rep_penalty, no_repeat_ngram)
         if not prompt:
             prompt = " "
         prompt_bytes = prompt.encode("utf-8")
@@ -490,6 +493,11 @@ class Brain:
             attn_to_pos = torch.zeros(T)
             for L in range(m.layers):
                 qkv = self.cap_qkv[L]
+                if qkv.size(1) != T:
+                    # recurrent-mixer block: capture is chunk-padded slot-space;
+                    # attention weights don't exist for it (model_patched.md).
+                    attn.append([])
+                    continue
                 q, k, _ = qkv.chunk(3, dim=-1)
                 q = q.view(1, T, m.heads, head_dim).transpose(1, 2)
                 k = k.view(1, T, m.heads, head_dim).transpose(1, 2)
@@ -549,7 +557,14 @@ class Brain:
                     # No legal byte; emit the stop event and bail.
                     yield {"kind": "stop", "reason": "constraint allowed no bytes"}
                     return
+            # Repetition control: hard no-repeat-ngram ban pre-topk, soft
+            # suffix-repeat penalty on the selected logits (scale-free demotion).
+            rep_ban, rep_soft = rep.compute()
+            if rep_ban is not None:
+                scaled = scaled.masked_fill(torch.from_numpy(rep_ban), float("-inf"))
             sv, si = torch.topk(scaled, top_k_sample)
+            if rep_soft is not None:
+                sv = sv - torch.from_numpy(rep_soft)[si]
             mask = torch.full_like(scaled, float("-inf"))
             mask.scatter_(0, si, sv)
             sample_probs = F.softmax(mask, dim=-1)
@@ -621,6 +636,7 @@ class Brain:
 
             if addons_chain is not None:
                 addons_chain.observe(nxt)
+            rep.observe(nxt)
             if constraint is not None:
                 constraint.step(nxt)
                 if constraint.done():
@@ -641,9 +657,11 @@ class Brain:
 
     def stream_fast(self, prompt, mode="kv", temperature=0.7, top_k_sample=40,
                     max_new=200, addons_chain=None, constraint=None,
-                    adaptive_threshold=0.8):
+                    adaptive_threshold=0.8, rep_window=0, rep_penalty=0.0, no_repeat_ngram=0):
+        from inference.decode.repetition import RepetitionController
         m = self.model
         seq = m.seq
+        rep = RepetitionController(m.vocab, rep_window, rep_penalty, no_repeat_ngram)
         if not prompt:
             prompt = " "
         prompt_bytes = prompt.encode("utf-8")
@@ -686,21 +704,23 @@ class Brain:
 
         if mode == "kv":
             yield from self._stream_fast_kv(prompt_bytes, temperature, top_k_sample,
-                                            max_new, addons_chain, constraint)
+                                            max_new, addons_chain, constraint, rep)
         elif mode == "adaptive":
             yield from self._stream_fast_adaptive(prompt_bytes, temperature, top_k_sample,
-                                                  max_new, addons_chain, constraint,
+                                                  max_new, addons_chain, constraint, rep,
                                                   threshold=adaptive_threshold)
         elif mode == "mtp":
             yield from self._stream_fast_mtp(prompt_bytes, temperature, top_k_sample,
-                                             max_new, addons_chain, constraint)
+                                             max_new, addons_chain, constraint, rep)
         elif mode == "mtp-verify":
             yield from self._stream_fast_mtp_verify(prompt_bytes, temperature, top_k_sample,
-                                                    max_new, addons_chain, constraint)
+                                                    max_new, addons_chain, constraint, rep)
 
-    def _sample_one(self, logits_1d, temperature, top_k_sample, addons_chain, constraint):
+    def _sample_one(self, logits_1d, temperature, top_k_sample, addons_chain, constraint, rep=None):
         """Shared per-step sampling helper for stream_fast. Returns int byte or
-        None to indicate the constraint forbids every byte."""
+        None to indicate the constraint forbids every byte. rep bias (if any) is
+        computed from the controller's observed history; callers observe the
+        committed byte."""
         scaled = logits_1d / max(temperature, 1e-6)
         if addons_chain is not None and len(addons_chain) > 0:
             scaled = addons_chain.bias_logits(scaled)
@@ -710,14 +730,19 @@ class Brain:
             scaled = scaled.masked_fill(~allowed, float("-inf"))
             if not torch.isfinite(scaled).any():
                 return None
+        rep_ban, rep_soft = (rep.compute() if rep is not None else (None, None))
+        if rep_ban is not None:
+            scaled = scaled.masked_fill(torch.from_numpy(rep_ban), float("-inf"))
         sv, si = torch.topk(scaled, top_k_sample)
+        if rep_soft is not None:
+            sv = sv - torch.from_numpy(rep_soft)[si]
         gate = torch.full_like(scaled, float("-inf"))
         gate.scatter_(0, si, sv)
         sample_probs = F.softmax(gate, dim=-1)
         return int(torch.multinomial(sample_probs, 1).item())
 
     def _stream_fast_kv(self, prompt_bytes, temperature, top_k_sample, max_new,
-                        addons_chain, constraint):
+                        addons_chain, constraint, rep=None):
         from inference.decode import KVCachedDecoder
 
         m = self.model
@@ -735,12 +760,14 @@ class Brain:
                     yield {"kind": "stop", "reason": "kv cache full"}
                     return
                 t0 = time.perf_counter()
-                nxt = self._sample_one(last_logits, temperature, top_k_sample, addons_chain, constraint)
+                nxt = self._sample_one(last_logits, temperature, top_k_sample, addons_chain, constraint, rep)
                 if nxt is None:
                     yield {"kind": "stop", "reason": "constraint allowed no bytes"}
                     return
                 if addons_chain is not None:
                     addons_chain.observe(nxt)
+                if rep is not None:
+                    rep.observe(nxt)
                 if constraint is not None:
                     constraint.step(nxt)
                 with torch.no_grad():
@@ -752,7 +779,7 @@ class Brain:
                     return
 
     def _stream_fast_mtp(self, prompt_bytes, temperature, top_k_sample, max_new,
-                         addons_chain, constraint):
+                         addons_chain, constraint, rep=None):
         from inference.decode import MTPDecoder
 
         m = self.model
@@ -775,7 +802,7 @@ class Brain:
             # Apply addons + constraint to head-0 only (the verified-canonical
             # byte). Heads 1..K-1 still run greedy from raw logits.
             head0 = last[0]
-            nxt0 = self._sample_one(head0, temperature, top_k_sample, addons_chain, constraint)
+            nxt0 = self._sample_one(head0, temperature, top_k_sample, addons_chain, constraint, rep)
             if nxt0 is None:
                 yield {"kind": "stop", "reason": "constraint allowed no bytes"}
                 return
@@ -783,6 +810,8 @@ class Brain:
             produced += 1
             if addons_chain is not None:
                 addons_chain.observe(nxt0)
+            if rep is not None:
+                rep.observe(nxt0)
             if constraint is not None:
                 constraint.step(nxt0)
             step_ms = (time.perf_counter() - t0) * 1000
@@ -801,13 +830,15 @@ class Brain:
                 if produced >= max_new:
                     break
                 row = last[hi]
-                nxt = self._sample_one(row, temperature, top_k_sample, addons_chain, constraint)
+                nxt = self._sample_one(row, temperature, top_k_sample, addons_chain, constraint, rep)
                 if nxt is None:
                     break
                 ctx.append(nxt)
                 produced += 1
                 if addons_chain is not None:
                     addons_chain.observe(nxt)
+                if rep is not None:
+                    rep.observe(nxt)
                 if constraint is not None:
                     constraint.step(nxt)
                 extras.append(int(nxt))
@@ -818,7 +849,7 @@ class Brain:
                     return
 
     def _stream_fast_mtp_verify(self, prompt_bytes, temperature, top_k_sample, max_new,
-                                addons_chain, constraint):
+                                addons_chain, constraint, rep=None):
         """Byte-exact MTP-verify (Medusa-style self-speculative). Each outer
         step does TWO forwards:
           Pass 1: forward at context. Draft K bytes from K heads at last pos.
@@ -861,7 +892,7 @@ class Brain:
             # only byte we COMMIT from pass 1 (the rest are speculative).
             head0_logits = last[0]
             nxt0 = self._sample_one(head0_logits, temperature, top_k_sample,
-                                    addons_chain, constraint)
+                                    addons_chain, constraint, rep)
             if nxt0 is None:
                 yield {"kind": "stop", "reason": "constraint allowed no bytes"}
                 return
@@ -882,7 +913,7 @@ class Brain:
                     for hi in range(1, K):
                         row = last[hi]
                         nxt = self._sample_one(row, temperature, top_k_sample,
-                                               addons_chain, constraint)
+                                               addons_chain, constraint, rep)
                         if nxt is None:
                             break
                         drafts.append(int(nxt))
@@ -942,6 +973,8 @@ class Brain:
                 produced += 1
                 if addons_chain is not None:
                     addons_chain.observe(int(b))
+                if rep is not None:
+                    rep.observe(int(b))
                 if constraint is not None:
                     constraint.step(int(b))
                 yield {
@@ -956,7 +989,7 @@ class Brain:
                     return
 
     def _stream_fast_adaptive(self, prompt_bytes, temperature, top_k_sample, max_new,
-                              addons_chain, constraint, threshold=0.8):
+                              addons_chain, constraint, rep=None, threshold=0.8):
         """Per-position adaptive depth (LayerSkip-style). For each byte:
           - Walk blocks one at a time. After each block, project the residual
             through the FINAL RMSNorm + tied LM head (logit-lens).
@@ -1010,7 +1043,7 @@ class Brain:
             layers_used_hist.append(exit_layer)
 
             nxt = self._sample_one(final_logits, temperature, top_k_sample,
-                                   addons_chain, constraint)
+                                   addons_chain, constraint, rep)
             if nxt is None:
                 yield {"kind": "stop", "reason": "constraint allowed no bytes"}
                 return
@@ -1019,6 +1052,8 @@ class Brain:
             produced += 1
             if addons_chain is not None:
                 addons_chain.observe(nxt)
+            if rep is not None:
+                rep.observe(nxt)
             if constraint is not None:
                 constraint.step(nxt)
 

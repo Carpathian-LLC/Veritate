@@ -37,6 +37,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setattr(sc, "CG_CACHE_PATH", str(tmp_path / "cg_cache.json"))
     monkeypatch.setattr(sc, "_CACHE", None)
+    monkeypatch.setattr(sc, "_CANDLES", {})
     return tmp_path
 
 
@@ -218,6 +219,60 @@ def test_scan_persists_snapshot(sandbox, monkeypatch):
     sc.scan(refresh=True)
     snaps = sc._snaps()
     assert len(snaps) == 1 and snaps[0]["syms"]["AAA"][0] == 50.0
+
+# ------------------------------------------------------------------------------------
+# Candles
+
+RAW_CANDLES = [["1700007200000", "1.2", "1.4", "1.1", "1.3", "60", "50", "300.0", "1"],
+               ["1700003600000", "1.1", "1.3", "1.0", "1.2", "50", "45", "200.0", "1"],
+               ["1700000000000", "1.0", "1.2", "0.9", "1.1", "40", "38", "100.0", "1"]]
+
+
+def _okx_candles(monkeypatch, payload, calls=None):
+    def fake(url):
+        if calls is not None:
+            calls.append(url)
+        return payload
+    monkeypatch.setattr(sc, "_get_json", fake)
+
+
+def test_candles_rows_oldest_first_with_quote_volume(sandbox, monkeypatch):
+    """OKX newest-first rows come back oldest-first as {t,o,h,l,c,v}, v = quote USD volume."""
+    _okx_candles(monkeypatch, {"code": "0", "data": RAW_CANDLES})
+    rows = sc.candles("btc", "1H")
+    assert [r["t"] for r in rows] == [1700000000, 1700003600, 1700007200]
+    assert rows[0] == {"t": 1700000000, "o": 1.0, "h": 1.2, "l": 0.9, "c": 1.1, "v": 100.0}
+
+
+def test_candles_limit_returns_newest_tail(sandbox, monkeypatch):
+    """limit trims to the newest rows after ordering."""
+    _okx_candles(monkeypatch, {"code": "0", "data": RAW_CANDLES})
+    assert [r["t"] for r in sc.candles("BTC", "1H", limit=2)] == [1700003600, 1700007200]
+
+
+def test_candles_ttl_cache_skips_refetch(sandbox, monkeypatch):
+    """A second call inside CANDLE_TTL_S serves the cache without another fetch."""
+    calls = []
+    _okx_candles(monkeypatch, {"code": "0", "data": RAW_CANDLES}, calls)
+    sc.candles("BTC", "1H")
+    sc.candles("BTC", "1H")
+    assert len(calls) == 1
+
+
+def test_candles_feed_down_serves_stale_cache(sandbox, monkeypatch):
+    """A failed refetch after TTL expiry serves the stale rows, not None."""
+    _okx_candles(monkeypatch, {"code": "0", "data": RAW_CANDLES})
+    first = sc.candles("BTC", "1H")
+    sc._CANDLES[("BTC", "1H")]["ts"] -= sc.CANDLE_TTL_S + 1
+    monkeypatch.setattr(sc, "_get_json", lambda url: None)
+    assert sc.candles("BTC", "1H") == first
+
+
+def test_candles_rejects_bad_bar_and_blank_symbol(sandbox, monkeypatch):
+    """An unknown bar or empty symbol returns None before any fetch."""
+    calls = []
+    _okx_candles(monkeypatch, {"code": "0", "data": RAW_CANDLES}, calls)
+    assert sc.candles("BTC", "5m") is None and sc.candles("", "1H") is None and calls == []
 
 # ------------------------------------------------------------------------------------
 # Watch resume

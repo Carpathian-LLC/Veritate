@@ -39,6 +39,7 @@ STATE_PATH = os.path.join(DATA_DIR, "state.json")
 CG_CACHE_PATH = os.path.join(DATA_DIR, "cg_cache.json")
 
 OKX_TICKERS_URL = "https://www.okx.com/api/v5/market/tickers?instType=SPOT"
+OKX_CANDLES_URL = "https://www.okx.com/api/v5/market/candles?instId={}-USDT&bar={}&limit={}"
 CG_TRENDING_URL = "https://api.coingecko.com/api/v3/search/trending"
 CG_MEME_URL = ("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd"
                "&category=meme-token&order=market_cap_desc&per_page=100"
@@ -65,10 +66,14 @@ EVENTS_MAX = 5000         # events.jsonl line cap (oldest rotated out)
 CG_TTL_S = 300            # CoinGecko refresh at most once per scan cadence
 SCAN_TTL_S = 240          # /scan serves the cached result inside this window
 SCAN_SEC = 300            # watch thread cadence
+CANDLE_BARS = ("1H", "4H", "1Dutc")   # chart bars; 1Dutc avoids OKX's UTC+8 daily alignment
+CANDLE_MAX = 300          # OKX per-call row cap; every fetch grabs the full window
+CANDLE_TTL_S = 60         # per (sym, bar) cache window
 
 _LOCK = threading.Lock()
 _CACHE = None             # last scan result
 _RUN = None               # watch thread {thread, stop, interval, model}
+_CANDLES = {}             # (sym, bar) -> {ts, rows}
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -119,6 +124,28 @@ def okx_rows():
                                    "high": float(r["high24h"]), "low": float(r["low24h"]),
                                    "vol_usd": vol}
     return out
+
+
+def candles(sym, bar, limit=CANDLE_MAX):
+    """OHLCV rows oldest-first for one USDT pair: [{t, o, h, l, c, v}], v = quote USD volume.
+    TTL-cached per (sym, bar); a failed refetch serves the stale cache. None on bad input
+    or unreachable feed with no cache."""
+    sym = "".join(ch for ch in str(sym).upper() if ch.isalnum())
+    if not sym or bar not in CANDLE_BARS:
+        return None
+    limit = max(2, min(CANDLE_MAX, int(limit)))
+    with _LOCK:
+        c = _CANDLES.get((sym, bar))
+    if c and time.time() - c["ts"] < CANDLE_TTL_S:
+        return c["rows"][-limit:]
+    d = _get_json(OKX_CANDLES_URL.format(sym, bar, CANDLE_MAX))
+    if not d or d.get("code") != "0" or not d.get("data"):
+        return c["rows"][-limit:] if c else None
+    rows = [{"t": int(r[0]) // 1000, "o": float(r[1]), "h": float(r[2]), "l": float(r[3]),
+             "c": float(r[4]), "v": float(r[7])} for r in reversed(d["data"])]
+    with _LOCK:
+        _CANDLES[(sym, bar)] = {"ts": time.time(), "rows": rows}
+    return rows[-limit:]
 
 
 def cg_boards(refresh=False):

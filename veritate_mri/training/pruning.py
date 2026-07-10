@@ -16,12 +16,9 @@
 # Imports:
 
 import json
-import math
 import os
 import sys
 import time
-
-import numpy as np
 
 _MRI_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 if _MRI_ROOT not in sys.path:
@@ -40,26 +37,30 @@ ACTIVITY_KEEP_MIN = 0.05  # never recommend pruning below 5% width
 # ------------------------------------------------------------------------------------
 # Functions
 
-def measure_activity(model, corpus_path, n_samples=DEFAULT_SAMPLES,
+def resolve_corpus_mix(spec):
+    """Resolve a stored corpus spec (single stem or weighted mixture like
+    "a:0.6,b:0.4") to the [(train_path, val_path, weight)] the mixed loader
+    consumes. Reuses the canonical multicorpus parser and platform resolver so
+    pruning scores against the exact training distribution."""
+    from readers import corpus as corpus_reader
+    from veritate_core.plugin import multicorpus
+    return multicorpus.resolve_and_weight(spec, corpus_reader.resolve_paths)
+
+
+def measure_activity(model, corpus_mix, n_samples=DEFAULT_SAMPLES,
                      seq_len=None, threshold=DEFAULT_THRESHOLD, seed=0):
     """For each FFN layer, compute the per-unit activity score over n_samples
-    random windows of corpus bytes. Returns a list of dicts with the per-layer
-    breakdown plus a per-unit score tensor that the prune routine consumes.
+    random windows drawn from the corpus mix. Returns a list of dicts with the
+    per-layer breakdown plus a per-unit score tensor the prune routine consumes.
 
-    score[L][n] = max post-GELU magnitude that unit n produced across all
-                  positions in all sampled windows.
-    a unit is 'alive' if its score exceeds `threshold`.
+    score[L][n] = max post-activation magnitude that unit n produced across all
+                  sampled positions. a unit is 'alive' if its score > threshold.
     """
     import torch
-
-    if not os.path.isfile(corpus_path):
-        raise FileNotFoundError(f"corpus not found: {corpus_path}")
+    from veritate_core.plugin import multicorpus
 
     seq_len = int(seq_len or model.seq)
-    arr = np.memmap(corpus_path, dtype=np.uint8, mode="r")
-    N = len(arr)
-    if N < seq_len + 2:
-        raise ValueError(f"corpus too small: {N} bytes, need at least {seq_len + 2}")
+    draw, _ = multicorpus.make_mixed_loader(corpus_mix, 1, seq_len, int(seed))
 
     device = next(model.parameters()).device
     was_training = model.training
@@ -78,14 +79,11 @@ def measure_activity(model, corpus_path, n_samples=DEFAULT_SAMPLES,
             cap[L] = mag if cap[L] is None else torch.maximum(cap[L], mag)
         handles.append(blk.ff.up.register_forward_hook(_hook))
 
-    rng = np.random.default_rng(int(seed))
     try:
         with torch.no_grad():
             for _ in range(int(n_samples)):
-                start = int(rng.integers(0, N - seq_len - 1))
-                toks  = torch.from_numpy(arr[start:start + seq_len].astype(np.int64))
-                toks  = toks.unsqueeze(0).to(device)
-                model(toks)
+                toks, _ = draw()
+                model(toks.to(device))
     finally:
         for h in handles: h.remove()
         if was_training: model.train()
@@ -239,10 +237,10 @@ def main():
     base.load_state_dict(sd, strict=True)
     base.eval()
 
-    train_path, _ = save.resolve_corpus(args.corpus)
+    corpus_mix = pruning.resolve_corpus_mix(args.corpus)
     print(f"measuring activity on {{args.samples}} sampled windows of {{args.corpus}}", flush=True)
     t0 = time.time()
-    report = pruning.measure_activity(base, train_path,
+    report = pruning.measure_activity(base, corpus_mix,
                                        n_samples=args.samples,
                                        threshold=args.threshold)
     print(f"  done in {{time.time() - t0:.1f}}s", flush=True)

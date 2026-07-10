@@ -17,10 +17,13 @@ Presence is always on: there is no off switch. `heartbeat_enabled` defaults `Tru
 
 State persisted at `data/heartbeat_state.json` ([line 71](../../../veritate_mri/runtime/heartbeat.py#L71)):
 
-- `machine_id` — sha256 of platform identifiers, 16 chars.
+- `machine_id` — 16 chars, `sha256("machine|" + fingerprint)`, bound to this box.
+- `machine_fingerprint` — 16-char hash of `sys_metrics.stable_machine_key()` (Linux `/etc/machine-id`, macOS `IOPlatformUUID`, Windows `MachineGuid`) plus OS/arch.
 - `host_token` — random per-install token (avoids shipping the macOS hostname).
 - `restarts`, `total_runtime_secs`, `errors_pending` — counters.
 - `last_send_ts`, `last_send_status`, `last_send_error` — last attempt outcome.
+
+**Auto-deconfliction.** `_ensure_identity()` reconciles the persisted id with the current fingerprint on every read. A fresh install, or state copied to another box (fingerprint present but different), regenerates `machine_id` + `host_token` so two machines never heartbeat under the same id. An existing id with no fingerprint (pre-fingerprint state) is grandfathered — kept as-is and stamped with this machine's fingerprint — so upgrades don't churn established ids, while any later clone of that stamped state mismatches and regenerates. `reconcile_identity()` is called by `POST /sys/detect` so "detect system" repairs a cloned id on demand. `data/` is machine-local and must not be copied between installs (excluded from any deploy sync; the HTTP updater already preserves it).
 
 ## Training detection (two paths)
 

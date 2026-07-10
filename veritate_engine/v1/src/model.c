@@ -11,6 +11,7 @@
 #include "veritate.h"
 #include "portability.h"
 #include "addons.h"
+#include "hybrid.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -641,6 +642,7 @@ void dla_top(const model_t* m, const int8_t* ffn_neurons_pos, int32_t byte, dla_
     const int32_t K = VERITATE_DLA_TOPK;
     int32_t heap_abs[VERITATE_DLA_TOPK];
     dla_entry_t heap[VERITATE_DLA_TOPK];
+    memset(heap, 0, sizeof(heap));
     for (int32_t i = 0; i < K; i++) heap_abs[i] = -1;
 
     const int32_t V = m->shape.vocab, F = m->shape.ffn, Ln = m->shape.layers;
@@ -728,6 +730,18 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
              int32_t real_len, int8_t* out_act, trace_record_t* trace, profile_t* prof) {
     const veritate_shape_t* sh = &m->shape;
     const int32_t S = sh->seq, H = sh->hidden, F = sh->ffn, V = sh->vocab, NH = sh->heads;
+
+    // v13 hybrid: turn start. reset stream state, walk the prompt byte-by-byte.
+    if (m->hybrid) {
+        hybrid_t* hb = (hybrid_t*)m->hybrid;
+        hybrid_reset(hb);
+        for (int32_t i = 0; i < real_len; i++) hybrid_step(hb, tokens[i], trace);
+        cache->len = real_len;
+        hybrid_final_act_i8(hb, out_act);
+        if (trace) memcpy(trace->final_act, out_act, (size_t)H);
+        (void)prof;
+        return;
+    }
 
     // MoE prefill: ffn() is single-FFN-only. when any block routes per-token,
     // fall back to S sequential forward_decode calls. correctness-first; the
@@ -947,10 +961,20 @@ void forward_decode(const model_t* m, kv_cache_t* cache, int32_t token, int8_t* 
     const veritate_shape_t* sh = &m->shape;
     const int32_t S = sh->seq, H = sh->hidden, F = sh->ffn, V = sh->vocab;
     const int32_t NH = sh->heads, HD = sh->head_dim;
-    decode_acts_t* d = &((acts_pool_t*)m->scratch)->decode;
-
     int32_t pos = cache->len;
     if (pos >= S) return;
+
+    // v13 hybrid: one byte through the fp32 path.
+    if (m->hybrid) {
+        hybrid_t* hb = (hybrid_t*)m->hybrid;
+        hybrid_step(hb, token, trace);
+        cache->len = pos + 1;
+        hybrid_final_act_i8(hb, out_act);
+        if (trace) memcpy(trace->final_act, out_act, (size_t)H);
+        return;
+    }
+
+    decode_acts_t* d = &((acts_pool_t*)m->scratch)->decode;
 
     const size_t per_layer_residual = (size_t)S * H;
     const size_t per_layer_ffn      = (size_t)S * F;
@@ -1165,9 +1189,9 @@ void forward_verify(const model_t* m, kv_cache_t* cache, int32_t K,
     const int32_t NH = sh->heads, HD = sh->head_dim;
     if (K <= 0) return;
     if (K > VERITATE_VERIFY_K_MAX) K = VERITATE_VERIFY_K_MAX;
-    if (K == 1 || m->blocks[0].use_int4 || m->n_experts > 1) {
-        // int4 path uses the per-row decode kernel; MoE has no batched verify
-        // path; either way, just call decode K times.
+    if (K == 1 || m->hybrid || m->blocks[0].use_int4 || m->n_experts > 1) {
+        // int4 path uses the per-row decode kernel; MoE and hybrid have no
+        // batched verify path; either way, just call decode K times.
         for (int32_t r = 0; r < K; r++) {
             forward_decode(m, cache, tokens[r], out_hidden_K + (size_t)r * H, NULL);
         }
@@ -1349,23 +1373,40 @@ void lm_head_build(model_t* m) {
 }
 
 int32_t sample_token_ext(const model_t* m, const int8_t* hidden, float temp, int32_t top_k,
-                         uint32_t* rng, int32_t* out_logits, int32_t* out_argmax) {
+                         uint32_t* rng, int32_t* out_logits, int32_t* out_argmax,
+                         const rep_ctx_t* rep) {
     const int32_t V = m->shape.vocab;
     const int32_t H = m->shape.hidden;
     int32_t* logits = (int32_t*)malloc((size_t)V * sizeof(int32_t));
     float*   fp     = (float*)  malloc((size_t)V * sizeof(float));
 
-    // v12: apply byte-0 MTP head before the lm_head matmul. On v11 and earlier
-    // (mtp_present == 0) this is a memcpy, so the int8 path is unchanged.
-    int8_t* h_byte0 = (int8_t*)malloc((size_t)H);
-    model_project_byte0(m, hidden, h_byte0);
-    matmul_int8_vnni_prep(h_byte0, &m->lm_head, logits, 1);
-    free(h_byte0);
+    if (m->hybrid) {
+        // v13: fp32 logits from the last hybrid step, scaled to the shared
+        // int32 sampler / telemetry convention. `hidden` is display-only here.
+        hybrid_logits_i32((const hybrid_t*)m->hybrid, logits);
+    } else {
+        // v12: apply byte-0 MTP head before the lm_head matmul. On v11 and earlier
+        // (mtp_present == 0) this is a memcpy, so the int8 path is unchanged.
+        int8_t* h_byte0 = (int8_t*)malloc((size_t)H);
+        model_project_byte0(m, hidden, h_byte0);
+        matmul_int8_vnni_prep(h_byte0, &m->lm_head, logits, 1);
+        free(h_byte0);
+    }
 
     int32_t argmax = 0;
-    int32_t argmax_logit = logits[0];
-    for (int32_t v = 1; v < V; v++) {
-        if (logits[v] > argmax_logit) { argmax_logit = logits[v]; argmax = v; }
+    if (m->hybrid) {
+        // fp32 argmax: the int32 view quantizes at 1/1024 and could tie-break
+        // differently on near-equal logits.
+        const float* flog = ((const hybrid_t*)m->hybrid)->logits;
+        float best = flog[0];
+        for (int32_t v = 1; v < V; v++) {
+            if (flog[v] > best) { best = flog[v]; argmax = v; }
+        }
+    } else {
+        int32_t argmax_logit = logits[0];
+        for (int32_t v = 1; v < V; v++) {
+            if (logits[v] > argmax_logit) { argmax_logit = logits[v]; argmax = v; }
+        }
     }
     if (out_logits) memcpy(out_logits, logits, (size_t)V * sizeof(int32_t));
     if (out_argmax) *out_argmax = argmax;
@@ -1382,9 +1423,51 @@ int32_t sample_token_ext(const model_t* m, const int8_t* hidden, float temp, int
             else                   logits[v] = (int32_t)fp[v];
         }
         argmax = 0;
-        argmax_logit = logits[0];
+        int32_t biased_best = logits[0];
         for (int32_t v = 1; v < V; v++) {
-            if (logits[v] > argmax_logit) { argmax_logit = logits[v]; argmax = v; }
+            if (logits[v] > biased_best) { biased_best = logits[v]; argmax = v; }
+        }
+    }
+
+    // repetition control: byte-level no-repeat-ngram hard ban (pre-topk) plus a
+    // soft suffix-repeat penalty applied in the softmax below. mirrors
+    // veritate_mri/inference/decode/repetition.py. rep NULL / disabled leaves the
+    // sampler bitwise-identical (rep_soft never read, logits untouched).
+    float rep_soft[256];
+    int   rep_soft_on = 0;
+    if (rep && rep->hist && rep->hist_len > 0 && V <= 256 &&
+        (rep->no_repeat_ngram > 0 || rep->penalty > 0.0f)) {
+        int32_t hl = rep->hist_len;
+        int32_t win = rep->window > 0 ? rep->window : hl;
+        int32_t lo = hl - win; if (lo < 0) lo = 0;
+        int32_t T = hl - lo;
+        const uint8_t* w = rep->hist + lo;
+        int32_t nrn = rep->no_repeat_ngram;
+        int32_t best[256];
+        for (int32_t b = 0; b < 256; b++) best[b] = -1;
+        for (int32_t i = 0; i < T; i++) {
+            int32_t ml = 0;
+            while (ml < VERITATE_REP_MATCH_CAP && (i - 1 - ml) >= 0 &&
+                   w[i - 1 - ml] == w[T - 1 - ml]) ml++;
+            int32_t bv = w[i];
+            if (ml > best[bv]) best[bv] = ml;
+        }
+        for (int32_t bv = 0; bv < 256; bv++) {
+            int32_t ml = best[bv];
+            if (ml < 0) continue;
+            int32_t run = ml + 1;
+            if (nrn > 0 && run >= nrn) {
+                if (bv < V) logits[bv] = -2147483647 - 1;
+            } else if (rep->penalty > 0.0f && run >= VERITATE_REP_MIN_MATCH) {
+                if (!rep_soft_on) { for (int32_t z = 0; z < 256; z++) rep_soft[z] = 0.0f; }
+                rep_soft[bv] = rep->penalty * (float)(run - VERITATE_REP_MIN_MATCH + 1);
+                rep_soft_on = 1;
+            }
+        }
+        argmax = 0;
+        int32_t rep_best = logits[0];
+        for (int32_t v = 1; v < V; v++) {
+            if (logits[v] > rep_best) { rep_best = logits[v]; argmax = v; }
         }
     }
 
@@ -1423,12 +1506,18 @@ int32_t sample_token_ext(const model_t* m, const int8_t* hidden, float temp, int
         free(heap);
     }
 
+    // v13 logits carry the x1024 telemetry scale; fold it into the temperature
+    // so the softmax sees true logit/temp units (dense int8 logits keep their
+    // historical scale). rep_soft then subtracts in the scale-free nat units
+    // repetition.py defines.
+    const float t_eff = m->hybrid ? temp * VERITATE_HYBRID_LOGIT_SCALE : temp;
     float max_fp = -1e30f;
     for (int32_t v = 0; v < V; v++) {
         if (logits[v] < threshold) {
             fp[v] = -1e30f;
         } else {
-            fp[v] = (float)logits[v] / temp;
+            fp[v] = (float)logits[v] / t_eff;
+            if (rep_soft_on) fp[v] -= rep_soft[v];
             if (fp[v] > max_fp) max_fp = fp[v];
         }
     }
@@ -1452,7 +1541,7 @@ int32_t sample_token_ext(const model_t* m, const int8_t* hidden, float temp, int
 }
 
 int32_t sample_token(const model_t* m, const int8_t* hidden, float temp, int32_t top_k, uint32_t* rng) {
-    return sample_token_ext(m, hidden, temp, top_k, rng, NULL, NULL);
+    return sample_token_ext(m, hidden, temp, top_k, rng, NULL, NULL, NULL);
 }
 
 // ------------------------------------------------------------------------------------
@@ -1699,6 +1788,33 @@ int model_load(model_t* m, const char* path) {
         m->shape.layers <= 0) { fclose(f); return -1; }
     if (m->shape.ffn > V_MAX_FFN) { fclose(f); return -1; }
 
+    // dense kernels (score_dot_v, inline attn, hadamard) are specialized to
+    // head_dim 64; other head dims silently corrupt heap. refuse at load. the
+    // v13 hybrid path below is head_dim-generic and exempt.
+    if (hdr.version != VERITATE_MODEL_VERSION_HYBRID &&
+        m->shape.head_dim != V_HEAD_DIM) {
+        fprintf(stderr, "model_load: dense path requires head_dim %d, got %d "
+                        "(hidden %d / heads %d)\n",
+                V_HEAD_DIM, m->shape.head_dim, m->shape.hidden, m->shape.heads);
+        fclose(f);
+        return -1;
+    }
+
+    // v13 hybrid: separate fp32 loader + forward path. int8 storage stays NULL;
+    // byte_direction arrays are allocated zeroed so trace consumers see empty
+    // tables instead of dereferencing NULL.
+    if (hdr.version == VERITATE_MODEL_VERSION_HYBRID) {
+        m->hybrid = hybrid_load(f, m->shape.vocab, m->shape.hidden, m->shape.layers,
+                                m->shape.ffn, m->shape.heads, m->shape.seq);
+        fclose(f);
+        if (!m->hybrid) return -1;
+        m->byte_direction       = (int16_t**)calloc((size_t)m->shape.layers, sizeof(int16_t*));
+        m->byte_direction_scale = (float*)calloc((size_t)m->shape.layers, sizeof(float));
+        if (!m->byte_direction || !m->byte_direction_scale) { model_free(m); return -1; }
+        m->cw_loaded = 0;
+        return 0;
+    }
+
     if (model_alloc_storage(m) != 0) { fclose(f); model_free(m); return -1; }
 
     if (hdr.version == VERITATE_MODEL_VERSION_INT4) {
@@ -1915,6 +2031,7 @@ int confidence_weights_load(model_t* m, const char* path) {
 
 void model_free(model_t* m) {
     if (!m) return;
+    if (m->hybrid) { hybrid_free((hybrid_t*)m->hybrid); m->hybrid = NULL; }
     byte_direction_free(m);
     free_prepped_b(&m->lm_head);
     if (m->mtp_present) {

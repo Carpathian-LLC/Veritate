@@ -64,8 +64,13 @@ Scores headlines via `/teacher/complete` (HTTP, no internal imports) and aggrega
 Standalone forward-running paper trader (CLI, like `recorder.py`). Each tick: `scraper.scrape`
 -> `sentiment.score_items` + `aggregate` -> `targets()` (per-asset long exposure; only coins
 in the `TRADABLE` universe above `--gate`, so the LLM tagging COINBASE/ALIBABA never becomes a
-position) -> `rebalance()` a SIMULATED JSON ledger marked to live Binance.US prices, round-trip
-spread `--fee_bps` -> persist (per-asset sentiment + price each tick, for the insight charts).
+position) -> `rebalance()` a SIMULATED JSON ledger marked to live Binance.US prices, charging
+`--fee_bps` **per side** on traded notional (`FEE=0.0020`, 20bp/side live) -> persist (per-asset
+sentiment + price each tick, for the insight charts). Each tick also accumulates `cum_notional`
+(gross traded value, `notional_of()`) and stores `fee_side`; the account route uses them to
+report an exact fee counterfactual `equity_alt` at `ALT_FEE` (10bp/side, the documented
+round-trip intent) off the same trade tape, so alternative cost assumptions need no second
+trader. `cum_notional` accrues forward from instrumentation, not over truncated history.
 **Trading is event-driven, not on a clock:** `--interval` only sets how often it SCANS news
 (default 300s); `rebalance` trades a position only when its target exposure shifts more than
 `--band` (the fee-aware deadband, default 0.12 of equity). So it trades heavily during breaking
@@ -201,7 +206,7 @@ token choice rides on `start` (`focus`), `sentiment` (`token`), and is echoed ba
 
 - Needs a configured teacher model (Ollama works locally). Calls `/teacher/complete` on the
   same host; the scraper hits public RSS + alternative.me.
-- **Validation status (see `overnight_run_log.md`):** the scrape->score->aggregate path is
+- **Validation status (see `worklog.md`):** the scrape->score->aggregate path is
   built and verified live. But the only FREE historical sentiment series (fear-greed) has
   ~zero predictive correlation with forward returns (corr ≈ 0.02), so there is no free
   historical backtest for the LLM-news thesis. The published edge is event-level and fast;
@@ -216,4 +221,18 @@ token choice rides on `start` (`focus`), `sentiment` (`token`), and is echoed ba
   LLM sentiment are look-ahead-contaminated (the model was trained on the past) and the free
   historical proxy (fear-greed) is a null predictor — so trust the FORWARD paper record, not a
   backtest. A GDELT historical headline-scoring test (`/tmp/gdelt_sent_test.py`) is the closest
-  historical probe; see `overnight_run_log.md` for its result.
+  historical probe; see `worklog.md` for its result.
+- **Fee is per-side, but the `FEE` constant was historically labeled "round-trip"** and the
+  autotrader spec says 20bp round-trip. The live book charges 20bp/side (≈40bp round-trip); the
+  `equity_alt`/`ALT_FEE` counterfactual reports the documented 10bp/side alongside it. Turnover
+  is high (event-driven but frequent), so the modeled fee dominates the P&L — the cost assumption
+  is the single biggest lever on whether this book is net-positive. Do not silently retune `FEE`
+  on the live arm to improve the number; the counterfactual exists to test cost realism honestly.
+- `history` is capped at the last 1000 rows, so lifetime trade attribution cannot be
+  reconstructed from the ledger after truncation; `cum_notional` is the durable forward counter.
+- **Server re-execs kill non-resuming threads.** `/lifecycle/soft_reload` and `restart`
+  re-exec the process; the quant arms come back via their `resume()`, so a news arm that
+  did not resume would silently gap its record while they keep ticking. `start_thread` now
+  stamps `auto`+`resume_cfg` in the ledger and `register.register()` calls `nt.resume()` at
+  boot (mirrors `xsmom_trader`), so the user-started `main` news arm survives re-execs;
+  `stop_thread` clears the flag so a stopped arm stays stopped.

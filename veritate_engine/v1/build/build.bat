@@ -32,13 +32,14 @@ set ROOT=%~dp0..
 set OUT=%ROOT%\bin\windows\x86_64
 if not exist "%OUT%" mkdir "%OUT%"
 
-set CFLAGS=-O3 -flto=full -march=native -mavx2 -mavx512f -mavx512bw -mavx512vnni -Wall -Wextra -Wno-unused-parameter -DVERITATE_VERIFY_DECODE -DVERITATE_GELU_ZERO_THRESH=4
+set CFLAGS=-O3 -flto=full -march=native -mavx2 -mavx512f -mavx512bw -mavx512vnni -Wall -Wextra -Wno-unused-parameter -DVERITATE_VERIFY_DECODE -DVERITATE_GELU_ZERO_THRESH=4 -DV_SEQ=1024
 
 echo build: %CLANG%
 "%CLANG%" %CFLAGS% ^
     "%ROOT%\src\main.c" ^
     "%ROOT%\src\dispatch.c" ^
     "%ROOT%\src\model.c" ^
+    "%ROOT%\src\hybrid.c" ^
     "%ROOT%\src\alloc.c" ^
     "%ROOT%\src\threadpool.c" ^
     "%ROOT%\src\addons.c" ^

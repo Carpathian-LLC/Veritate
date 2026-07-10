@@ -49,6 +49,29 @@ let live = true;
 let promptBytes = [];
 let generatedBytes = [];
 let coactState = { pairs: new Map(), nFrames: 0 };
+let hallucReport = null;
+
+// ---- hallucination + confidence coloring ----
+const HALLUC_KB_SCOPE = "all";
+const HALLUC_DEFAULT_MAXNEW = 128;
+const HALLUC_DEFAULT_TEMP = 0.8;
+const HALLUC_VERDICT = {
+  grounded:            { cls: "v-grounded",     label: "grounded" },
+  partially_grounded:  { cls: "v-partial",      label: "partially grounded" },
+  likely_hallucinated: { cls: "v-hallucinated", label: "likely hallucinated" },
+  low_confidence:      { cls: "v-low",          label: "low confidence" },
+  refused:             { cls: "v-refused",      label: "refused" },
+  ungrounded_ok:       { cls: "v-ungrounded",   label: "ungrounded (ok)" },
+};
+
+function _confColorOn() { const c = $("confColorToggle"); return !!(c && c.checked); }
+function _confLevel() { const s = $("confColorLevel"); return (s && s.value) || "word"; }
+function _groundClass(g) {
+  if (g === "yes") return " g-yes";
+  if (g === "no") return " g-no";
+  if (g === "partial") return " g-partial";
+  return "";
+}
 
 // ---- utility ----
 
@@ -1121,13 +1144,92 @@ function drawFlowList(elId, flow) {
 }
 
 // ---- generic response renderer ----
-function renderResponseInto(el, promptBs, generatedBs, frameIdx, showCursor) {
+// Map each visible char (code unit) to the frame-local byte index that produced
+// it. Chat mode collapses multi-byte utf-8 into fewer chars, so a char can span
+// several bytes; use the last byte of the char's encoding.
+function _charByteMap(raw, sliceLen) {
+  const enc = new TextEncoder();
+  const map = new Array(raw.length);
+  let b = 0, cu = 0;
+  for (const ch of raw) {
+    b += enc.encode(ch).length;
+    const last = Math.min(b - 1, sliceLen - 1);
+    for (let k = 0; k < ch.length; k++) map[cu++] = last;
+  }
+  return map;
+}
+
+function _segmentRanges(text, level) {
+  const ranges = [];
+  if (level === "word") {
+    const re = /\S+/g; let m;
+    while ((m = re.exec(text))) ranges.push([m.index, m.index + m[0].length]);
+    return ranges;
+  }
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const sentenceEnd = (c === "." || c === "!" || c === "?") &&
+                        (i + 1 >= text.length || /\s/.test(text[i + 1]));
+    const cut = (level === "sentence") ? (sentenceEnd || c === "\n") : (c === "\n");
+    if (cut) { ranges.push([start, i + 1]); start = i + 1; }
+  }
+  if (start < text.length) ranges.push([start, text.length]);
+  return ranges;
+}
+
+function _meanConf(charByte, frameList, frameBase, s, e) {
+  let sum = 0, n = 0;
+  for (let c = s; c < e; c++) {
+    const bi = charByte[c];
+    if (bi == null) continue;
+    const f = frameList[frameBase + bi];
+    if (f && typeof f.confidence === "number") { sum += f.confidence; n++; }
+  }
+  return n ? sum / n : null;
+}
+
+function _appendColoredText(el, slice, stripChat, frameList, frameBase, level) {
+  let visible, charByte;
+  if (stripChat) {
+    const raw = new TextDecoder("utf-8", { fatal: false }).decode(Uint8Array.from(slice));
+    visible = stripChatStream(raw);
+    charByte = _charByteMap(raw, slice.length);
+  } else {
+    visible = "";
+    charByte = new Array(slice.length);
+    for (let i = 0; i < slice.length; i++) { visible += byteToCh(slice[i]); charByte[i] = i; }
+  }
+  const ranges = _segmentRanges(visible, level);
+  let pos = 0;
+  for (const [s, e] of ranges) {
+    if (s > pos) el.appendChild(document.createTextNode(visible.slice(pos, s)));
+    const conf = _meanConf(charByte, frameList, frameBase, s, e);
+    const span = document.createElement("span");
+    span.className = "cw";
+    if (conf != null) { span.style.color = confColor(conf); span.title = `confidence ${conf.toFixed(2)}`; }
+    span.textContent = visible.slice(s, e);
+    el.appendChild(span);
+    pos = e;
+  }
+  if (pos < visible.length) el.appendChild(document.createTextNode(visible.slice(pos)));
+}
+
+function renderResponseInto(el, promptBs, generatedBs, frameIdx, showCursor, stripChat, frameList, frameBase) {
   el.innerHTML = "";
   const ps = document.createElement("span"); ps.className = "pr";
   ps.textContent = String.fromCharCode(...promptBs.filter(b => b < 256));
   el.appendChild(ps);
   const slice = generatedBs.slice(0, frameIdx + 1);
-  for (const b of slice) el.appendChild(document.createTextNode(byteToCh(b)));
+  const colorOn = _confColorOn() && Array.isArray(frameList) && frameList.length > 0;
+  if (colorOn) {
+    _appendColoredText(el, slice, stripChat, frameList, frameBase || 0, _confLevel());
+  } else if (stripChat) {
+    const raw = new TextDecoder("utf-8", { fatal: false }).decode(Uint8Array.from(slice));
+    el.appendChild(document.createTextNode(stripChatStream(raw)));
+  } else {
+    for (const b of slice) el.appendChild(document.createTextNode(byteToCh(b)));
+  }
   if (showCursor) {
     const cur = document.createElement("span"); cur.className = "cur"; cur.textContent = " ";
     el.appendChild(cur);
@@ -1135,9 +1237,49 @@ function renderResponseInto(el, promptBs, generatedBs, frameIdx, showCursor) {
   el.scrollTop = el.scrollHeight;
 }
 
+// Report-driven render: colors + grounding outlines from a /hallucination
+// analysis. Uses the report's own answer text and span offsets, so chat-marker
+// stripping is already handled server-side.
+function _reportTier(report, level) {
+  const paras = (report.spans && report.spans.paragraphs) || [];
+  if (level === "paragraph") return paras;
+  const sents = paras.flatMap(p => p.sentences || []);
+  if (level === "sentence") return sents;
+  return sents.flatMap(s => s.words || []);
+}
+
+function renderGroundedResponse(el, promptBs, report) {
+  el.innerHTML = "";
+  const ps = document.createElement("span"); ps.className = "pr";
+  ps.textContent = String.fromCharCode(...promptBs.filter(b => b < 256));
+  el.appendChild(ps);
+  const ans = report.answer || "";
+  const colorOn = _confColorOn();
+  let pos = 0;
+  for (const seg of _reportTier(report, _confLevel())) {
+    if (seg.start > pos) el.appendChild(document.createTextNode(ans.slice(pos, seg.start)));
+    const span = document.createElement("span");
+    span.className = "cw" + _groundClass(seg.grounded);
+    const c = (typeof seg.confidence === "number") ? seg.confidence : null;
+    if (colorOn && c != null) span.style.color = confColor(c);
+    const gTxt = seg.grounded ? ` · grounded: ${seg.grounded}` : "";
+    if (c != null) span.title = `confidence ${c.toFixed(2)}${gTxt}`;
+    else if (gTxt) span.title = gTxt.slice(3);
+    span.textContent = ans.slice(seg.start, seg.end);
+    el.appendChild(span);
+    pos = seg.end;
+  }
+  if (pos < ans.length) el.appendChild(document.createTextNode(ans.slice(pos)));
+  el.scrollTop = el.scrollHeight;
+}
+
 // ---- live tab render ----
 function renderResponse() {
-  renderResponseInto($("response"), promptBytes, generatedBytes, currentFrame, live);
+  const el = $("response");
+  const full = frames.length === 0 || currentFrame === frames.length - 1;
+  if (hallucReport && full) { renderGroundedResponse(el, promptBytes, hallucReport); return; }
+  renderResponseInto(el, promptBytes, generatedBytes, currentFrame, live,
+                     _genMode() === "chat", frames, 0);
 }
 
 function blankCanvas(c, ctx, msg) {
@@ -1146,6 +1288,147 @@ function blankCanvas(c, ctx, msg) {
   ctx.fillStyle = "#6f7480"; ctx.font = "11px ui-monospace,monospace";
   ctx.fillText(msg, 8, h / 2);
 }
+
+// ---- hallucination detect ----
+function _hallucModel(backend) {
+  if (backend === "c") return (meta && meta.c_model_dir) || (($("cModel") || {}).value || "");
+  return (($("cModel") || {}).value || "");
+}
+
+function _clip(s, n) { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+async function runHallucinationDetect() {
+  const btn = $("detectHalluc"), st = $("detectStatus");
+  const backend = (($("backend") || { value: "pytorch" }).value || "pytorch").toLowerCase();
+  const model = _hallucModel(backend);
+  if (st) st.className = "halluc-status";
+  if (!model) { if (st) { st.textContent = "no model loaded"; st.className = "halluc-status err"; } return; }
+  const prompt = ($("prompt") || { value: "" }).value;
+  if (!prompt.trim()) { if (st) { st.textContent = "enter a prompt first"; st.className = "halluc-status err"; } return; }
+  const mode = _genMode();
+  const kUi = parseInt(($("ragK") || { value: "" }).value, 10);
+  const maxNew = parseInt(($("maxnew") || { value: "" }).value, 10);
+  const temp = parseFloat(($("temp") || { value: "" }).value);
+  const body = {
+    model, backend,
+    max_new: isNaN(maxNew) ? HALLUC_DEFAULT_MAXNEW : maxNew,
+    temperature: isNaN(temp) ? HALLUC_DEFAULT_TEMP : temp,
+  };
+  if (mode === "chat") {
+    body.message = prompt; body.use_rag = true; body.kb_scope = HALLUC_KB_SCOPE;
+    if (!isNaN(kUi)) body.k = kUi;
+  } else {
+    body.prompt = prompt; body.use_rag = false;
+  }
+  if (btn) { btn.disabled = true; btn.dataset.busy = "1"; }
+  if (st) st.textContent = "analyzing...";
+  try {
+    const r = await fetch("/hallucination/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      const msg = data.error || `analyze failed (${r.status})`;
+      if (st) { st.textContent = msg; st.className = "halluc-status err"; }
+      drawHallucinationError(msg);
+      return;
+    }
+    hallucReport = data;
+    drawHallucination(data);
+    renderResponse();
+    if (st) st.textContent = `verdict: ${(data.overall && data.overall.verdict) || "?"}`;
+  } catch (e) {
+    const msg = _backendErrMsg(e);
+    if (st) { st.textContent = msg; st.className = "halluc-status err"; }
+    drawHallucinationError(msg);
+  } finally {
+    if (btn) { btn.disabled = false; btn.dataset.busy = ""; }
+  }
+}
+
+function _provenanceHtml(prov) {
+  const sources = prov.grounded_sources || [];
+  const matches = prov.training_matches || [];
+  let h = `<div class="halluc-prov"><h4>grounded sources</h4>`;
+  if (!sources.length) {
+    h += `<div class="note">no retrieved context supported a span (RAG off or no match).</div>`;
+  } else {
+    for (const s of sources) {
+      h += `<div class="halluc-src">
+        <div class="span">"${_esc(_clip(s.span, 120))}"</div>
+        <div class="meta">context #${s.source_chunk} · score ${(+s.score).toFixed(3)}</div>
+      </div>`;
+    }
+  }
+  h += `<h4>training matches <span class="note">similar training text (not proof of source)</span></h4>`;
+  if (!matches.length) {
+    h += `<div class="note">no near training passages.</div>`;
+  } else {
+    for (const m of matches) {
+      let ps = "";
+      for (const p of (m.passages || [])) {
+        ps += `<div class="passage">"${_esc(_clip(p.text, 140))}" <span class="meta">${_esc(p.corpus || "")} · ${(+p.score).toFixed(3)}</span></div>`;
+      }
+      h += `<div class="halluc-src"><div class="span">"${_esc(_clip(m.span, 120))}"</div>${ps}</div>`;
+    }
+  }
+  return h + `</div>`;
+}
+
+function drawHallucination(report) {
+  const el = $("hallucinationPanel");
+  if (!el) return;
+  const o = report.overall || {};
+  const v = HALLUC_VERDICT[o.verdict] || { cls: "v-ungrounded", label: o.verdict || "unknown" };
+  const legend = `linear-gradient(90deg, ${confColor(0)}, ${confColor(0.5)}, ${confColor(1)})`;
+  const bar = (label, val, invert) => {
+    if (val == null) return `<div><div class="halluc-metric-head"><span>${label}</span><span class="halluc-na">n/a</span></div></div>`;
+    const clamp = Math.max(0, Math.min(1, val));
+    const col = confColor(invert ? 1 - clamp : clamp);
+    return `<div>
+      <div class="halluc-metric-head"><span>${label}</span><span>${(clamp * 100).toFixed(0)}%</span></div>
+      <div class="halluc-bar"><div class="halluc-fill" style="width:${(clamp * 100).toFixed(0)}%;background:${col}"></div></div>
+    </div>`;
+  };
+  const flag = o.uncertain ? `<span class="halluc-flag">uncertain</span>` : "";
+  let html = `
+    <div class="halluc-head">
+      <span class="verdict-chip ${v.cls}">${v.label}</span>
+      ${flag}
+      <span style="color:var(--dim);font-size:11px">confidence source: ${_esc(report.confidence_source || "?")}</span>
+    </div>
+    <div class="halluc-metrics">
+      ${bar("hallucination risk", o.hallucination_risk, true)}
+      ${bar("grounded fraction", o.grounded_fraction, false)}
+      ${bar("context divergence", o.context_divergence, true)}
+    </div>
+    <div class="conf-legend"><span>low</span><span class="bar" style="background:${legend}"></span><span>high confidence</span></div>`;
+  el.innerHTML = html + _provenanceHtml(report.provenance || {});
+}
+
+function drawHallucinationError(msg) {
+  const el = $("hallucinationPanel");
+  if (el) el.innerHTML = `<div class="halluc-error">${_esc(msg)}</div>`;
+}
+
+function resetHallucination() {
+  hallucReport = null;
+  const el = $("hallucinationPanel");
+  if (el) el.innerHTML = `<div class="halluc-empty">generate, then click <b>detect hallucinations</b> above to score grounding and risk.</div>`;
+  const st = $("detectStatus");
+  if (st) { st.textContent = ""; st.className = "halluc-status"; }
+}
+
+(function _wireHallucination() {
+  const btn = $("detectHalluc");
+  if (btn) btn.addEventListener("click", runHallucinationDetect);
+  ["confColorToggle", "confColorLevel"].forEach(id => {
+    const e = $(id);
+    if (e) e.addEventListener("change", () => { if (frames.length || hallucReport) renderResponse(); });
+  });
+})();
 
 function _coactRegionClass(layer, totalLayers) {
   const t = totalLayers || 12;
@@ -1290,6 +1573,7 @@ function setMeta(m) {
     <span class="stat">ffn <b>${m.ffn}</b></span>
   `;
   if (typeof _applyModeAvailability === "function") _applyModeAvailability();
+  if (typeof updateMaxHint === "function") updateMaxHint();
 }
 
 // ---- addons ----
@@ -1348,8 +1632,13 @@ function _genMode() {
 function _activeCapabilities() {
   const m = meta || {};
   const backend = ($("backend") || { value: "c" }).value;
-  if (backend === "pytorch") return m.pytorch_capabilities || _legacyCaps();
-  return m.c_model_capabilities || _legacyCaps();
+  // Capabilities describe the trained weights, not the runtime. When the active
+  // backend has no model loaded (its caps block is null), borrow the other
+  // backend's caps before the legacy default, so a chat-trained model does not
+  // read as chat:untrained just because this backend has not loaded it yet.
+  const primary   = backend === "pytorch" ? m.pytorch_capabilities : m.c_model_capabilities;
+  const secondary = backend === "pytorch" ? m.c_model_capabilities : m.pytorch_capabilities;
+  return primary || secondary || _legacyCaps();
 }
 
 function _legacyCaps() {
@@ -1466,25 +1755,52 @@ function showAgentEmpty(reason) {
   const meta = $("agentPanelMeta"); if (meta) meta.textContent = "—";
 }
 
-// ---- ChatML framing (documentation/corpus/framing.md) ----
+// ---- chat framing (platform chat markers — same contract as /hybrid/chat) ----
 // Frames are literal byte sequences the chat-trained model learned in SFT.
-// vocab=256, so these are just bytes, not special tokens.
+// vocab=256, so these are just bytes, not special tokens. Current chat models
+// (chat_v1/v2/v3 corpora) train on <|user|>/<|assistant|>/<|end|>; ChatML
+// markers stay in the strip list as legacy defense.
 const CHATML_IM_START = "<|im_start|>";
 const CHATML_IM_END   = "<|im_end|>";
 const CHATML_EOT      = "<|endoftext|>";
-function wrapChatML(prompt) {
-  return `${CHATML_IM_START}user\n${prompt}${CHATML_IM_END}\n${CHATML_IM_START}assistant\n`;
+const CHAT_SYSTEM_TAG    = "<|system|>";
+const CHAT_USER_TAG      = "<|user|>";
+const CHAT_ASSISTANT_TAG = "<|assistant|>";
+const CHAT_END_TAG       = "<|end|>";
+const DEFAULT_PERSONA    = "You are Veritate, a helpful assistant.";
+function chatPersona() {
+  const el = $("genPersona");
+  const v = el ? (el.value || "").trim() : "";
+  return v || DEFAULT_PERSONA;
 }
-function stripChatMLResponse(text) {
-  // Trim everything from the first <|im_end|> or <|endoftext|> onward.
-  // Defensive against the model emitting a stray <|im_start|> next-turn header.
-  const cuts = [CHATML_IM_END, CHATML_EOT, `${CHATML_IM_START}user`, `${CHATML_IM_START}tool`];
+// Prepend the trained system turn so the model has an identity to answer with,
+// then the user/assistant frame it learned in SFT (build_chat_corpus template).
+function wrapChat(prompt) {
+  return `${CHAT_SYSTEM_TAG}\n${chatPersona()}\n${CHAT_USER_TAG}\n${prompt}\n${CHAT_ASSISTANT_TAG}\n`;
+}
+function stripChatResponse(text) {
+  // Trim at the first end-of-turn / next-turn marker (either framing).
+  const cuts = [CHAT_END_TAG, CHAT_USER_TAG, CHAT_ASSISTANT_TAG,
+                CHATML_IM_END, CHATML_EOT, `${CHATML_IM_START}user`, `${CHATML_IM_START}tool`];
   let cut = text.length;
   for (const m of cuts) {
     const i = text.indexOf(m);
     if (i >= 0 && i < cut) cut = i;
   }
   return text.slice(0, cut).replace(/\s+$/, "");
+}
+const CHAT_STREAM_MARKERS = [CHAT_END_TAG, CHAT_USER_TAG, CHAT_ASSISTANT_TAG,
+                             CHATML_IM_END, CHATML_IM_START];
+function stripChatStream(text) {
+  // Live chat view: cut at the first complete turn marker, then drop a trailing
+  // partial marker so a forming "<|us" never flashes as self-talk.
+  const out = stripChatResponse(text);
+  for (const m of CHAT_STREAM_MARKERS) {
+    for (let n = Math.min(m.length - 1, out.length); n > 0; n--) {
+      if (out.endsWith(m.slice(0, n))) return out.slice(0, out.length - n).replace(/\s+$/, "");
+    }
+  }
+  return out;
 }
 
 // ---- chat history (localStorage) ----
@@ -1704,7 +2020,9 @@ const _GenThink = (() => {
     const tail = (generatedBs.length > STREAM_TAIL_BYTES)
       ? generatedBs.slice(generatedBs.length - STREAM_TAIL_BYTES)
       : generatedBs;
-    renderResponseInto(el, promptBs, tail, tail.length - 1, !!showCursor);
+    const base = generatedBs.length - tail.length;
+    renderResponseInto(el, promptBs, tail, tail.length - 1, !!showCursor,
+                       _genMode() === "chat", frames, base);
   }
   // End-of-generation: kill the typer, drop any live cursor, leave the
   // streamed answer visible. If we never left the typewriter (no bytes
@@ -1755,6 +2073,7 @@ $("go").addEventListener("click", async () => {
   if (replay.timer) { clearInterval(replay.timer); replay.timer = null; }
   frames = []; generatedBytes = []; currentFrame = -1; live = true;
   resetLiveCoact();
+  resetHallucination();
   setReplayMode("live");
 
   const prompt = $("prompt").value;
@@ -1898,10 +2217,21 @@ $("go").addEventListener("click", async () => {
   }
 
   if (mode === "chat") pushChatMessage("you", prompt);
-  // ChatML wrap for chat mode so a chat-SFT model recognizes the frame it
-  // learned. Autocomplete mode sends the raw prompt.
-  const wirePrompt = (mode === "chat") ? wrapChatML(prompt) : prompt;
-  const url = `/generate?prompt=${encodeURIComponent(wirePrompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}${ragParam}`;
+  // Platform chat-marker wrap for chat mode so a chat-SFT model recognizes
+  // the frame it learned. Autocomplete mode sends the raw prompt.
+  const wirePrompt = (mode === "chat") ? wrapChat(prompt) : prompt;
+  // Repetition control is chat-only: loops are chat-lethal but autocomplete
+  // legitimately repeats. Autocomplete omits the params (server default off).
+  let repParam = "";
+  if (mode === "chat") {
+    const repWin = parseInt(($("genRepWindow") || { value: "256" }).value, 10);
+    const repPen = parseFloat(($("genRepPenalty") || { value: "0.5" }).value);
+    const repNg  = parseInt(($("genRepNgram") || { value: "16" }).value, 10);
+    repParam = `&rep_window=${isNaN(repWin) ? 256 : repWin}`
+             + `&rep_penalty=${isNaN(repPen) ? 0.5 : repPen}`
+             + `&no_repeat_ngram=${isNaN(repNg) ? 16 : repNg}`;
+  }
+  const url = `/generate?prompt=${encodeURIComponent(wirePrompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}${ragParam}${repParam}`;
   evtSrc = new EventSource(url);
   const t0 = performance.now();
   evtSrc.onmessage = (e) => {
@@ -1994,10 +2324,12 @@ $("go").addEventListener("click", async () => {
     if (mode === "chat" && generatedBytes.length > 0) {
       try {
         const raw   = new TextDecoder("utf-8", { fatal: false }).decode(Uint8Array.from(generatedBytes));
-        const clean = stripChatMLResponse(raw);
+        const clean = stripChatResponse(raw);
         if (clean) pushChatMessage("model", clean);
       } catch (_) {}
     }
+    const auto = $("hallucAuto");
+    if (auto && auto.checked && generatedBytes.length > 0) runHallucinationDetect();
   });
   evtSrc.onerror = () => {
     evtSrc?.close(); evtSrc = null;
@@ -2120,6 +2452,9 @@ function activateTab(name) {
     });
   } else if (name === "training") {
     startTrainPolling();
+    // Pull discovery now so the export/resume model lists aren't blank on entry;
+    // the 3s _trPoll interval would otherwise leave them empty until the next tick.
+    _trPoll();
     trainStreamStart();
     requestAnimationFrame(() => {
       [cLossT, cLrT, cTpsT, cGnT, cConfEvoT, cReadGradeT].forEach(fitCanvas);
@@ -2156,9 +2491,15 @@ var _trainStreamCount = 0;
 window.addEventListener("hashchange", () => activateTab(location.hash.slice(1)));
 setTimeout(() => activateTab(location.hash.slice(1)), 0);
 
-// keep the max-bytes hint in sync with the prompt length. engine caps at V_SEQ=256.
-const C_SEQ = 256;
+// keep the max-bytes hint in sync with the prompt length. the C engine caps at
+// its compiled V_SEQ; read the loaded model's seq from /meta (hybrid-class bins
+// are built at 1024) and fall back to 1024 rather than the old hardcoded 256.
+function _cSeqCap() {
+  const s = (typeof meta !== "undefined" && meta && meta.seq) ? parseInt(meta.seq, 10) : 0;
+  return s > 0 ? s : 1024;
+}
 function updateMaxHint() {
+  const C_SEQ = _cSeqCap();
   const promptBs = (new TextEncoder().encode($("prompt").value)).length;
   const cap = Math.max(0, C_SEQ - promptBs);
   $("maxHint").textContent = `engine cap: ${cap} bytes (V_SEQ=${C_SEQ} − ${promptBs} prompt)`;
@@ -2409,6 +2750,10 @@ const _GenPrefs = (() => {
     ["ablNeuron", "value"],
     ["genFastMode", "value"],
     ["genConstrained", "value"],
+    ["genPersona", "value"],
+    ["genRepNgram", "value"],
+    ["genRepPenalty", "value"],
+    ["genRepWindow", "value"],
     ["ragCorpus", "value"],
     ["ragK", "value"],
     ["ragCompress", "value"],
@@ -6838,10 +7183,56 @@ function _cEngineRebuildFailed(host, msg) {
   if (host) {
     host.innerHTML = `<b style="color:var(--hot)">rebuild failed:</b> ${safe} ${_cEngineActionsHtml()}`;
     _wireCEngineActions(host);
+    _maybeOfferDeps(host);
   } else {
     backendsState.lastError = `rebuild failed: ${msg}`;
     _renderBackendState();
   }
+}
+
+// A build needs a C compiler (git enables sync). When a system dep is missing, append
+// the remedy under the rebuild-failed message: a one-click install where the OS can
+// auto-install (loopback + package manager), otherwise the commands to paste.
+function _maybeOfferDeps(host) {
+  fetch("/engine/deps").then(r => r.json()).then(d => {
+    const missing = ((d && d.deps) || []).filter(x => !x.present);
+    if (!missing.length) return;
+    const box = document.createElement("div");
+    box.style.cssText = "margin-top:6px;font-size:11px;line-height:1.5";
+    _renderDepsRemedy(box, d, missing);
+    host.appendChild(box);
+  }).catch(() => {});
+}
+
+function _depsCommandsHtml(missing) {
+  return missing.filter(m => m.install_command)
+    .map(m => ` <code>${escapeHtml(m.install_command)}</code>`).join("");
+}
+
+function _renderDepsRemedy(box, d, missing) {
+  const head = `<b style="color:var(--warm)">missing: ${missing.map(m => escapeHtml(m.label)).join(", ")}.</b>`;
+  if (!d.can_auto_install) {
+    box.innerHTML = `${head} <span style="color:var(--dim)">run in a terminal:</span>${_depsCommandsHtml(missing)}`;
+    return;
+  }
+  box.innerHTML = `${head} <a href="#" data-deps-action="install" style="color:var(--accent)">install now</a> <span style="color:var(--dim)">(needs passwordless sudo)</span>`;
+  box.querySelector("[data-deps-action='install']").addEventListener("click", (e) => {
+    e.preventDefault();
+    box.innerHTML = `<span class="spinner"></span> <b style="color:var(--warm)">installing dependencies&hellip;</b>`;
+    fetch("/engine/deps/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+      .then(r => r.json().catch(() => ({ ok: false, error: `http ${r.status}` })))
+      .then(res => {
+        if (res && res.ok) {
+          box.innerHTML = `<b style="color:var(--accent)">dependencies installed.</b> <span style="color:var(--dim)">retrying build&hellip;</span>`;
+          _cEngineRebuild(box);
+        } else {
+          const still = ((res && res.status && res.status.deps) || missing).filter(x => !x.present);
+          box.innerHTML = `<b style="color:var(--hot)">install failed:</b> ${escapeHtml((res && res.error) || "")}` +
+            (still.length ? ` <span style="color:var(--dim)">run in a terminal:</span>${_depsCommandsHtml(still)}` : "");
+        }
+      })
+      .catch(err => { box.innerHTML = `<b style="color:var(--hot)">install failed:</b> ${escapeHtml(String(err && err.message || err))}`; });
+  });
 }
 
 function _applyGenerateGate() {
@@ -7004,7 +7395,7 @@ function _trBuildInput(a) {
       const what = source === "bundled"
         ? "this bundle's own corpus folder"
         : (source === "shared" ? "the shared corpus folder (trainers/corpus/)" : "any corpus folder");
-      return `<p class="train-no-corpus-error">No training data file found in ${what}. Drop a <code>&lt;name&gt;_train.bin</code> file at ${where}, then click <i>refresh</i>.</p><input type="hidden" data-arg="${_trEsc(name)}" value="">`;
+      return `<p class="train-no-corpus-error">No training data file found in ${what}. <a class="train-corpus-lib-link" data-open-corpus-lib>Download one from the corpus library</a>, or drop a <code>&lt;name&gt;_train.bin</code> file at ${where}, then click <i>refresh</i>.</p><input type="hidden" data-arg="${_trEsc(name)}" value="">`;
     }
     // Collapsed checkbox picker. The hidden input carries the joined "+"
     // stem list (multicorpus handles weighting); the summary echoes it.
@@ -7961,6 +8352,9 @@ function _trWireArgListeners() {
       });
     });
   });
+  document.querySelectorAll('#trainArgs [data-open-corpus-lib]').forEach(link => {
+    link.addEventListener("click", _corpusOpenLibraryModal);
+  });
   document.querySelectorAll('#trainArgs .hint').forEach(hint => {
     hint.addEventListener("mouseenter", () => _trPosHintPop(hint));
     hint.addEventListener("mouseleave", () => _trClearHintPop(hint));
@@ -8644,6 +9038,11 @@ function _exRender() {
   row.style.display = "flex";
   const models = (trainState.discovery && trainState.discovery.models) || [];
   const cur = sel.value;
+  if (!trainState.loaded && models.length === 0) {
+    sel.innerHTML = '<option value="">loading models&hellip;</option>';
+    _exPopulateSteps();
+    return;
+  }
   sel.innerHTML = '<option value="">- pick a model -</option>' +
     models.map(m => `<option value="${_trEsc(m.name)}">${_trEsc(m.name)}</option>`).join("");
   if (cur && models.some(m => m.name === cur)) sel.value = cur;
@@ -9458,9 +9857,8 @@ function _renderHud(snap) {
   if (!gpus.length) { gpuHost.innerHTML = ""; return; }
   gpuHost.innerHTML = gpus.map((g, i) => {
     const load = g.load_pct;
-    const w = load == null ? 0 : Math.min(100, load);
-    const val = load == null ? "—" : Math.round(load) + "%";
     const tag = g.integrated ? "iGPU" : "GPU";
+    const lbl = `${tag}${i > 0 ? (i+1) : ""}`;
     let detail = g.name;
     if (g.vram_used != null && g.vram_total != null) {
       detail += ` · ${_fmtBytes(g.vram_used)}/${_fmtBytes(g.vram_total)}`;
@@ -9469,8 +9867,14 @@ function _renderHud(snap) {
     }
     const gFmt = _fmtTemp(g.temp_c);
     if (gFmt) detail += ` · ${gFmt.val}${gFmt.suffix}`;
-    if (load == null) detail += ` · no load telemetry`;
-    return `<div class="hud-bar gpu" title="${g.name}"><span class="lbl">${tag}${i > 0 ? (i+1) : ""}</span><div class="track"><div class="fill" style="width:${w}%"></div></div><span class="val">${val}</span><span class="detail">${detail}</span></div>`;
+    // No utilization counter for this adapter (Intel iGPU on Linux, non-NVIDIA
+    // Windows): disable the meter, keep the adapter and its other telemetry.
+    if (load == null) {
+      detail += ` · no load telemetry`;
+      return `<div class="hud-bar gpu" title="${g.name}"><span class="lbl">${lbl}</span><div class="track na"></div><span class="val na">N/A</span><span class="detail">${detail}</span></div>`;
+    }
+    const w = Math.min(100, load);
+    return `<div class="hud-bar gpu" title="${g.name}"><span class="lbl">${lbl}</span><div class="track"><div class="fill" style="width:${w}%"></div></div><span class="val">${Math.round(load)}%</span><span class="detail">${detail}</span></div>`;
   }).join("");
 }
 
@@ -11805,6 +12209,43 @@ function _renderSysSpecs(s) {
   view.style.color = "var(--text)";
 }
 
+// Renders the Settings > System dependencies panel: each registry dep with a
+// ready/missing mark, its purpose, and (for missing ones) a one-click install where
+// the OS can auto-install, else the command to paste. `err` shows a failure banner.
+function _renderSystemDeps(err) {
+  const view = $("systemDepsView");
+  if (!view) return;
+  fetch("/engine/deps").then(r => r.json()).then(d => {
+    if (!d || !d.deps) { view.textContent = "unavailable"; return; }
+    const rows = d.deps.map(dep => {
+      const mark = dep.present
+        ? `<span style="color:var(--accent)">ready</span>`
+        : `<span style="color:var(--warm)">missing</span>`;
+      const opt = dep.required ? "" : ` <span style="color:var(--dim)">optional</span>`;
+      const cmd = (!dep.present && dep.install_command)
+        ? `<div style="color:var(--dim);margin-left:12px"><code>${escapeHtml(dep.install_command)}</code></div>` : "";
+      return `<div>${escapeHtml(dep.label)}: ${mark}${opt} <span style="color:var(--dim)">&mdash; ${escapeHtml(dep.purpose)}</span></div>${cmd}`;
+    }).join("");
+    const missing = d.deps.filter(x => !x.present);
+    const action = (missing.length && d.can_auto_install)
+      ? `<div style="margin-top:6px"><a href="#" data-deps-action="install" style="color:var(--accent)">install missing dependencies</a> <span style="color:var(--dim)">(needs passwordless sudo)</span></div>`
+      : "";
+    const banner = err ? `<div style="color:var(--hot);margin-bottom:4px">${escapeHtml(err)}</div>` : "";
+    view.innerHTML = banner + rows + action;
+    const btn = view.querySelector("[data-deps-action='install']");
+    if (btn) btn.addEventListener("click", (e) => { e.preventDefault(); _installDeps(); });
+  }).catch(() => { view.textContent = "unavailable"; });
+}
+
+function _installDeps() {
+  const view = $("systemDepsView");
+  if (view) view.innerHTML = `<span class="spinner"></span> <b style="color:var(--warm)">installing dependencies&hellip;</b>`;
+  fetch("/engine/deps/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+    .then(r => r.json().catch(() => ({ ok: false, error: `http ${r.status}` })))
+    .then(res => _renderSystemDeps(res && res.ok ? "" : (res && res.error) || "install failed"))
+    .catch(err => _renderSystemDeps(String(err && err.message || err)));
+}
+
 async function showConsentModal({ allowDecline }) {
   const body = `
     <div style="display:grid;gap:10px">
@@ -12041,6 +12482,9 @@ document.addEventListener("DOMContentLoaded", () => {
       .finally(() => { detectBtn.disabled = false; detectBtn.textContent = prev; });
   });
   fetch("/sys/specs").then(r => r.json()).then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoTuneVisibility(); _applyDevicePrefCapabilities(); }).catch(() => {});
+  const depsBtn = $("sysDepsBtn");
+  if (depsBtn) depsBtn.addEventListener("click", () => _renderSystemDeps());
+  _renderSystemDeps();
   const hbBtn = $("heartbeatSendBtn");
   if (hbBtn) hbBtn.addEventListener("click", () => {
     const lab = $("heartbeatSendStatus");

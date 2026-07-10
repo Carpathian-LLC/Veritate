@@ -82,6 +82,19 @@
   .response .pr { color: var(--dim); }
   .response .cur { background: #fff; color: #000; animation: blink .8s steps(2) infinite; padding: 0 1px; }
   @keyframes blink { 50% { background: transparent; color: inherit; } }
+  /* per-word confidence + grounding overlay on the response */
+  .response .cw { border-bottom: 2px solid transparent; }
+  .response .cw.g-yes { border-bottom-color: var(--data-pos); }
+  .response .cw.g-no { border-bottom-color: var(--hot); }
+  .response .cw.g-partial { border-bottom-color: var(--warm); }
+  /* output tools: coloring toggle, granularity, detect button */
+  .out-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+  .out-tools .out-tool { display: inline-flex; align-items: center; gap: 5px; color: var(--dim); margin: 0; cursor: pointer; }
+  .out-tools select.out-tool { background: #0a0c12; border: 1px solid var(--line); color: var(--text); padding: 3px 6px; border-radius: 3px; font: inherit; cursor: pointer; }
+  .halluc-btn { padding: 4px 12px; font-size: 11px; }
+  .halluc-btn[data-busy="1"] { opacity: .6; }
+  .halluc-status { font-size: 11px; color: var(--dim); }
+  .halluc-status.err { color: var(--hot); }
   .timeline { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
   .timeline input[type=range] { flex: 1; -webkit-appearance: none; appearance: none; background: transparent; height: 18px; cursor: pointer; padding: 0; margin: 0; }
   .timeline input[type=range]::-webkit-slider-runnable-track { height: 4px; background: var(--line); border-radius: 2px; }
@@ -190,6 +203,7 @@
   #trainRecent tr:hover td { background: rgba(255,255,255,0.025); }
 
   .train-no-corpus-error { font-size: 12px; color: var(--hot, #ff5d5d); margin: 4px 0; line-height: 1.5; }
+  .train-corpus-lib-link { color: var(--accent); cursor: pointer; text-decoration: underline; }
 
   /* training tab — roomier sections than the rest of the app */
   .tab-body[data-tab="training"] > .panel { padding: 22px 24px; margin-bottom: 16px; }
@@ -477,6 +491,8 @@
   .hud-bar .track { flex: 1 1 0; min-width: 60px; height: 6px; background: #1a1f28; border-radius: 1px; overflow: hidden; }
   .hud-bar .fill  { height: 100%; transition: width 0.4s ease; }
   .hud-bar .val   { color: var(--text); min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
+  .hud-bar .track.na { background: repeating-linear-gradient(45deg, #14171d, #14171d 4px, #1a1f28 4px, #1a1f28 8px); }
+  .hud-bar .val.na   { color: var(--dim); }
   .hud-bar.cpu .fill { background: var(--cool, #5dc8ff); }
   .hud-bar.mem .fill { background: #3b5dd9; }
   .hud-bar.tmp-cpu .fill { background: #ff9a4d; }
@@ -847,3 +863,30 @@
   body.training-active #trainFormToggle { display: none !important; }
   body.training-active .train-flow-card:not([data-flow="export"]) { opacity: 0.35; pointer-events: none; }
   body.training-active .train-flow-card[data-flow="export"] .train-flow-card-desc::after { content: " Works while a run is training."; color: var(--data-pos); }
+
+  /* hallucination panel */
+  .halluc-panel { display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
+  .halluc-empty { color: var(--dim); font-style: italic; }
+  .halluc-error { color: var(--hot); }
+  .halluc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .verdict-chip { padding: 3px 10px; border-radius: 3px; font-weight: 600; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; border: 1px solid transparent; }
+  .verdict-chip.v-grounded { background: rgba(93,156,117,.18); color: var(--data-pos); border-color: var(--data-pos); }
+  .verdict-chip.v-partial, .verdict-chip.v-low { background: rgba(255,174,93,.16); color: var(--warm); border-color: var(--warm); }
+  .verdict-chip.v-hallucinated { background: rgba(255,93,93,.16); color: var(--hot); border-color: var(--hot); }
+  .verdict-chip.v-refused { background: rgba(111,116,128,.16); color: var(--dim); border-color: var(--line); }
+  .verdict-chip.v-ungrounded { background: rgba(154,164,181,.14); color: var(--soft); border-color: var(--line); }
+  .halluc-flag { font-size: 11px; color: var(--warm); }
+  .halluc-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  @media (max-width: 700px) { .halluc-metrics { grid-template-columns: 1fr; } }
+  .halluc-metric-head { display: flex; justify-content: space-between; color: var(--dim); font-size: 11px; }
+  .halluc-bar { height: 8px; background: #1a1d24; border-radius: 2px; margin-top: 3px; overflow: hidden; }
+  .halluc-fill { height: 8px; }
+  .halluc-na { color: var(--dim); font-style: italic; }
+  .conf-legend { display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--dim); }
+  .conf-legend .bar { height: 8px; flex: 1; border-radius: 2px; max-width: 220px; }
+  .halluc-prov h4 { color: var(--accent); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; margin: 8px 0 4px; }
+  .halluc-prov .note { color: var(--dim); font-style: italic; font-size: 10px; }
+  .halluc-src { border-left: 2px solid var(--line); padding: 2px 0 2px 8px; margin: 4px 0; }
+  .halluc-src .span { color: var(--text); }
+  .halluc-src .meta { color: var(--dim); font-size: 10px; }
+  .halluc-src .passage { color: var(--soft); font-size: 11px; margin-top: 2px; }

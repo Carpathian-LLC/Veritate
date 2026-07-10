@@ -11,6 +11,7 @@
 #include "veritate.h"
 #include "portability.h"
 #include "addons.h"
+#include "hybrid.h"
 #include "metal_dispatch.h"
 
 #include <stdio.h>
@@ -70,6 +71,8 @@ static int verify_match(const int32_t* a, const int32_t* b, size_t n) {
 // ------------------------------------------------------------------------------------
 // confidence — four-component calibrated score
 // ------------------------------------------------------------------------------------
+
+static int dbl_cmp(const void* a, const void* b);
 
 static float sigmoidf(float x) {
     if (x >= 0.0f) {
@@ -162,8 +165,10 @@ static float compute_lens_consistency(const veritate_shape_t* sh,
 }
 
 // residual stability: mean pearson r of (residual_post[L] * embed[byte]) across layer pairs.
+// v13 hybrid has no int8 embed table; the feature reports 0.
 static float compute_residual_stab(const trace_record_t* trace, const model_t* m,
                                    int32_t pos, uint8_t sampled) {
+    if (!m->embed) return 0.0f;
     const int32_t H = m->shape.hidden, S = m->shape.seq, Ln = m->shape.layers;
     const int8_t* erow = m->embed + (size_t)sampled * H;
     float* v_prev = (float*)malloc((size_t)H * sizeof(float));
@@ -232,8 +237,12 @@ static void trace_top_predictions(const model_t* m, const int8_t* hidden, trace_
     int32_t* logits = (int32_t*)malloc((size_t)V * sizeof(int32_t));
     int8_t*  taken  = (int8_t*) calloc((size_t)V, 1);
     int8_t*  h_b0   = (int8_t*) malloc((size_t)H);
-    model_project_byte0(m, hidden, h_b0);
-    matmul_int8_vnni_prep(h_b0, &m->lm_head, logits, 1);
+    if (m->hybrid) {
+        hybrid_logits_i32((const hybrid_t*)m->hybrid, logits);
+    } else {
+        model_project_byte0(m, hidden, h_b0);
+        matmul_int8_vnni_prep(h_b0, &m->lm_head, logits, 1);
+    }
     for (int32_t k = 0; k < VERITATE_TRACE_TOPK; k++) {
         int32_t best = -2147483647 - 1, idx = 0;
         for (int32_t v = 0; v < V; v++) {
@@ -389,6 +398,7 @@ static int chat_traced_loop(void) {
     }
 
     int32_t* tokens         = (int32_t*)malloc((size_t)S * sizeof(int32_t));
+    uint8_t* gen_bytes      = (uint8_t*)malloc((size_t)S);
     int8_t*  attn_q         = (int8_t*) malloc((size_t)NH * S);
     float*   attn_scale_buf = (float*)  malloc((size_t)NH * sizeof(float));
     float*   decisiveness   = (float*)  malloc((size_t)Ln * sizeof(float));
@@ -410,11 +420,16 @@ static int chat_traced_loop(void) {
         int   ablate_layer = -1;
         int   ablate_neuron = -1;
         char  addons_csv[128] = "";
-        // header format: "temp top_k max_new ablate_l ablate_n [addons_csv]\n"
+        int   rep_window = 0;
+        float rep_penalty = 0.0f;
+        int   no_repeat_ngram = 0;
+        // header format: "temp top_k max_new ablate_l ablate_n [addons_csv [rep_window rep_penalty no_repeat_ngram]]\n"
         // addons_csv is optional; missing means "use the env-var chain or none".
-        // empty token "-" explicitly clears any previously-installed chain.
-        sscanf(header, "%f %d %d %d %d %127s",
-               &temp, &top_k, &max_new, &ablate_layer, &ablate_neuron, addons_csv);
+        // empty token "-" explicitly clears any previously-installed chain. the
+        // trailing rep fields default to 0 (repetition control off) when absent.
+        sscanf(header, "%f %d %d %d %d %127s %d %f %d",
+               &temp, &top_k, &max_new, &ablate_layer, &ablate_neuron, addons_csv,
+               &rep_window, &rep_penalty, &no_repeat_ngram);
         veritate_set_ablation(ablate_layer, ablate_neuron);
 
         // per-request addon chain swap. only rebuild when csv changes; common
@@ -438,6 +453,10 @@ static int chat_traced_loop(void) {
         while (plen > 0 && (prompt_line[plen - 1] == '\n' || prompt_line[plen - 1] == '\r'))
             prompt_line[--plen] = '\0';
         if (plen == 0) continue;
+        // 0x01 is the protocol escape for embedded newlines (see c_engine.py).
+        for (size_t pi = 0; pi < plen; pi++) {
+            if (prompt_line[pi] == '\x01') prompt_line[pi] = '\n';
+        }
 
         int32_t n = tokenize_bytes(prompt_line, tokens, S);
         for (int32_t i = n; i < S; i++) tokens[i] = 0;
@@ -457,13 +476,16 @@ static int chat_traced_loop(void) {
         int32_t budget = S - n;
         if (budget > max_new) budget = max_new;
 
+        int32_t gen_len = 0;
         for (int32_t step = 0; step < budget; step++) {
             int32_t pos = (step == 0) ? (n - 1) : (cache.len - 1);
 
             int32_t argmax_v = 0;
-            int32_t next = sample_token_ext(&model, hidden, temp, top_k, &rng, logits, &argmax_v);
+            rep_ctx_t rep = { gen_bytes, gen_len, rep_window, rep_penalty, no_repeat_ngram };
+            int32_t next = sample_token_ext(&model, hidden, temp, top_k, &rng, logits, &argmax_v, &rep);
             uint8_t b = (uint8_t)(next & 0xFF);
             uint8_t ab = (uint8_t)(argmax_v & 0xFF);
+            if (gen_len < S) gen_bytes[gen_len++] = b;
             if (g_chain != NULL && g_chain->count > 0) {
                 addon_chain_observe(g_chain, (int)b);
             }
@@ -592,7 +614,7 @@ static int chat_traced_loop(void) {
         cache.len = 0;
     }
 
-    free(prompt_line); free(tokens); free(hidden); free(logits);
+    free(prompt_line); free(tokens); free(gen_bytes); free(hidden); free(logits);
     free(attn_q); free(attn_scale_buf); free(decisiveness);
     free(lens_pos_block); free(ffn_pos_block);
     trace_free(trace);
@@ -619,6 +641,7 @@ static int chat_greedy_loop(int budget_override) {
     kv_cache_init(&cache, &model.shape);
     int8_t* hidden = (int8_t*)malloc((size_t)H);
     int32_t* tokens = (int32_t*)malloc((size_t)S * sizeof(int32_t));
+    double* step_ms = (double*)malloc((size_t)S * sizeof(double));
     char* line = (char*)malloc((size_t)S + 4);
     uint32_t rng = 0;
     while (1) {
@@ -635,20 +658,27 @@ static int chat_greedy_loop(int budget_override) {
         double t0 = now_ms();
         int32_t emitted = 0;
         for (int32_t step = 0; step < budget; step++) {
+            double ts = now_ms();
             int32_t next = sample_token(&model, hidden, 0.0f, 0, &rng);
             putchar(next & 0xFF);
             emitted++;
             if (cache.len >= S) break;
             if (step < budget - 1) forward_decode(&model, &cache, next, hidden, NULL);
+            step_ms[step] = now_ms() - ts;
         }
         fflush(stdout);
         double t1 = now_ms();
         double tps = emitted > 0 ? (double)emitted * 1000.0 / (t1 - t0) : 0.0;
-        fprintf(stderr, "\n[greedy] emitted=%d  %.2f tok/s  %.2f ms\n", emitted, tps, t1 - t0);
+        int32_t n_steps = emitted > 1 ? emitted - 1 : emitted;
+        qsort(step_ms, (size_t)n_steps, sizeof(double), dbl_cmp);
+        double p50 = n_steps > 0 ? step_ms[n_steps / 2] : 0.0;
+        double p95 = n_steps > 0 ? step_ms[(int32_t)(n_steps * 0.95)] : 0.0;
+        fprintf(stderr, "\n[greedy] emitted=%d  %.2f tok/s  %.2f ms  p50=%.3f ms/byte  p95=%.3f ms/byte\n",
+                emitted, tps, t1 - t0, p50, p95);
         fflush(stderr);
         putchar('\n'); fflush(stdout);
     }
-    free(line); free(tokens); free(hidden);
+    free(line); free(tokens); free(hidden); free(step_ms);
     kv_cache_free(&cache);
     model_free(&model);
     return 0;
@@ -692,6 +722,12 @@ static int chat_speculative_loop(int budget_override) {
     if (target.shape.vocab != draft.shape.vocab) {
         fprintf(stderr, "vocab mismatch: target=%d draft=%d\n",
                 target.shape.vocab, draft.shape.vocab);
+        model_free(&target); model_free(&draft);
+        return 1;
+    }
+    if (target.hybrid || draft.hybrid) {
+        fprintf(stderr, "chat_spec does not support v13 hybrid models (kv rewind "
+                        "would desync recurrent state)\n");
         model_free(&target); model_free(&draft);
         return 1;
     }
@@ -773,7 +809,7 @@ static int chat_speculative_loop(int budget_override) {
                 const int8_t* h = (k == 0) ? hidden_t
                                            : verify_h + (size_t)(k - 1) * H_t;
                 int32_t argmax_v = 0;
-                (void)sample_token_ext(&target, h, 0.0f, 0, &rng, logits_t, &argmax_v);
+                (void)sample_token_ext(&target, h, 0.0f, 0, &rng, logits_t, &argmax_v, NULL);
                 if (argmax_v == draft_toks[k]) {
                     accepted++;
                 } else {
@@ -785,7 +821,7 @@ static int chat_speculative_loop(int budget_override) {
                 // all Kmax matched — bonus token from verify_h[Kmax-1].
                 const int8_t* h = verify_h + (size_t)(Kmax - 1) * H_t;
                 int32_t argmax_v = 0;
-                (void)sample_token_ext(&target, h, 0.0f, 0, &rng, logits_t, &argmax_v);
+                (void)sample_token_ext(&target, h, 0.0f, 0, &rng, logits_t, &argmax_v, NULL);
                 fallback = argmax_v;
             }
 
@@ -942,21 +978,23 @@ static int bench_mode(int argc, char** argv) {
 
     double stages = prof.embed_ms + prof.ln_ms + prof.qkv_ms + prof.attn_ms +
                     prof.out_proj_ms + prof.ffn_up_ms + prof.gelu_ms + prof.ffn_down_ms;
-    printf("\n");
-    printf("per-stage breakdown (avg over %d forwards, all %d layers summed)\n", trials_fwd, sh->layers);
-    const struct { const char* name; double ms; } phases[] = {
-        {"embed           ", prof.embed_ms},
-        {"layernorm       ", prof.ln_ms},
-        {"qkv matmul      ", prof.qkv_ms},
-        {"attention loops ", prof.attn_ms},
-        {"out_proj matmul ", prof.out_proj_ms},
-        {"ffn_up matmul   ", prof.ffn_up_ms},
-        {"gelu            ", prof.gelu_ms},
-        {"ffn_down matmul ", prof.ffn_down_ms},
-    };
-    for (size_t i = 0; i < sizeof(phases) / sizeof(phases[0]); i++) {
-        printf("  %s %7.3f ms  (%5.1f %%)\n",
-               phases[i].name, phases[i].ms / trials_fwd, 100.0 * phases[i].ms / stages);
+    if (stages > 0.0) {
+        printf("\n");
+        printf("per-stage breakdown (avg over %d forwards, all %d layers summed)\n", trials_fwd, sh->layers);
+        const struct { const char* name; double ms; } phases[] = {
+            {"embed           ", prof.embed_ms},
+            {"layernorm       ", prof.ln_ms},
+            {"qkv matmul      ", prof.qkv_ms},
+            {"attention loops ", prof.attn_ms},
+            {"out_proj matmul ", prof.out_proj_ms},
+            {"ffn_up matmul   ", prof.ffn_up_ms},
+            {"gelu            ", prof.gelu_ms},
+            {"ffn_down matmul ", prof.ffn_down_ms},
+        };
+        for (size_t i = 0; i < sizeof(phases) / sizeof(phases[0]); i++) {
+            printf("  %s %7.3f ms  (%5.1f %%)\n",
+                   phases[i].name, phases[i].ms / trials_fwd, 100.0 * phases[i].ms / stages);
+        }
     }
 
     forward(&model, &cache, tokens, S - trials_dec, hidden, NULL, NULL);
@@ -1086,8 +1124,14 @@ static int ppl_mode(int argc, char** argv) {
             ? ((double)model.lm_head.scale_q24 / 16777216.0 / 32.0)
             : (1.0 / 1024.0);
         for (int i = 0; i < chunk_len - 1; i++) {
-            model_project_byte0(&model, hidden, h_b0);
-            matmul_int8_vnni_prep(h_b0, &model.lm_head, logits, 1);
+            if (model.hybrid) {
+                // v13: fp32 logits scaled by 1024 -> same 1/1024 inv_scale as
+                // the tied int8 path.
+                hybrid_logits_i32((const hybrid_t*)model.hybrid, logits);
+            } else {
+                model_project_byte0(&model, hidden, h_b0);
+                matmul_int8_vnni_prep(h_b0, &model.lm_head, logits, 1);
+            }
             int32_t max_logit = logits[0];
             for (int32_t v = 1; v < V; v++) if (logits[v] > max_logit) max_logit = logits[v];
             double sum = 0.0;
@@ -1483,6 +1527,137 @@ int main(int argc, char** argv) {
         veritate_aligned_free(c_ref_t); veritate_aligned_free(c_simd_t);
     }
 #endif  // __x86_64__ || _M_X64
+
+    // ------------------------------------------------------------------------------
+    // hybrid fp32 matvec parity (v13). scalar 4-partial-sum reference vs NEON
+    // lane-mapped port; bitwise contract (rule 24). arm64 only — scalar is the
+    // sole x86 implementation today.
+    // ------------------------------------------------------------------------------
+#if defined(__aarch64__) || defined(_M_ARM64)
+    {
+        const int32_t HK = V_HIDDEN, HN = V_FFN;
+        float* hw    = (float*)veritate_aligned_alloc((size_t)HK * HN * sizeof(float), 64);
+        float* hx    = (float*)veritate_aligned_alloc((size_t)HK * sizeof(float), 64);
+        float* out_s = (float*)veritate_aligned_alloc((size_t)HN * sizeof(float), 64);
+        float* out_n = (float*)veritate_aligned_alloc((size_t)HN * sizeof(float), 64);
+
+        unsigned hs = 424243u;
+        for (size_t p = 0; p < (size_t)HK * HN; p++) {
+            hs = hs * 1103515245u + 12345u;
+            hw[p] = (float)((int32_t)((hs >> 8) & 0xFFFF) - 32768) / 32768.0f;
+        }
+        for (int32_t p = 0; p < HK; p++) {
+            hs = hs * 1103515245u + 12345u;
+            hx[p] = (float)((int32_t)((hs >> 8) & 0xFFFF) - 32768) / 32768.0f;
+        }
+
+        uint16_t* hw16 = (uint16_t*)veritate_aligned_alloc((size_t)HK * HN * sizeof(uint16_t), 64);
+        for (size_t p = 0; p < (size_t)HK * HN; p++) {
+            hs = hs * 1103515245u + 12345u;
+            hw16[p] = (uint16_t)(hs >> 16);
+            if ((hw16[p] & 0x7C00u) == 0x7C00u) hw16[p] &= 0x7BFFu;  // no inf/nan
+        }
+
+        int8_t* hw8 = (int8_t*)veritate_aligned_alloc((size_t)HK * HN, 64);
+        float*  hs8 = (float*) veritate_aligned_alloc((size_t)HN * sizeof(float), 64);
+        for (size_t p = 0; p < (size_t)HK * HN; p++) {
+            hs = hs * 1103515245u + 12345u;
+            hw8[p] = (int8_t)((int32_t)((hs >> 16) & 0xFF) - 128);
+        }
+        for (int32_t p = 0; p < HN; p++) {
+            hs = hs * 1103515245u + 12345u;
+            hs8[p] = (float)((hs >> 8) & 0xFFFF) / 8388608.0f + 1e-6f;
+        }
+        hybrid_w_i8_t hwi8 = { hw8, hs8 };
+
+        int ok_h = 1, ok_h16 = 1, ok_h8 = 1;
+        int32_t first_h = -1;
+        for (int32_t kk = 0; kk < 2; kk++) {
+            const int32_t k_run = kk == 0 ? HK : HK - 3;  // tail path on pass 2
+            hybrid_matvec_f32_scalar(hw, hx, out_s, HN, k_run);
+            hybrid_matvec_f32_neon  (hw, hx, out_n, HN, k_run);
+            if (memcmp(out_s, out_n, (size_t)HN * sizeof(float)) != 0) {
+                ok_h = 0;
+                for (int32_t j = 0; j < HN; j++) {
+                    if (out_s[j] != out_n[j]) { first_h = j; break; }
+                }
+            }
+            hybrid_matvec_f16_scalar(hw16, hx, out_s, HN, k_run);
+            hybrid_matvec_f16_neon  (hw16, hx, out_n, HN, k_run);
+            if (memcmp(out_s, out_n, (size_t)HN * sizeof(float)) != 0) ok_h16 = 0;
+            hybrid_matvec_i8_scalar(&hwi8, hx, out_s, HN, k_run);
+            hybrid_matvec_i8_sdot  (&hwi8, hx, out_n, HN, k_run);
+            if (memcmp(out_s, out_n, (size_t)HN * sizeof(float)) != 0) ok_h8 = 0;
+        }
+
+        // exhaustive f16 conversion check: scalar converter vs hardware vcvt.
+        int ok_cvt = 1;
+        for (uint32_t hv = 0; hv < 65536u; hv++) {
+            if ((hv & 0x7C00u) == 0x7C00u && (hv & 0x3FFu) != 0) continue;  // nan payloads
+            __fp16 native;
+            memcpy(&native, &hv, sizeof(native));
+            float hwv = (float)native;
+            float swv = hybrid_f16_to_f32((uint16_t)hv);
+            if (memcmp(&hwv, &swv, sizeof(float)) != 0) { ok_cvt = 0; break; }
+        }
+
+        printf("\n");
+        printf("hybrid fp32/fp16 matvec (m=1, k=%d/%d, n=%d):\n", HK, HK - 3, HN);
+        printf("  fp32 scalar vs neon:          %s\n",
+               ok_h ? "verify OK (bit-match)" : "FAIL");
+        printf("  fp16 scalar vs neon:          %s\n",
+               ok_h16 ? "verify OK (bit-match)" : "FAIL");
+        printf("  int8 scalar vs sdot:          %s\n",
+               ok_h8 ? "verify OK (bit-match)" : "FAIL");
+        printf("  f16->f32 convert (65536):     %s\n",
+               ok_cvt ? "verify OK (bit-match)" : "FAIL");
+        if (!ok_h) {
+            printf("  first fp32 mismatch at j=%d: scalar=%.9g neon=%.9g\n",
+                   first_h, out_s[first_h], out_n[first_h]);
+        }
+        if (!ok_h || !ok_h16 || !ok_h8 || !ok_cvt) parity_failures++;
+
+        const int hb_trials = 200;
+        double best_hs = 1e9, best_hn = 1e9, best_h16 = 1e9;
+        for (int t = 0; t < hb_trials; t++) {
+            double t0 = now_ms();
+            hybrid_matvec_f32_scalar(hw, hx, out_s, HN, HK);
+            double d = now_ms() - t0;
+            if (d < best_hs) best_hs = d;
+        }
+        for (int t = 0; t < hb_trials; t++) {
+            double t0 = now_ms();
+            hybrid_matvec_f32_neon(hw, hx, out_n, HN, HK);
+            double d = now_ms() - t0;
+            if (d < best_hn) best_hn = d;
+        }
+        for (int t = 0; t < hb_trials; t++) {
+            double t0 = now_ms();
+            hybrid_matvec_f16_neon(hw16, hx, out_n, HN, HK);
+            double d = now_ms() - t0;
+            if (d < best_h16) best_h16 = d;
+        }
+        double best_h8 = 1e9;
+        for (int t = 0; t < hb_trials; t++) {
+            double t0 = now_ms();
+            hybrid_matvec_i8_sdot(&hwi8, hx, out_n, HN, HK);
+            double d = now_ms() - t0;
+            if (d < best_h8) best_h8 = d;
+        }
+        printf("  decode bench m=1 (k=%d, n=%d), best of %d:\n", HK, HN, hb_trials);
+        printf("    fp32 scalar:              %8.4f ms\n", best_hs);
+        printf("    fp32 neon:                %8.4f ms   %.2fx\n",
+               best_hn, best_hs / best_hn);
+        printf("    fp16 neon:                %8.4f ms   %.2fx\n",
+               best_h16, best_hs / best_h16);
+        printf("    int8 sdot:                %8.4f ms   %.2fx\n",
+               best_h8, best_hs / best_h8);
+
+        veritate_aligned_free(hw); veritate_aligned_free(hw16); veritate_aligned_free(hx);
+        veritate_aligned_free(hw8); veritate_aligned_free(hs8);
+        veritate_aligned_free(out_s); veritate_aligned_free(out_n);
+    }
+#endif  // __aarch64__ || _M_ARM64
 
     // v3 — single transformer block forward pass
     static model_t model;

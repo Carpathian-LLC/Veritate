@@ -22,6 +22,12 @@ from .constraints import (
     VocabConstraint,
     StopOnConstraint,
 )
+from .repetition import (
+    RepetitionController,
+    REP_WINDOW_DEFAULT,
+    REP_PENALTY_DEFAULT,
+    NO_REPEAT_NGRAM_DEFAULT,
+)
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -33,4 +39,8 @@ __all__ = [
     "JSONConstraint",
     "VocabConstraint",
     "StopOnConstraint",
+    "RepetitionController",
+    "REP_WINDOW_DEFAULT",
+    "REP_PENALTY_DEFAULT",
+    "NO_REPEAT_NGRAM_DEFAULT",
 ]

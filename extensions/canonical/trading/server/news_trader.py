@@ -46,7 +46,8 @@ TIMEOUT = 12
 QUOTE = "USDT"
 START_CASH = 10000.0
 SENT_GATE = 0.25          # act only on sentiment above this
-FEE = 0.0020              # round-trip spread, fraction
+FEE = 0.0020              # per-side spread charged live, fraction
+ALT_FEE = 0.0010          # 10bp/side counterfactual (the documented 20bp round-trip intent); readout only, live book unchanged
 MAX_SIZE = 1.0
 REBAL_BAND = 0.12         # event-driven: only trade when target exposure shifts > this (of equity)
 INTERVAL = 300            # SCAN news every 5 min; trading is event-driven, not on this clock
@@ -218,6 +219,12 @@ def rebalance(led, tgt, prices, fee, band):
                      "qty": round(dqty, 8), "price": p})
     return acts
 
+
+def notional_of(acts):
+    """Gross traded notional across acts. Fees are linear in this, so a running sum lets the
+    account view price the book at any fee rate off the same trade tape (no second trader)."""
+    return sum(abs(a["qty"] * a["price"]) for a in acts)
+
 # ------------------------------------------------------------------------------------
 # One tick + loop
 
@@ -250,6 +257,8 @@ def tick(model, provider, gate, max_size, fee, use_chart, source, band, focus=No
     prices = {s: price(s, market) for s in syms}
     acts = rebalance(led, tgt, prices, fee, band) if market_open(market) else []
     eq = equity(led, prices)
+    led["cum_notional"] = led.get("cum_notional", 0.0) + notional_of(acts)
+    led["fee_side"] = fee
     led["history"].append({"t": int(time.time()), "equity": round(eq, 2), "market": market,
                            "bench_px": prices.get(sym_for(bench_asset, market)), "bench_asset": bench_asset,
                            "signal": {a: round(signal[a]["score"], 3) for a in track if a in signal},
@@ -277,6 +286,19 @@ def loop(model, provider, gate, max_size, fee, use_chart, source, interval, band
 # Managed thread (UI start/stop from the dashboard)
 
 _RUNS = {}          # label -> {"thread", "stop", "cfg"}; supports concurrent runs on separate ledgers
+RESUME_KEYS = ("model", "provider", "gate", "max_size", "fee", "use_chart", "source",
+               "interval", "band", "focus", "market", "mode", "risk_off")
+
+
+def _stamp_auto(label, cfg):
+    """Persist resume intent + full config so a server re-exec restarts this run (mirrors the
+    quant arms' `auto` flag; news needs the config too, not just the arm name)."""
+    path = ledger_for(label)
+    led = load_ledger(path)
+    led["auto"] = True
+    led["resume_cfg"] = {k: cfg.get(k) for k in RESUME_KEYS}
+    save_ledger(led, path)
+
 
 def start_thread(model, provider, gate, max_size, fee, use_chart, source, interval, band, focus=None,
                  label="main", market="crypto", mode="follow", risk_off=True):
@@ -291,6 +313,7 @@ def start_thread(model, provider, gate, max_size, fee, use_chart, source, interv
            "focus": focus, "market": market, "mode": mode, "risk_off": risk_off,
            "fee_bps": round(fee * 1e4, 1), "started": int(time.time())}
     _RUNS[label] = {"thread": None, "stop": ev, "cfg": cfg}
+    _stamp_auto(label, cfg)
 
     def _run():
         while not ev.is_set():
@@ -332,7 +355,25 @@ def stop_thread(label="main"):
     if r and r["stop"]:
         r["stop"].set()
     _RUNS.pop(label, None)
+    path = ledger_for(label)
+    led = load_ledger(path)
+    if led.get("auto"):                     # clear resume intent so a re-exec stays stopped
+        led["auto"] = False
+        save_ledger(led, path)
     return True
+
+
+def resume(label="main"):
+    """Restart the news run if its ledger is flagged auto (server re-exec must not gap the record).
+    Mirrors the quant arms' resume; reads the config stamped by start_thread."""
+    led = load_ledger(ledger_for(label))
+    c = led.get("resume_cfg") or {}
+    if not (led.get("auto") and c.get("model")):
+        return False
+    return start_thread(c["model"], c.get("provider"), c["gate"], c["max_size"], c["fee"],
+                        c["use_chart"], c["source"], c["interval"], c["band"], c.get("focus"),
+                        label, c.get("market", "crypto"), c.get("mode", "follow"),
+                        c.get("risk_off", True))
 
 
 def status(label="main"):

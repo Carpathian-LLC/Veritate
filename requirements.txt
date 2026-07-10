@@ -1,4 +1,3 @@
---extra-index-url https://download.pytorch.org/whl/cu128
 flask~=3.1
 psutil~=7.2
 certifi>=2024.0.0
@@ -12,6 +11,7 @@ numpy~=2.4 ; sys_platform != "darwin" or platform_machine == "arm64"
 numpy<2.0  ; sys_platform == "darwin" and platform_machine == "x86_64"
 
 # Torch: Intel Mac caps at 2.2 (last with x86 macOS wheels). Everything else
-# rides modern torch.
+# rides modern torch. The wheel index (CUDA vs CPU) is supplied by veritate.py
+# per host: NVIDIA GPU present -> cu128, otherwise the cpu build.
 torch~=2.11 ; sys_platform != "darwin" or platform_machine == "arm64"
 torch~=2.2  ; sys_platform == "darwin" and platform_machine == "x86_64"

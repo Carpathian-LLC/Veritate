@@ -41,3 +41,7 @@ dev_documentation/multimind/affect_probe_stats.json
 trainers/multimind_poc/corpus/
 corpus_for_s3/
 extensions/installed/
+
+# Standalone local fact dataset + its watchdog: local-only (not for the repo).
+/facts/
+/facts_pipeline/

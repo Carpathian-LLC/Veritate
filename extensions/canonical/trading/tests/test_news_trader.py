@@ -15,6 +15,8 @@
 import os
 import sys
 
+import pytest
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SERVER_DIR = os.path.normpath(os.path.join(HERE, "..", "server"))
 if SERVER_DIR not in sys.path:
@@ -78,6 +80,61 @@ def test_rebalance_deadband_skips_small_drift():
     led = _fresh(); led["positions"]["BTCUSDT"] = 50.0; led["cash"] = 4990.0   # ~50% exposure
     acts = nt.rebalance(led, {"BTCUSDT": 0.55}, {"BTCUSDT": 100.0}, 0.002, 0.12)  # +5% < band
     assert acts == []
+
+# ------------------------------------------------------------------------------------
+# fee counterfactual
+
+def test_notional_of_sums_absolute_traded_value():
+    """notional_of totals |qty*price| across acts, so sells count positive."""
+    acts = [{"sym": "BTCUSDT", "qty": 0.5, "price": 100.0},
+            {"sym": "ETHUSDT", "qty": -2.0, "price": 50.0}]
+    assert nt.notional_of(acts) == 150.0
+
+
+def test_notional_of_empty_is_zero():
+    """A quiet tick with no trades adds zero notional."""
+    assert nt.notional_of([]) == 0.0
+
+# ------------------------------------------------------------------------------------
+# auto-resume (survive server re-exec)
+
+@pytest.fixture
+def tmp_ledger(tmp_path, monkeypatch):
+    """Point the 'main' ledger at tmp so resume/stamp tests never touch the live account."""
+    p = str(tmp_path / "account.json")
+    monkeypatch.setattr(nt, "LEDGER_PATH", p)
+    monkeypatch.setattr(nt, "LEDGER_DIR", str(tmp_path))
+    return p
+
+
+def test_stamp_auto_persists_resume_config(tmp_ledger):
+    """_stamp_auto writes auto=True and the full resume config to the ledger."""
+    nt.save_ledger(_fresh(), tmp_ledger)
+    nt._stamp_auto("main", {"model": "m", "gate": 0.3, "max_size": 1.0, "fee": 0.002,
+                            "use_chart": False, "source": "crypto_of", "interval": 300, "band": 0.12})
+    led = nt.load_ledger(tmp_ledger)
+    assert led["auto"] is True and led["resume_cfg"]["model"] == "m" and led["resume_cfg"]["gate"] == 0.3
+
+
+def test_resume_noop_when_not_flagged(tmp_ledger, monkeypatch):
+    """resume() does nothing when the ledger was never stamped auto."""
+    nt.save_ledger(_fresh(), tmp_ledger)
+    called = []
+    monkeypatch.setattr(nt, "start_thread", lambda *a, **k: called.append(a) or True)
+    assert nt.resume("main") is False and called == []
+
+
+def test_resume_restarts_with_stamped_config(tmp_ledger, monkeypatch):
+    """resume() restarts the run with the model/gate stamped by start_thread."""
+    led = _fresh()
+    led["auto"] = True
+    led["resume_cfg"] = {"model": "qwen", "provider": None, "gate": 0.25, "max_size": 1.0,
+                         "fee": 0.002, "use_chart": False, "source": "crypto_of", "interval": 300,
+                         "band": 0.12, "focus": None, "market": "crypto", "mode": "follow", "risk_off": True}
+    nt.save_ledger(led, tmp_ledger)
+    got = {}
+    monkeypatch.setattr(nt, "start_thread", lambda model, *a, **k: got.update(model=model) or True)
+    assert nt.resume("main") is True and got["model"] == "qwen"
 
 # ------------------------------------------------------------------------------------
 # market hours (stocks only trade when the exchange is open)

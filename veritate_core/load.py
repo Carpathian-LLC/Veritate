@@ -80,6 +80,42 @@ def _import_trainer_model(trainer_dirname, class_name):
     return cls
 
 
+def _load_variant_trunk(sd, cfg, trunk, shape):
+    """Research-trunk branch (trunk recorded in training_args). Patched/hybrid
+    global-block count = total blocks minus the fixed local enc/dec blocks."""
+    state_rule = str(cfg.get("state_rule") or "gla")
+    activation = cfg.get("activation") or _act_default()
+    common = dict(vocab=shape["vocab"], hidden=shape["hidden"], ffn=shape["ffn"],
+                  heads=shape["heads"], seq=shape["seq"], activation=activation)
+    if trunk == "recurrent":
+        from veritate_core.model_recurrent import VeritateRecurrent
+        model = VeritateRecurrent(layers=shape["layers"], state_rule=state_rule, **common)
+    elif trunk in ("patched", "hybrid", "hybrid_moe", "looped"):
+        from veritate_core.model_patched import VeritatePatched, N_LOCAL_ENC, N_LOCAL_DEC, LOOP_MAX
+        glob = shape["layers"] - N_LOCAL_ENC - N_LOCAL_DEC
+        kwargs = {}
+        if trunk in ("hybrid", "hybrid_moe"):
+            kwargs["global_mixer"] = "recurrent"
+            kwargs["state_rule"] = state_rule
+        if trunk == "hybrid_moe":
+            kwargs["global_ffn"] = "moe"
+        if trunk == "looped":
+            kwargs["global_loops"] = int(cfg.get("global_loops") or LOOP_MAX)
+            glob = glob * 2  # constructor halves unique blocks when looping
+        model = VeritatePatched(layers=glob, **common, **kwargs)
+    else:
+        raise RuntimeError(
+            f"trunk '{trunk}' has no inference load branch (checkpoint-eval only)."
+        )
+    model.load_state_dict(sd, strict=True)
+    return model
+
+
+def _act_default():
+    from veritate_core.model import ACT_DEFAULT
+    return ACT_DEFAULT
+
+
 def load_from_state_dict(sd, cfg, strict_canonical=True):
     """Construct the right Veritate model variant for the given state_dict and
     load it. Returns the constructed model with state_dict applied.
@@ -92,6 +128,9 @@ def load_from_state_dict(sd, cfg, strict_canonical=True):
             "state_dict has no tok_emb.weight; not a Veritate checkpoint."
         )
     shape = shape_from_state_dict(sd, cfg)
+    trunk = str((cfg or {}).get("trunk") or "dense")
+    if trunk != "dense":
+        return _load_variant_trunk(sd, cfg, trunk, shape)
     has_pos_emb = POS_EMB_KEY in sd
     has_mtp = any(k.startswith(MTP_PREFIX) for k in sd)
 

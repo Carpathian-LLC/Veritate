@@ -10,12 +10,10 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
-import os
-
 from flask import request
 
 from runtime import logs as logmod
-from readers import checkpoints, models, paths
+from readers import checkpoints, models
 
 from ._common import user_error
 
@@ -62,15 +60,14 @@ def register(app):
             m.eval()
 
             corpus_stem = (cfg.get("corpus") or "").strip()
-            if corpus_stem and ":" in corpus_stem:
-                corpus_stem = corpus_stem.rsplit(":", 1)[-1]
             if not corpus_stem:
                 return ({"ok": False, "error": "checkpoint args missing 'corpus' stem"}, 400)
-            corpus_path = paths.corpus_train_path(corpus_stem)
-            if not os.path.isfile(corpus_path):
-                return ({"ok": False, "error": f"corpus bin not found: {corpus_path}"}, 400)
+            try:
+                corpus_mix = pruning_mod.resolve_corpus_mix(corpus_stem)
+            except FileNotFoundError as e:
+                return ({"ok": False, "error": str(e)}, 400)
 
-            report = pruning_mod.measure_activity(m, corpus_path, n_samples=samples)
+            report = pruning_mod.measure_activity(m, corpus_mix, n_samples=samples)
             plan   = pruning_mod.recommend_plan(report, layers)
 
             total_params = sum(p.numel() for p in m.parameters())
@@ -142,12 +139,15 @@ def register(app):
             m.eval()
 
             corpus_stem = (cfg.get("corpus") or "").strip()
-            if corpus_stem and ":" in corpus_stem:
-                corpus_stem = corpus_stem.rsplit(":", 1)[-1]
-            corpus_path = paths.corpus_train_path(corpus_stem) if corpus_stem else None
+            corpus_mix = None
+            if corpus_stem:
+                try:
+                    corpus_mix = pruning_mod.resolve_corpus_mix(corpus_stem)
+                except FileNotFoundError:
+                    corpus_mix = None
 
-            if corpus_path and os.path.isfile(corpus_path):
-                report = pruning_mod.measure_activity(m, corpus_path, n_samples=int(body.get("samples") or 16))
+            if corpus_mix:
+                report = pruning_mod.measure_activity(m, corpus_mix, n_samples=int(body.get("samples") or 16))
             else:
                 report = {"per_layer": [{"layer": L, "alive": 0,
                                          "total": ffn_per_layer[L],
