@@ -50,7 +50,7 @@ def _stats(values):
 
 def _resolve_exe(override):
     if override and os.path.isfile(override): return override
-    manifest_path = os.path.join(ROOT, "data", "engine_versions.json")
+    manifest_path = os.path.join(ROOT, "veritate_engine", "v1", "engine_versions.json")
     edir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "veritate")
     if os.path.isfile(manifest_path):
         try:

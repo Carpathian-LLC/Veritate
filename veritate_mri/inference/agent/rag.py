@@ -198,12 +198,6 @@ def bm25_retriever_from_tool(tool):
     return _retrieve
 
 
-def identity_compressor(passage: str) -> str:
-    """Placeholder compressor, returns passage unchanged. Swap with a real
-    LongLLMLingua-style compressor (I53) when one ships."""
-    return passage
-
-
 def make_word_ppl_compressor(brain, keep_frac: float = 0.5, max_ctx_bytes: int = 1024):
     """Word-level perplexity compressor (I53 / S60). Uses a Brain-shaped
     backend as the byte-level scorer: per-byte NLL of the passage is

@@ -1,6 +1,6 @@
 # Trainer plugin contract
 
-The platform surface that trainers are allowed to import. Trainers may only reach `veritate_core.plugin` (or the legacy `veritate.plugin` alias via the [shim](../architecture/backend/veritate_shim.md)). Direct imports from `veritate_mri/` or `veritate_engine/` are forbidden by preflight rule 39.
+The platform surface that trainers are allowed to import. Trainers may only reach `veritate_core.plugin`. Direct imports from `veritate_mri/` or `veritate_engine/` are forbidden by preflight rule 39.
 
 The full, authoritative API reference (every `save`, `paths`, `model`, `qat`, `hardware` call, the manifest schema, and reserved flags) lives in [trainers/contract.md](../trainers/contract.md). This file is the short orientation; trainers/contract.md is the spec.
 
@@ -103,6 +103,6 @@ The dashboard's Training tab is the canonical path. Direct CLI is valid for expe
 
 ## Pitfalls
 
-- The `from veritate.X import` aliases work today via the [shim](../architecture/backend/veritate_shim.md). New code should use `from veritate_core.plugin import save, paths, model, qat, ...` instead.
+- Trainers import the platform surface as `from veritate_core.plugin import save, paths, model, qat, ...`.
 - Subprocess stdout is line-buffered. Use `flush=True` or unbuffered output (`python -u`) so logs appear in the dashboard in real time.
 - Single-instance enforced by `trainer_runner.start()`. Direct CLI launches can be concurrent — be deliberate.

@@ -281,8 +281,8 @@ def dump_probe(model, prompt, out_dir: str, step: int):
                 absmag_acc = torch.zeros_like(acts)
             act_acc    += acts
             absmag_acc += acts.abs()
-            rnorm_acc  += res.norm(dim=1).double().cpu()
-            lens_acc   += (res @ embed_wt).double().cpu()
+            rnorm_acc  += res.norm(dim=1).cpu().double()
+            lens_acc   += (res @ embed_wt).cpu().double()
             n_used += 1
     finally:
         for h in handles: h.remove()

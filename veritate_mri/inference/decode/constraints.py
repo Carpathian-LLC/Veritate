@@ -103,10 +103,6 @@ class StopOnConstraint(Constraint):
     The constraint never masks anything (every byte is allowed). It only
     affects `done()`. The decoder is responsible for checking `done()` after
     each `step()` and breaking out of its loop.
-
-    Why this is a "constraint": it composes through CombineConstraint -- you
-    can ask for "lowercase only, until you see \\n\\n" without writing a
-    special-cased decoder.
     """
 
     def __init__(self, stop_bytes: bytes):
@@ -135,41 +131,6 @@ class StopOnConstraint(Constraint):
     def reset(self) -> None:
         self._tail.clear()
         self._done = False
-
-
-# ------------------------------------------------------------------------------------
-# CombineConstraint
-# ------------------------------------------------------------------------------------
-
-class CombineConstraint(Constraint):
-    """AND together a list of constraints.
-
-    mask = element-wise AND of children's masks.
-    done = OR of children's done() (any child saying stop -> stop).
-    step  propagates to every child.
-    """
-
-    def __init__(self, constraints: List[Constraint]):
-        if not constraints:
-            raise ValueError("CombineConstraint needs at least one child")
-        self.children: List[Constraint] = list(constraints)
-
-    def mask(self) -> np.ndarray:
-        out = _ALL_BYTES_TRUE.copy()
-        for c in self.children:
-            out &= c.mask()
-        return out
-
-    def step(self, byte: int) -> None:
-        for c in self.children:
-            c.step(byte)
-
-    def done(self) -> bool:
-        return any(c.done() for c in self.children)
-
-    def reset(self) -> None:
-        for c in self.children:
-            c.reset()
 
 
 # ------------------------------------------------------------------------------------

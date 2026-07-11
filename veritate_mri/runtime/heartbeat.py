@@ -27,23 +27,19 @@ import os
 import platform
 import random
 import socket
-import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
 
-try:
-    import certifi
-    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
-except ImportError:
-    _SSL_CTX = ssl.create_default_context()
-
 from readers import paths, models as models_reader
 from . import logs as logmod
+from . import net
 from . import settings as settings_mod
 from . import sys_metrics
+
+_SSL_CTX = net.ssl_context()
 
 # ------------------------------------------------------------------------------------
 # Constants

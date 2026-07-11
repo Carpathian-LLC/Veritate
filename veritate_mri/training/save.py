@@ -257,22 +257,39 @@ def _ensure_config(name, args):
     _sync_qat_flag(name, args)
 
 
+def _corpus_spec(name, args):
+    """Raw corpus spec string for the run: live args first, then the persisted
+    training_args block. Single stem or multicorpus mix; None when unset."""
+    if isinstance(args, dict) and isinstance(args.get("corpus"), str) and args["corpus"].strip():
+        return args["corpus"].strip()
+    cfg = cfg_reader.load(name) or {}
+    ta  = cfg.get("training_args") or {}
+    if isinstance(ta, dict) and isinstance(ta.get("corpus"), str) and ta["corpus"].strip():
+        return ta["corpus"].strip()
+    return None
+
+
 def _sync_capabilities(name, step, args):
-    """Promote the active trainer's capability tier to in_progress (or trained
-    on the final step). Reads the plugin id from PLUGIN_ID_ENV, resolves the
-    teaches tier from the trainer manifest, and writes via capabilities.mark.
+    """Promote the run's capability tier(s) to in_progress (or trained on the
+    final step). Tiers come from the training corpus: each catalog stem in
+    training_args.corpus declares trained_modes (chat/agent/autocomplete), so a
+    chat corpus marks chat. Falls back to the trainer manifest's teaches tier
+    when no member stem is in the catalog (custom corpora). Additivity in
+    capabilities.mark lifts the implied lower tiers.
 
     No-op when:
         * PLUGIN_ID_ENV is unset (standalone runs, tests).
         * config.json is missing (mark returns None).
 
-    Total-steps resolution looks at the live args dict first, then the
-    persisted training_args block, so resumed runs that override --total_steps
-    on the CLI promote to trained at the right moment."""
+    Total-steps resolution looks at the live args dict first, then the persisted
+    training_args block, so resumed runs that override --total_steps on the CLI
+    promote to trained at the right moment."""
     plugin_id = os.environ.get(PLUGIN_ID_ENV)
     if not plugin_id:
         return
-    tier = trainers_reader.teaches(plugin_id)
+    tiers = caps_reader.modes_for_corpus(_corpus_spec(name, args))
+    if not tiers:
+        tiers = (trainers_reader.teaches(plugin_id),)
     total_steps = None
     if isinstance(args, dict) and args.get("total_steps") is not None:
         try: total_steps = int(args["total_steps"])
@@ -283,12 +300,13 @@ def _sync_capabilities(name, step, args):
         if isinstance(ta, dict) and ta.get("total_steps") is not None:
             try: total_steps = int(ta["total_steps"])
             except (TypeError, ValueError): total_steps = None
-    try:
-        caps_reader.mark(name, tier, caps_reader.STATUS_IN_PROGRESS,
-                         trainer=plugin_id, step=int(step),
-                         total_steps=total_steps)
-    except (OSError, ValueError) as e:
-        logmod.warn("save", f"capability mark failed: {e}")
+    for tier in tiers:
+        try:
+            caps_reader.mark(name, tier, caps_reader.STATUS_IN_PROGRESS,
+                             trainer=plugin_id, step=int(step),
+                             total_steps=total_steps)
+        except (OSError, ValueError) as e:
+            logmod.warn("save", f"capability mark failed: {e}")
 
 
 def _sync_model_meta(name, args):
@@ -511,14 +529,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     step_dir = paths.hook_step_dir(name, step)
     os.makedirs(step_dir, exist_ok=True)
 
-    corpus_stem = None
-    if isinstance(args, dict) and isinstance(args.get("corpus"), str) and args["corpus"].strip():
-        corpus_stem = args["corpus"].strip()
-    else:
-        cfg = cfg_reader.load(name) or {}
-        ta  = cfg.get("training_args") or {}
-        if isinstance(ta, dict) and isinstance(ta.get("corpus"), str) and ta["corpus"].strip():
-            corpus_stem = ta["corpus"].strip()
+    corpus_stem = _corpus_spec(name, args)
     if corpus_stem and ":" in corpus_stem:
         # Multicorpus mix spec "stem1:w1,stem2:w2,...": use the highest-weight
         # stem (first on ties). A single "prefix:stem" form keeps the old rsplit.

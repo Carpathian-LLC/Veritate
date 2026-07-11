@@ -201,3 +201,27 @@ def test_training_matches_empty_index_is_empty():
     answer = "anything"
     spans, _ = hl.segment_spans(answer, _metrics(answer))
     assert hl.training_matches(spans, None, []) == []
+
+
+# deferred-mode assembly: grade client-provided frames, no re-generation
+
+def test_assemble_from_frames_reconstructs_answer_and_metrics():
+    """_assemble_from_frames rebuilds the answer + per-byte metrics from client frames."""
+    from routes import hallucination_routes as hr
+    frames = [
+        {"byte": ord("h"), "confidence": 0.9, "surprise_bits": 0.2, "entropy_bits": 0.1},
+        {"byte": ord("i"), "confidence": 0.8, "surprise_bits": 0.3, "entropy_bits": 0.2},
+    ]
+    answer, metrics, source = hr._assemble_from_frames(frames)
+    assert answer == "hi"
+    assert [m["confidence"] for m in metrics] == [0.9, 0.8]
+    assert source == hl.CONFIDENCE_SOURCE_BYTE
+
+
+def test_assemble_from_frames_derives_confidence_when_absent():
+    """A frame with no confidence derives it from surprise and flags the source."""
+    from routes import hallucination_routes as hr
+    frames = [{"byte": ord("x"), "confidence": None, "surprise_bits": 1.0, "entropy_bits": 0.5}]
+    answer, _, source = hr._assemble_from_frames(frames)
+    assert answer == "x"
+    assert source == hl.CONFIDENCE_SOURCE_DERIVED

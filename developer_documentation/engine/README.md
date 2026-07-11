@@ -6,15 +6,14 @@ Veritate's inference engine. Hand-coded INT8 transformer forward and decode in C
 
 ```
 veritate_engine/
-├── v1/                                  # primary engine
-│   ├── src/{main,model,dispatch,...}.c
-│   ├── kernels/{scalar,arm64,x86_64,inline}/
-│   ├── build/{build.sh,build.bat,setup.*}
-│   └── bin/<os>/<arch>/veritate
-└── v2/                                  # empty scratchpad (see v2.md)
+└── v1/                                  # primary engine
+    ├── src/{main,model,dispatch,...}.c
+    ├── kernels/{scalar,arm64,x86_64,inline}/
+    ├── build/{build.sh,build.bat,setup.*}
+    └── bin/<os>/<arch>/veritate
 ```
 
-`v1/` is the only engine that builds and ships. `v2/` is reserved for future experiments. See `v1.md` for engine details and `v2.md` for the scratchpad note.
+`v1/` is the only engine that builds and ships. See `v1.md` for engine details.
 
 ## supported `.bin` formats
 

@@ -15,7 +15,7 @@ work into the version number.
 ## Manifest
 
 `veritate_engine/v1/engine_versions.json` is the source of truth. Each entry maps an
-engine binary filename under `veritate_engine/bin/<os>/<arch>/` to a semver string
+engine binary filename under `veritate_engine/v1/bin/<os>/<arch>/` to a semver string
 and a human-readable label.
 
 ```json

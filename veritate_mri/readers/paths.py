@@ -37,8 +37,7 @@ WIKI_ROOT          = os.path.join(DATA_ROOT, "wiki")
 NATIVE_CORPUS_ROOT = os.path.join(DATA_ROOT, "corpus")
 SYNTH_JOBS_ROOT    = os.path.join(DATA_ROOT, "synth_jobs")
 ENGINE_ROOT     = os.path.join(REPO_ROOT, "veritate_engine")
-# v1 is the primary (and only built) engine. v2 is an empty scratchpad folder
-# reserved for future engine experiments (see documentation/engine/v2.md).
+# v1 is the primary (and only built) engine.
 ENGINE_PRIMARY  = os.path.join(ENGINE_ROOT, "v1")
 ENGINE_BIN      = os.path.join(ENGINE_PRIMARY, "bin")
 ENGINE_BUILD    = os.path.join(ENGINE_PRIMARY, "build")

@@ -4,15 +4,14 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - read the engine binary registry at veritate_engine/v1/engine_versions.json.
-# veritate_mri/readers/engine.py
+# - shared HTTPS trust store. certifi CA bundle when importable, else system default.
+#   framework Python on macOS ships a broken store unless the user runs
+#   "Install Certificates.command"; certifi sidesteps that.
+# veritate_mri/runtime/net.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
-import json
-import os
-
-from . import paths
+import ssl
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -20,20 +19,9 @@ from . import paths
 # ------------------------------------------------------------------------------------
 # Functions
 
-def manifest():
+def ssl_context():
     try:
-        with open(paths.ENGINE_VERSIONS_JSON, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {"current": None, "engines": []}
-
-
-def engines():
-    return manifest().get("engines", [])
-
-
-def by_path(abs_path):
-    for e in engines():
-        if e.get("path") and os.path.abspath(e["path"]) == abs_path:
-            return e
-    return None
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()

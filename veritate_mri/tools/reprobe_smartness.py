@@ -23,7 +23,6 @@
 
 import argparse
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -33,13 +32,11 @@ MRI_ROOT  = REPO_ROOT / "veritate_mri"
 sys.path.insert(0, str(MRI_ROOT))
 sys.path.insert(0, str(REPO_ROOT))
 
-from readers import paths  # noqa: E402
+from readers import paths, checkpoints  # noqa: E402
 
 
 # ------------------------------------------------------------------------------------
 # Constants
-
-CKPT_RE = re.compile(r"^step_(\d+)\.pt$")
 
 AXIS_TO_FN = {
     "grades":    ("dump_grades",    "grades_step_{step}.json",    "grades.json"),
@@ -53,17 +50,7 @@ AXIS_TO_FN = {
 # Functions
 
 def discover_checkpoints(name):
-    ckpt_dir = paths.checkpoints_dir(name)
-    if not os.path.isdir(ckpt_dir):
-        return []
-    out = []
-    for fn in os.listdir(ckpt_dir):
-        m = CKPT_RE.match(fn)
-        if not m:
-            continue
-        out.append((int(m.group(1)), os.path.join(ckpt_dir, fn)))
-    out.sort(key=lambda x: x[0])
-    return out
+    return [(s, paths.checkpoint_path(name, s)) for s in checkpoints.list_steps(name)]
 
 
 def hook_step_dir(name, step):

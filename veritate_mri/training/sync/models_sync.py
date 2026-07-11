@@ -29,21 +29,17 @@
 
 import json
 import os
-import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
 
-try:
-    import certifi
-    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
-except ImportError:
-    _SSL_CTX = ssl.create_default_context()
-
 from readers import paths
 from runtime import logs as logmod
+from runtime import net
 from . import sync_common as sc
+
+_SSL_CTX = net.ssl_context()
 
 # ------------------------------------------------------------------------------------
 # Constants

@@ -29,7 +29,7 @@ Byte-level, energy-efficient LLM on consumer hardware ($300-1000 box; Apple Sili
 | TinyStories val | `trainers/corpus/tinystories_val.bin` |
 | FineWeb val | `trainers/corpus/fineweb_edu_val.bin` |
 | Tool-SFT bins | `trainers/corpus/tool_sft_{train,val}.bin` |
-| Canonical model class | `veritate.model.Veritate` (h=768 L=12 GELU absolute-pos) |
+| Canonical model class | `veritate_core.model.Veritate` (h=768 L=12 GELU absolute-pos) |
 | 800M model class | `trainers/veritate_800m/trainer.py::Veritate800M` (RoPE + MTP) |
 | Brain (inference) | `veritate_mri/inference/backends/pytorch.py::Brain` |
 | Agent loop / eval | `veritate_mri/agent/{loop,eval}.py` |

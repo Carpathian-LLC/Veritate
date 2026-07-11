@@ -38,7 +38,7 @@ from runtime import logs as logmod
 from training import build_runner
 
 from . import _brain
-from ._common import auto_thread_count, user_error
+from ._common import auto_thread_count, is_loopback, user_error
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -56,6 +56,10 @@ RAG_K_DEFAULT        = 3
 RAG_CACHE_MAX        = 8
 AGENT_MAX_TURNS_CAP  = 16
 AGENT_BEST_OF_N_CAP  = 8
+MAX_NEW_CAP          = 4096
+BYTE_VOCAB           = 256
+SSE_HEADERS          = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+PATH_LOOPBACK_ONLY   = "path params (rag/corpus/fs_root) are restricted to loopback (local) requests"
 
 _VOCAB_PRESETS = {
     "ascii":      set(range(0x20, 0x7f)) | {0x09, 0x0a, 0x0d},
@@ -504,6 +508,16 @@ def _build_constraint(spec):
     raise ValueError(f"unknown constrained spec: {spec!r}")
 
 
+def _sse_error_response(message):
+    """SSE Response: one error frame + terminal done event. /generate is consumed
+    by an EventSource, which reports a bare 500 as an unparseable non-stream body;
+    this keeps the failure visible as a normal stream event."""
+    def stream_err():
+        yield "data: " + json.dumps({"kind": "error", "message": message}) + "\n\n"
+        yield "event: done\ndata: {}\n\n"
+    return Response(stream_err(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
 def register(app):
     @app.route("/backends")
     def backends_status():
@@ -703,16 +717,21 @@ def register(app):
     def generate():
         cfg = current_app.config
         prompt        = request.args.get("prompt", "")
-        temperature   = float(request.args.get("temperature", "0.7"))
-        top_k         = int(request.args.get("top_k", "40"))
-        max_new       = int(request.args.get("max_new", "200"))
         backend       = request.args.get("backend", "c").lower()
-        ablate_layer  = int(request.args.get("ablate_layer",  "-1"))
-        ablate_neuron = int(request.args.get("ablate_neuron", "-1"))
         addons_csv    = request.args.get("addons", "")
         addons_sel    = [s.strip() for s in addons_csv.split(",") if s.strip()]
         fast_mode     = (request.args.get("fast", "") or "").strip().lower()
         constrained_v = (request.args.get("constrained", "") or "").strip()
+        try:
+            temperature   = float(request.args.get("temperature", "0.7"))
+            top_k         = int(request.args.get("top_k", "40"))
+            max_new       = int(request.args.get("max_new", "200"))
+            ablate_layer  = int(request.args.get("ablate_layer",  "-1"))
+            ablate_neuron = int(request.args.get("ablate_neuron", "-1"))
+        except (TypeError, ValueError) as e:
+            return _sse_error_response(user_error(e, "bad query param"))
+        top_k   = max(1, min(top_k, BYTE_VOCAB))
+        max_new = max(1, min(max_new, MAX_NEW_CAP))
         try:
             adaptive_threshold = float(request.args.get("adaptive_threshold", "0.8"))
         except ValueError:
@@ -736,11 +755,7 @@ def register(app):
                 msg = ("No exported .bin available. Train a model and export it first, "
                        "or switch to the PyTorch backend." if bins == 0
                        else "C engine not loaded. Pick a model from the dropdown.")
-                def stream_err():
-                    yield "data: " + json.dumps({"kind": "error", "message": msg}) + "\n\n"
-                    yield "event: done\ndata: {}\n\n"
-                return Response(stream_err(), mimetype="text/event-stream",
-                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                return _sse_error_response(msg)
             def stream_c():
                 try:
                     base = _c_engine_stream(cfg, prompt, max_new, temperature=temperature, top_k=top_k,
@@ -765,16 +780,12 @@ def register(app):
                     except Exception:
                         pass
             return Response(stream_c(), mimetype="text/event-stream",
-                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                            headers=SSE_HEADERS)
 
         brain = cfg["BRAIN"]
         if brain is None:
-            def stream_err():
-                yield "data: " + json.dumps({"kind": "error",
-                    "message": "PyTorch backend not loaded. Pick a model from the dropdown and try again."}) + "\n\n"
-                yield "event: done\ndata: {}\n\n"
-            return Response(stream_err(), mimetype="text/event-stream",
-                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            return _sse_error_response(
+                "PyTorch backend not loaded. Pick a model from the dropdown and try again.")
         cfg["BRAIN_LAST_USED"] = time.time()
 
         chain = None
@@ -801,6 +812,8 @@ def register(app):
         rag_press = (request.args.get("rag_compress", "") or "").strip().lower()
         rag_cfg = None
         if rag_path:
+            if not is_loopback(request.remote_addr):
+                return ({"error": PATH_LOOPBACK_ONLY}, 403)
             try:
                 rag_top_k = max(1, min(int(rag_k), RAG_K_MAX)) if rag_k else RAG_K_DEFAULT
             except (TypeError, ValueError):
@@ -896,7 +909,7 @@ def register(app):
                     brain.set_ablation(-1, -1)
 
         return Response(stream_pt(), mimetype="text/event-stream",
-                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                        headers=SSE_HEADERS)
 
     @app.route("/agent/stream")
     def agent_stream():
@@ -912,7 +925,7 @@ def register(app):
                     "message": "PyTorch backend not loaded. Pick a model from the dropdown and try again."}) + "\n\n"
                 yield "event: stop\ndata: {}\n\n"
             return Response(stream_err(), mimetype="text/event-stream",
-                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                            headers=SSE_HEADERS)
         try:
             max_turns   = max(1, min(int(request.args.get("max_turns", "6")), AGENT_MAX_TURNS_CAP))
             best_of_n   = max(1, min(int(request.args.get("best_of_n", "1")), AGENT_BEST_OF_N_CAP))
@@ -923,6 +936,8 @@ def register(app):
             return ({"error": user_error(e, "bad query param")}, 400)
         corpus_path = (request.args.get("corpus", "") or "").strip() or None
         fs_root     = (request.args.get("fs_root", "") or "").strip() or None
+        if (corpus_path or fs_root) and not is_loopback(request.remote_addr):
+            return ({"error": PATH_LOOPBACK_ONLY}, 403)
         if corpus_path and not os.path.exists(os.path.expanduser(corpus_path)):
             return ({"error": f"corpus path does not exist: {corpus_path}"}, 400)
         if fs_root and not os.path.isdir(os.path.expanduser(fs_root)):
@@ -959,4 +974,4 @@ def register(app):
                                                "message": user_error(e)}) + "\n\n")
 
         return Response(stream_agent(), mimetype="text/event-stream",
-                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                        headers=SSE_HEADERS)

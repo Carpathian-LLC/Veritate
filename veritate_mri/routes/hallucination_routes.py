@@ -101,6 +101,23 @@ def _assemble(events, stop_seq):
     return _finalize(raw, conf, surp, ent)
 
 
+def _assemble_from_frames(frames):
+    """Rebuild (answer, metrics, source) from client-collected stream frames.
+    Reuses _finalize so the sanitize/cut/strip matches the live generation path
+    exactly: the analysis grades the EXACT answer the user saw, no re-generation,
+    no dependence on the model still being loaded."""
+    raw, conf, surp, ent = bytearray(), [], [], []
+    for fr in frames:
+        b = fr.get("byte")
+        if b is None:
+            continue
+        raw.append(int(b) & 0xff)
+        conf.append(fr.get("confidence"))
+        surp.append(fr.get("surprise_bits"))
+        ent.append(fr.get("entropy_bits"))
+    return _finalize(raw, conf, surp, ent)
+
+
 def _run(cfg, backend, prompt, max_new, temperature):
     stop_seq = backends_routes._chat_stop_seq(prompt)
     rep = dict(rep_window=REP_WINDOW_DEFAULT, rep_penalty=REP_PENALTY_DEFAULT,
@@ -150,13 +167,20 @@ def register(app):
         if not message and not prompt_in:
             return ({"ok": False, "error": "provide a prompt or a message"}, 400)
 
-        try:
-            if backend == "c":
-                hybrid_routes._ensure_c(cfg, model)
-            else:
-                hybrid_routes._ensure_pytorch(cfg, model)
-        except (FileNotFoundError, RuntimeError) as e:
-            return ({"ok": False, "error": user_error(e)}, 503)
+        # Deferred (robust) mode: the client posts the frames it already streamed,
+        # so we grade the exact finished answer with no re-generation and no need
+        # for the model to still be loaded. Generation mode (frames absent, e.g.
+        # the manual Detect button) re-runs and can also measure divergence.
+        provided = body.get("frames")
+
+        if not provided:
+            try:
+                if backend == "c":
+                    hybrid_routes._ensure_c(cfg, model)
+                else:
+                    hybrid_routes._ensure_pytorch(cfg, model)
+            except (FileNotFoundError, RuntimeError) as e:
+                return ({"ok": False, "error": user_error(e)}, 503)
 
         facts, context, plain_prompt = [], [], None
         if message:
@@ -169,16 +193,18 @@ def register(app):
         else:
             main_prompt = prompt_in
 
-        answer, metrics, conf_source = _run(cfg, backend, main_prompt, max_new, temperature)
+        divergence = None
+        if provided:
+            answer, metrics, conf_source = _assemble_from_frames(provided)
+        else:
+            answer, metrics, conf_source = _run(cfg, backend, main_prompt, max_new, temperature)
+            if facts:
+                alt_answer, _, _ = _run(cfg, backend, plain_prompt, max_new, DIVERGENCE_TEMPERATURE)
+                divergence = hallucination.divergence_score(answer, alt_answer)
 
         spans, overall_conf = hallucination.segment_spans(answer, metrics)
         context_text = " ".join(facts) if facts else None
         grounded_fraction = hallucination.annotate_grounding(spans, context_text)
-
-        divergence = None
-        if facts:
-            alt_answer, _, _ = _run(cfg, backend, plain_prompt, max_new, DIVERGENCE_TEMPERATURE)
-            divergence = hallucination.divergence_score(answer, alt_answer)
 
         overall = hallucination.build_overall(overall_conf, grounded_fraction, divergence, answer)
 

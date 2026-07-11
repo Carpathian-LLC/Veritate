@@ -37,3 +37,4 @@ Everything else, including `/app` (the dashboard) and all management / training 
 - Without `VERITATE_SECRET_KEY`, every server restart invalidates active sessions.
 - The gate protects the management surface only; the public chat page (`/`, `/chat`) and `/hybrid` API stay reachable by design. Do not assume `/hybrid/chat` is gated.
 - Single shared password, no users or roles. It is a deployment lock, not an identity system.
+- Auth off + `app.run` binding `0.0.0.0` means any LAN client reaches non-public routes. Routes taking a caller-chosen filesystem path (`/generate?rag=`, `/agent/stream?corpus=`/`?fs_root=`) do not rely on this gate; they are independently loopback-restricted (`403` off-loopback). See [routes.md](routes.md) pitfalls.

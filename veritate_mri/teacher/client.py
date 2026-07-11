@@ -14,7 +14,6 @@
 
 import json
 import random
-import ssl
 import time
 import urllib.error
 import urllib.request
@@ -30,17 +29,12 @@ from .providers import (
     default_model_for,
     get_provider,
 )
+from runtime import net
 
 # ------------------------------------------------------------------------------------
 # Constants
 
-# certifi-backed context so HTTPS verification works on Python builds that don't
-# resolve a system CA bundle (macOS). Mirrors runtime.heartbeat / runtime.ai_assist.
-try:
-    import certifi
-    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
-except ImportError:
-    _SSL_CTX = ssl.create_default_context()
+_SSL_CTX = net.ssl_context()
 
 _JSON_CONTENT_TYPE = "application/json"
 _AUTH_STATUS = (401, 403)

@@ -13,7 +13,7 @@ The data-access layer at [veritate_mri/readers/](../../../veritate_mri/readers/)
 | [config.py](../../../veritate_mri/readers/config.py)                              | `models/<name>/config.json` load                           |
 | [checkpoints.py](../../../veritate_mri/readers/checkpoints.py)                    | List of `step_<N>.pt` files                                |
 | [train_csv.py](../../../veritate_mri/readers/train_csv.py)                        | Parse `models/<name>/train.csv` per the canonical schema   |
-| [capabilities.py](../../../veritate_mri/readers/capabilities.py)                  | Capability tiers (reading, math, reasoning) per model      |
+| [capabilities.py](../../../veritate_mri/readers/capabilities.py)                  | Generation-mode capability tiers (autocomplete/chat/agent) per model; see [model_capabilities.md](model_capabilities.md) |
 | [corpus.py](../../../veritate_mri/readers/corpus.py)                              | List corpus stems; per-stem usage across models            |
 | [engine.py](../../../veritate_mri/readers/engine.py)                              | Query C engine state                                       |
 | [hooks.py](../../../veritate_mri/readers/hooks.py)                                | Load `hooks/step_<N>/` artifacts (probe.json, lens.npz...) |

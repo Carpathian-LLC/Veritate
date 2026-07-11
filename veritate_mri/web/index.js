@@ -1296,7 +1296,7 @@ function _hallucModel(backend) {
 
 function _clip(s, n) { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 
-async function runHallucinationDetect() {
+async function runHallucinationDetect(deferred = false) {
   const btn = $("detectHalluc"), st = $("detectStatus");
   const backend = (($("backend") || { value: "pytorch" }).value || "pytorch").toLowerCase();
   const model = _hallucModel(backend);
@@ -1318,6 +1318,17 @@ async function runHallucinationDetect() {
     if (!isNaN(kUi)) body.k = kUi;
   } else {
     body.prompt = prompt; body.use_rag = false;
+  }
+  if (deferred) {
+    // Grade the exact answer just produced from the frames we already streamed:
+    // no re-generation, deterministic, consistent with what the user saw, and it
+    // works even if the model idle-unloaded. The with/without-context divergence
+    // pass needs a second generation, so it stays on the manual Detect button.
+    if (!frames.length) return;
+    body.frames = frames.map(f => ({
+      byte: f.byte, confidence: f.confidence,
+      surprise_bits: f.surprise_bits, entropy_bits: f.entropy_bits,
+    }));
   }
   if (btn) { btn.disabled = true; btn.dataset.busy = "1"; }
   if (st) st.textContent = "analyzing...";
@@ -1478,7 +1489,7 @@ function resetHallucination() {
 
 (function _wireHallucination() {
   const btn = $("detectHalluc");
-  if (btn) btn.addEventListener("click", runHallucinationDetect);
+  if (btn) btn.addEventListener("click", () => runHallucinationDetect(false));
   ["confColorToggle", "confColorLevel"].forEach(id => {
     const e = $(id);
     if (e) e.addEventListener("change", () => {
@@ -1704,7 +1715,25 @@ function _genMode() {
 // regardless of which backend is loaded or idle-unloaded. Legacy block (only
 // autocomplete) is the final fallback for older servers with no caps at all.
 const _CAP_RANK = { trained: 3, in_progress: 2, failed: 1, untrained: 0 };
+
+// Per-model caps keyed by model name, filled from /pytorch-models. Lets the mode
+// picker gate on the SELECTED dropdown model's own caps before its backend swap
+// resolves, instead of waiting on the loaded-backend /meta blocks.
+let _pytorchModelCaps = {};
+function _selectedModelCaps() {
+  const sel = $("cModel");
+  if (!sel || !sel.value) return null;
+  const opt = sel.selectedOptions && sel.selectedOptions[0];
+  // pytorch backend: option value IS the model name. C backend: value is a bin
+  // path, so read the name stamped on the option's dataset.
+  const name = $("backend").value === "c"
+    ? (opt && opt.dataset ? opt.dataset.name : null)
+    : sel.value;
+  return (name && _pytorchModelCaps[name]) || null;
+}
 function _activeCapabilities() {
+  const own = _selectedModelCaps();
+  if (own) return own;
   const m = meta || {};
   return _mergeCaps(m.pytorch_capabilities, m.c_model_capabilities) || _legacyCaps();
 }
@@ -2407,7 +2436,7 @@ $("go").addEventListener("click", async () => {
         if (clean) pushChatMessage("model", clean);
       } catch (_) {}
     }
-    if (generatedBytes.length > 0) runHallucinationDetect();
+    if (generatedBytes.length > 0) runHallucinationDetect(true);
   });
   evtSrc.onerror = () => {
     evtSrc?.close(); evtSrc = null;
@@ -2643,6 +2672,7 @@ function refreshPytorchModels() {
   }).then(d => {
     const sel = $("cModel");
     sel.innerHTML = "";
+    _pytorchModelCaps = {};
     if (!d.models || !d.models.length) {
       fillSelectFallback("cModel", "no trained checkpoints");
       sel.disabled = true;
@@ -2656,6 +2686,7 @@ function refreshPytorchModels() {
       o.dataset.step = String(m.step);
       o.textContent = `${plugin}${m.name} (step ${m.step}${params})`;
       o.title = m.description || "";
+      if (m.capabilities) _pytorchModelCaps[m.name] = m.capabilities;
       if (m.is_current) o.selected = true;
       sel.appendChild(o);
     }
@@ -2692,6 +2723,7 @@ function refreshCModels() {
       o.title = m.description || "";
       o.value = m.bin_path;
       o.textContent = `[${prec}${train}] ${m.name}`;
+      o.dataset.name = m.name;
       o.dataset.binVersion = String(m.bin_version || 0);
       o.dataset.actBoost   = (m.act_boost === null || m.act_boost === undefined) ? "" : String(m.act_boost);
       o.dataset.qatEnabled = m.qat_enabled ? "1" : "0";
@@ -2750,6 +2782,9 @@ $("cModel").addEventListener("change", () => {
   const sel = $("cModel");
   const v = sel.value;
   if (!v) return;
+  // Reflect the newly picked model's own caps right away, before the backend
+  // swap + /meta round-trip completes.
+  if (typeof _applyModeAvailability === "function") _applyModeAvailability();
   if ($("backend").value === "c") {
     refreshQatWarning();
     postCConfig({model: v});

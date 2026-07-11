@@ -7,7 +7,6 @@ Server-side architecture: Flask app, training pipeline, runtime, readers, engine
 - [veritate_core_overview.md](veritate_core_overview.md) — training-side model + QAT
 - [veritate_mri_overview.md](veritate_mri_overview.md) — Flask app + runtime + readers + routes
 - [veritate_engine.md](veritate_engine.md) — C inference engine (`veritate_engine/v1/`)
-- [veritate_shim.md](veritate_shim.md) — backwards-compat `veritate/` package
 - [trainer_plugins.md](trainer_plugins.md) — `trainers/<id>/` plugin contract
 
 ## Flask app
@@ -30,6 +29,7 @@ Server-side architecture: Flask app, training pipeline, runtime, readers, engine
 ## Runtime
 
 - [heartbeat.md](heartbeat.md) — Carpathian webhook integration
+- [net.md](net.md) — shared HTTPS SSL context (certifi-backed)
 - [settings.md](settings.md) — `mri_settings.json` store
 - [lifecycle.md](lifecycle.md) — Flask restart
 - [sys_metrics.md](sys_metrics.md) — CPU/GPU/RAM detection

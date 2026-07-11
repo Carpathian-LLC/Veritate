@@ -31,12 +31,12 @@ import tarfile
 import tempfile
 import threading
 import time
-import ssl
 import urllib.error
 import urllib.request
 
 from readers import paths
 from runtime import logs as logmod
+from runtime import net
 from runtime import settings as settings_mod
 from training import trainer_runner as plugin_runner
 from . import sync_common as sc
@@ -288,7 +288,7 @@ def _remote_ahead_behind(branch, local_sha):
     req.add_header("Accept", "application/vnd.github+json")
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECS,
-                                     context=_ssl_context()) as resp:
+                                     context=net.ssl_context()) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         return (0, None) if e.code == 404 else (None, f"HTTP {e.code} on compare")
@@ -310,25 +310,13 @@ def _build_request(url, method="GET"):
     return req
 
 
-def _ssl_context():
-    """SSL context with a usable trust store. The macOS framework Python
-    installer ships its own and that breaks if "Install Certificates.command"
-    wasn't run. We prefer `certifi` (bundled on most modern Python installs)
-    so the updater works regardless of which Python the user runs against."""
-    try:
-        import certifi
-        return ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        return ssl.create_default_context()
-
-
 def _etag_cached(url):
     """HEAD the tarball URL. Returns (etag, last_modified, error). Either of
     the first two may be None when the server omits the header."""
     req = _build_request(url, method="HEAD")
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECS,
-                                     context=_ssl_context()) as resp:
+                                     context=net.ssl_context()) as resp:
             return resp.headers.get("ETag"), resp.headers.get("Last-Modified"), None
     except urllib.error.HTTPError as e:
         return None, None, f"HTTP {e.code} on HEAD"
@@ -344,7 +332,7 @@ def _download_tarball(url, dst_path, progress_cb=None):
     req = _build_request(url, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECS,
-                                     context=_ssl_context()) as resp:
+                                     context=net.ssl_context()) as resp:
             total_hdr = resp.headers.get("Content-Length")
             try:
                 total = int(total_hdr) if total_hdr else None

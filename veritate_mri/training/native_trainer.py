@@ -37,7 +37,7 @@ for _p in (_REPO, _MRI_ROOT):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from readers import paths as paths_mod, models as models_mod   # noqa: E402
+from readers import paths as paths_mod, models as models_mod, checkpoints as checkpoints_reader   # noqa: E402
 from training import save as save_mod                          # noqa: E402
 from veritate_core import model as veritate_model              # noqa: E402
 from veritate_core import qat as veritate_qat                  # noqa: E402
@@ -56,9 +56,6 @@ QAT_MODES         = ("int8", "int4", "ternary")
 # planner sizes its buckets in fp32; paged optimizer state lives under the model dir.
 PLAN_DTYPE        = "fp32"
 PAGED_STATE_DIR   = "optim_state"
-
-CKPT_PREFIX       = "step_"
-CKPT_SUFFIX       = ".pt"
 
 # Size catalog. Used as a fallback when the form / CLI passes only --size; the
 # dashboard's per-trainer manifest.sizes blocks are the primary source. Native
@@ -152,22 +149,6 @@ def _make_loader(bin_path, seq_len, batch_size, seed):
     return draw, n
 
 
-def _latest_step(model_dir):
-    ckpt_dir = os.path.join(model_dir, "checkpoints")
-    if not os.path.isdir(ckpt_dir):
-        raise FileNotFoundError(f"no checkpoints/ under {model_dir}")
-    steps = []
-    for fn in os.listdir(ckpt_dir):
-        if fn.startswith(CKPT_PREFIX) and fn.endswith(CKPT_SUFFIX):
-            try:
-                steps.append(int(fn[len(CKPT_PREFIX):-len(CKPT_SUFFIX)]))
-            except ValueError:
-                continue
-    if not steps:
-        raise FileNotFoundError(f"no step_*.pt in {ckpt_dir}")
-    return max(steps)
-
-
 def _resolve_output_dir(args):
     """Path precedence: --resume wins, then --name + size composes a fresh slug,
     else error. Sets args.output_dir and returns the model dir basename."""
@@ -222,8 +203,11 @@ def _build_model(args):
 def _maybe_resume(model, opt, args, device):
     if not args.resume:
         return 0
-    last = _latest_step(args.output_dir)
-    ckpt_path = os.path.join(args.output_dir, "checkpoints", f"step_{last}{CKPT_SUFFIX}")
+    name = os.path.basename(os.path.normpath(args.output_dir))
+    last = checkpoints_reader.latest_step(name)
+    if last is None:
+        raise FileNotFoundError(f"no step_*.pt under {args.output_dir}")
+    ckpt_path = paths_mod.checkpoint_path(name, last)
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model"], strict=True)
     if "optimizer" in ckpt:

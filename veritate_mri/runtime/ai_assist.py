@@ -13,20 +13,16 @@
 # Imports:
 
 import json
-import ssl
 import urllib.error
 import urllib.request
-
-try:
-    import certifi
-    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
-except ImportError:
-    _SSL_CTX = ssl.create_default_context()
 
 from readers import train_csv as train_csv_reader
 from readers import config as cfg_reader
 from . import logs as logmod
+from . import net
 from . import settings as settings_mod
+
+_SSL_CTX = net.ssl_context()
 
 # ------------------------------------------------------------------------------------
 # Constants
