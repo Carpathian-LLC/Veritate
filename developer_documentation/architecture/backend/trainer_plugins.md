@@ -80,9 +80,14 @@ Three paths:
 
 Per-file three-state sync against the upstream repo, implemented in [training/sync/](../../../veritate_mri/training/sync/) (`sync_common.py` engine, `trainers_sync.py` for trainers). `.sync_state.json` records the SHA written at the last sync. `GET /trainers/git/files` classifies every file as `current`, `missing`, `update_available`, `modified`, `conflict`, or `orphan` (tracked locally but dropped upstream). `POST /trainers/git/sync` applies per-file actions: `install`, `update`, `force`, `adopt`, `delete`, `skip`. The dashboard's per-file details panel exposes the action buttons; `force` and `delete` route through a confirm dialog. `delete` is valid only for orphans: it removes the local file and drops the tracking entry so it stops resurfacing.
 
+## Machine-local tuning
+
+`trainers/` is upstream-synced, so per-machine settings cannot live in `manifest.json` (a sync would overwrite them and they would leak to other machines). `readers.trainers.update_defaults(plugin_id, args)` no longer writes `trainers/<id>/manifest.json`: it keeps only keys already present in the manifest defaults (dropping run-only fields like corpus/model/description), coerces each to the default's type, and writes the machine-local store via [readers.trainer_tuning](trainer_tuning.md). `scan()` calls `_overlay_tuning()` to overlay that stored tuning onto each record's `manifest.defaults` at read time (native trainer included), so the dashboard form prefills the machine's benchmarked values while the on-disk manifest is never mutated.
+
 ## Dependencies
 
 - [veritate_core/plugin/](../../../veritate_core/plugin/): the only platform surface trainers import (`save`, `paths`, `model`, `qat`, `multicorpus`).
+- [readers/trainer_tuning.py](trainer_tuning.md): machine-local per-trainer overrides overlaid onto manifest defaults by `scan()`.
 - [training/save.py](save.md): CSV + checkpoint + dump contract (re-exported as `veritate_core.plugin.save`).
 - [readers/trainers.py](../../../veritate_mri/readers/trainers.py): plugin discovery.
 

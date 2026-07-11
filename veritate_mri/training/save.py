@@ -453,7 +453,8 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         dump_probe, dump_classroom, dump_grades, dump_concepts,
         dump_math, dump_grammar, dump_reasoning,
         dump_surprise, dump_quant_kl, dump_generation,
-        dump_writing_health, dump_reading_comprehension, PROBE_PROMPT,
+        dump_writing_health, dump_reading_comprehension,
+        sample_probe_prompts, PROBE_PROMPT,
     )
 
     _validate_name(name)
@@ -473,6 +474,10 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     _validate_description(name, args)
     _sync_capabilities(name, step, args)
 
+    # dump_probe aggregates over a deterministically sampled seed collection;
+    # an explicit prompt (CLI / caller override) pins it to that single seed.
+    # Single-prompt dumps (surprise, quant_kl, generation) use `prompt`.
+    probe_prompts = [prompt] if prompt is not None else sample_probe_prompts()
     if prompt is None:
         prompt = PROBE_PROMPT
 
@@ -558,7 +563,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
             ))
             skip.add("generation")
     dumps = [
-        ("probe",      lambda: dump_probe     (view, prompt, step_dir, step)),
+        ("probe",      lambda: dump_probe     (view, probe_prompts, step_dir, step)),
         ("classroom",  lambda: dump_classroom (view,         step_dir, step)),
         ("grades",     lambda: dump_grades    (view,         step_dir, step)),
         ("reading_comprehension", lambda: dump_reading_comprehension(view, step_dir, step)),

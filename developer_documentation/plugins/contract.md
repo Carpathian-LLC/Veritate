@@ -75,12 +75,14 @@ The trainer is a standalone Python script. It must:
 | [paths](../../veritate_mri/readers/paths.py)                                          | read-only path composition over `models/<name>/` and `trainers/corpus/` |
 | [model](../../veritate_core/model.py)                                                 | `Veritate(...)` canonical byte-level decoder, `VOCAB_BYTE_LEVEL` |
 | [qat](../../veritate_core/qat.py)                                                     | fake-quant helpers, `set_qat`, `set_quant_mode`, quant constants |
-| [hardware](../../veritate_core/plugin/hardware.py)                                    | `pick_device()`, `physical_cores()`, device detection          |
+| [hardware](../../veritate_core/plugin/hardware.py)                                    | `pick_device()`, `bf16_supported(device)`, `resolve_precision(requested, device)`, `physical_cores()`, device detection |
 | [multicorpus](../../veritate_core/plugin/multicorpus.py)                              | `make_mixed_loader(stems_or_spec, ...)` for `"a+b"` or `"a:0.5,b:0.5"` |
 | [oom_recovery](../../veritate_core/plugin/oom_recovery.py)                            | Wrap a training step to catch and recover from CUDA OOM        |
 | [bench](../../veritate_core/plugin/bench.py)                                          | `run(model, device, seq, vocab)` measured memory/throughput ramp for Auto tune ([doc](../platform/bench.md)) |
 | [mem_planner](../../veritate_core/plugin/mem_planner.py)                              | `plan_training_memory(...)` size-adaptive unified-memory plan ([doc](../platform/mem_planner.md)) |
 | [mem_executor](../../veritate_core/plugin/mem_executor.py)                            | `apply_plan(model, plan)` applies the plan (activation checkpointing) ([doc](../platform/mem_executor.md)) |
+
+`hardware` precision helpers: `bf16_supported(device)` returns True for `cuda` when `torch.cuda.is_bf16_supported()`, True for `mps`, False for `cpu`. `resolve_precision(requested, device)` maps a CLI precision string to a torch autocast dtype, downgrading `bf16` to fp32 (`None`) when the device lacks bf16 acceleration so no machine runs the emulated bf16 path. `pick_device()` falls back to auto-detect with a warning when a forced device is unavailable, rather than raising.
 
 Full signatures and semantics for each namespace are in [trainers/contract.md](../trainers/contract.md).
 

@@ -104,20 +104,55 @@ def _file_block(path):
     return {"path": path, "bytes": st.st_size, "mtime": st.st_mtime, "sha256": _sha256(path)}
 
 
-def usage(stem):
-    train_path, val_path = resolve_paths(stem)
-    train = _file_block(train_path)
-    val   = _file_block(val_path)
-    if train is None:
-        return None
+def _models_for(train_sha):
     matches = []
     for name in models.list_models():
         cfg = cfg_reader.load(name) or {}
         ta  = cfg.get("training_args") or {}
         sha = ta.get("corpus_sha256")
-        if sha and sha == train["sha256"]:
+        if sha and sha == train_sha:
             matches.append({"name": name, "step": int(cfg.get("step") or 0)})
     matches.sort(key=lambda r: r["name"])
+    return matches
+
+
+def _member_block(stem):
+    train_path, val_path = resolve_paths(stem)
+    train = _file_block(train_path)
     plugin_id, _ = _split_namespace(stem)
     return {"stem": stem, "source": "bundle" if plugin_id else "shared",
-            "plugin_id": plugin_id, "train": train, "val": val, "models": matches}
+            "plugin_id": plugin_id, "train": train, "val": _file_block(val_path),
+            "models": _models_for(train["sha256"]) if train else []}
+
+
+def _mix_weights(parsed, sizes):
+    explicit = [w for _, w in parsed]
+    if all(w is not None for w in explicit):
+        total = sum(explicit) or 1.0
+        return [w / total for w in explicit]
+    total = sum(sizes) or 1
+    return [s / total for s in sizes]
+
+
+def _usage_mixed(spec):
+    from veritate_core.plugin import multicorpus
+    parsed = multicorpus.parse_spec(spec)
+    members = [_member_block(st) for st, _ in parsed]
+    weights = _mix_weights(parsed, [m["train"]["bytes"] if m["train"] else 0 for m in members])
+    for m, w in zip(members, weights):
+        m["weight"] = w
+    merged = {}
+    for m in members:
+        for rec in m["models"]:
+            merged[rec["name"]] = rec
+    return {"stem": spec, "mixed": True, "members": members,
+            "models": sorted(merged.values(), key=lambda r: r["name"]),
+            "missing": [m["stem"] for m in members if m["train"] is None]}
+
+
+def usage(stem):
+    from veritate_core.plugin import multicorpus
+    if multicorpus.is_mixed_spec(stem):
+        return _usage_mixed(stem)
+    block = _member_block(stem)
+    return block if block["train"] else None

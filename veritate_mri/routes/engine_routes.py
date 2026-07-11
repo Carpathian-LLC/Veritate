@@ -17,9 +17,7 @@ from flask import current_app, request
 from inference.backends.c_engine import CTracedSubprocess
 from readers import bin as binr, config as cfg_reader, engine, models, paths
 from runtime import logs as logmod
-from training import build_runner, system_deps
-
-from ._common import is_loopback
+from training import build_runner
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -36,25 +34,12 @@ def register(app):
         cur_exe = cfg.get("C_EXE")
         s["c_subprocess_running"] = cfg.get("C_SUBPROCESS") is not None
         s["c_exe"] = cur_exe
-        s["deps"] = system_deps.status()
         return s
 
     @app.route("/engine/build", methods=["POST"])
     def engine_build_trigger():
         body = request.get_json(silent=True) or {}
         return build_runner.start(force=bool(body.get("force")))
-
-    @app.route("/engine/deps")
-    def engine_deps_status():
-        return system_deps.status()
-
-    @app.route("/engine/deps/install", methods=["POST"])
-    def engine_deps_install():
-        if not is_loopback(request.remote_addr):
-            return ({"ok": False, "error": "dependency install is loopback-only"}, 403)
-        body = request.get_json(silent=True) or {}
-        keys = body.get("keys")
-        return system_deps.install(keys if isinstance(keys, list) else None)
 
     @app.route("/c-engines")
     def c_engines_index():

@@ -59,6 +59,12 @@ DEVICE_ENV = "VERITATE_DEVICE"
 # often hurts (NUMA / thread-thrash / memory-bandwidth saturation).
 _BLAS_THREAD_CAP = 16
 
+# Bools the canonical trainers register as argparse BooleanOptionalAction, so a
+# False must be sent as --no-<flag> to override a manifest default of true
+# (auto-optimize turning QAT / act-ckpt off on weak hardware). Plain store_true
+# bools stay omitted-on-false.
+NEGATABLE_BOOL_FLAGS = ("qat_enabled", "use_act_ckpt", "use_8bit_adam")
+
 _LOCK = threading.Lock()
 _STATE = {
     "status":      STATUS_IDLE,
@@ -268,7 +274,10 @@ def _build_argv(plugin, args):
         if v is None or v == "":
             continue
         if isinstance(v, bool):
-            if v: out.append(f"--{k}")
+            if v:
+                out.append(f"--{k}")
+            elif k in NEGATABLE_BOOL_FLAGS:
+                out.append(f"--no-{k}")
         else:
             out += [f"--{k}", str(v)]
     return out

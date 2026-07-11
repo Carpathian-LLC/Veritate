@@ -215,25 +215,30 @@ function regionRamp(t, layer) {
 }
 
 let _layerCount = 12;
+const FFN_LEGEND_IDS = ["ffnRegionLegend", "ffnRegionLegendL"];
 function setLayerCount(n) {
   if (!n || n < 1) return;
   _layerCount = n;
   _buildFfnLegend(n);
+  const abl = $("ablLayer");
+  if (abl) abl.max = String(n - 1);
 }
 function _regionBounds(n) {
   const s = Math.max(1, Math.round(n / 3));
   return { sense_end: s - 1, assoc_end: n - s - 1, total: n };
 }
 function _buildFfnLegend(n) {
-  const el = $("ffnRegionLegend");
-  if (!el) return;
   const b = _regionBounds(n);
   const range = (a, c) => a === c ? `L${a}` : `L${a}&ndash;L${c}`;
-  el.innerHTML = `
+  const html = `
     <span class="leg b-sense"><b>${range(0, b.sense_end)} sensory</b><span class="range">cool blue</span><em>raw byte features, surface patterns</em></span>
     <span class="leg b-assoc"><b>${range(b.sense_end + 1, b.assoc_end)} association</b><span class="range">warm orange</span><em>concepts, syntax, semantics</em></span>
     <span class="leg b-out"><b>${range(b.assoc_end + 1, n - 1)} output</b><span class="range">hot red</span><em>commits to a specific next byte</em></span>
   `;
+  for (const id of FFN_LEGEND_IDS) {
+    const el = $(id);
+    if (el) el.innerHTML = html;
+  }
 }
 
 function regionLabel(layer) {
@@ -805,7 +810,7 @@ function drawDlaTable(elId, entries) {
     <th>contrib</th>
   </tr></thead><tbody>`;
   for (const e of entries) {
-    const cls = regionRowClass(e.layer);
+    const cls = regionRowClass(e.layer, _layerCount);
     const cclass = e.contrib >= 0 ? "contrib-pos" : "contrib-neg";
     const labelPill = e.label ? renderLabelPill(e.label) : "";
     html += `<tr class="${cls}" data-layer="${e.layer}" data-neuron="${e.neuron}">
@@ -1237,9 +1242,9 @@ function renderResponseInto(el, promptBs, generatedBs, frameIdx, showCursor, str
   el.scrollTop = el.scrollHeight;
 }
 
-// Report-driven render: colors + grounding outlines from a /hallucination
-// analysis. Uses the report's own answer text and span offsets, so chat-marker
-// stripping is already handled server-side.
+// Flatten the report's nested spans to the chosen granularity. Uses the
+// report's own answer text and byte offsets, so chat-marker stripping is
+// already handled server-side.
 function _reportTier(report, level) {
   const paras = (report.spans && report.spans.paragraphs) || [];
   if (level === "paragraph") return paras;
@@ -1248,38 +1253,32 @@ function _reportTier(report, level) {
   return sents.flatMap(s => s.words || []);
 }
 
-function renderGroundedResponse(el, promptBs, report) {
-  el.innerHTML = "";
-  const ps = document.createElement("span"); ps.className = "pr";
-  ps.textContent = String.fromCharCode(...promptBs.filter(b => b < 256));
-  el.appendChild(ps);
+// Hallucination-panel answer: the clean answer with grounding underlines
+// (green / amber / red) and a confidence color ramp per span.
+function _groundedAnswerHtml(report) {
   const ans = report.answer || "";
-  const colorOn = _confColorOn();
-  let pos = 0;
+  let html = "", pos = 0;
   for (const seg of _reportTier(report, _confLevel())) {
-    if (seg.start > pos) el.appendChild(document.createTextNode(ans.slice(pos, seg.start)));
-    const span = document.createElement("span");
-    span.className = "cw" + _groundClass(seg.grounded);
+    if (seg.start > pos) html += _esc(ans.slice(pos, seg.start));
     const c = (typeof seg.confidence === "number") ? seg.confidence : null;
-    if (colorOn && c != null) span.style.color = confColor(c);
+    const style = c != null ? ` style="color:${confColor(c)}"` : "";
     const gTxt = seg.grounded ? ` · grounded: ${seg.grounded}` : "";
-    if (c != null) span.title = `confidence ${c.toFixed(2)}${gTxt}`;
-    else if (gTxt) span.title = gTxt.slice(3);
-    span.textContent = ans.slice(seg.start, seg.end);
-    el.appendChild(span);
+    const title = (c != null ? `confidence ${c.toFixed(2)}${gTxt}` : gTxt.slice(3));
+    html += `<span class="cw${_groundClass(seg.grounded)}"${style} title="${_esc(title)}">${_esc(ans.slice(seg.start, seg.end))}</span>`;
     pos = seg.end;
   }
-  if (pos < ans.length) el.appendChild(document.createTextNode(ans.slice(pos)));
-  el.scrollTop = el.scrollHeight;
+  if (pos < ans.length) html += _esc(ans.slice(pos));
+  return html;
 }
 
 // ---- live tab render ----
+// #response is the technical byte inspector: it always shows the RAW generated
+// bytes (chat template scaffolding included) so the timeline scrubs the actual
+// output. The clean answer streams into #genThinking; grounding + the colored
+// answer live in the hallucination panel.
 function renderResponse() {
-  const el = $("response");
-  const full = frames.length === 0 || currentFrame === frames.length - 1;
-  if (hallucReport && full) { renderGroundedResponse(el, promptBytes, hallucReport); return; }
-  renderResponseInto(el, promptBytes, generatedBytes, currentFrame, live,
-                     _genMode() === "chat", frames, 0);
+  renderResponseInto($("response"), promptBytes, generatedBytes, currentFrame, live,
+                     false, frames, 0);
 }
 
 function blankCanvas(c, ctx, msg) {
@@ -1377,12 +1376,54 @@ function _provenanceHtml(prov) {
   return h + `</div>`;
 }
 
+// Plain-language sentence tying the verdict to the metrics that drove it.
+function _hallucWhy(o) {
+  const pct = x => (Math.max(0, Math.min(1, x)) * 100).toFixed(0);
+  const gf = o.grounded_fraction, dv = o.context_divergence, cf = o.confidence;
+  switch (o.verdict) {
+    case "grounded":
+      return `${pct(gf)}% of the answer's content words are backed by retrieved context, so it reads as grounded.`;
+    case "partially_grounded":
+      return `Only ${pct(gf)}% of the answer is backed by context; the rest is unverified, so check it.`;
+    case "likely_hallucinated":
+      return `Grounding is low (${pct(gf)}%) and the answer swings a lot without context (divergence ${pct(dv)}%): likely fabricated.`;
+    case "low_confidence":
+      return `The model's own calibrated confidence is low (${pct(cf)}%): it is unsure of this answer.`;
+    case "refused":
+      return `The model declined to answer rather than guess.`;
+    default:
+      return gf == null
+        ? `No context was retrieved, so grounding could not be checked; overall confidence is ${pct(cf)}%.`
+        : `No strong hallucination signal, but grounding is weak (${pct(gf)}%); overall confidence is ${pct(cf)}%.`;
+  }
+}
+
+function _sentenceRollupHtml(report) {
+  const paras = (report.spans && report.spans.paragraphs) || [];
+  const sents = paras.flatMap(p => p.sentences || []);
+  if (!sents.length) return "";
+  let rows = "";
+  for (const s of sents) {
+    const c = (typeof s.confidence === "number") ? s.confidence : null;
+    const w = c != null ? (c * 100).toFixed(0) : "0";
+    const col = c != null ? confColor(c) : "var(--dim)";
+    const dot = s.grounded ? `<span class="g-dot${_groundClass(s.grounded)}" title="grounded: ${s.grounded}"></span>` : "";
+    rows += `<div class="halluc-sent">
+      <span class="s-text" title="${_esc(s.text || "")}">${dot}${_esc(_clip(s.text || "", 90))}</span>
+      <div class="halluc-bar s-bar"><div class="halluc-fill" style="width:${w}%;background:${col}"></div></div>
+      <span class="s-conf">${c != null ? (c * 100).toFixed(0) + "%" : "n/a"}</span>
+    </div>`;
+  }
+  return `<div class="halluc-roll"><h4>per-sentence confidence</h4>${rows}</div>`;
+}
+
 function drawHallucination(report) {
   const el = $("hallucinationPanel");
   if (!el) return;
   const o = report.overall || {};
   const v = HALLUC_VERDICT[o.verdict] || { cls: "v-ungrounded", label: o.verdict || "unknown" };
   const legend = `linear-gradient(90deg, ${confColor(0)}, ${confColor(0.5)}, ${confColor(1)})`;
+  const hasCtx = o.grounded_fraction != null;
   const bar = (label, val, invert) => {
     if (val == null) return `<div><div class="halluc-metric-head"><span>${label}</span><span class="halluc-na">n/a</span></div></div>`;
     const clamp = Math.max(0, Math.min(1, val));
@@ -1392,20 +1433,34 @@ function drawHallucination(report) {
       <div class="halluc-bar"><div class="halluc-fill" style="width:${(clamp * 100).toFixed(0)}%;background:${col}"></div></div>
     </div>`;
   };
-  const flag = o.uncertain ? `<span class="halluc-flag">uncertain</span>` : "";
-  let html = `
+  const flag = o.uncertain ? `<span class="halluc-flag" title="overall byte confidence sits below the I-don't-know line">uncertain</span>` : "";
+  const grounding = hasCtx
+    ? `<span class="ki"><span class="sw g-yes"></span>grounded</span>
+       <span class="ki"><span class="sw g-partial"></span>partly grounded</span>
+       <span class="ki"><span class="sw g-no"></span>invented / unsupported</span>`
+    : `<span class="ki note">grounding needs RAG (chat mode with a knowledge base)</span>`;
+  el.innerHTML = `
     <div class="halluc-head">
       <span class="verdict-chip ${v.cls}">${v.label}</span>
       ${flag}
-      <span style="color:var(--dim);font-size:11px">confidence source: ${_esc(report.confidence_source || "?")}</span>
+      <span class="halluc-src-tag">confidence source: ${_esc(report.confidence_source || "?")}</span>
     </div>
+    <div class="halluc-why">${_hallucWhy(o)}</div>
     <div class="halluc-metrics">
       ${bar("hallucination risk", o.hallucination_risk, true)}
       ${bar("grounded fraction", o.grounded_fraction, false)}
       ${bar("context divergence", o.context_divergence, true)}
+      ${bar("confidence", o.confidence, false)}
     </div>
-    <div class="conf-legend"><span>low</span><span class="bar" style="background:${legend}"></span><span>high confidence</span></div>`;
-  el.innerHTML = html + _provenanceHtml(report.provenance || {});
+    <div class="halluc-answer">${_groundedAnswerHtml(report)}</div>
+    <div class="halluc-key">
+      <span class="halluc-key-title">key</span>
+      ${grounding}
+      <span class="ki ramp"><span>low</span><span class="sw-ramp" style="background:${legend}"></span><span>high confidence</span></span>
+    </div>
+    ${_sentenceRollupHtml(report)}
+    ${_provenanceHtml(report.provenance || {})}
+  `;
 }
 
 function drawHallucinationError(msg) {
@@ -1416,7 +1471,7 @@ function drawHallucinationError(msg) {
 function resetHallucination() {
   hallucReport = null;
   const el = $("hallucinationPanel");
-  if (el) el.innerHTML = `<div class="halluc-empty">generate, then click <b>detect hallucinations</b> above to score grounding and risk.</div>`;
+  if (el) el.innerHTML = `<div class="halluc-empty">grounding + risk score automatically after each generation.</div>`;
   const st = $("detectStatus");
   if (st) { st.textContent = ""; st.className = "halluc-status"; }
 }
@@ -1426,7 +1481,10 @@ function resetHallucination() {
   if (btn) btn.addEventListener("click", runHallucinationDetect);
   ["confColorToggle", "confColorLevel"].forEach(id => {
     const e = $(id);
-    if (e) e.addEventListener("change", () => { if (frames.length || hallucReport) renderResponse(); });
+    if (e) e.addEventListener("change", () => {
+      if (frames.length || hallucReport) renderResponse();
+      if (hallucReport) drawHallucination(hallucReport);
+    });
   });
 })();
 
@@ -1543,6 +1601,15 @@ function render(frame) {
 }
 
 function setMeta(m) {
+  // Model-select and generate-stream frames rebuild meta without the capability
+  // and device fields; carry them over from the prior meta so the mode picker
+  // does not re-grey chat mid-session. A fresh load passes real values (or an
+  // explicit null for a model with no caps), which take precedence.
+  if (meta) {
+    if (m.c_model_capabilities === undefined) m.c_model_capabilities = meta.c_model_capabilities;
+    if (m.pytorch_capabilities === undefined) m.pytorch_capabilities = meta.pytorch_capabilities;
+    if (m.pytorch_device === undefined) m.pytorch_device = meta.pytorch_device;
+  }
   meta = m;
   promptBytes = m.prompt_bytes || [];
   if (m.layers) setLayerCount(m.layers);
@@ -1631,19 +1698,26 @@ function _genMode() {
   return r ? r.value : GEN_MODE_DEFAULT;
 }
 
-// Pull the active-backend's capabilities block out of /meta. Falls back to
-// the legacy block (autocomplete trained only) when the field is absent so
-// older servers still render a usable picker.
+// Capabilities describe the trained WEIGHTS, not the runtime, so the same model
+// reports the same tiers whichever backend served /meta. Merge both backends'
+// blocks per tier (best status wins) so a tier a model was trained for enables
+// regardless of which backend is loaded or idle-unloaded. Legacy block (only
+// autocomplete) is the final fallback for older servers with no caps at all.
+const _CAP_RANK = { trained: 3, in_progress: 2, failed: 1, untrained: 0 };
 function _activeCapabilities() {
   const m = meta || {};
-  const backend = ($("backend") || { value: "c" }).value;
-  // Capabilities describe the trained weights, not the runtime. When the active
-  // backend has no model loaded (its caps block is null), borrow the other
-  // backend's caps before the legacy default, so a chat-trained model does not
-  // read as chat:untrained just because this backend has not loaded it yet.
-  const primary   = backend === "pytorch" ? m.pytorch_capabilities : m.c_model_capabilities;
-  const secondary = backend === "pytorch" ? m.c_model_capabilities : m.pytorch_capabilities;
-  return primary || secondary || _legacyCaps();
+  return _mergeCaps(m.pytorch_capabilities, m.c_model_capabilities) || _legacyCaps();
+}
+function _mergeCaps(a, b) {
+  if (!a && !b) return null;
+  const out = {};
+  for (const t of GEN_MODE_TIERS) {
+    const ea = (a && a[t]) || null, eb = (b && b[t]) || null;
+    const ra = _CAP_RANK[(ea && ea.status) || "untrained"] || 0;
+    const rb = _CAP_RANK[(eb && eb.status) || "untrained"] || 0;
+    out[t] = (rb > ra ? eb : ea) || { status: "untrained" };
+  }
+  return out;
 }
 
 function _legacyCaps() {
@@ -2333,8 +2407,7 @@ $("go").addEventListener("click", async () => {
         if (clean) pushChatMessage("model", clean);
       } catch (_) {}
     }
-    const auto = $("hallucAuto");
-    if (auto && auto.checked && generatedBytes.length > 0) runHallucinationDetect();
+    if (generatedBytes.length > 0) runHallucinationDetect();
   });
   evtSrc.onerror = () => {
     evtSrc?.close(); evtSrc = null;
@@ -2660,6 +2733,9 @@ function postCConfig(body) {
             c_model_training: m.c_model_training, c_model_activation: m.c_model_activation,
             c_exe: m.c_exe, c_exe_path: m.c_exe_path,
             c_engine_version: m.c_engine_version, c_engine_label: m.c_engine_label,
+            c_model_capabilities: m.c_model_capabilities,
+            pytorch_capabilities: m.pytorch_capabilities,
+            pytorch_device: m.pytorch_device,
           });
         }
       });
@@ -2848,7 +2924,7 @@ fetch("/meta").then(r => r.json()).then(m => {
   } else {
     opt.textContent = "Veritate (not built — run build.bat)";
   }
-  if (m.checkpoint && !meta) {
+  if ((m.checkpoint || m.c_model_dir) && !meta) {
     setMeta({
       checkpoint: m.checkpoint, n_params: m.n_params,
       layers: m.layers, heads: m.heads, ffn: m.ffn,
@@ -2858,6 +2934,9 @@ fetch("/meta").then(r => r.json()).then(m => {
       c_model_training: m.c_model_training, c_model_activation: m.c_model_activation,
       c_exe: m.c_exe, c_exe_path: m.c_exe_path,
       c_engine_version: m.c_engine_version, c_engine_label: m.c_engine_label,
+      c_model_capabilities: m.c_model_capabilities,
+      pytorch_capabilities: m.pytorch_capabilities,
+      pytorch_device: m.pytorch_device,
     });
   }
   applyBackendUI();
@@ -3224,6 +3303,9 @@ function renderLearning() {
   renderResponseInto($("responseL"), learningState.promptBytes, generatedBs, idx, false);
   $("frameLabelL").textContent = `${idx + 1} / ${data.frames.length}`;
   updateScrubTape("scrubTapeL", data.frames, idx, learningState.promptBytes);
+  if (Array.isArray(frame.ffn_full) && frame.ffn_full.length && frame.ffn_full.length !== _layerCount) {
+    setLayerCount(frame.ffn_full.length);
+  }
   drawFfn(cFfnL, ctxFfnL, frame.ffn_full);
   drawSaturation(cSatL, ctxSatL, frame.saturation);
   drawTopNeurons(cTopL, ctxTopL, frame.ffn_top);
@@ -6723,8 +6805,7 @@ function attachExpandButtons() {
       e.stopPropagation();
       const isExpanded = panel.classList.toggle("expanded");
       btn.textContent = isExpanded ? "collapse" : "expand";
-      panel.querySelectorAll("canvas").forEach(fitCanvas);
-      window.dispatchEvent(new Event("resize"));
+      // The canvas ResizeObserver re-fits and redraws on the layout change.
     });
     h2.appendChild(btn);
   });
@@ -6749,8 +6830,9 @@ function attachCollapseButtons() {
 }
 attachCollapseButtons();
 
-[cFfn, cTop, cTel, cFlow, cDecisive, cConfBar, cConfTrend].forEach(fitCanvas);
-window.addEventListener("resize", () => {
+// Re-fit and redraw every chart on the active tab. Runs on window resize and
+// whenever a canvas's box changes (see the observer below).
+function redrawAllVisible() {
   [cFfn, cTop, cTel, cFlow, cDecisive, cConfBar, cConfTrend].forEach(fitCanvas);
   if (currentFrame >= 0) render(frames[currentFrame]);
   if (learningState.loaded && document.querySelector('.tab-body[data-tab="learning"]').classList.contains("active")) {
@@ -6772,7 +6854,24 @@ window.addEventListener("resize", () => {
       render_reading_level(classroomRefsT, classroomState.run, classroomState.gradesSteps, classroomState.gradesByStep, true, classroomState.config);
     }
   }
+}
+
+[cFfn, cTop, cTel, cFlow, cDecisive, cConfBar, cConfTrend].forEach(fitCanvas);
+window.addEventListener("resize", redrawAllVisible);
+
+// Redraw a chart at the correct size whenever its box changes, including the
+// 0 -> N transition when its tab or panel first becomes visible. This is the
+// one mechanism that keeps canvases crisp without a manual expand/collapse:
+// fitCanvas preserves the display aspect ratio, so it never changes the CSS box
+// and never re-triggers the observer. Per-canvas callbacks coalesce into one
+// pass per frame.
+let _redrawPending = false;
+const _canvasResizeObserver = new ResizeObserver(() => {
+  if (_redrawPending) return;
+  _redrawPending = true;
+  requestAnimationFrame(() => { _redrawPending = false; redrawAllVisible(); });
 });
+document.querySelectorAll("canvas").forEach(c => _canvasResizeObserver.observe(c));
 
 // ============================================================
 // CLASSROOM DASHBOARD — tier 2 panels (Learning tab only)
@@ -7188,56 +7287,10 @@ function _cEngineRebuildFailed(host, msg) {
   if (host) {
     host.innerHTML = `<b style="color:var(--hot)">rebuild failed:</b> ${safe} ${_cEngineActionsHtml()}`;
     _wireCEngineActions(host);
-    _maybeOfferDeps(host);
   } else {
     backendsState.lastError = `rebuild failed: ${msg}`;
     _renderBackendState();
   }
-}
-
-// A build needs a C compiler (git enables sync). When a system dep is missing, append
-// the remedy under the rebuild-failed message: a one-click install where the OS can
-// auto-install (loopback + package manager), otherwise the commands to paste.
-function _maybeOfferDeps(host) {
-  fetch("/engine/deps").then(r => r.json()).then(d => {
-    const missing = ((d && d.deps) || []).filter(x => !x.present);
-    if (!missing.length) return;
-    const box = document.createElement("div");
-    box.style.cssText = "margin-top:6px;font-size:11px;line-height:1.5";
-    _renderDepsRemedy(box, d, missing);
-    host.appendChild(box);
-  }).catch(() => {});
-}
-
-function _depsCommandsHtml(missing) {
-  return missing.filter(m => m.install_command)
-    .map(m => ` <code>${escapeHtml(m.install_command)}</code>`).join("");
-}
-
-function _renderDepsRemedy(box, d, missing) {
-  const head = `<b style="color:var(--warm)">missing: ${missing.map(m => escapeHtml(m.label)).join(", ")}.</b>`;
-  if (!d.can_auto_install) {
-    box.innerHTML = `${head} <span style="color:var(--dim)">run in a terminal:</span>${_depsCommandsHtml(missing)}`;
-    return;
-  }
-  box.innerHTML = `${head} <a href="#" data-deps-action="install" style="color:var(--accent)">install now</a> <span style="color:var(--dim)">(needs passwordless sudo)</span>`;
-  box.querySelector("[data-deps-action='install']").addEventListener("click", (e) => {
-    e.preventDefault();
-    box.innerHTML = `<span class="spinner"></span> <b style="color:var(--warm)">installing dependencies&hellip;</b>`;
-    fetch("/engine/deps/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
-      .then(r => r.json().catch(() => ({ ok: false, error: `http ${r.status}` })))
-      .then(res => {
-        if (res && res.ok) {
-          box.innerHTML = `<b style="color:var(--accent)">dependencies installed.</b> <span style="color:var(--dim)">retrying build&hellip;</span>`;
-          _cEngineRebuild(box);
-        } else {
-          const still = ((res && res.status && res.status.deps) || missing).filter(x => !x.present);
-          box.innerHTML = `<b style="color:var(--hot)">install failed:</b> ${escapeHtml((res && res.error) || "")}` +
-            (still.length ? ` <span style="color:var(--dim)">run in a terminal:</span>${_depsCommandsHtml(still)}` : "");
-        }
-      })
-      .catch(err => { box.innerHTML = `<b style="color:var(--hot)">install failed:</b> ${escapeHtml(String(err && err.message || err))}`; });
-  });
 }
 
 function _applyGenerateGate() {
@@ -7549,7 +7602,7 @@ const TRAINER_SCHEMA = {
     { name: "description",  type: "text",                    label: "what this model is for",   help: "saved into the model config. If left blank, auto-filled from corpus/size/precision/version/variant." },
     { name: "model_type",   type: "str",                     label: "model type",               help: "what this model is for. Controls which checkpoint evaluations run: 'language' runs the full language probe suite (fluency, reading, grammar, reasoning, concepts, writing); 'code', 'statistical', and 'other' skip the language tests because they are meaningless for non-text models.", choices: ["language","code","statistical","other"] },
     // ---- recipe + research-validated knobs ----
-    { name: "recipe",       type: "str",    uiOnly: true,    label: "training recipe",          help: "one pick fills the training knobs with a lab-validated combination (see developer_documentation/training/research_successes.md for the measurements behind each). 'custom' leaves everything as you set it.", choices: ["balanced","efficient byte-native","long-conversation","classic","custom"] },
+    { name: "recipe",       type: "str",    uiOnly: true,    label: "training recipe",          help: "one pick fills the training knobs with a lab-validated combination. 'custom' leaves everything as you set it.", choices: ["balanced","efficient byte-native","long-conversation","classic","custom"] },
     { name: "optimizer",    type: "str",                     label: "optimizer",                help: "muon = measured 1.60x fewer training bytes to the same quality vs adamw on this platform (research ledger 2026-07-03). adamw = the classic default.", choices: ["adamw","muon"] },
     { name: "trunk",        type: "str",                     label: "architecture",             help: "dense = canonical transformer. patched = global compute per ~4-byte patch: measured 1.82x faster to the same quality, more parameters at the same speed. recurrent = constant-state: quality parity with attention and stays fast/light no matter how long the conversation gets. hybrid = patched + recurrent global path: best measured quality of all variants (1.70x vs dense). looped = weight-tied depth: beats dense at equal parameters but loses to patched/hybrid, and thinking longer at test time did not help (research ledger 2026-07-05). memory = long-context device, not a knowledge store (ledger 2026-07-05).", choices: ["dense","patched","recurrent","hybrid","looped","memory"] },
     // ---- standard training loop ----
@@ -7630,6 +7683,15 @@ const TRAINER_SCHEMA = {
     { name: "quant_mode",   type: "str", advanced: true,        label: "weight quant mode",     help: "active only when QAT enabled. int8 (default), int4, or ternary (BitNet 1.58).", choices: ["int8","int4","ternary"] },
     // ---- checkboxes (all together at the end; qat_enabled is up top with resume) ----
   ],
+};
+
+// Settings with a "learn more" wiki page (data/wiki/settings/<slug>.md). Field
+// name -> page slug; the form renders a link next to the label for each.
+const WIKI_SETTING_PAGES = {
+  recipe: "recipe", optimizer: "optimizer", trunk: "trunk", precision: "precision",
+  batch_size: "batch_size", seq: "seq", n_chunks: "n_chunks", bptt_window: "bptt_window",
+  base_lr: "base_lr", min_lr: "min_lr", lr_schedule: "lr_schedule", warmup_steps: "warmup_steps",
+  weight_decay: "weight_decay", grad_clip: "grad_clip", label_smoothing: "label_smoothing",
 };
 
 // Build the per-render arg list for a plugin. Render order = required fields
@@ -7720,6 +7782,12 @@ function _trMemoryBudget() {
   return null;
 }
 
+// No-flash (CPU/MPS) attention materializes the [B,H,T,T] softmax weights and
+// holds them for backward. Calibrated against measured CPU runs.
+const ATTN_SAVED_TENSORS = 1;
+// QAT fake-quant adds a modest activation overhead (extra straight-through tensors).
+const QAT_ACT_MULT = 1.15;
+
 function _trEstimateMemory() {
   let size        = _trArgVal("size");
   let precision   = _trArgVal("precision");
@@ -7729,6 +7797,10 @@ function _trEstimateMemory() {
   const coreArgs  = _corePluginsArgs();
   const ckptOn    = !!coreArgs.use_act_ckpt;
   const adam8On   = !!coreArgs.use_8bit_adam;
+  const qatOn     = !!coreArgs.qat_enabled;
+  const caps      = (_sysSpecsCache && _sysSpecsCache.capabilities) || {};
+  const hasFlash  = !!caps.can_use_cuda;                     // only CUDA has a real flash kernel
+  const hasBf16   = !!(caps.can_use_cuda || caps.is_apple_silicon);
 
   if (!size || !precision || !seq) {
     const resumeName = _trArgVal("resume");
@@ -7750,7 +7822,7 @@ function _trEstimateMemory() {
   const sz = _trSizeShape(size);
   if (!sz || !batch || !seq) return null;
 
-  const bpv = precision === "bf16" ? 2 : 4;
+  const bpv = (precision === "bf16" && hasBf16) ? 2 : 4;
   // AdamW: fp32 weights + grads + m + v = 16 bytes/param. bitsandbytes 8-bit
   // AdamW drops m+v to 1 byte each, giving 4+4+1+1 = 10.
   const bytesPerParam = adam8On ? 10 : 16;
@@ -7770,7 +7842,11 @@ function _trEstimateMemory() {
 
   let actBytes = batch * seq * sz.hidden * sz.layers * 13 * bpv * bpttWindow;
   if (isMoE) actBytes *= activeParams / totalParams;
+  // No FlashAttention on CPU/MPS: the [batch, heads, seq, seq] scores + softmax
+  // probs materialize and are held for backward. Quadratic in seq.
+  if (!hasFlash) actBytes += ATTN_SAVED_TENSORS * batch * sz.heads * sz.layers * seq * seq * bpv * bpttWindow;
   if (ckptOn) actBytes *= 0.5;
+  if (qatOn)  actBytes *= QAT_ACT_MULT;
 
   // KV cache during eval (only matters at long seq). Per-byte cost is
   // 2 (K+V) * heads * head_dim * bpv per layer, summed over T.
@@ -7780,7 +7856,7 @@ function _trEstimateMemory() {
   const totalRaw = staticBytes + actBytes;
   const total = Math.round(totalRaw * 1.15);
   return {
-    staticBytes, actBytes, total, kvBytes, ckptOn, adam8On,
+    staticBytes, actBytes, total, kvBytes, ckptOn, adam8On, qatOn, hasFlash, hasBf16,
     size, precision, seq, batch, bpttWindow,
     isMoE, totalParams, activeParams,
     weightsBytes, gradsBytes, optimBytes,
@@ -7817,6 +7893,9 @@ function _trUpdateVramEstimate() {
       ` <b style="color:var(--text)">${fmt(budget.bytes)}</b>` +
       ` <span style="color:var(--dim)">${budget.label}</span>${rawNote}` +
       ` &middot; <span style="color:${badgeColor}">${pct}% used &mdash; ${verdict}</span></div>`;
+    if (ratio >= 0.92 && trainState.selected && trainState.selected.manifest && trainState.selected.manifest.bench) {
+      budgetLine += `<div style="margin-top:2px;color:var(--warm)">Tight on this machine. Run <b>Auto-optimize</b> (step 3) to benchmark and fit the settings automatically.</div>`;
+    }
   } else {
     budgetLine = `<div style="margin-top:3px;color:var(--warm)">no system specs detected &mdash; click <b>detect my system</b> in settings to compare against your hardware.</div>`;
   }
@@ -8002,6 +8081,10 @@ function _autoTuneRecommend(result, plugin) {
     args.eval_every   = Math.max(100, Math.round(totalSteps * 0.05));
     args.ckpt_every   = Math.max(200, Math.round(totalSteps * 0.10));
   }
+  const caps = (_sysSpecsCache && _sysSpecsCache.capabilities) || {};
+  const hasBf16 = !!(caps.can_use_cuda || caps.is_apple_silicon);
+  if (!hasBf16) args.precision = "fp32";                   // no bf16 unit: emulated bf16 is slower and heavier
+  if (result.device === "cpu") args.qat_enabled = false;   // fake-quant overhead not worth it on CPU
   const bestEntry = ramp.find(r => r.batch === best.batch) || best;
   const hours = totalSteps > 0 && bestEntry.tok_per_s > 0
     ? (totalSteps * batch * result.seq / bestEntry.tok_per_s / 3600) : null;
@@ -8031,6 +8114,8 @@ function _autoTuneFinish(result) {
       `Recommended: <b>batch ${recs.batch}</b> at <b>lr ${recs.lr}</b>` +
       (recs.args.warmup_steps ? `, warmup/log/eval/ckpt cadence scaled to ${recs.totalSteps.toLocaleString()} steps` : "") +
       (recs.args.use_act_ckpt ? `, activation checkpointing on` : "") +
+      (recs.args.precision ? `, precision ${recs.args.precision}` : "") +
+      (recs.args.qat_enabled === false ? `, QAT off` : "") +
       `.${timeNote}<br><span style="color:var(--dim)">Bigger batches fit (up to ${result.max_batch}) but measured slower — the recommendation is the throughput sweet spot.</span>${pagedNote}`;
   } else {
     $("autoTuneRecs").textContent = "no usable measurements — see the log above.";
@@ -8070,7 +8155,7 @@ function _autoTuneApply() {
         _trUpdateVramEstimate();
       }
       fetch("/sys/specs").then(r => r.json()).then(s => { if (s && s.platform) { _sysSpecsCache = s; _renderSysSpecs(s); } }).catch(() => {});
-      status.textContent = "saved to trainer" + (d.manifest_updated ? " manifest" : "") + " — future runs start from these values.";
+      status.textContent = "saved for this machine. Future runs start from these values.";
       status.style.color = "var(--data-pos)";
     })
     .catch(e => { status.textContent = "apply failed: " + e; status.style.color = "var(--hot)"; });
@@ -8134,6 +8219,7 @@ function _trUpdateCorpusMeta() {
     trainCorpusMetaState.inflight = false;
     if (trainCorpusMetaState.stem !== stem) return;
     if (d.error) { box.innerHTML = `<span style="color:var(--hot)">${_trEsc(d.error)}</span>`; return; }
+    if (d.mixed) { box.innerHTML = _trCorpusMixHtml(d); box.dataset.loaded = "1"; return; }
     const tr = d.train, va = d.val;
     const nMatches = (d.models || []).length;
     const matchLabel = nMatches === 0
@@ -8154,6 +8240,27 @@ function _trUpdateCorpusMeta() {
     trainCorpusMetaState.inflight = false;
     box.innerHTML = `<span style="color:var(--hot)">corpus meta failed: ${_trEsc(String(e))}</span>`;
   });
+}
+
+function _trCorpusMixHtml(d) {
+  const members = d.members || [];
+  const nMatches = (d.models || []).length;
+  const matchLabel = nMatches === 0
+    ? '<span style="color:var(--dim)">no models trained on these corpora yet</span>'
+    : `<span style="color:var(--data-pos)">shared with ${nMatches} model${nMatches === 1 ? "" : "s"}</span>: ${(d.models || []).map(m => _trEsc(m.name)).join(", ")}`;
+  let html = `<div style="color:var(--text);margin-bottom:4px">corpus mix &middot; ${members.length} sources</div>`;
+  for (const m of members) {
+    if (!m.train) {
+      html += `<div style="color:var(--hot)"><b>${_trEsc(m.stem)}</b> &middot; not found on disk</div>`;
+      continue;
+    }
+    const pct = Math.round((m.weight || 0) * 100);
+    const valTag = m.val ? "val ✓" : '<span style="color:var(--warm)">no val</span>';
+    html += `<div><b>${_trEsc(m.stem)}</b> &middot; ${pct}% &middot; ${_trFmtBytes(m.train.bytes)} &middot; <span style="color:var(--accent)">${_trEsc(m.train.sha256.substring(0, 12))}</span> &middot; ${valTag}</div>`;
+  }
+  html += `<div style="margin-top:4px">${matchLabel}</div>`;
+  html += `<div style="margin-top:4px;color:var(--dim);font-size:10px">weights are size-proportional; the trainer samples per-example across sources</div>`;
+  return html;
 }
 
 function _trPosHintPop(hint) {
@@ -8865,12 +8972,16 @@ function _trRenderForm() {
     const hint     = helpText
       ? `<span class="hint" tabindex="0" aria-label="${helpText}"><span class="hint-mark">?</span><span class="hint-pop">${helpText}</span></span>`
       : "";
+    const wikiSlug = WIKI_SETTING_PAGES[a.name];
+    const learn    = wikiSlug
+      ? ` <a href="/wiki/settings/${encodeURIComponent(wikiSlug)}/page" target="_blank" rel="noopener" style="font-size:10px;color:var(--accent);text-decoration:none">learn more</a>`
+      : "";
     const wide     = (a.type === "text" || a.type === "path") ? " wide" : "";
     const featured = a.featured ? " featured" : "";
     if (a.type === "bool") {
-      html += `<div class="cell bool wide${featured}" data-cell="${_trEsc(a.name)}">${_trBuildInput(a)}<label>${labelTxt}${req}</label>${advBadge}${hint}</div>`;
+      html += `<div class="cell bool wide${featured}" data-cell="${_trEsc(a.name)}">${_trBuildInput(a)}<label>${labelTxt}${req}</label>${advBadge}${hint}${learn}</div>`;
     } else {
-      html += `<div class="cell${wide}${featured}" data-cell="${_trEsc(a.name)}"><label>${labelTxt}${req} ${advBadge}${hint}</label>${_trBuildInput(a)}</div>`;
+      html += `<div class="cell${wide}${featured}" data-cell="${_trEsc(a.name)}"><label>${labelTxt}${req} ${advBadge}${hint}${learn}</label>${_trBuildInput(a)}</div>`;
     }
   }
   html += `</div>`;
@@ -12214,43 +12325,6 @@ function _renderSysSpecs(s) {
   view.style.color = "var(--text)";
 }
 
-// Renders the Settings > System dependencies panel: each registry dep with a
-// ready/missing mark, its purpose, and (for missing ones) a one-click install where
-// the OS can auto-install, else the command to paste. `err` shows a failure banner.
-function _renderSystemDeps(err) {
-  const view = $("systemDepsView");
-  if (!view) return;
-  fetch("/engine/deps").then(r => r.json()).then(d => {
-    if (!d || !d.deps) { view.textContent = "unavailable"; return; }
-    const rows = d.deps.map(dep => {
-      const mark = dep.present
-        ? `<span style="color:var(--accent)">ready</span>`
-        : `<span style="color:var(--warm)">missing</span>`;
-      const opt = dep.required ? "" : ` <span style="color:var(--dim)">optional</span>`;
-      const cmd = (!dep.present && dep.install_command)
-        ? `<div style="color:var(--dim);margin-left:12px"><code>${escapeHtml(dep.install_command)}</code></div>` : "";
-      return `<div>${escapeHtml(dep.label)}: ${mark}${opt} <span style="color:var(--dim)">&mdash; ${escapeHtml(dep.purpose)}</span></div>${cmd}`;
-    }).join("");
-    const missing = d.deps.filter(x => !x.present);
-    const action = (missing.length && d.can_auto_install)
-      ? `<div style="margin-top:6px"><a href="#" data-deps-action="install" style="color:var(--accent)">install missing dependencies</a> <span style="color:var(--dim)">(needs passwordless sudo)</span></div>`
-      : "";
-    const banner = err ? `<div style="color:var(--hot);margin-bottom:4px">${escapeHtml(err)}</div>` : "";
-    view.innerHTML = banner + rows + action;
-    const btn = view.querySelector("[data-deps-action='install']");
-    if (btn) btn.addEventListener("click", (e) => { e.preventDefault(); _installDeps(); });
-  }).catch(() => { view.textContent = "unavailable"; });
-}
-
-function _installDeps() {
-  const view = $("systemDepsView");
-  if (view) view.innerHTML = `<span class="spinner"></span> <b style="color:var(--warm)">installing dependencies&hellip;</b>`;
-  fetch("/engine/deps/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
-    .then(r => r.json().catch(() => ({ ok: false, error: `http ${r.status}` })))
-    .then(res => _renderSystemDeps(res && res.ok ? "" : (res && res.error) || "install failed"))
-    .catch(err => _renderSystemDeps(String(err && err.message || err)));
-}
-
 async function showConsentModal({ allowDecline }) {
   const body = `
     <div style="display:grid;gap:10px">
@@ -12487,9 +12561,6 @@ document.addEventListener("DOMContentLoaded", () => {
       .finally(() => { detectBtn.disabled = false; detectBtn.textContent = prev; });
   });
   fetch("/sys/specs").then(r => r.json()).then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoTuneVisibility(); _applyDevicePrefCapabilities(); }).catch(() => {});
-  const depsBtn = $("sysDepsBtn");
-  if (depsBtn) depsBtn.addEventListener("click", () => _renderSystemDeps());
-  _renderSystemDeps();
   const hbBtn = $("heartbeatSendBtn");
   if (hbBtn) hbBtn.addEventListener("click", () => {
     const lab = $("heartbeatSendStatus");

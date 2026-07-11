@@ -60,18 +60,19 @@ def register(app):
 
     @app.route("/trainers/tune_defaults", methods=["POST"])
     def trainers_tune_defaults():
-        """Write auto-tune results into the trainer manifest + saved specs
-        without launching a run. Body: {id, args:{...}, measured:{...}}."""
+        """Persist auto-tune results as machine-local trainer tuning + saved
+        specs, without launching a run. Body: {id, args:{...}, measured:{...}}.
+        The upstream-synced manifest is never touched."""
         def _do():
             from runtime import sys_metrics
             body = request.get_json(silent=True) or {}
             trainer_id = body.get("id")
             if not trainer_id:
                 return ({"ok": False, "error": "missing 'id'"}, 400)
-            updated = trainers_reader.update_defaults(trainer_id, body.get("args") or {})
+            saved = trainers_reader.update_defaults(trainer_id, body.get("args") or {})
             if body.get("measured"):
                 sys_metrics.save_measured(body["measured"])
-            return {"ok": True, "manifest_updated": bool(updated)}
+            return {"ok": True, "saved": bool(saved)}
         return _safe("trainers", _do)
 
     @app.route("/core_trainers")

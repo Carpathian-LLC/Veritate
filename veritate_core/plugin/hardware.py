@@ -44,28 +44,56 @@ def pick_device(requested="auto"):
     """Resolve a torch device string. `requested` is a CLI value; when "auto",
     the dashboard's VERITATE_DEVICE env override is consulted before auto-detect.
     MPS is arm64-guarded: Intel Macs report mps available but crash mid-step, so
-    they fall through to cpu regardless of the requested/preference value."""
-    import torch
+    they fall through to cpu. A forced device that isn't available falls back to
+    auto-detect with a warning rather than raising, so no machine is left unable
+    to train."""
     req = (requested or "auto").strip().lower()
     if req == "auto":
         forced = (os.environ.get(DEVICE_ENV) or "auto").strip().lower()
         if forced in VALID_FORCED:
             req = forced
-    if req == "cuda":
-        if not cuda_supported():
-            raise RuntimeError("CUDA requested but torch.cuda.is_available() is False")
+    if req == "cuda" and cuda_supported():
         return "cuda"
-    if req == "mps":
-        if not mps_supported():
-            raise RuntimeError("MPS requested but unavailable (needs Apple Silicon + torch MPS)")
+    if req == "mps" and mps_supported():
         return "mps"
     if req == "cpu":
         return "cpu"
+    if req in ("cuda", "mps"):
+        from runtime import logs as logmod
+        logmod.warn("hardware", f"device {req!r} requested but unavailable; auto-detecting")
     if cuda_supported():
         return "cuda"
     if mps_supported():
         return "mps"
     return "cpu"
+
+
+def bf16_supported(device):
+    """True when `device` has real bf16 acceleration. CUDA consults torch; MPS
+    supports bf16 autocast; CPU is False because torch CPU autocast bf16 is
+    emulated (slower than fp32 even with AVX512-BF16) and doubles activation
+    bytes on weak boxes."""
+    import torch
+    if device == "cuda":
+        return bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
+    if device == "mps":
+        return True
+    return False
+
+
+def resolve_precision(requested, device):
+    """Autocast dtype for `device` given a CLI precision string. Downgrades bf16
+    to fp32 (None) when the device lacks bf16 acceleration, so no machine runs
+    the emulated bf16 path. Returns a torch dtype for autocast, or None for
+    fp32. Logs one line on downgrade."""
+    import torch
+    if (requested or "").strip().lower() != "bf16":
+        return None
+    if bf16_supported(device):
+        return torch.bfloat16
+    from runtime import logs as logmod
+    logmod.warn("hardware", f"bf16 requested but {device} has no bf16 acceleration: running fp32")
+    return None
 
 
 def physical_cores():

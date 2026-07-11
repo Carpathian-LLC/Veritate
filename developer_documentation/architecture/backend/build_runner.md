@@ -13,10 +13,9 @@ Builds invoke the platform-specific build script under [veritate_engine/v1/build
 ## Dependencies
 
 - [engine_routes.py](../../../veritate_mri/routes/engine_routes.py) — exposes build trigger to the dashboard.
-- [system_deps.md](system_deps.md) — detects and (optionally) installs the C compiler a build needs; its status rides on `/engine/status`.
 - `app.config["C_SUBPROCESS"]` — held while the engine is running; the pre-build hook clears it.
 
 ## Pitfalls
 
 - Concurrent builds for the same platform are not protected. The dashboard UI disables the build button while one is in flight; programmatic callers should respect a similar gate.
-- The build relies on a working C toolchain (clang). A missing compiler is detected by [system_deps.md](system_deps.md): `/engine/status` carries a `deps` block and the dashboard surfaces install/guidance under the rebuild-failed message, so it no longer reads as a bare exit code.
+- The build relies on a working C toolchain (clang). A missing compiler surfaces as a rebuild failure in the dashboard.

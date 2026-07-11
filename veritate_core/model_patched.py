@@ -161,17 +161,13 @@ class VeritatePatched(nn.Module):
     def supports_streaming(self):
         return self.global_mixer == GLOBAL_MIXER_RECURRENT
 
-    def forward_streaming(self, tokens, states=None):
-        # inference-only window walk: training forward below stays untouched.
-        # states = flat list of global-block states in invocation order (loops
-        # included); positions + slot embeddings stay window-local.
+    def _boundary_slots(self, tokens):
+        # boundary/slot mapping shared by forward, forward_streaming, and the
+        # probe. is_b: spacelike boundary bytes (position 0 forced). slot_of:
+        # each byte's owning slot. bpos: sorted boundary positions per slot.
+        # slot_mask: live slots (trailing padding slots are False).
         B, T = tokens.shape
-        H = self.hidden
         S = min(self.slots, T)
-        x = self.embed(tokens)
-        for blk in self.blocks[:N_LOCAL_ENC]:
-            x = blk(x)
-
         first = torch.zeros(T, dtype=torch.bool, device=tokens.device)
         first[0] = True
         is_b = (F.embedding(tokens, self.boundary).squeeze(-1) > 0.5) | first
@@ -180,6 +176,31 @@ class VeritatePatched(nn.Module):
                               torch.full((B, T), T, device=tokens.device, dtype=torch.int32))
         bpos = pos_idx.sort(1).values[:, :S].long()
         slot_mask = (bpos < T).unsqueeze(-1)
+        return is_b, slot_of, bpos, slot_mask, S
+
+    def probe_columns(self, tokens):
+        # per-block sequence column for activation snapshots (rule 23). local
+        # enc/dec blocks read the last byte; global blocks read the last live
+        # slot, since trailing slots are masked padding (exactly zero).
+        last = int(tokens.size(1) - 1)
+        _, slot_of, _, _, S = self._boundary_slots(tokens)
+        glob_col = int(slot_of[0, last].clamp(0, S - 1).item())
+        cols = [last] * self.layers
+        for L in range(N_LOCAL_ENC, N_LOCAL_ENC + self.glob_layers):
+            cols[L] = glob_col
+        return cols
+
+    def forward_streaming(self, tokens, states=None):
+        # inference-only window walk: training forward below stays untouched.
+        # states = flat list of global-block states in invocation order (loops
+        # included); positions + slot embeddings stay window-local.
+        B, T = tokens.shape
+        H = self.hidden
+        x = self.embed(tokens)
+        for blk in self.blocks[:N_LOCAL_ENC]:
+            x = blk(x)
+
+        is_b, slot_of, bpos, slot_mask, S = self._boundary_slots(tokens)
         g = x.gather(1, bpos.clamp_max(T - 1).unsqueeze(-1).expand(B, S, H))
         g = (g + self.slot_pos_emb.weight[:S].unsqueeze(0)) * slot_mask
         glob = self.blocks[N_LOCAL_ENC:N_LOCAL_ENC + self.glob_layers]
@@ -209,19 +230,11 @@ class VeritatePatched(nn.Module):
     def forward(self, tokens, targets=None):
         B, T = tokens.shape
         H = self.hidden
-        S = min(self.slots, T)
         x = self.embed(tokens)
         for blk in self.blocks[:N_LOCAL_ENC]:
             x = blk(x)
 
-        first = torch.zeros(T, dtype=torch.bool, device=tokens.device)
-        first[0] = True
-        is_b = (F.embedding(tokens, self.boundary).squeeze(-1) > 0.5) | first
-        slot_of = is_b.long().cumsum(1) - 1
-        pos_idx = torch.where(is_b, torch.arange(T, device=tokens.device, dtype=torch.int32).expand(B, T),
-                              torch.full((B, T), T, device=tokens.device, dtype=torch.int32))
-        bpos = pos_idx.sort(1).values[:, :S].long()
-        slot_mask = (bpos < T).unsqueeze(-1)
+        is_b, slot_of, bpos, slot_mask, S = self._boundary_slots(tokens)
         g = x.gather(1, bpos.clamp_max(T - 1).unsqueeze(-1).expand(B, S, H))
         g = (g + self.slot_pos_emb.weight[:S].unsqueeze(0)) * slot_mask
         glob = self.blocks[N_LOCAL_ENC:N_LOCAL_ENC + self.glob_layers]

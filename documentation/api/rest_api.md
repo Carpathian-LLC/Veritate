@@ -66,7 +66,7 @@ Read-only endpoints (`GET` on `/pytorch-models`, `/meta`, `/runs`, `/run/*`, `/s
 | `GET /trainers` | `trainers_routes.py:26` | none | `{trainers:[...], running:{...}}` | trainer catalog + current run state |
 | `POST /trainers/run` | `trainers_routes.py:33` | body `id:str`, `args:{name, size, resume, base_ckpt, ...}` | `{ok, ...}`; `400` missing id, `409` model name exists, `500` error | start a trainer run |
 | `POST /trainers/stop` | `trainers_routes.py:57` | none | stop-result dict; `500` error | stop the current trainer run |
-| `POST /trainers/tune_defaults` | `trainers_routes.py:61` | body `id:str`, `args:dict`, `measured:dict` | `{ok, manifest_updated:bool}`; `400` missing id, `500` error | write auto-tune results into a trainer manifest |
+| `POST /trainers/tune_defaults` | `trainers_routes.py:61` | body `id:str`, `args:dict`, `measured:dict` | `{ok, saved:bool}`; `400` missing id, `500` error | persist auto-tune results as machine-local trainer tuning (never the upstream manifest) |
 | `GET /core_trainers` | `trainers_routes.py:77` | `flow` (optional) | `{trainers:[...]}`; `500` error | core trainer index, optionally filtered by flow |
 | `GET /trainers/git/status` | `trainers_routes.py:85` | none | git-status dict; `500` | trainers repo git status |
 | `POST /trainers/git/sync` | `trainers_routes.py:89` | body `actions:dict`, `branch:str` | sync-result dict; `500` | sync the trainers repo (canonical upstream) |
@@ -198,10 +198,8 @@ C-engine build/config and model export (used to produce the `.bin` an extension 
 
 | method + path | def | params | response | purpose |
 |---|---|---|---|---|
-| `GET /engine/status` | `engine_routes.py:32` | none | `{status, error, c_subprocess_running, c_exe, deps:{...}, ...}` | C-engine build + subprocess + system-deps status |
+| `GET /engine/status` | `engine_routes.py:32` | none | `{status, error, c_subprocess_running, c_exe, ...}` | C-engine build + subprocess status |
 | `POST /engine/build` | `engine_routes.py:42` | body `force:bool` | build-state dict | trigger a C-engine build |
-| `GET /engine/deps` | `engine_routes.py:47` | none | `{os, arch, package_manager, deps:[{key, label, present, required, purpose, install_command, can_auto_install}], all_present, missing_required, can_auto_install}` | system-dependency (OS package) readiness |
-| `POST /engine/deps/install` | `engine_routes.py:51` | body `keys:[str]` (optional; default all missing) | `{ok, exit_code, installed, error, status}`; `403` non-loopback | install missing OS packages (loopback-only, non-interactive sudo) |
 | `GET /c-engines` | `engine_routes.py:57` | none | `{engines:[{version, label, perf_ms_per_byte, path, exists, is_current, mtime, size}]}` | list built C-engine binaries |
 | `GET /c-models` | `engine_routes.py:77` | none | `{models:[{name, bin_path, is_current, mtime, size, precision, bin_version, training, activation, act_boost, qat_enabled, description}]}` | list C-model `.bin` files |
 | `POST /c-config` | `engine_routes.py:106` | body `exe:str`, `model:str` (both paths, optional) | `{ok, c_exe_path, c_exe, c_model_path, c_model, c_model_dir, c_model_precision, c_model_bin_version, c_model_training, c_model_activation, c_model_act_boost, c_model_qat_enabled}`; `400` not found / no exe, `500` respawn failed | select + respawn the C engine and model |

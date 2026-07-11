@@ -65,6 +65,10 @@ DRAIN_WALL_S        = 2.0
 # holder dead and reclaims the backend (kill+respawn+fresh lock) instead of
 # hanging. Sized well above a normal full-length generation.
 STREAM_LOCK_TIMEOUT_S = 30.0
+# How often a waiting request re-checks the holder's liveness. Reclaim triggers
+# only when the holder has produced NO frame for STREAM_LOCK_TIMEOUT_S, so a
+# slow-but-healthy long generation (which keeps emitting frames) is never killed.
+RECLAIM_POLL_S = 2.0
 # v8 tail: u16 cand_count + u8[CAND_TOPK] cand_bytes + dla_entry[CAND_TOPK][DLA_TOPK]
 # + i16 ablation_layer + i16 ablation_neuron.
 V8_TAIL_BYTES       = 2 + CAND_TOPK + CAND_TOPK * DLA_TOPK * DLA_ENTRY_BYTES + 2 + 2
@@ -134,6 +138,17 @@ class CTracedSubprocess:
         # generator captures the epoch at start; its cleanup no-ops if the epoch
         # moved on, so an abandoned stream cannot drain frames off the fresh proc.
         self._epoch = 0
+        # Guards the reclaim mutation so two timed-out waiters cannot both
+        # reclaim. _last_frame_time is the holder's heartbeat (monotonic),
+        # refreshed per frame; a reclaimer only acts when it goes stale.
+        self._reclaim_lock = threading.Lock()
+        self._last_frame_time = 0.0
+        # False while a request is mid-flight or ended without a clean TEND. The
+        # next request respawns to guarantee a protocol-clean pipe: _ensure_alive
+        # only respawns a DEAD proc, but a desynced-but-alive proc (e.g. after an
+        # SSE client vanished before the drain reached TEND) would otherwise echo
+        # its own header as output until a manual reload.
+        self._last_clean = True
         self.proc = None
         # shape comes from the bin header. all frame-size math derives from it.
         self.shape = _read_bin_shape(model_path)
@@ -218,6 +233,21 @@ class CTracedSubprocess:
             raise RuntimeError(f"chat_traced not ready: {warnings!r} {tail!r}")
         for w in warnings:
             logmod.warn("c engine", w.decode("latin-1", "replace"))
+        # Drain stderr for the life of this process. Without this, a mid-generation
+        # stderr flood fills the ~64 KB OS pipe buffer, blocks the engine's write,
+        # stalls stdout frames, and wedges stream() until the reclaim kills it.
+        # Daemon thread bound to THIS proc's stderr; exits on EOF when it dies.
+        err_pipe = self.proc.stderr
+        def _pump_stderr():
+            try:
+                for line in iter(err_pipe.readline, b""):
+                    s = line.strip()
+                    if s:
+                        logmod.warn("c engine", s.decode("latin-1", "replace"))
+            except Exception:
+                pass
+        threading.Thread(target=_pump_stderr, daemon=True).start()
+        self._last_clean = True
 
     def _ensure_alive(self):
         if self.proc is None or self.proc.poll() is not None:
@@ -226,26 +256,45 @@ class CTracedSubprocess:
     def stream(self, prompt, temperature, top_k, max_new,
                ablate_layer=-1, ablate_neuron=-1, addons_csv="",
                rep_window=0, rep_penalty=0.0, no_repeat_ngram=0):
-        if not self.lock.acquire(timeout=STREAM_LOCK_TIMEOUT_S):
-            # Prior stream wedged (client vanished at a yield inside the lock, so
-            # it was never closed). Reclaim rather than block forever: kill its
-            # subprocess, bump the epoch so that stream's cleanup no-ops, and swap
-            # in a fresh lock so this and later requests proceed.
-            logmod.error("c_engine",
-                         f"stream lock stuck >{STREAM_LOCK_TIMEOUT_S:.0f}s; reclaiming backend")
-            try:
-                if self.proc is not None:
-                    self.proc.kill()
-            except Exception:
-                pass
-            self._epoch += 1
-            self.lock = threading.Lock()
-            self.lock.acquire()
-            self.proc = None
+        # Acquire the per-generation lock. A live generation refreshes
+        # _last_frame_time on every frame; reclaim only when the holder has gone
+        # silent for STREAM_LOCK_TIMEOUT_S (truly wedged, e.g. an abandoned SSE
+        # generator parked at a yield), never a slow-but-emitting one. The
+        # reclaim mutation is serialized by _reclaim_lock so two waiters cannot
+        # both reclaim, and it kills+respawns + bumps the epoch so the wedged
+        # generator stops at its next read/epoch check instead of racing us.
+        acquired = self.lock.acquire(timeout=RECLAIM_POLL_S)
+        while not acquired:
+            with self._reclaim_lock:
+                if self.lock.acquire(timeout=0):
+                    acquired = True
+                else:
+                    idle = time.monotonic() - self._last_frame_time
+                    if idle >= STREAM_LOCK_TIMEOUT_S:
+                        logmod.error("c_engine",
+                                     f"stream stalled {idle:.0f}s (no frame); reclaiming backend")
+                        try:
+                            if self.proc is not None:
+                                self.proc.kill()
+                        except Exception:
+                            pass
+                        self._epoch += 1
+                        self.lock = threading.Lock()
+                        self.lock.acquire()
+                        self.proc = None
+                        acquired = True
+            if not acquired:
+                acquired = self.lock.acquire(timeout=RECLAIM_POLL_S)
         my_lock = self.lock
         my_epoch = self._epoch
+        self._last_frame_time = time.monotonic()
         try:
             self._ensure_alive()
+            # Force a fresh proc if the previous request did not end on a clean
+            # TEND: a protocol-desynced but alive engine survives _ensure_alive.
+            if not self._last_clean:
+                self._kill_and_respawn()
+            self._last_clean = False
             # newlines ride the line-based protocol as 0x01; chat_traced maps
             # them back so chat-template prompts keep their trained framing.
             p = prompt.replace("\r", "").replace("\n", "\x01")
@@ -274,21 +323,32 @@ class CTracedSubprocess:
                 except (BrokenPipeError, OSError) as e2:
                     raise RuntimeError(f"chat_traced respawn failed: {e2!r}")
 
+            # Bind this generation to the subprocess that received our header.
+            # A concurrent reclaim kills THIS proc and installs a fresh one on
+            # self.proc; reading my_proc (not self.proc) plus the epoch checks
+            # below keep us from ever reading the successor's pipe.
+            my_proc = self.proc
             saw_tend = False
+            respawned = False
             trace = []
             t_stream_start = time.perf_counter_ns()
             t_prev_frame_done = t_stream_start
             try:
                 while True:
+                    if my_epoch != self._epoch:
+                        return  # reclaimed; stop before touching the successor pipe
                     t_read0 = time.perf_counter_ns()
-                    marker = _read_exact(self.proc.stdout, 4)
+                    marker = _read_exact(my_proc.stdout, 4)
                     if marker is None:
+                        if my_epoch != self._epoch:
+                            return  # our proc was killed by a reclaim; not ours to respawn
                         logmod.error("c_engine", "stdout closed mid-frame; respawning")
-                        self._kill_and_respawn()
+                        self._kill_and_respawn(); respawned = True
                         raise RuntimeError("chat_traced stdout closed mid-frame; subprocess respawned")
                     if marker == b"TEND":
-                        _read_exact(self.proc.stdout, 4)
+                        _read_exact(my_proc.stdout, 4)
                         saw_tend = True
+                        self._last_clean = True
                         return
                     if marker != b"TFRM":
                         # Pipe is desynced reading garbage instead of frame magic.
@@ -297,25 +357,29 @@ class CTracedSubprocess:
                         logmod.error("c_engine",
                                      f"bad frame marker {marker!r} (expected TFRM/TEND); "
                                      f"killing+respawning subprocess to clear pipe desync")
-                        self._kill_and_respawn()
+                        self._kill_and_respawn(); respawned = True
                         raise RuntimeError(
                             f"chat_traced pipe desync (got {marker!r}); subprocess respawned, "
                             "retry the request"
                         )
 
-                    rest = _read_exact(self.proc.stdout, 12)
+                    rest = _read_exact(my_proc.stdout, 12)
                     if rest is None:
+                        if my_epoch != self._epoch:
+                            return
                         logmod.error("c_engine", "stdout closed mid-header; respawning")
-                        self._kill_and_respawn()
+                        self._kill_and_respawn(); respawned = True
                         raise RuntimeError("chat_traced stdout closed mid-header; subprocess respawned")
                     pos, real_len = struct.unpack("<II", rest[:8])
                     byte = rest[8]
                     argmax_byte = rest[9]
 
-                    payload = _read_exact(self.proc.stdout, self._frame_payload_bytes)
+                    payload = _read_exact(my_proc.stdout, self._frame_payload_bytes)
                     if payload is None:
+                        if my_epoch != self._epoch:
+                            return
                         logmod.error("c_engine", "stdout closed mid-payload; respawning")
-                        self._kill_and_respawn()
+                        self._kill_and_respawn(); respawned = True
                         raise RuntimeError("chat_traced stdout closed mid-payload; subprocess respawned")
                     t_read1 = time.perf_counter_ns()
 
@@ -331,18 +395,20 @@ class CTracedSubprocess:
                         "frame_size_bytes":  frame_bytes,
                     })
                     t_prev_frame_done = t_parse1
+                    self._last_frame_time = time.monotonic()  # heartbeat
 
                     yield parsed
             finally:
-                # If this stream was reclaimed by a later request (epoch moved
-                # on), the subprocess is no longer ours: skip the drain so we do
-                # not steal frames off the fresh proc.
+                # Skip if reclaimed (epoch moved) — the subprocess is no longer
+                # ours. Skip the drain after a respawn too: the pipe is already
+                # fresh+idle, so draining it would block on a read that never
+                # returns (the fresh proc emits nothing until the next request).
                 if my_epoch == self._epoch:
                     t_stream_end = time.perf_counter_ns()
                     self.last_trace = trace
                     self.last_total_wall_ms = (t_stream_end - t_stream_start) / 1e6
                     self.last_total_bytes = sum(f["frame_size_bytes"] for f in trace)
-                    if not saw_tend:
+                    if not saw_tend and not respawned:
                         self._drain_to_tend()
         finally:
             my_lock.release()
@@ -374,19 +440,20 @@ class CTracedSubprocess:
         try:
             for _ in range(DRAIN_MAX_FRAMES):
                 if time.time() > deadline:
-                    self._respawn()
+                    self._kill_and_respawn()
                     return
                 marker = _read_exact(self.proc.stdout, 4)
                 if marker is None: return
                 if marker == b"TEND":
                     _read_exact(self.proc.stdout, 4)
+                    self._last_clean = True
                     return
                 if marker == b"TFRM":
                     if _read_exact(self.proc.stdout, 12) is None: return
                     if _read_exact(self.proc.stdout, self._frame_payload_bytes) is None: return
                 else:
                     return
-            self._respawn()
+            self._kill_and_respawn()
         except Exception:
             return
 

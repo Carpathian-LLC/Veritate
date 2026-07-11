@@ -15,6 +15,10 @@ Markup at [index.html:504–900](../../../veritate_mri/web/index.html#L504). Tab
 
 `renderTier2ForLearning` extends the base render with tier-2 panels (math, grammar, reasoning capability evals when available).
 
+### Layer-count scaling
+
+The `L`-suffixed panels share the same drawers as the Generation tab (`drawFfn`, `drawTopNeurons`, `drawLens`, `drawList`, `drawCandidates`), all of which draw one row per layer from the frame's own array length, so row count already scales. Region tints and the FFN region legend read the module-global `_layerCount`; `renderLearning` calls `setLayerCount(frame.ffn_full.length)` when the scrubbed checkpoint's layer count differs, mirroring the Generation tab (`render` at [index.js](../../../veritate_mri/web/index.js)). `setLayerCount` rebuilds both region legends (`#ffnRegionLegend`, `#ffnRegionLegendL`) via `_buildFfnLegend` and caps the ablation-layer input at `n - 1`. The Models-tab FFN legend is `#ffnRegionLegendL`, populated by JS; it is never hardcoded to a layer count. Bounds come from `_regionBounds(n)` (thirds: sensory / association / output).
+
 ## Dependencies
 
 - Backend [checkpoint_probe.py](../../../veritate_mri/training/checkpoint_probe.py) produces the hooks/ artifacts at each checkpoint.

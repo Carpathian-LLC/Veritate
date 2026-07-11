@@ -35,8 +35,39 @@ from . import confidence as confidence_mod
 # ------------------------------------------------------------------------------------
 # Constants
 
-PROBE_PROMPT = "Once upon a time, there was a little girl who"
-PROBE_TOP_K  = 8
+# Probe seed pool. dump_probe feeds a deterministically sampled subset (rule 48)
+# so per-layer residual/lens/neuron stats aggregate over diverse inputs instead
+# of one fixed sentence. Seeds stay short (< slot/chunk counts, rule 24d) and
+# span the chat/knowledge/code training mix. Single-prompt dumps (surprise,
+# quant_kl, generation) use PROBE_PROMPT.
+PROBE_SEEDS = [
+    "Once upon a time, there was a little girl who",
+    "The old man walked slowly toward the",
+    "In the beginning, the world was",
+    "She opened the door and saw a",
+    "\"Hello,\" said the boy to the",
+    "Q: What is the capital of France?\nA:",
+    "The scientist looked into the microscope and",
+    "def add(a, b):\n    return",
+    "for i in range(10):\n    print(",
+    "The quick brown fox jumps over the",
+    "Water boils at a temperature of",
+    "My favorite thing about summer is",
+    "The king ruled the land with",
+    "import numpy as np\nx = np.",
+    "He picked up the phone and said,",
+    "The recipe calls for two cups of",
+    "After the storm passed, the sky turned",
+    "The dog ran across the field to",
+    "To solve this problem, we first need to",
+    "The history of the Roman empire began",
+    "She wrote a letter to her friend about",
+    "The train arrived at the station just as",
+]
+PROBE_SAMPLE_SEED = 12345   # deterministic rng seed for probe-seed sampling
+PROBE_SAMPLE_N    = 8       # seeds fed to dump_probe per checkpoint
+PROBE_PROMPT      = PROBE_SEEDS[0]
+PROBE_TOP_K       = 8
 
 # per-token generation probe constants. match mri/probes/timeline_probe.py
 # legacy frame shape so the Learning tab consumes the output without changes.
@@ -63,7 +94,7 @@ GRADE_BYTES     = 8192            # probe window per band; sources author at >=8
 # smartness-meter axes beyond reading. each axis is a directory of jsonl
 # tier files under veritate_mri/data/eval/grade/<axis>/. tier order here drives
 # the dashboard ladder order.
-EVAL_ROOT       = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "grade_eval"))
+EVAL_ROOT       = paths.GRADE_EVAL_ROOT
 MATH_TIERS      = ["t1_arith1", "t2_arith2", "t3_algebra", "t4_word", "t5_multi"]
 GRAMMAR_TYPES   = ["sv_agreement", "articles", "tense", "word_order"]
 REASONING_TIERS = ["recall", "pattern", "deduction1", "deduction_n"]
@@ -183,6 +214,25 @@ def _encode_bytes(prompt, seq):
     return torch.tensor(list(raw), dtype=torch.long).unsqueeze(0)
 
 
+def sample_probe_prompts(n=PROBE_SAMPLE_N, seed=PROBE_SAMPLE_SEED):
+    """Deterministically sample n distinct probe seeds from PROBE_SEEDS."""
+    rng = np.random.default_rng(seed)
+    n = min(int(n), len(PROBE_SEEDS))
+    idx = rng.choice(len(PROBE_SEEDS), size=n, replace=False)
+    return [PROBE_SEEDS[int(i)] for i in idx]
+
+
+def _probe_columns(model, x):
+    """Per-block sequence column to snapshot activations at. Slot-stream blocks
+    (patched-trunk global stack) read the last live slot, since trailing slots
+    are masked padding (exactly zero); dense trunks default to the last byte.
+    The model owns the mapping (rule 11a); consumers call it blindly."""
+    fn = getattr(model, "probe_columns", None)
+    if fn is not None:
+        return fn(x)
+    return [int(x.size(1) - 1)] * model.layers
+
+
 def _capture(model):
     cap_ffn  = [None] * model.layers
     cap_post = [None] * model.layers
@@ -196,50 +246,69 @@ def _capture(model):
 
 
 @torch.no_grad()
-def dump_probe(model, prompt: str, out_dir: str, step: int):
-    """Run model in eval mode on prompt; write probe_step_<N>.json and lens_step_<N>.npz."""
+def dump_probe(model, prompt, out_dir: str, step: int):
+    """Run model on a collection of probe seeds; aggregate per-layer top-k ffn
+    neurons, logit lens, and residual norms across seeds. Writes probe_step_<N>.json
+    and lens_step_<N>.npz. Per-block snapshot column follows the model's structure
+    (rule 23): slot-stream global blocks read the last live slot, not masked padding.
+    `prompt` may be a single string or a list of seeds."""
     os.makedirs(out_dir, exist_ok=True)
     device = next(model.parameters()).device
     was_training = model.training
     model.eval()
 
+    prompts = [prompt] if isinstance(prompt, str) else list(prompt)
+    layers   = model.layers
+    vocab    = model.vocab
+    embed_wt = model.tok_emb.weight.detach().t().float()
+
     cap_ffn, cap_post, handles = _capture(model)
+    act_acc = absmag_acc = None                          # (layers, ffn) device
+    rnorm_acc = torch.zeros(layers, dtype=torch.float64)
+    lens_acc  = torch.zeros(layers, vocab, dtype=torch.float64)
+    n_used = 0
     try:
-        x = _encode_bytes(prompt, model.seq).to(device)
-        logits, _ = model(x)
-
-        embed_w = model.tok_emb.weight
-
-        layers = model.layers
-        vocab  = model.vocab
-        lens   = np.zeros((layers, vocab), dtype=np.int32)
-        rnorm  = np.zeros(layers, dtype=np.float32)
-        top    = []
-
-        for L in range(layers):
-            raw = cap_ffn[L][0, -1]
-            act = F.gelu(raw)
-            mag = act.abs().float()
-            k = min(PROBE_TOP_K, mag.numel())
-            vals, idx = torch.topk(mag, k)
-            top.append([
-                {"id": int(idx[i].item()), "v": round(float(act[idx[i]].item()), 4)}
-                for i in range(k)
-            ])
-
-            r = cap_post[L][0, -1].float()
-            rnorm[L] = float(r.norm().item())
-            ll = (r @ embed_w.t().float())
-            scaled = (ll * 1000.0).round().clamp(-2_000_000_000, 2_000_000_000)
-            lens[L] = scaled.cpu().numpy().astype(np.int32)
+        for pr in prompts:
+            x = _encode_bytes(pr, model.seq).to(device)
+            if x.numel() == 0:
+                continue
+            model(x)
+            cols = _probe_columns(model, x)
+            acts = torch.stack([F.gelu(cap_ffn[L][0, cols[L]]).float() for L in range(layers)])   # (layers, ffn)
+            res  = torch.stack([cap_post[L][0, cols[L]].float()        for L in range(layers)])   # (layers, hidden)
+            if act_acc is None:
+                act_acc    = torch.zeros_like(acts)
+                absmag_acc = torch.zeros_like(acts)
+            act_acc    += acts
+            absmag_acc += acts.abs()
+            rnorm_acc  += res.norm(dim=1).double().cpu()
+            lens_acc   += (res @ embed_wt).double().cpu()
+            n_used += 1
     finally:
         for h in handles: h.remove()
         if was_training: model.train()
 
+    n_used = max(n_used, 1)
+    act_mean    = act_acc / n_used
+    absmag_mean = absmag_acc / n_used
+    rnorm = (rnorm_acc / n_used).float().numpy().astype(np.float32)
+    lens  = ((lens_acc / n_used) * 1000.0).round().clamp(-2_000_000_000, 2_000_000_000).numpy().astype(np.int32)
+
+    top = []
+    for L in range(layers):
+        mag = absmag_mean[L]
+        k = min(PROBE_TOP_K, mag.numel())
+        _, idx = torch.topk(mag, k)
+        top.append([
+            {"id": int(idx[i].item()), "v": round(float(act_mean[L, idx[i]].item()), 4)}
+            for i in range(k)
+        ])
+
     probe = {
         "step":      int(step),
         "precision": _precision_tag(model),
-        "prompt":    prompt,
+        "prompt":    prompts[0] if len(prompts) == 1 else prompts,
+        "n_seeds":   len(prompts),
         "top_k":     PROBE_TOP_K,
         "layers":    [{"layer": L, "neurons": top[L]} for L in range(layers)],
     }
@@ -466,10 +535,16 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
             T = ids.size(1)
             last_logits = logits[0, -1].float()
 
+            # per-block snapshot column (rule 23): slot-stream global blocks read
+            # the last live slot, not masked padding. byte blocks read the last
+            # byte; is_byte flags which blocks carry real per-position attention.
+            cols = _probe_columns(model, ids)
+            is_byte = [cols[L] == T - 1 for L in range(layers)]
+
             # stack ffn activations once per token. (layers, ffn) signed, used by
             # ffn_full/top, dla, etc. abs version reused for the bucket panels.
             acts_all = torch.stack([
-                F.gelu(cap_ffn[L][0, -1])
+                F.gelu(cap_ffn[L][0, cols[L]])
                 for L in range(layers)
             ], dim=0).float()                          # (layers, ffn)
             acts_abs = acts_all.abs()                  # (layers, ffn)
@@ -491,9 +566,13 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
                                 for x, i in zip(top_v_all[L], top_i_all[L])])
 
             # attention: recompute per layer using captured block input.
-            # canonical block applies RMSNorm (n1) then attn.qkv linear.
+            # canonical block applies RMSNorm (n1) then attn.qkv linear. slot-
+            # stream global blocks (GLA) carry no per-position attention; leave
+            # their rows zero and emit [] below, matching the C engine + Brain.
             attn_w_all = torch.zeros(layers, heads, T, device=device)
             for L in range(layers):
+                if not is_byte[L]:
+                    continue
                 blk = model.blocks[L]
                 xin = cap_block_in[L]
                 n1  = blk.n1
@@ -515,6 +594,9 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
             top_i_cpu = top_i_a.cpu().tolist()
             attn = []
             for L in range(layers):
+                if not is_byte[L]:
+                    attn.append([])
+                    continue
                 heads_data = []
                 for hh in range(heads):
                     heads_data.append({
@@ -530,8 +612,8 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
                          for x, p in zip(flow_v.tolist(), flow_i.tolist())]
 
             # res / contrib: vectorized norms.
-            rin_stack  = torch.stack([cap_block_in[L][0, -1]  for L in range(layers)]).float()
-            rout_stack = torch.stack([cap_block_out[L][0, -1] for L in range(layers)]).float()
+            rin_stack  = torch.stack([cap_block_in[L][0, cols[L]]  for L in range(layers)]).float()
+            rout_stack = torch.stack([cap_block_out[L][0, cols[L]] for L in range(layers)]).float()
             res_norms     = [round(float(x), 3) for x in rout_stack.norm(dim=1).cpu().tolist()]
             contributions = [round(float(x), 3) for x in (rout_stack - rin_stack).norm(dim=1).cpu().tolist()]
 
@@ -574,7 +656,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
             # Both this training-time dump path and the live Brain go through the
             # same function so the dashboard renders one shape from both sources
             # (rule 23).
-            res_stack = torch.stack([cap_block_out[L][0, -1] for L in range(layers)], dim=0)
+            res_stack = torch.stack([cap_block_out[L][0, cols[L]] for L in range(layers)], dim=0)
             conf_fields = confidence_mod.frame_fields(
                 last_logits=last_logits, probs=probs, nxt=nxt,
                 lens_argmax=lens_argmax, res_stack=res_stack, embed_row=embed_w[nxt],

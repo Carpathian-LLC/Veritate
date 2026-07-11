@@ -136,6 +136,11 @@ class Brain:
         # the layer matches.
         self._ablate_layer = -1
         self._ablate_neuron = -1
+        # per-block snapshot column from the last forward. Local blocks read the
+        # last byte; hybrid global (recurrent) blocks run on the slot stream, so
+        # the last position is masked-zero padding for a short prompt: read the
+        # last live slot via model.probe_columns instead. None on dense models.
+        self._probe_cols = None
         for L, blk in enumerate(self.model.blocks):
             blk.ff.up.register_forward_hook(self._hook(self.cap_ffn, L))
             blk.attn.qkv.register_forward_hook(self._hook(self.cap_qkv, L))
@@ -187,6 +192,13 @@ class Brain:
         self._ablate_layer = int(layer)
         self._ablate_neuron = int(neuron)
 
+    def _refresh_probe_cols(self, ids):
+        fn = getattr(self.model, "probe_columns", None)
+        self._probe_cols = fn(ids) if callable(fn) else None
+
+    def _col(self, L):
+        return self._probe_cols[L] if self._probe_cols is not None else -1
+
     def _dla_for_byte(self, byte_idx, top_k=12):
         """Top FFN neurons by direct logit attribution to a single byte. Returns
         list of {layer, neuron, act, w, contrib}. Computed at the current token
@@ -194,7 +206,7 @@ class Brain:
         m = self.model
         contrib = []
         for L in range(m.layers):
-            act = F.gelu(self.cap_ffn[L][0, -1])
+            act = F.gelu(self.cap_ffn[L][0, self._col(L)])
             w = self.byte_direction[L][:, byte_idx]
             contrib.append(act * w)
         mat = torch.stack(contrib)
@@ -207,7 +219,7 @@ class Brain:
             e = {
                 "layer": int(L),
                 "neuron": int(n),
-                "act": round(float(F.gelu(self.cap_ffn[L][0, -1, n])), 4),
+                "act": round(float(F.gelu(self.cap_ffn[L][0, self._col(L), n])), 4),
                 "w": round(float(self.byte_direction[L][n, byte_idx]), 5),
                 "contrib": round(float(mat[L, n]), 4),
             }
@@ -347,13 +359,15 @@ class Brain:
             return []
         m = self.model
         with torch.no_grad():
-            read_dir = m.blocks[layer].ff.up.weight[neuron_id, :]  # (hidden,)
+            # Captures live on CPU (moved off-device after each forward), so keep
+            # the weight slices CPU-side too or this straddles CPU x MPS.
+            read_dir = m.blocks[layer].ff.up.weight[neuron_id, :].detach().to("cpu")  # (hidden,)
             per_layer = []
             for L_prev in range(layer):
                 if self.cap_ffn[L_prev] is None:
                     return []
-                prev_act = F.gelu(self.cap_ffn[L_prev][0, -1])  # (ffn,)
-                W_down = m.blocks[L_prev].ff.down.weight  # (hidden, ffn)
+                prev_act = F.gelu(self.cap_ffn[L_prev][0, self._col(L_prev)])  # (ffn,)
+                W_down = m.blocks[L_prev].ff.down.weight.detach().to("cpu")  # (hidden, ffn)
                 # contribution per neuron m at L_prev = prev_act[m] * (W_down[:, m] · read_dir)
                 contribs = prev_act * (W_down.t() @ read_dir)  # (ffn,)
                 per_layer.append(contribs)
@@ -365,7 +379,7 @@ class Brain:
             L_prev = i // ffn_n
             n = i % ffn_n
             c = float(flat[i])
-            a = float(F.gelu(self.cap_ffn[L_prev][0, -1, n]))
+            a = float(F.gelu(self.cap_ffn[L_prev][0, self._col(L_prev), n]))
             entry = {"layer": int(L_prev), "neuron": int(n),
                      "act": round(a, 4), "contrib": round(c, 4)}
             lbl = self.label_for(L_prev, n)
@@ -410,7 +424,7 @@ class Brain:
         out = {"current_act": None, "probe_max": None, "current_pct": None}
         if self.cap_ffn[layer] is not None:
             try:
-                a = float(F.gelu(self.cap_ffn[layer][0, -1, neuron_id]))
+                a = float(F.gelu(self.cap_ffn[layer][0, self._col(layer), neuron_id]))
                 out["current_act"] = round(a, 4)
             except Exception:
                 pass
@@ -518,12 +532,13 @@ class Brain:
             # Forward ran on the device; pull this token's activations and logits
             # to CPU so the per-token telemetry below runs CPU-side.
             self._captures_to_cpu()
+            self._refresh_probe_cols(ids)
             last_logits = logits[0, -1].detach().to("cpu")
 
             ffn_full, ffn_top, ffn_argmax, saturation = [], [], [], []
             ds = self.ffn_downsample
             for L in range(m.layers):
-                act = F.gelu(self.cap_ffn[L][0, -1]).abs()
+                act = F.gelu(self.cap_ffn[L][0, self._col(L)]).abs()
                 sat = float((act >= INT8_SAT_THRESHOLD).float().mean())
                 saturation.append(round(sat, 5))
                 grouped = act.view(-1, ds)
@@ -576,14 +591,14 @@ class Brain:
 
             res_norms, contributions = [], []
             for L in range(m.layers):
-                rin  = self.cap_block_in[L][0, -1]
-                rout = self.cap_block_out[L][0, -1]
+                rin  = self.cap_block_in[L][0, self._col(L)]
+                rout = self.cap_block_out[L][0, self._col(L)]
                 res_norms.append(round(float(rout.norm()), 3))
                 contributions.append(round(float((rout - rin).norm()), 3))
 
             lens = []
             for L in range(m.layers):
-                r = self.cap_block_out[L][0, -1]
+                r = self.cap_block_out[L][0, self._col(L)]
                 lens_logits = r @ emb_w.T
                 p = F.softmax(lens_logits, dim=-1)
                 top_p, top_i = torch.topk(p, 3)
@@ -637,7 +652,7 @@ class Brain:
             # tells you which layer either committed or stalled for this token.
             decisiveness = []
             for L in range(m.layers):
-                delta = (self.cap_block_out[L][0, -1] - self.cap_block_in[L][0, -1])
+                delta = (self.cap_block_out[L][0, self._col(L)] - self.cap_block_in[L][0, self._col(L)])
                 logit_delta = delta @ self.W_E_T  # (vocab,)
                 ad = logit_delta.abs()
                 score = float(ad.max() / ad.mean().clamp(min=1e-8))
@@ -650,7 +665,7 @@ class Brain:
             # veritate_mri/confidence.py so both paths agree by construction).
             # lens[L] is a list of top-3 {b, p} dicts; the top-1 byte is lens[L][0]["b"].
             lens_argmax = [int(lens[L][0]["b"]) for L in range(m.layers)]
-            res_stack = torch.stack([self.cap_block_out[L][0, -1] for L in range(m.layers)]).float()
+            res_stack = torch.stack([self.cap_block_out[L][0, self._col(L)] for L in range(m.layers)]).float()
             embed_row = emb_w[nxt].float()
             conf = confidence_mod.frame_fields(
                 last_logits=last_logits, probs=probs, nxt=nxt,
@@ -774,6 +789,11 @@ class Brain:
         None to indicate the constraint forbids every byte. rep bias (if any) is
         computed from the controller's observed history; callers observe the
         committed byte."""
+        # Constraint/repetition masks are CPU numpy tensors; the fast-decode
+        # callers pass device-resident logits (MPS when auto-selected), so pull
+        # to CPU here to avoid a device mismatch. vocab-sized, so the copy is
+        # negligible and sampling is unaffected.
+        logits_1d = logits_1d.detach().to("cpu")
         scaled = logits_1d / max(temperature, 1e-6)
         if addons_chain is not None and len(addons_chain) > 0:
             scaled = addons_chain.bias_logits(scaled)

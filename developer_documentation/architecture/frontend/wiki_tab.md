@@ -15,9 +15,11 @@ Markup at [index.html:1645–1658](../../../veritate_mri/web/index.html#L1645).
 
 Backend reads from a wiki directory; see [wiki_routes.py](../../../veritate_mri/routes/wiki_routes.py).
 
+`GET /wiki/<category>/<slug>/page` ([wiki_routes.py](../../../veritate_mri/routes/wiki_routes.py#L73)) returns a standalone styled HTML render (`_wiki_page_html`) of a single entry for opening in a new browser tab, distinct from the JSON entry route the tab itself consumes. Per-setting pages live in the `settings/` wiki category (`veritate_mri/data/wiki/settings/<slug>.md`) and are the target of the training form's "learn more" links (see [training_tab.md](training_tab.md)).
+
 ## Dependencies
 
-- `/wiki/categories`, `/wiki/entries/<cat>`, `/wiki/entry/<id>` routes.
+- `/wiki/categories`, `/wiki/entries/<cat>`, `/wiki/entry/<id>`, and `/wiki/<cat>/<slug>/page` routes.
 - Reader [wiki.py](../../../veritate_mri/readers/wiki.py).
 
 ## Pitfalls

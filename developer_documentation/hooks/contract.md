@@ -10,7 +10,7 @@ All paths relative to `models/<name>/hooks/step_<N>/`. Every artifact below is p
 
 | file | producer | fields |
 |---|---|---|
-| `probe_step_<N>.json` | `dump_probe` | `step`, `precision`, `prompt`, `top_k`, `layers[]: {layer, neurons[]: {id, v}}` |
+| `probe_step_<N>.json` | `dump_probe` | `step`, `precision`, `prompt` (string, or list when >1 seed), `n_seeds`, `top_k`, `layers[]: {layer, neurons[]: {id, v}}` |
 | `lens_step_<N>.npz` | `dump_probe` | `lens_logits` int32 [layers, vocab], `residual_norms` fp32 [layers] |
 | `classroom_step_<N>.json` | `dump_classroom` | `step`, `precision`, `params`, `int8_bytes`, `int4_bytes`, `weight_delta_l2`, `alive_neurons_per_layer`, `time_s` |
 | `grades_step_<N>.json` | `dump_grades` | `step`, `precision`, `grades: {level: {ppl, n_bytes}}`, `estimated_reading_grade`, `time_s` |
@@ -120,9 +120,12 @@ Atlas endpoints aggregate frames from the in-memory ring (live) or `step_<N>.jso
 | `blocks[L].ff.up` | module | forward must return a `(B, T, ffn)` tensor (pre-GELU FFN intermediate). `.weight` must expose a real `(ffn, hidden)` weight tensor for direct-logit-attribution math. |
 | `blocks[L].ff.down` | module | `.weight` must expose a real `(hidden, ffn)` weight tensor; forward unused by the dumper. |
 | `forward(tokens, targets=None)` | callable | returns `(logits, loss)` 2-tuple, like canonical |
+| `probe_columns(tokens)` | callable (optional) | per-block sequence column the dumper snapshots activations at, given the forward input. Omit for dense trunks (the dumper defaults every block to the last byte). Slot-stream trunks (patched/hybrid global stack) return the last live slot for global blocks, since trailing slots are masked padding (exactly zero). Consumed blindly by `dump_probe`/`dump_generation` and mirrored by the inference telemetry (rule 23). |
 | `named_parameters()`, `parameters()` | generators | classroom dump's L2-norm walk reads these |
 
 For canonical `Veritate`, `hook_spec()` returns `self`. For non-canonical models, return a small `nn.Module` adapter whose forward delegates to the real model and whose attributes proxy onto canonical-shaped trace points. The adapter is dump-only: the saved `.pt` still contains the real (non-canonical) state dict.
+
+Per-block snapshot column: local (byte-stream) blocks are snapshotted at the last byte; slot-stream global blocks (patched/hybrid GLA stack) are snapshotted at the last live slot via `probe_columns`. Global GLA blocks carry no per-position attention, so `dump_generation` emits `attn[L] = []` for them, matching the C engine and Brain.
 
 Example: an MoE model whose per-block FFN has `n_experts` up/down projections plus a router exposes a routing-weighted `(B, T, ffn)` activation under `blocks[L].ff.up.forward()` and presents one canonical down-projection weight (typically expert 0's) under `blocks[L].ff.down.weight`. Per-expert traces are out of scope until the contract is extended.
 

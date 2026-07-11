@@ -34,6 +34,10 @@ CSS custom properties in [index.css](../../../veritate_mri/web/index.css) mirror
 
 `regionRamp(t, layer)` at [index.js:173–192](../../../veritate_mri/web/index.js#L173) maps layer index to one of three regions (sensory/association/output) and returns an RGB string based on the normalized value `t`. Used in lens-style visualizations where layer-region matters.
 
+## Redraw on visibility / layout change
+
+`canvas` is `width: 100%` with no CSS height, so its displayed height is aspect-ratio-derived and settles only after layout. A chart fit while its tab or panel is hidden (or before width settles) renders distorted until a reflow re-fits it. One mechanism fixes this: a single `ResizeObserver` (`_canvasResizeObserver`) observes every `<canvas>` and, on any box change, coalesces to one `requestAnimationFrame` and calls `redrawAllVisible()`, which re-fits and redraws the active tab's charts. The observer fires on the 0 -> N transition when a tab or panel becomes visible, on panel expand/collapse, and on window resize (the `resize` listener calls the same `redrawAllVisible`). `fitCanvas` preserves the display aspect ratio, so it never changes the CSS box and never re-triggers the observer (no feedback loop). The expand button only toggles the `.expanded` class; the observer does the re-fit, so there is no manual `fitCanvas` + `dispatchEvent("resize")` in the click handler.
+
 ## Dependencies
 
 - DPR-aware canvases need `c.style.width` and `c.style.height` set by CSS layout. If the canvas has no CSS size, `fitCanvas` returns zero-sized.
@@ -41,6 +45,6 @@ CSS custom properties in [index.css](../../../veritate_mri/web/index.css) mirror
 
 ## Pitfalls
 
-- `fitCanvas` returns early on hidden canvases; calling a drawer before the tab is active produces nothing visible. The pattern is to call drawers inside `requestAnimationFrame` from the tab's activation branch.
+- `fitCanvas` returns early on hidden canvases (`offsetParent === null`); a drawer called while the tab is hidden produces nothing. The `_canvasResizeObserver` covers this: the redraw fires when the canvas becomes visible. New dynamically-created canvases are not auto-observed (the observe pass runs once at init over the static DOM).
 - Don't draw cumulative state. Drawers should be idempotent given the same inputs so they can be called repeatedly during scrub.
 - Lines drawn at 1px without `lineWidth = 1.5` and `setLineDash` get fuzzy on non-integer DPR (e.g., 2.25 on some 4K displays). Use the existing examples as templates.

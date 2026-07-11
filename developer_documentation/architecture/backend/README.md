@@ -25,7 +25,6 @@ Server-side architecture: Flask app, training pipeline, runtime, readers, engine
 - [train_stream.md](train_stream.md) — SSE pub/sub for live training payloads
 - [export.md](export.md) — PyTorch `.pt` → engine `.bin` conversion
 - [build_runner.md](build_runner.md) — engine rebuild orchestration
-- [system_deps.md](system_deps.md) — OS-package (clang/git) detection + opt-in localhost install
 - [native_trainer.md](native_trainer.md) — low-level training loop
 
 ## Runtime

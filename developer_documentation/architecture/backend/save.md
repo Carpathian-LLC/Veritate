@@ -50,7 +50,7 @@ save(model, name, step, *, optimizer=None, args=None, prompt=None, dump_set=None
 ```
 
 - `args` supplies the description (ROE rule 6) and bootstraps `config.json` when it is absent.
-- `prompt` overrides the canonical probe prompt; defaults to `PROBE_PROMPT`.
+- `prompt` overrides the probe/generation seed. When omitted, `dump_probe` runs over a deterministically sampled seed collection (`sample_probe_prompts()`); single-prompt dumps (`surprise`, `quant_kl`, `generation`) use `PROBE_PROMPT`. An explicit `prompt` pins `dump_probe` to that single seed too.
 - `dump_set` is an optional iterable of dump names to skip; default runs all.
 
 Returns the absolute path of the `.pt` written. It writes:

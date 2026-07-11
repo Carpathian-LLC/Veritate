@@ -15,6 +15,8 @@ Public API:
 
 Globals: `_LOCK`, `_STATE`, `_PROC`. Single-instance enforcement: `start()` returns an error if `_STATE["status"] == STATUS_RUNNING`.
 
+Argv build: [`_build_argv`](../../../veritate_mri/training/trainer_runner.py#L271) emits `--<flag>` for a True bool. For the negatable set `NEGATABLE_BOOL_FLAGS = ("qat_enabled", "use_act_ckpt", "use_8bit_adam")` it emits `--no-<flag>` for a False value, since the trainers register those as argparse `BooleanOptionalAction`, so the dashboard can turn them off; every other False bool is omitted (its argparse default stands). On launch `start()` calls [`plugins_reader.update_defaults(plugin_id, args)`](../../../veritate_mri/training/trainer_runner.py#L387), which now persists machine-local tuning, not the upstream-synced manifest (see [trainer_plugins.md](trainer_plugins.md)).
+
 PID-file persistence at `.plugin_pid.json` lets the dashboard reattach after a server restart: on module load, `_recover_from_disk` ([line 205](../../../veritate_mri/training/trainer_runner.py#L205)) finds a still-alive PID by command-marker match and restores `_STATE`.
 
 Environment variables set on every spawn:

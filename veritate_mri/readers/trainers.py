@@ -25,7 +25,7 @@ import json
 import os
 import re
 
-from . import paths
+from . import paths, trainer_tuning
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -215,7 +215,26 @@ def scan():
     # keeps the alphabetical _walk order for equal-size plugins.
     plugins.sort(key=_size_key)
     out.extend(plugins)
+    _overlay_tuning(out)
     return out
+
+
+def _overlay_tuning(records):
+    """Overlay machine-local tuning onto each record's manifest defaults so the
+    dashboard form prefills a machine's benchmarked settings. Only keys already
+    present in the manifest defaults are replaced; the on-disk manifest is never
+    touched."""
+    for rec in records:
+        tuned = trainer_tuning.args_for(rec["id"])
+        if not tuned:
+            continue
+        manifest = dict(rec.get("manifest") or {})
+        defaults = dict(manifest.get("defaults") or {})
+        for k, v in tuned.items():
+            if k in defaults:
+                defaults[k] = v
+        manifest["defaults"] = defaults
+        rec["manifest"] = manifest
 
 
 def by_id(plugin_id):
@@ -239,12 +258,6 @@ def teaches(plugin_id):
     return caps.DEFAULT_TEACHES
 
 
-def _manifest_path(plugin):
-    if plugin.get("bundle_dir"):
-        return os.path.join(plugin["bundle_dir"], BUNDLE_MANIFEST)
-    return plugin["path"][:-3] + ".json"
-
-
 def _coerce_like(template, v):
     # Dashboard form values arrive as strings; keep the manifest default's type
     # so parse_args registers the correct argparse type. bool subclasses int, check first.
@@ -260,49 +273,27 @@ def _coerce_like(template, v):
 
 
 def update_defaults(plugin_id, args):
-    """Merge submitted args into the plugin manifest's `defaults` block. Only
-    keys already present in defaults are overwritten so run-only fields
-    (corpus, model, description, step) do not pollute the schema."""
+    """Persist submitted args as machine-local tuning for this trainer. Only
+    keys already present in the trainer's manifest defaults are kept (run-only
+    fields like corpus/model/description/step are dropped) and each is coerced
+    to the manifest default's type. Written to the local tuning store, never the
+    upstream-synced manifest, so a machine's benchmarked settings survive
+    /trainers/git/sync and don't leak to other machines. scan() overlays them
+    onto the manifest defaults at read time."""
     plugin = by_id(plugin_id)
     if plugin is None or not isinstance(args, dict):
         return False
-    if plugin.get("native"):
-        # Native trainer has no on-disk manifest; defaults are constants.
-        # Skip the merge so we never try to write outside MRI_ROOT.
-        return False
-    mpath = _manifest_path(plugin)
-    if not os.path.isfile(mpath):
-        return False
-    try:
-        with open(mpath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return False
-    defaults = data.get("defaults") or {}
+    defaults = (plugin.get("manifest") or {}).get("defaults") or {}
     if not isinstance(defaults, dict):
         return False
-    changed = False
+    keep = {}
     for k, v in args.items():
         if k not in defaults:
             continue
         try:
-            nv = _coerce_like(defaults[k], v)
+            keep[k] = _coerce_like(defaults[k], v)
         except (TypeError, ValueError):
             continue
-        if defaults[k] != nv:
-            defaults[k] = nv
-            changed = True
-    if not changed:
+    if not keep:
         return False
-    data["defaults"] = defaults
-    tmp = mpath + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, mpath)
-    except OSError:
-        try: os.remove(tmp)
-        except OSError: pass
-        return False
-    return True
+    return trainer_tuning.save(plugin_id, keep)
