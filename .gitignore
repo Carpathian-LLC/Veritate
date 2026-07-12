@@ -12,9 +12,9 @@ veritate_engine/**/bin/
 .venv/
 ..venv/
 venv/
-.veritate_venv/
 __pycache__/
 /models/
+docs/
 build_out.txt
 chat_err.log
 c_trace_*.bin
@@ -24,10 +24,8 @@ c_trace_*.bin
 .plugin_run.log
 /trainers/
 data/*
-veritate_mri/data/kb/
 /*de.md
 .DS_Store
-docs/
 /experiments
 experiments
 experiments/
@@ -35,6 +33,11 @@ veritate_trace.bin
 *.vrmr
 *.tern
 .pytest_cache
+/synth_jobs/
+
+# merged from dev
+.veritate_venv/
+veritate_mri/data/kb/
 veritate_mri/data/synth_jobs/
 dev_documentation/multimind/*.pt
 dev_documentation/multimind/affect_probe_stats.json

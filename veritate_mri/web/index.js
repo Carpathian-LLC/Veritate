@@ -2534,10 +2534,14 @@ $("goLive").addEventListener("click", () => {
 
 // ---- tabs ----
 function activateTab(name) {
-  const valid = ["generation", "learning", "training", "wiki", "logs", "settings"];
+  const valid = ["chat", "generation", "learning", "training", "wiki", "logs", "settings"];
   if (!valid.includes(name)) name = "generation";
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
   document.querySelectorAll(".tab-body").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
+  if (name === "chat") {
+    // Wire + network-init the chat on first open (defined in chat_tab.js).
+    if (typeof window.chatTabInit === "function") window.chatTabInit();
+  }
   if (name === "learning") {
     ensureLearningLoaded();
     // mirror tier-1 panels for the picked timeline. one render per activation.
