@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="/static/tutorial.css">
 <link rel="stylesheet" href="/static/prune.css">
 <link rel="stylesheet" href="/static/rag_train.css">
+<link rel="stylesheet" href="/static/chat_tab.css">
 </head>
 <body>
 
@@ -72,12 +73,99 @@
 </div>
 
 <div class="tabs">
+  <div class="tab" data-tab="chat">Chat</div>
   <div class="tab active" data-tab="generation">Generation</div>
   <div class="tab" data-tab="learning">Models</div>
   <div class="tab" data-tab="training">Training</div>
   <div class="tab" data-tab="wiki">Wiki</div>
   <div class="tab" data-tab="logs">Logs</div>
   <div class="tab" data-tab="settings">Settings<span class="notify-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warm);margin-left:6px;vertical-align:middle"></span></div>
+</div>
+
+<!-- ============================ CHAT TAB ============================ -->
+<!-- Inlined port of the front-door chat (hybrid.html). Same features: model
+     picker, PyTorch/C engine toggle, BM25 grounding + file upload, context
+     ring, server-compacted conversation memory. All ids are prefixed "ch-"
+     and styles are scoped under #chatMount to avoid clashing with the
+     dashboard. Wired by chatTabInit() in chat_tab.js on first activation. -->
+<div class="tab-body" data-tab="chat">
+  <div id="chatMount">
+    <header>
+      <div class="meta">answering with <b id="ch-activeModel">…</b></div>
+      <div class="actions">
+        <button class="gear" id="ch-newChat">new chat</button>
+        <button class="gear" id="ch-gear">settings</button>
+      </div>
+    </header>
+
+    <div id="ch-settings">
+      <div class="panel">
+        <div class="sgroup">
+          <div class="srow">
+            <span class="lbl">Model</span>
+            <select id="ch-modelSel"><option value="cloud">loading…</option></select>
+          </div>
+          <a class="link" href="/app#training">Train your own →</a>
+        </div>
+
+        <div class="sgroup" id="ch-engineRow">
+          <div class="srow">
+            <span class="lbl">Engine</span>
+            <div class="seg" id="ch-engineSeg">
+              <button data-engine="pytorch" class="on">PyTorch</button>
+              <button data-engine="c">Veritate (C)</button>
+            </div>
+          </div>
+          <div class="hint" id="ch-engineHint"></div>
+        </div>
+
+        <div class="sgroup" id="ch-ragRow">
+          <div class="srow">
+            <span class="lbl">Context</span>
+            <label class="check"><input type="checkbox" id="ch-ragChk"> Use my uploaded files when answering</label>
+          </div>
+          <div class="srow">
+            <span class="lbl"></span>
+            <label class="check"><input type="checkbox" id="ch-logChk"> Read my recent training logs</label>
+          </div>
+          <div class="kb">
+            <label class="filebtn">Choose file<input type="file" id="ch-kbFile" accept=".txt,.md,.rst,.text" hidden></label>
+            <span class="fname" id="ch-kbFileName">no file selected</span>
+            <button class="btn" id="ch-kbUpload">Add file</button>
+          </div>
+          <div class="hint" id="ch-kbHint"></div>
+        </div>
+
+        <button class="settings-close" id="ch-settingsClose">Close settings</button>
+      </div>
+    </div>
+
+    <div class="wrap">
+      <div id="ch-log"><div class="hint-row">Ask a question. Pick a model in settings, or let the cloud answer.</div></div>
+      <div class="bar">
+        <div class="ctxwrap">
+          <svg id="ch-ctxRing" width="34" height="34" viewBox="0 0 34 34" role="button" tabindex="0" aria-label="context used">
+            <title>context used</title>
+            <circle cx="17" cy="17" r="14" fill="none" stroke="var(--line)" stroke-width="3"></circle>
+            <circle id="ch-ctxArc" cx="17" cy="17" r="14" fill="none" stroke="var(--accent)" stroke-width="3"
+                    stroke-linecap="round" transform="rotate(-90 17 17)"
+                    stroke-dasharray="87.96" stroke-dashoffset="87.96"></circle>
+            <text id="ch-ctxPct" x="17" y="17" text-anchor="middle" dominant-baseline="central"
+                  font-size="9" fill="var(--soft)">0%</text>
+          </svg>
+          <div id="ch-ctxPop" class="ctxpop" hidden>
+            <b>Model context</b><br>
+            How full the conversation is against this model's context window, before it auto-compacts. At
+            100% the oldest turns are summarized and dropped to free room. The window differs per model
+            (a local model is small; cloud models are far larger).
+            <div id="ch-ctxPopDetail" class="ctxpop-detail"></div>
+          </div>
+        </div>
+        <input id="ch-q" placeholder="Ask anything..." autocomplete="off">
+        <button id="ch-send">Send</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ============================ GENERATION TAB ============================ -->
@@ -2039,6 +2127,7 @@
 <script src="/static/tutorial.js"></script>
 <script src="/static/prune.js"></script>
 <script src="/static/rag_train.js"></script>
+<script src="/static/chat_tab.js"></script>
 <script>
 /* Extensions gate. Self-contained: unique IDs, no overlap with index.js.
    Drives the toggle + a single Extensions menu that collapses installed

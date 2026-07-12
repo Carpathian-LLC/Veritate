@@ -68,14 +68,18 @@ app.config["BRAIN_LAST_USED"] = 0.0
 # Functions
 
 @app.route("/")
-@app.route("/chat")
-def chat_page():
-    return send_from_directory(STATIC_DIR, "hybrid.html")
-
-
 @app.route("/app")
 def index():
+    # The dashboard is the front door. Chat lives inside it as a tab (embedding
+    # /chat), so loading the platform no longer drops straight into the chat UI.
     return send_from_directory(STATIC_DIR, "index.html")
+
+
+@app.route("/chat")
+def chat_page():
+    # Standalone chat page, still directly reachable and embedded by the Chat
+    # tab via an <iframe src="/chat?embed=1">.
+    return send_from_directory(STATIC_DIR, "hybrid.html")
 
 
 @app.errorhandler(Exception)
