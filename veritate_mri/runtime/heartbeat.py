@@ -318,14 +318,18 @@ def _build_payload(peek=False):
       minimal (always sent if heartbeat enabled): machine_id, ts, uptime,
         restarts, error count, presence of training (no detail).
       errors tier (heartbeat_send_errors): full {ts, source, msg} list.
+      training-share (share_current_training): the identifying training
+        detail with model name + shape + n_params; otherwise only
+        training_active presence. Independent of the analytics tier.
       analytics tier (analytics_advanced_enabled): host/os/arch, total
-        runtime, n_models, models_hash, hw block (once), training detail
-        with model name + shape + n_params, trainings event buffer."""
+        runtime, n_models, models_hash, hw block (once), trainings event
+        buffer."""
     uptime = max(0.0, time.monotonic() - _PROCESS_START)
     s    = _state()
     cfg  = settings_mod.get()
     send_errors    = bool(cfg.get("heartbeat_send_errors"))
     send_analytics = bool(cfg.get("analytics_advanced_enabled"))
+    share_training = bool(cfg.get("share_current_training"))
     err_count, err_detail = _consume_errors(with_detail=send_errors, peek=peek)
     payload = {
         "v":           PROTOCOL_VERSION,
@@ -349,11 +353,13 @@ def _build_payload(peek=False):
         except Exception:
             train_payload = None
     if train_payload is not None:
-        if send_analytics:
+        if share_training:
+            # Identity ships only under the dedicated opt-in, independent of
+            # the broad analytics tier.
             payload["training"] = train_payload
         else:
-            # Minimal tier still reports whether a run is active so the
-            # server can flip online/active, just without identifying it.
+            # No opt-in: report only that a run is active so the server can
+            # flip online/active, without identifying the model.
             payload["training_active"] = True
     if send_analytics:
         mh, n_models = _models_hash()

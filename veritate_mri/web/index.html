@@ -1607,11 +1607,8 @@
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Detect system <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">local only</span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">Snapshot CPU, RAM, GPU, OS &rarr; <code>data/system_specs.json</code>. Powers the training memory estimator. Re-run after hardware changes.</div>
-            <div class="meta" style="font-size:10.5px;color:var(--warm)">With Advanced on, also enables <b>Auto tune</b> on the Training tab.</div>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="sysDetectBtn" class="action" type="button">Detect now</button>
-              <button id="sysAutoTuneBtn" class="action" type="button"
-                      title="Run a short measured benchmark (throwaway weights). Finds your real RAM ceiling and throughput, saves the results here and into the trainer.">Auto tune</button>
             </div>
             <div id="sysSpecsView" class="meta" style="font-size:10.5px;color:var(--dim);line-height:1.55">not detected yet</div>
           </div>
@@ -1646,6 +1643,10 @@
             <label class="opt" style="max-width:none;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;margin-top:2px">
               <span style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="analyticsAdvancedEnable"><span class="opt-title" style="margin:0;font-size:11.5px">Hardware &amp; training details</span></span>
               <span class="opt-sub" style="font-size:10px;color:var(--dim);line-height:1.4">Once per machine: CPU/RAM/GPU. Per active run: name, params, shape, plugin. No weights or metrics.</span>
+            </label>
+            <label class="opt" style="max-width:none;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px">
+              <span style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="shareCurrentTrainingEnable"><span class="opt-title" style="margin:0;font-size:11.5px">Share current training model</span></span>
+              <span class="opt-sub" style="font-size:10px;color:var(--dim);line-height:1.4">Include the name and shape of the model you're currently training in anonymous telemetry. Off leaves only an active/idle flag.</span>
             </label>
             <label class="opt" style="max-width:none;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px">
               <span style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="heartbeatSendErrorsEnable"><span class="opt-title" style="margin:0;font-size:11.5px">Error detail</span></span>
