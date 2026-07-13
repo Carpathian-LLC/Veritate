@@ -39,6 +39,11 @@ N_TURNS      = 3
 I8_SHAPE     = {"vocab": 256, "hidden": 32, "global": 3, "ffn": 64, "heads": 4, "seq": 64}
 I8_NAME      = "tiny_hybrid_i8"
 I8_STEP      = 10
+# threading engages only for matvecs >= HYBRID_MT_MIN_WORK (2^18); this shape's
+# qkv (3*384^2) and ff (1536*384) clear it so row-split actually runs.
+MT_SHAPE     = {"vocab": 256, "hidden": 384, "global": 3, "ffn": 1536, "heads": 6, "seq": 64}
+MT_NAME      = "hybrid_mt_fp16"
+MT_THREADS   = 8
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -51,10 +56,12 @@ def _engine():
     return exe
 
 
-def _greedy(exe, bin_path, scalar=False):
+def _greedy(exe, bin_path, scalar=False, threads=None):
     env = dict(os.environ, VERITATE_MODEL_PATH=bin_path)
     if scalar:
         env["VERITATE_HYBRID_SCALAR"] = "1"
+    if threads is not None:
+        env["VERITATE_HYBRID_THREADS"] = str(threads)
     p = subprocess.run([exe, "chat_greedy", BUDGET], input=PROMPTS,
                        capture_output=True, env=env, timeout=300)
     assert p.returncode == 0, p.stderr.decode(errors="replace")
@@ -80,27 +87,34 @@ def test_v13_simd_matches_scalar():
     assert _greedy(exe, V13_FIXTURE) == _greedy(exe, V13_FIXTURE, scalar=True)
 
 
-def _export_int8_fixture(tmp_path, monkeypatch):
+def _export_fixture(tmp_path, monkeypatch, shape, name, dtype):
     torch = pytest.importorskip("torch")
     from training import export
     from veritate_core.model_patched import VeritatePatched
-    s = I8_SHAPE
+    s = shape
     torch.manual_seed(0)
     model = VeritatePatched(s["vocab"], s["hidden"], s["global"], s["ffn"], s["heads"],
                             s["seq"], global_mixer="recurrent", state_rule="gla")
-    mdir = tmp_path / I8_NAME / "checkpoints"
+    mdir = tmp_path / name / "checkpoints"
     mdir.mkdir(parents=True)
     torch.save({"model": model.state_dict()}, mdir / f"step_{I8_STEP}.pt")
     cfg = {"shape": {k: s[k] for k in ("vocab", "hidden", "ffn", "heads", "seq")} | {"layers": s["global"]},
            "training_args": {"trunk": "hybrid", "state_rule": "gla"}}
-    with open(tmp_path / I8_NAME / "config.json", "w", encoding="utf-8") as f:
+    with open(tmp_path / name / "config.json", "w", encoding="utf-8") as f:
         json.dump(cfg, f)
     monkeypatch.setattr(paths, "MODELS_ROOT", str(tmp_path))
-    return export.export_checkpoint(I8_NAME, I8_STEP, dtype="int8")["path"]
+    return export.export_checkpoint(name, I8_STEP, dtype=dtype)["path"]
 
 
 def test_v13_int8_simd_matches_scalar(tmp_path, monkeypatch):
     """v13 int8 hybrid SIMD matvec (avx2/sdot) greedy-decodes byte-identically to scalar."""
     exe = _engine()
-    bin_path = _export_int8_fixture(tmp_path, monkeypatch)
+    bin_path = _export_fixture(tmp_path, monkeypatch, I8_SHAPE, I8_NAME, "int8")
     assert _greedy(exe, bin_path) == _greedy(exe, bin_path, scalar=True)
+
+
+def test_v13_threaded_matches_single_thread(tmp_path, monkeypatch):
+    """v13 row-split threaded matvec greedy-decodes byte-identically to VERITATE_HYBRID_THREADS=1."""
+    exe = _engine()
+    bin_path = _export_fixture(tmp_path, monkeypatch, MT_SHAPE, MT_NAME, "fp16")
+    assert _greedy(exe, bin_path, threads=MT_THREADS) == _greedy(exe, bin_path, threads=1)

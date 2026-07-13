@@ -37,6 +37,12 @@ NEURON_TOP_K      = 8
 MEMORY_TOP_N      = 5
 INFO_FLOW_TOP     = 8
 
+# prompt/n-gram lookahead decode: suffix-match length to trigger a draft, and the
+# max bytes drafted per step. A longer match keeps false drafts (novel text) rare;
+# the draft only widens one forward, so a rejected draft costs a fraction of a step.
+LOOKAHEAD_NGRAM = 8
+LOOKAHEAD_DRAFT = 16
+
 # matches training/qat.py: post-GELU activations get fake-quant'd at scale 32 in QAT mode 2.
 # saturation = fraction of activations whose magnitude would clip the int8 range under that scale.
 ACTIVATION_INT8_SCALE = 32.0
@@ -750,7 +756,7 @@ class Brain:
 
         has_mtp = m.supports_mtp_decode()
         mtp_modes = ("mtp", "mtp-verify")
-        valid_modes = ("kv", "mtp", "mtp-verify", "adaptive")
+        valid_modes = ("kv", "mtp", "mtp-verify", "adaptive", "lookahead")
         if mode in mtp_modes and not has_mtp:
             yield {"kind": "error", "message": f"fast={mode} requires a model with multi-token-prediction decode support"}
             return
@@ -783,6 +789,9 @@ class Brain:
         elif mode == "mtp-verify":
             yield from self._stream_fast_mtp_verify(prompt_bytes, temperature, top_k_sample,
                                                     max_new, addons_chain, constraint, rep)
+        elif mode == "lookahead":
+            yield from self._stream_fast_lookahead(prompt_bytes, temperature, top_k_sample,
+                                                   max_new, addons_chain, constraint, rep)
 
     def _sample_one(self, logits_1d, temperature, top_k_sample, addons_chain, constraint, rep=None):
         """Shared per-step sampling helper for stream_fast. Returns int byte or
@@ -1061,6 +1070,92 @@ class Brain:
                     yield {"kind": "stop", "reason": "constraint complete"}
                     return
 
+    def _stream_fast_lookahead(self, prompt_bytes, temperature, top_k_sample, max_new,
+                               addons_chain, constraint, rep=None):
+        """Prompt/n-gram lookahead decode (LLMA-style). No draft model, no MTP:
+        the next bytes are drafted by matching the context suffix against an
+        earlier occurrence in the context, then verified byte-exactly in ONE
+        forward over context ++ draft. Each position is sampled via _sample_one
+        at its true-prefix logits, so every emitted byte is a fresh draw from the
+        canonical distribution: output is byte-exact to single-byte decode under
+        greedy (and distribution-preserving under sampling). The draft only sets
+        how many positions one forward verifies, so a match commits several bytes
+        per forward while a miss costs one widened forward. Windowing mirrors
+        Brain.stream()'s last-(seq-1)-bytes context, so lookahead-off is identical
+        to stream()."""
+        m = self.model
+        seq_max = m.seq
+        ctx = list(prompt_bytes)
+        produced = 0
+        n_drafted = 0
+        n_matched = 0
+
+        while produced < max_new:
+            cap = min(LOOKAHEAD_DRAFT, max_new - produced - 1)
+            draft = _ngram_draft(ctx, LOOKAHEAD_NGRAM, cap) if cap > 0 else []
+            window = ctx[-(seq_max - 1):]
+            Tw = len(window)
+            a = min(len(draft), seq_max - Tw)
+            draft = draft[:a]
+
+            toks = torch.tensor([window + draft], dtype=torch.long, device=self.device)
+            t0 = time.perf_counter()
+            with torch.no_grad():
+                logits, *_ = m(toks)
+            fwd_ms = (time.perf_counter() - t0) * 1000
+
+            # Sample + commit left to right. Each ref is drawn under the prefix
+            # committed so far, so rep/constraint/addons advance in lockstep with
+            # the bytes we keep. No snapshot/restore: the draft is a text guess,
+            # never an un-sampled emitted byte.
+            accepted = []
+            matched = 0
+            done_at = None
+            for i in range(a + 1):
+                ref = self._sample_one(logits[0, Tw - 1 + i], temperature, top_k_sample,
+                                       addons_chain, constraint, rep)
+                if ref is None:
+                    break
+                accepted.append(ref)
+                if addons_chain is not None:
+                    addons_chain.observe(ref)
+                if rep is not None:
+                    rep.observe(ref)
+                if constraint is not None:
+                    constraint.step(ref)
+                is_match = i < a and ref == draft[i]
+                if is_match:
+                    matched += 1
+                if constraint is not None and constraint.done():
+                    done_at = len(accepted) - 1
+                    break
+                if not is_match:
+                    break
+
+            n_drafted += a
+            n_matched += matched
+
+            if not accepted:
+                yield {"kind": "stop", "reason": "constraint allowed no bytes"}
+                return
+
+            ms_each = fwd_ms / len(accepted)
+            for idx, b in enumerate(accepted):
+                ctx.append(int(b))
+                produced += 1
+                yield {
+                    "kind": "fast_byte", "byte": int(b),
+                    "ms_per_byte": round(ms_each, 2),
+                    "draft_len": int(a),
+                    "accepted_extra_so_far": int(n_matched),
+                    "acceptance_rate": round(n_matched / max(1, n_drafted), 3),
+                }
+                if done_at is not None and idx == done_at:
+                    yield {"kind": "stop", "reason": "constraint complete"}
+                    return
+                if produced >= max_new:
+                    return
+
     def _stream_fast_adaptive(self, prompt_bytes, temperature, top_k_sample, max_new,
                               addons_chain, constraint, rep=None, threshold=0.8):
         """Per-position adaptive depth (LayerSkip-style). For each byte:
@@ -1145,6 +1240,25 @@ class Brain:
             if constraint is not None and constraint.done():
                 yield {"kind": "stop", "reason": "constraint complete"}
                 return
+
+
+# ------------------------------------------------------------------------------------
+# Prompt/n-gram lookahead draft.
+#
+# Match the last `ngram` bytes of the context against the most recent earlier
+# occurrence; the up-to-`max_draft` bytes that followed it are the draft. Pure
+# byte search (bytes.rfind is C-level), no model, no state.
+
+def _ngram_draft(ctx, ngram, max_draft):
+    if max_draft <= 0 or len(ctx) < ngram + 1:
+        return []
+    buf = bytes(ctx)
+    key = buf[-ngram:]
+    j = buf.rfind(key, 0, len(buf) - 1)
+    if j < 0:
+        return []
+    start = j + ngram
+    return list(buf[start:start + max_draft])
 
 
 # ------------------------------------------------------------------------------------

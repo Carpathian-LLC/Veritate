@@ -52,7 +52,7 @@ supplemental data below.)
 
 ## endpoints
 
-Full request/response detail lives in [../api/rest_api.md](../api/rest_api.md).
+Full request/response detail lives in [../api/internal_api.md](../api/internal_api.md).
 
 | method + path | purpose |
 |---|---|
@@ -105,7 +105,7 @@ at its real path (`extensions/data.py:108`).
 The mechanism is generic platform code (`extensions/data.py`): it reports presence,
 downloads, and deletes for any extension. The **catalog** (which datasets exist and
 where they are hosted) is owned by each extension via its `data_catalog.json`.
-Request/response detail is in [../api/rest_api.md](../api/rest_api.md).
+Request/response detail is in [../api/internal_api.md](../api/internal_api.md).
 
 ## live activation (no restart)
 
@@ -129,7 +129,7 @@ on the next restart. Toggling an extension that was active at start is fully liv
 
 The settings flag (`extensions`, formerly `experimental`) enables the extensions
 nav entry and the marketplace UI in the dashboard. It is a boolean read/written via
-`GET`/`POST /settings` ([../api/rest_api.md](../api/rest_api.md)). It is a
+`GET`/`POST /settings` ([../api/internal_api.md](../api/internal_api.md)). It is a
 visibility switch for the UI surface, not an isolation boundary: the
 `/extensions/*` routes register regardless of the flag, and an installed
 extension's own routes register at startup regardless of the flag.
@@ -139,4 +139,4 @@ extension's own routes register at startup regardless of the flag.
 - [entry_point.md](entry_point.md) — what registration does at startup.
 - [manifest.md](manifest.md) — the manifest fields the catalog mirrors.
 - [authoring.md](authoring.md) — building an extension to install.
-- [../api/rest_api.md](../api/rest_api.md) — endpoint request/response detail.
+- [../api/internal_api.md](../api/internal_api.md) — endpoint request/response detail.

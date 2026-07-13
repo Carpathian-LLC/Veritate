@@ -1,10 +1,12 @@
-# rest api reference
+# internal api reference
 
 Complete HTTP contract for the Veritate platform server (`veritate_mri/app.py`). This is the stable surface that downloadable extensions code against: extensions are self-contained pages that talk to the platform only through these routes.
 
+For the outward-facing programmatic API an outside client uses to reach this box's models (`/v1/models`, `/v1/chat/completions`, `/generate`, `/agent/stream`) and its optional key gate, see [external_api.md](external_api.md). Those endpoints are also listed here in full.
+
 - **Base URL:** `http://0.0.0.0:8001` (default port; `--port` overrides it, `veritate_mri/app.py:183`).
 - **Content type:** request bodies are JSON (`request.get_json(silent=True)`) unless noted (knowledge-base upload is `multipart/form-data`). Responses are JSON unless noted (CSV, file downloads, SSE).
-- **Auth:** off by default. A password gate activates only when `VERITATE_DASHBOARD_PASSWORD` is set (`veritate_mri/routes/auth_routes.py:33`). When enabled, the public surface (`/`, `/login`, `/logout`, `/favicon.ico`, `/static/*`, `/chat*`, `/hybrid*`) stays open; every other route requires a session. Unauthenticated `GET` redirects to `/login`; unauthenticated non-`GET` returns `401 {"ok": false, "error": "authentication required"}` (`veritate_mri/routes/auth_routes.py:49`).
+- **Auth:** off by default. A password gate activates only when `VERITATE_DASHBOARD_PASSWORD` is set (`veritate_mri/routes/auth_routes.py:33`). When enabled, the public surface (`/`, `/login`, `/logout`, `/favicon.ico`, `/static/*`, `/chat*`, `/hybrid*`) stays open; every other route requires a session. Unauthenticated `GET` redirects to `/login`; unauthenticated non-`GET` returns `401 {"ok": false, "error": "authentication required"}` (`veritate_mri/routes/auth_routes.py:49`). The programmatic API-key gate is separate; see [external_api.md](external_api.md).
 - **Error convention:** every uncaught exception and every Flask HTTP error is serialized to JSON, never an HTML error page. Shape is `{"ok": false, "error": "<message>", "status": <code>}` for HTTP errors and `{"ok": false, "error": "<message>"}` for uncaught exceptions (`veritate_mri/app.py:86`). Route-local handlers also return `{"ok": false, "error": ...}` with `400`/`404`/`409`/`500`/`502`/`503` as noted per endpoint. The `safe_route` wrapper (`veritate_mri/routes/_common.py:26`) gives the same `500` envelope. Treat any non-2xx as failure and read `error`.
 - **SSE:** streaming endpoints set `Content-Type: text/event-stream`, emit `data: <json>\n\n` frames, send `: keepalive\n\n` comment lines to hold the connection, and close on client disconnect. Consume with `EventSource` or a streaming fetch reader.
 - **Note on CLI:** the platform never surfaces shell commands as user-facing errors; error strings are plain language.
@@ -262,4 +264,4 @@ An installed extension also contributes its own routes under the `api_prefix` fr
 | `GET, POST /login` | `auth_routes.py:57` | GET `login.html`; POST form field `password`, redirects to `/app` on match else `/login?e=1` | password login (only meaningful when auth is enabled) |
 | `GET /logout` | `auth_routes.py:67` | redirect `/` | clear the session |
 
-Optional programmatic API-key gate (`api_auth_routes.py`), independent of the dashboard password. When `settings.api_key` is set, `/v1/models`, `/v1/chat/completions`, `/generate`, and `/agent/stream` require `Authorization: Bearer <key>` (missing/wrong = `401`); when unset (default) they are open. Dashboard pages, `/chat`, `/hybrid/*`, `/static`, and heartbeat are never gated by it. Rotate/clear via `POST /settings/api-key`.
+Optional programmatic API-key gate (`api_auth_routes.py`), independent of the dashboard password: gates `/v1/models`, `/v1/chat/completions`, `/generate`, and `/agent/stream`. Off by default; rotate/clear via `POST /settings/api-key`. Full detail in [external_api.md](external_api.md).

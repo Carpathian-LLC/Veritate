@@ -183,27 +183,65 @@ raising it is compat-neutral for v3-v12 bins.
 4. **Kernel identity (S4)**: every SIMD kernel bitwise-equal to the scalar
    reference on randomized shapes (rule 24).
 
-## measured performance (M3 Ultra, 64-byte greedy generations from chat prompts)
+## threaded decode: row-split across the persistent pool
 
-Threaded matvec splits rows across the pool for matmuls with n*k >= 2^20
-elements (int8: >= 2^23 — the sdot kernel runs ~4x the fp rate, so smaller
-splits lose to pool dispatch; measured 1T >= 4T for int8 at both shapes below).
-Row-splits are bitwise-identical to single-thread; `VERITATE_HYBRID_THREADS`
-overrides (default 4). p50 is a non-boundary byte, p95 a boundary byte (the
-recurrent stack fires). Prompts whose replies are boundary-dense read p50 near
-p95. Kernel bench (768x3072 matvec, single-thread): fp32 0.118 ms, fp16
-0.112 ms, int8 sdot 0.030 ms (~79 GB/s, bandwidth ceiling).
+`hybrid_mv` ([hybrid.c](../../veritate_engine/v1/src/hybrid.c)) splits the output
+rows of every weight matvec with `n*k >= HYBRID_MT_MIN_WORK` (2^18 fp / 2^23 int8)
+across the persistent worker pool
+([threadpool.c](../../veritate_engine/v1/src/threadpool.c)); each `out[j]` is
+computed entirely by one worker with the unchanged single-thread kernel, so the
+result is **bitwise-identical to single-thread at every thread count** (rule 24;
+gated by `tests/engine/test_v13_compat.py::test_v13_threaded_matches_single_thread`,
+which exports a threading-sized fp16 fixture and A/Bs default vs
+`VERITATE_HYBRID_THREADS=1`). The tiny vector ops (attention dot, recurrent state
+update, norms, sampler) stay single-thread.
 
-121.75M chat80m (step 51000; quiet-machine fp16-4T at step 48000 measured
-1.08-1.12 p50):
+The pool is **spin-then-park**: `veritate_pool_run` wakes workers by setting a
+lock-free atomic flag and blocks on a lock-free `done_count`; a condvar (POSIX)
+or SRWLOCK+CONDITION_VARIABLE (Win32) only parks a worker after a bounded idle
+spin, so an idle engine burns no cores (energy target) while an active decode
+burst keeps workers hot and pays ~sub-us wake latency. This cut per-dispatch cost
+~60x vs the prior condvar wake (single-stream decode issues 12 matvec dispatches
+per non-boundary byte, 48 per boundary byte, so wake latency dominated) and moved
+the useful-scaling knee from ~4 to ~8 cores. `VERITATE_HYBRID_THREADS` overrides
+the worker count (default `min(pool_size, 8)`, override up to `pool_size`, 1 =
+single-thread); `VERITATE_POOL_SPIN` tunes the idle spin budget. The pool is
+shared with the dense v9-v12 matmul path (`matmul_neon_sdot`, `matmul_vnni`), so
+the same win applies there and the v9 greedy golden still matches.
 
-| config | p50 ms/byte | p95 ms/byte | peak tok/s |
+## measured performance (M3 Ultra 24 P-core, chat80m fp16 greedy decode)
+
+Scaling curve (chat80m fp16, greedy; p50 = non-boundary byte, p95 = boundary
+byte; spin pool, 2^18 fp floor; best of 5, machine shared with a live MPS train,
+so >8T carries real load noise):
+
+| threads | p50 ms/byte | p95 ms/byte | speedup (p50) |
 |---|---|---|---|
-| fp16 4T | 1.58-1.60 | 6.6-6.7 | 418 |
-| fp16 1T | 1.98-2.00 | 8.2-8.6 | 339 |
-| int8 4T | 1.22-1.25 | 3.4-3.5 | 639 |
-| **int8 1T** | **1.17-1.18** | **3.35-3.36** | **660** |
-| int8 1T E-core (`taskpolicy -b`) | 3.8-4.1 | 14.1-14.5 | 187 |
+| 1  | 1.74 | 7.01 | 1.00x |
+| 2  | 1.31 | 4.83 | 1.33x |
+| 4  | 0.80 | 2.79 | 2.17x |
+| **8 (default)** | **0.68** | **2.22** | **2.56x** |
+| 12 | 0.72 | 2.25 | 2.43x |
+| 16 | 0.75 | 2.25 | 2.31x |
+| 24 | 1.97 | 8.34 | collapse (only 24 P-cores; E-core + oversubscription) |
+
+8 threads is the robust knee: ~2.5-3x at low variance, and it honors the energy
+target (8 of 24 P-cores for ~90% of the best case). 16T edges ahead only on a
+fully quiet box (measured 0.52 p50 there, ~3.4x) and regresses under load, so it
+is opt-in via the override, not the default. Prior condvar pool at the same 8T
+was 1.75x (1.04 p50); the spin pool + 2^18 floor is the 2.56x. At the knee decode
+moves ~57 MB / 0.68 ms ~= 84 GB/s, still ~10x under the ~800 GB/s bandwidth floor:
+the remaining ceiling is per-byte serial work (attention, recurrent state,
+sampling) plus dispatch count, not raw bandwidth. Extracting the leftover cores
+needs a second unit of work per model pass (speculative / n-gram-lookahead verify
+against the byte-exact `project_byte0`), not more matvec threads.
+
+Kernel bench (768x3072 matvec, single-thread): fp32 0.118 ms, fp16 0.112 ms,
+int8 sdot 0.030 ms (~79 GB/s). The int8 split floor is held at 2^23 (1T-optimal
+on the prior pool at this size); it is worth a spin-pool re-measure once an int8
+bin is on the box.
+
+## measured performance (condvar-era, superseded fp16 rows)
 
 200m-class shape (h1024, 4 local + 16 global blocks, ffn 4096, heads 16,
 seq 1024; 270.8M params by the same manifest-shape convention; random weights,

@@ -159,14 +159,21 @@ void hybrid_dispatch_init(int32_t dtype) {
 }
 
 // ------------------------------------------------------------------------------------
-// threaded matvec — row-split across the pool, bitwise-identical to the single
-// call (each row is computed once, same kernel). only matmuls with
-// n * k >= HYBRID_MT_MIN_WORK are split. VERITATE_HYBRID_THREADS overrides the
-// worker count (1 = single-thread).
+// threaded matvec — row-split across the persistent spin-then-park pool,
+// bitwise-identical to the single call (each row is computed once, same kernel).
+// only matmuls with n * k >= HYBRID_MT_MIN_WORK are split. default worker count
+// is min(pool_size, HYBRID_MT_DEFAULT); VERITATE_HYBRID_THREADS overrides up to
+// the pool size (1 = single-thread).
+// tuning is measured on M3 Ultra chat80m fp16 greedy decode (2026-07-13): the
+// spin pool cut per-dispatch latency ~60x vs the prior condvar pool, so the fp
+// split floor drops to 2^18 (proj/gate matvecs now pay off) and 8 threads is the
+// robust knee at 2.56x over 1T. beyond 8 gains are load-sensitive; 24 collapses.
 // ------------------------------------------------------------------------------------
 
-#define HYBRID_MT_MIN_WORK  (1 << 20)
-#define HYBRID_MT_MAX       8
+#define HYBRID_MT_MIN_WORK     (1 << 18)
+#define HYBRID_MT_MIN_WORK_I8  (1 << 23)
+#define HYBRID_MT_DEFAULT      8
+#define HYBRID_MT_MAX          32
 
 typedef struct {
     hybrid_matvec_fn fn;
@@ -186,10 +193,11 @@ static int32_t hybrid_threads(void) {
     static int32_t cached = 0;
     if (cached == 0) {
         int32_t cap = veritate_pool_size();
+        if (cap > HYBRID_MT_MAX) cap = HYBRID_MT_MAX;
         const char* s = getenv("VERITATE_HYBRID_THREADS");
-        int32_t nt = s && *s ? atoi(s) : cap;
+        int32_t nt = s && *s ? atoi(s)
+                             : (cap < HYBRID_MT_DEFAULT ? cap : HYBRID_MT_DEFAULT);
         if (nt > cap) nt = cap;
-        if (nt > HYBRID_MT_MAX) nt = HYBRID_MT_MAX;
         cached = nt < 1 ? 1 : nt;
     }
     return cached;
@@ -198,13 +206,13 @@ static int32_t hybrid_threads(void) {
 // big-weight matvec entry: picks the dtype kernel, row-splits across the pool.
 // int8 spans re-derive identical qx per worker (hybrid_quant_act is
 // deterministic over the shared x), so threading stays bitwise-identical.
-// int8 threads only at 8x the fp work floor: the sdot kernel runs ~4x the fp
-// rate, so below that pool dispatch costs more than the split saves (measured:
-// 1T beats 4T for int8 at both the 121.75M and 270M shapes).
+// int8 keeps a higher split floor: the sdot kernel runs ~4x the fp rate, so it
+// stayed 1T-optimal on the prior condvar pool. the floor is held at the measured
+// value pending a spin-pool int8 re-measure (no int8 fixture on this box).
 static void hybrid_mv(const hybrid_t* h, const void* w, const float* x,
                       float* out, int32_t n, int32_t k) {
     const int i8 = h->dtype == VERITATE_HYBRID_DTYPE_INT8;
-    const int64_t min_work = i8 ? (int64_t)HYBRID_MT_MIN_WORK * 8 : HYBRID_MT_MIN_WORK;
+    const int64_t min_work = i8 ? HYBRID_MT_MIN_WORK_I8 : HYBRID_MT_MIN_WORK;
     int32_t nt = hybrid_threads();
     if (nt <= 1 || (int64_t)n * k < min_work) {
         hybrid_matvec_wt(w, x, out, n, k);

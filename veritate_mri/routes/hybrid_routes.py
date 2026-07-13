@@ -283,7 +283,7 @@ def _local_events(cfg, backend, prompt):
         from .backends_routes import _c_engine_stream
         events = _c_engine_stream(cfg, prompt, MAX_NEW, **rep)
     else:
-        events = cfg["BRAIN"].stream(prompt, max_new=MAX_NEW, **rep)
+        events = cfg["BRAIN"].stream_fast(prompt, mode="lookahead", max_new=MAX_NEW, **rep)
     return events, _chat_stop_seq(prompt)
 
 

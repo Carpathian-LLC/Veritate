@@ -4,7 +4,10 @@ Public reference for building and using extensions on top of the Veritate platfo
 
 ## REST API
 
-- **[api/rest_api.md](api/rest_api.md)** — the complete HTTP contract every extension
+- **[api/external_api.md](api/external_api.md)** — the box's programmatic API for outside
+  clients: the OpenAI-compatible endpoints plus `/generate` and `/agent/stream`, and the
+  optional key gate. Start here to integrate this box from another service or app.
+- **[api/internal_api.md](api/internal_api.md)** — the complete HTTP contract every extension
   codes against. Base URL, auth, error convention, SSE, and every endpoint with its
   params and response shape.
 
