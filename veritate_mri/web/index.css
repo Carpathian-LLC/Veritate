@@ -459,25 +459,11 @@
                       overscroll-behavior: contain; touch-action: none; }
   #lifecycleOverlay.on { display: flex; }
   body.lifecycle-locked { overflow: hidden; }
+  /* Rotation is JS-driven (_pinwheelStart) so slow drags fire at random times
+     with no repeating keyframe pattern. */
   #lifecycleOverlay .pinwheel { width: 46px; height: 46px; border: 4px solid var(--dim);
-                                border-top-color: var(--accent); border-radius: 50%;
-                                animation: pinstutter 1.9s linear infinite; }
+                                border-top-color: var(--accent); border-radius: 50%; }
   #lifecycleOverlay .msg { color: var(--text); font-size: 14px; letter-spacing: .06em; }
-  /* Rotation only ever moves forward, but the per-segment slope swings hard:
-     fast bursts, near-stalls, no two the same, so the spin visibly races and
-     drags like it's grinding through uneven work. */
-  @keyframes pinstutter {
-    0%   { transform: rotate(0deg); }
-    9%   { transform: rotate(98deg); }
-    15%  { transform: rotate(108deg); }
-    30%  { transform: rotate(305deg); }
-    39%  { transform: rotate(318deg); }
-    47%  { transform: rotate(436deg); }
-    59%  { transform: rotate(459deg); }
-    71%  { transform: rotate(648deg); }
-    82%  { transform: rotate(659deg); }
-    100% { transform: rotate(720deg); }
-  }
 
   /* Inline pulse dot for status text — for polling refreshes that shouldn't
      trigger a full overlay (no flicker on 1-second polls). */

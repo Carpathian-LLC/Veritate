@@ -10753,6 +10753,37 @@ function _lifecycleSetButtonsDisabled(disabled) {
   if (mmb) mmb.disabled = disabled;
 }
 
+// Update-overlay pinwheel. JS-driven so slow drags fire at random (Poisson-
+// spaced) times with no repeating pattern: even forward spin at the base rate,
+// each frame a small dt-scaled chance to open a slow-drag window.
+const PINWHEEL_SPIN_RATE = 360 / 700;    // deg/ms, matches the .spinner cadence
+const PINWHEEL_DRAG_FACTOR = 0.14;       // drag rate as a fraction of spin
+const PINWHEEL_DRAG_PER_MS = 0.00022;    // avg drag onsets per ms (~1 / 4.5s)
+const PINWHEEL_DRAG_MIN_MS = 240;
+const PINWHEEL_DRAG_JITTER_MS = 380;     // drag length = min + rand*jitter
+let _pinwheelRaf = 0;
+
+function _pinwheelStart() {
+  const el = document.querySelector("#lifecycleOverlay .pinwheel");
+  if (!el) return;
+  let angle = 0, prev = 0, dragUntil = 0;
+  const frame = (t) => {
+    const dt = prev ? t - prev : 0; prev = t;
+    if (t >= dragUntil && Math.random() < PINWHEEL_DRAG_PER_MS * dt)
+      dragUntil = t + PINWHEEL_DRAG_MIN_MS + Math.random() * PINWHEEL_DRAG_JITTER_MS;
+    const rate = t < dragUntil ? PINWHEEL_SPIN_RATE * PINWHEEL_DRAG_FACTOR : PINWHEEL_SPIN_RATE;
+    angle = (angle + dt * rate) % 360;
+    el.style.transform = `rotate(${angle}deg)`;
+    _pinwheelRaf = requestAnimationFrame(frame);
+  };
+  _pinwheelRaf = requestAnimationFrame(frame);
+}
+
+function _pinwheelStop() {
+  if (_pinwheelRaf) cancelAnimationFrame(_pinwheelRaf);
+  _pinwheelRaf = 0;
+}
+
 function _lifecycleOverlayShow(msg) {
   const ov = $("lifecycleOverlay");
   if (!ov) return;
@@ -10760,12 +10791,14 @@ function _lifecycleOverlayShow(msg) {
   if (m) m.textContent = msg;
   ov.classList.add("on");
   document.body.classList.add("lifecycle-locked");
+  _pinwheelStart();
 }
 
 function _lifecycleOverlayHide() {
   const ov = $("lifecycleOverlay");
   if (ov) ov.classList.remove("on");
   document.body.classList.remove("lifecycle-locked");
+  _pinwheelStop();
 }
 
 // Tabs that depend on the pytorch brain or analytics/sync threads being
