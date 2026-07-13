@@ -4,8 +4,9 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - unit tests for the pytorch inference device selection (_pick_infer_device).
-#   a fake torch stubs mps availability so nothing touches a real accelerator.
+# - unit tests for the pytorch inference device selection (_pick_infer_device) and
+#   the CPU inference thread cap (_infer_threads). a fake torch stubs mps
+#   availability so nothing touches a real accelerator.
 # tests/mri/test_infer_device.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -16,8 +17,11 @@ import sys
 REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 if os.path.join(REPO_ROOT, "veritate_mri") not in sys.path:
     sys.path.insert(0, os.path.join(REPO_ROOT, "veritate_mri"))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 from inference.backends.pytorch import _pick_infer_device
+from veritate_core.plugin import hardware
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -83,3 +87,45 @@ def test_unset_defaults_to_auto(monkeypatch):
     """An unset preference behaves as auto (mps when available)."""
     monkeypatch.delenv("VERITATE_INFER_DEVICE", raising=False)
     assert _pick_infer_device(_FakeTorch(True)) == "mps"
+
+
+def test_thread_ladder_powers_of_two_plus_max():
+    """The probe ladder is 1,2,4,... up to and including max_threads."""
+    assert hardware._thread_ladder(8) == [1, 2, 4, 8]
+    assert hardware._thread_ladder(6) == [1, 2, 4, 6]
+    assert hardware._thread_ladder(1) == [1]
+
+
+def test_infer_threads_accelerator_skips_probe(monkeypatch):
+    """A non-cpu device keeps the full count and never runs the probe."""
+    monkeypatch.delenv("VERITATE_INFER_THREADS", raising=False)
+    monkeypatch.setattr(hardware, "_probe_infer_threads",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("probed on accelerator")))
+    assert hardware.optimal_infer_threads("mps", 768, 3072, 12, 16) == 16
+
+
+def test_infer_threads_single_core_skips_probe(monkeypatch):
+    """A one-core budget returns 1 without probing."""
+    monkeypatch.delenv("VERITATE_INFER_THREADS", raising=False)
+    monkeypatch.setattr(hardware, "_probe_infer_threads",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("probed at max=1")))
+    assert hardware.optimal_infer_threads("cpu", 768, 3072, 12, 1) == 1
+
+
+def test_infer_threads_env_override_wins(monkeypatch):
+    """VERITATE_INFER_THREADS overrides the measured value on any device."""
+    monkeypatch.setenv("VERITATE_INFER_THREADS", "2")
+    assert hardware.optimal_infer_threads("cpu", 768, 3072, 12, 16) == 2
+    assert hardware.optimal_infer_threads("mps", 768, 3072, 12, 16) == 2
+
+
+def test_infer_threads_cpu_measures_then_caches(monkeypatch):
+    """CPU self-calibrates via the probe, then serves the cached value for the shape."""
+    monkeypatch.delenv("VERITATE_INFER_THREADS", raising=False)
+    hardware._INFER_THREADS_CACHE.clear()
+    calls = []
+    monkeypatch.setattr(hardware, "_probe_infer_threads",
+                        lambda h, f, l, m: (calls.append((h, f, l, m)), 3)[1])
+    assert hardware.optimal_infer_threads("cpu", 768, 3072, 12, 16) == 3
+    assert hardware.optimal_infer_threads("cpu", 768, 3072, 12, 16) == 3   # cache hit
+    assert len(calls) == 1

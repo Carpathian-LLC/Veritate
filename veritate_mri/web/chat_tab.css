@@ -4,10 +4,11 @@
    it reads as native platform UI: only chat-specific colors (--me user bubble,
    --field input) are declared here, the rest inherit. The spin keyframe is
    renamed (chspin) to avoid clashing with the dashboard's own @keyframes spin.
-   Ids in the markup are prefixed "ch-". chatTabInit() sizes the panel to the
-   viewport each activation/resize so the composer never clips the bottom. */
+   Ids in the markup are prefixed "ch-". The panel is a pure flex column that fills
+   the viewport-locked chat tab body (index.css), so the composer never clips. */
 
-#chatMount { --me:#1a2030; --field:#0a0c12; background:var(--bg); color:var(--text); }
+#chatMount { --me:#1a2030; --field:#0a0c12; background:var(--bg); color:var(--text);
+             flex:1 1 0; min-height:0; display:flex; flex-direction:column; }
 
 #chatMount header { display:flex; align-items:center; justify-content:space-between;
                     padding:4px 2px 10px; border-bottom:1px solid var(--line); }
@@ -54,12 +55,12 @@
 #chatMount .btn:hover { background:#80b4ff; }
 #chatMount .btn:disabled { opacity:.4; cursor:default; }
 
-/* The chat is a self-contained panel: the message log scrolls internally, the
-   composer keeps its size at the bottom. chatTabInit() sets the exact height each
-   activation/resize; the calc is the pre-init fallback (kept conservative so it
-   cannot clip even with the HUD band showing; dvh tracks the real viewport). */
-#chatMount .wrap { display:flex; flex-direction:column; height:calc(100dvh - 240px);
-                    max-width:760px; margin:0 auto; padding:6px 2px; transition:filter .15s ease; }
+/* The chat is a self-contained panel: it flex-fills the viewport-locked tab body
+   (see index.css), the message log scrolls internally, and the composer keeps its
+   size at the bottom. Pure flex, no JS height math, so it reflows on resize, HUD
+   toggle, and settings open/close on its own. */
+#chatMount .wrap { display:flex; flex-direction:column; flex:1 1 0; min-height:0;
+                    max-width:760px; width:100%; margin:0 auto; padding:6px 2px; transition:filter .15s ease; }
 #chatMount #ch-log { flex:1 1 0; min-height:0; overflow-y:auto; display:flex; flex-direction:column;
                     gap:12px; padding-bottom:16px; }
 #chatMount .msg { max-width:86%; padding:9px 12px; border-radius:5px; white-space:pre-wrap; line-height:1.5; }

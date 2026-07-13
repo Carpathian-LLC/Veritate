@@ -11,8 +11,6 @@
   const TEACHER_ID = "teacher";
   const TEACHER_PREFIX = "teacher:";
   const VERITATE_DOCS_ID = "veritate_docs";   // grounds the public model on the platform docs
-  const WRAP_FIT_GAP = 16;      // px of breathing room below the composer
-  const WRAP_MIN_HEIGHT = 200;  // px floor so a very short window still shows log + composer
 
   const mount = document.getElementById("chatMount");
   if (!mount) return;
@@ -20,12 +18,14 @@
   const log = $("log"), q = $("q"), send = $("send");
 
   const state = Object.assign(
-    { model: VERITATE_DOCS_ID, backend: "pytorch", use_rag: false, use_logs: false },
+    { model: VERITATE_DOCS_ID, engines: {}, use_rag: false, use_logs: false },
     loadSettings());
+  if (!state.engines || typeof state.engines !== "object") state.engines = {};
   let cCapable = new Set();    // models with a veritate.bin (c-engine runnable)
   let hasCorpus = false, nFiles = 0, busy = false;
   let remoteById = new Map();  // remote model id -> {label, group} from /hybrid/models
   let convo = loadConvo();     // {summary, turns} conversation memory, server-compacted
+  let controller = null;       // AbortController for the in-flight stream; null when idle
 
   function loadSettings() {
     try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") || {}; }
@@ -118,6 +118,16 @@
     return state.model;
   }
 
+  // Engine for the current model. Per-model choice, persisted. Prefer the fast C
+  // engine whenever the model has a veritate.bin; fall back to pytorch only when it
+  // has none. A saved "c" pick is never silently downgraded (or persisted as pytorch)
+  // just because the c-model list hasn't loaded yet.
+  function effectiveBackend() {
+    const cOk = cCapable.has(state.model);
+    if (state.engines[state.model] === "pytorch") return "pytorch";
+    return cOk ? "c" : "pytorch";
+  }
+
   function renderControls() {
     const sel = $("modelSel");
     if (sel.value !== state.model) sel.value = state.model;
@@ -125,13 +135,12 @@
     $("engineRow").style.display = isRemote() ? "none" : "";
     $("ragRow").style.display = (state.model === VERITATE_DOCS_ID) ? "none" : "";
 
-    const cOk = cCapable.has(state.model);
+    const cOk = cCapable.has(state.model), eff = effectiveBackend();
     for (const b of $("engineSeg").children) {
       const eng = b.dataset.engine;
       b.disabled = (eng === "c" && !cOk);
-      b.classList.toggle("on", eng === state.backend);
+      b.classList.toggle("on", eng === eff);
     }
-    if (state.backend === "c" && !cOk) { state.backend = "pytorch"; renderControls(); return; }
     $("engineHint").textContent = cOk ? "" : "C engine needs a veritate.bin export for this model.";
 
     const chk = $("ragChk");
@@ -243,20 +252,27 @@
     pending.scrollIntoView({ block: "end" });
   }
 
+  function setSending(on) { send.textContent = on ? "Stop" : "Send"; }
+
   // Streams the reply token-by-token like the Generation tab: reads the SSE body
-  // of /hybrid/chat/stream and paints each `delta` as it arrives.
+  // of /hybrid/chat/stream and paints each `delta` as it arrives. While in flight
+  // Send becomes Stop; Stop aborts the request, which frees the engine (the C
+  // subprocess drains/kills on disconnect) and keeps the partial reply.
   async function ask() {
     const text = q.value.trim(); if (!text) return;
     if (text[0] === "/" && handleSlash(text)) { q.value = ""; q.focus(); return; }
-    bubble("user", text); q.value = ""; send.disabled = true;
+    bubble("user", text); q.value = "";
     const pending = bubble("bot", "");
     pending.innerHTML = '<span class="spin"></span>';
+    controller = new AbortController();
+    setSending(true);
     let acc = "", started = false;
     try {
       const r = await fetch("/hybrid/chat/stream", {
         method: "POST", headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({ message: text, model: state.model,
-                               backend: state.backend, use_rag: state.use_rag, use_logs: state.use_logs,
+                               backend: effectiveBackend(), use_rag: state.use_rag, use_logs: state.use_logs,
                                history: convo.turns, summary: convo.summary }),
       });
       const reader = r.body.getReader(), dec = new TextDecoder();
@@ -283,35 +299,37 @@
         }
       }
       if (pending.querySelector(".spin")) pending.textContent = "(no answer)";
-    } catch (_) {
-      if (!started) pending.textContent = "request failed";
+    } catch (e) {
+      if (e && e.name === "AbortError") {
+        // Stopped by the user: no server `done`, so keep the partial and record
+        // the turn locally so the conversation stays coherent next send.
+        pending.textContent = acc || "(stopped)";
+        if (acc) {
+          convo.turns = convo.turns.concat(
+            [{ role: "user", content: text }, { role: "assistant", content: acc }]);
+          saveConvo();
+        }
+      } else if (!started) {
+        pending.textContent = "request failed";
+      }
     } finally {
-      send.disabled = false; q.focus();
+      controller = null; setSending(false); q.focus();
     }
   }
 
-  // Size the panel to the space actually below the chrome (topbar + tabs + an
-  // on/off HUD) so the composer never drops below the fold. Guarded so the
-  // ResizeObserver settles instead of looping.
-  function fitWrap() {
-    const w = mount.querySelector(".wrap");
-    if (!w || !w.offsetParent) return;
-    const target = Math.max(WRAP_MIN_HEIGHT,
-                            window.innerHeight - w.getBoundingClientRect().top - WRAP_FIT_GAP);
-    if (Math.abs(parseFloat(w.style.height || "0") - target) < 1) return;
-    w.style.height = target + "px";
+  // Send button doubles as Stop while a reply streams.
+  function onSend() {
+    if (controller) { controller.abort(); return; }
+    ask();
   }
 
   let wired = false;
-  // Called by activateTab("chat") on every open. Refits the panel each time;
-  // wires listeners + kicks off the network init once, refocuses thereafter.
+  // Called by activateTab("chat") on every open. The panel sizes itself via CSS
+  // flex (index.css / chat_tab.css); this wires listeners + kicks off the network
+  // init once, and refocuses the input thereafter.
   window.chatTabInit = function () {
-    fitWrap();
     if (wired) { q.focus(); return; }
     wired = true;
-
-    window.addEventListener("resize", fitWrap);
-    if (window.ResizeObserver) new ResizeObserver(fitWrap).observe(document.body);
 
     $("newChat").addEventListener("click", newChat);
     $("gear").addEventListener("click", () => $("settings").classList.toggle("open"));
@@ -324,7 +342,7 @@
     $("modelSel").addEventListener("change", e => { state.model = e.target.value; renderControls(); });
     $("engineSeg").addEventListener("click", e => {
       const b = e.target.closest("button"); if (!b || b.disabled) return;
-      state.backend = b.dataset.engine; renderControls();
+      state.engines[state.model] = b.dataset.engine; saveSettings(); renderControls();
     });
     $("ragChk").addEventListener("change", e => { state.use_rag = e.target.checked; saveSettings(); });
     $("logChk").addEventListener("change", e => { state.use_logs = e.target.checked; saveSettings(); });
@@ -332,8 +350,8 @@
       const f = e.target.files[0]; $("kbFileName").textContent = f ? f.name : "no file selected";
     });
     $("kbUpload").addEventListener("click", upload);
-    send.addEventListener("click", ask);
-    q.addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+    send.addEventListener("click", onSend);
+    q.addEventListener("keydown", e => { if (e.key === "Enter" && !controller) ask(); });
 
     init(); q.focus();
   };

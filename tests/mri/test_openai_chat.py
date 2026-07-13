@@ -131,8 +131,8 @@ def test_local_delta_stream_holds_back_stop_marker():
 def test_stream_local_dispatches_true_token_path(monkeypatch):
     """A local-kind streaming request is dispatched to the true per-token handler, not the buffered one."""
     monkeypatch.setattr(H, "_openai_stream_local",
-                        lambda cfg, model, backend, conv, system: Response("TRUE_TOKEN",
-                                                                           mimetype="text/event-stream"))
+                        lambda cfg, model, backend, conv, system, mri=False: Response(
+                            "TRUE_TOKEN", mimetype="text/event-stream"))
     r = _client(monkeypatch, kind="local").post(
         "/v1/chat/completions",
         json={"model": "m", "stream": True, "messages": [{"role": "user", "content": "hi"}]})
@@ -204,7 +204,8 @@ def test_hybrid_stream_local_honors_c_engine(monkeypatch):
     calls = []
     monkeypatch.setattr(H, "_ensure_c", lambda cfg, name: calls.append("c"))
     monkeypatch.setattr(H, "_ensure_pytorch", lambda cfg, name: calls.append("pytorch"))
-    monkeypatch.setattr(H, "_local_events", lambda cfg, backend, prompt: (_events(LOCAL_ANSWER), []))
+    monkeypatch.setattr(H, "_local_events",
+                        lambda cfg, backend, prompt, mri=False: (_events(LOCAL_ANSWER), []))
     monkeypatch.setattr(B, "_stop_on_bytes", lambda events, stop: events)
     r = _client(monkeypatch, kind="local").post(
         "/hybrid/chat/stream", json={"model": "m", "backend": "c", "message": "hi"})

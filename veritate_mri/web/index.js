@@ -10759,11 +10759,13 @@ function _lifecycleOverlayShow(msg) {
   const m = $("lifecycleOverlayMsg");
   if (m) m.textContent = msg;
   ov.classList.add("on");
+  document.body.classList.add("lifecycle-locked");
 }
 
 function _lifecycleOverlayHide() {
   const ov = $("lifecycleOverlay");
   if (ov) ov.classList.remove("on");
+  document.body.classList.remove("lifecycle-locked");
 }
 
 // Tabs that depend on the pytorch brain or analytics/sync threads being

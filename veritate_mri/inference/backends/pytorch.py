@@ -42,6 +42,15 @@ INFO_FLOW_TOP     = 8
 # the draft only widens one forward, so a rejected draft costs a fraction of a step.
 LOOKAHEAD_NGRAM = 8
 LOOKAHEAD_DRAFT = 16
+# Devices where drafting runs. On CPU a causal forward over window++draft is
+# bitwise-identical at the window positions to the single-byte forward, so the
+# speculative accept is byte-exact under greedy. Off-CPU (MPS) float GEMMs over
+# different shapes are not guaranteed bitwise-identical, so a near-tie argmax can
+# flip; drafting is disabled there so every forward keeps the single-byte-window
+# shape and parity holds trivially. Re-enable once MPS parity is measured (see
+# inference_brain.md).
+LOOKAHEAD_DEVICES  = ("cpu",)
+LOOKAHEAD_BACKEND  = "pytorch"
 
 # matches training/qat.py: post-GELU activations get fake-quant'd at scale 32 in QAT mode 2.
 # saturation = fraction of activations whose magnitude would clip the int8 range under that scale.
@@ -132,6 +141,20 @@ class Brain:
         while ds > 1 and ffn % ds != 0:
             ds -= 1
         self.ffn_downsample = ds
+
+        # Set decode threads now the device + shape are known. On CPU the box
+        # self-calibrates (hardware.optimal_infer_threads measures this shape once
+        # and caches it) instead of oversubscribing cores and spin-waiting; on
+        # MPS/CUDA the forward runs on the accelerator so the full count is kept.
+        # The checkpoint load above used the full count.
+        from veritate_core.plugin import hardware
+        n_infer_threads = hardware.optimal_infer_threads(
+            self.device.type, self.model.hidden, ffn, self.model.layers, threads)
+        torch.set_num_threads(n_infer_threads)
+        if n_infer_threads != threads:
+            logmod.info("backends.pytorch",
+                        f"inference threads {threads} -> {n_infer_threads} "
+                        f"({self.device.type}, autotuned)")
 
         self.cap_ffn      = [None] * self.model.layers
         self.cap_qkv      = [None] * self.model.layers
@@ -1077,21 +1100,26 @@ class Brain:
         earlier occurrence in the context, then verified byte-exactly in ONE
         forward over context ++ draft. Each position is sampled via _sample_one
         at its true-prefix logits, so every emitted byte is a fresh draw from the
-        canonical distribution: output is byte-exact to single-byte decode under
-        greedy (and distribution-preserving under sampling). The draft only sets
-        how many positions one forward verifies, so a match commits several bytes
-        per forward while a miss costs one widened forward. Windowing mirrors
-        Brain.stream()'s last-(seq-1)-bytes context, so lookahead-off is identical
-        to stream()."""
+        canonical distribution. The draft only sets how many positions one forward
+        verifies, so a match commits several bytes per forward while a miss costs
+        one widened forward. Windowing mirrors Brain.stream()'s last-(seq-1)-bytes
+        context, so with drafting off the output is identical to stream().
+
+        Byte-exactness scope: proven on CPU, where a causal forward over
+        window++draft is bitwise-identical at the window positions to stream()'s
+        single-byte forward. Off-CPU (LOOKAHEAD_DEVICES) drafting is disabled, so
+        every forward keeps the single-byte-window shape and the argument holds
+        trivially; MPS parity is a deferred measurement (inference_brain.md)."""
         m = self.model
         seq_max = m.seq
         ctx = list(prompt_bytes)
         produced = 0
         n_drafted = 0
         n_matched = 0
+        draft_ok = self.device.type in LOOKAHEAD_DEVICES
 
         while produced < max_new:
-            cap = min(LOOKAHEAD_DRAFT, max_new - produced - 1)
+            cap = min(LOOKAHEAD_DRAFT, max_new - produced - 1) if draft_ok else 0
             draft = _ngram_draft(ctx, LOOKAHEAD_NGRAM, cap) if cap > 0 else []
             window = ctx[-(seq_max - 1):]
             Tw = len(window)
@@ -1112,11 +1140,12 @@ class Brain:
             matched = 0
             done_at = None
             for i in range(a + 1):
-                ref = self._sample_one(logits[0, Tw - 1 + i], temperature, top_k_sample,
+                pos_logits = logits[0, Tw - 1 + i]
+                ref = self._sample_one(pos_logits, temperature, top_k_sample,
                                        addons_chain, constraint, rep)
                 if ref is None:
                     break
-                accepted.append(ref)
+                accepted.append((ref, int(pos_logits.argmax()), Tw + i))
                 if addons_chain is not None:
                     addons_chain.observe(ref)
                 if rep is not None:
@@ -1140,12 +1169,14 @@ class Brain:
                 return
 
             ms_each = fwd_ms / len(accepted)
-            for idx, b in enumerate(accepted):
+            for idx, (b, argmax_byte, T) in enumerate(accepted):
                 ctx.append(int(b))
                 produced += 1
                 yield {
                     "kind": "fast_byte", "byte": int(b),
+                    "argmax_byte": int(argmax_byte), "T": int(T),
                     "ms_per_byte": round(ms_each, 2),
+                    "backend": LOOKAHEAD_BACKEND,
                     "draft_len": int(a),
                     "accepted_extra_so_far": int(n_matched),
                     "acceptance_rate": round(n_matched / max(1, n_drafted), 3),

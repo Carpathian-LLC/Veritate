@@ -57,9 +57,15 @@
   .tab.active { color: #fff; background: var(--panel); border-color: var(--line); position: relative; top: 1px; }
   .tab-body { display: none; }
   .tab-body.active { display: block; }
-  /* chat sizes itself to the viewport; drop the page's bottom padding so its
-     composer sits at the fold instead of below a phantom scroll region. */
-  body:has(.tab-body[data-tab="chat"].active) { padding-bottom: 0; }
+  /* Chat locks to the viewport as a flex column: topbar + tabs take their height
+     and the chat panel fills the rest, so #ch-log is the only scroll region and the
+     composer can never be overlapped or clipped. No JS height math; the sticky HUD
+     band, when on, just takes a row and the panel reflows around it. */
+  body:has(.tab-body[data-tab="chat"].active) {
+    height: 100dvh; overflow: hidden; padding-bottom: 0;
+    display: flex; flex-direction: column;
+  }
+  .tab-body[data-tab="chat"].active { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
 
   /* extensions menu: collapses installed extensions into one tab entry */
   .ext-library { display: inline-flex; align-items: center; padding: 0 14px; font-size: 13px; font-weight: 500; color: var(--dim); cursor: pointer; border-left: 1px solid var(--line); user-select: none; }
@@ -448,28 +454,28 @@
      python). Visible on any tab so the action never looks dead. */
   #lifecycleOverlay { position: fixed; inset: 0; z-index: 9000; display: none;
                       flex-direction: column; align-items: center; justify-content: center;
-                      gap: 16px; background: rgba(10, 12, 18, 0.55); backdrop-filter: blur(2px); }
+                      gap: 16px; background: rgba(6, 8, 12, 0.78);
+                      backdrop-filter: blur(9px); -webkit-backdrop-filter: blur(9px);
+                      overscroll-behavior: contain; touch-action: none; }
   #lifecycleOverlay.on { display: flex; }
+  body.lifecycle-locked { overflow: hidden; }
   #lifecycleOverlay .pinwheel { width: 46px; height: 46px; border: 4px solid var(--dim);
                                 border-top-color: var(--accent); border-radius: 50%;
-                                animation: pinstutter 2.4s linear infinite; }
+                                animation: pinstutter 1.9s linear infinite; }
   #lifecycleOverlay .msg { color: var(--text); font-size: 14px; letter-spacing: .06em; }
-  /* Constant spin rate broken by crisp, irregularly-spaced freezes: mimics a
-     spinner dropping frames under load (rotation holds, then resumes at the same
-     speed) rather than a motor speeding up and slowing down. Flats = freezes;
-     every moving segment shares the same slope so the speed never visibly wobbles. */
+  /* Rotation only ever moves forward, but the per-segment slope swings hard:
+     fast bursts, near-stalls, no two the same, so the spin visibly races and
+     drags like it's grinding through uneven work. */
   @keyframes pinstutter {
     0%   { transform: rotate(0deg); }
-    15%  { transform: rotate(127deg); }
-    18%  { transform: rotate(127deg); }
-    29%  { transform: rotate(220deg); }
-    31%  { transform: rotate(220deg); }
-    50%  { transform: rotate(381deg); }
-    55%  { transform: rotate(381deg); }
-    64%  { transform: rotate(457deg); }
-    66%  { transform: rotate(457deg); }
-    85%  { transform: rotate(618deg); }
-    88%  { transform: rotate(618deg); }
+    9%   { transform: rotate(98deg); }
+    15%  { transform: rotate(108deg); }
+    30%  { transform: rotate(305deg); }
+    39%  { transform: rotate(318deg); }
+    47%  { transform: rotate(436deg); }
+    59%  { transform: rotate(459deg); }
+    71%  { transform: rotate(648deg); }
+    82%  { transform: rotate(659deg); }
     100% { transform: rotate(720deg); }
   }
 
