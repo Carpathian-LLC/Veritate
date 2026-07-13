@@ -3,7 +3,7 @@
 The extensions system lets a self-contained page run beside the Veritate
 dashboard. An extension is its own directory: a manifest, an entry point, a page,
 and optional server modules. It talks to the platform **only** through the
-documented HTTP API ([../api/rest_api.md](../api/rest_api.md)) and the server-side
+documented HTTP API ([../api/internal_api.md](../api/internal_api.md)) and the server-side
 model-loading surface. It never imports platform internals.
 
 This is distinct from the internal trainer **plugin** (a trainer; see
@@ -25,5 +25,5 @@ self-contained add-on page.
 ## the contract
 
 The platform HTTP API is the only stable surface an extension codes against:
-[../api/rest_api.md](../api/rest_api.md). Anything not in that reference is not part
+[../api/internal_api.md](../api/internal_api.md). Anything not in that reference is not part
 of the contract.

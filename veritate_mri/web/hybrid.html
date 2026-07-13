@@ -184,12 +184,14 @@
   const log = $("log"), q = $("q"), send = $("send");
 
   const state = Object.assign(
-    { model: VERITATE_DOCS_ID, backend: "pytorch", use_rag: false, use_logs: false },
+    { model: VERITATE_DOCS_ID, engines: {}, use_rag: false, use_logs: false },
     loadSettings());
+  if (!state.engines || typeof state.engines !== "object") state.engines = {};
   let cCapable = new Set();    // models with a veritate.bin (c-engine runnable)
   let hasCorpus = false, nFiles = 0, busy = false;
   let remoteById = new Map();  // remote model id -> {label, group} from /hybrid/models
   let convo = loadConvo();     // {summary, turns} conversation memory, server-compacted
+  let controller = null;       // AbortController for the in-flight stream; null when idle
 
   function loadSettings() {
     try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") || {}; }
@@ -282,6 +284,16 @@
     return state.model;
   }
 
+  // Engine for the current model. Per-model choice, persisted. Prefer the fast C
+  // engine whenever the model has a veritate.bin; fall back to pytorch only when it
+  // has none. A saved "c" pick is never silently downgraded (or persisted as pytorch)
+  // just because the c-model list hasn't loaded yet.
+  function effectiveBackend() {
+    const cOk = cCapable.has(state.model);
+    if (state.engines[state.model] === "pytorch") return "pytorch";
+    return cOk ? "c" : "pytorch";
+  }
+
   function renderControls() {
     const sel = $("modelSel");
     if (sel.value !== state.model) sel.value = state.model;
@@ -289,13 +301,12 @@
     $("engineRow").style.display = isRemote() ? "none" : "";
     $("ragRow").style.display = (state.model === VERITATE_DOCS_ID) ? "none" : "";
 
-    const cOk = cCapable.has(state.model);
+    const cOk = cCapable.has(state.model), eff = effectiveBackend();
     for (const b of $("engineSeg").children) {
       const eng = b.dataset.engine;
       b.disabled = (eng === "c" && !cOk);
-      b.classList.toggle("on", eng === state.backend);
+      b.classList.toggle("on", eng === eff);
     }
-    if (state.backend === "c" && !cOk) { state.backend = "pytorch"; renderControls(); return; }
     $("engineHint").textContent = cOk ? "" : "C engine needs a veritate.bin export for this model.";
 
     const chk = $("ragChk");
@@ -386,37 +397,96 @@
     });
   }
 
-  function ask() {
+  // Terminal `done` frame: lock in the canonical answer, store compacted memory,
+  // update the context ring, render retrieval sources.
+  function applyDone(pending, d) {
+    pending.textContent = d.answer || pending.textContent || "(no answer)";
+    if (d.memory) {
+      convo = { summary: d.memory.summary || "",
+                turns: Array.isArray(d.memory.turns) ? d.memory.turns : [] };
+      saveConvo();
+    }
+    lastCtx = d.context || null;
+    updateCtxRing(lastCtx ? lastCtx.pct : 0);
+    if (d.sources && d.sources.length) {
+      const s = document.createElement("div"); s.className = "src";
+      s.innerHTML = "<b>retrieved</b> · ";
+      s.appendChild(document.createTextNode(
+        d.sources.map(x => x.score == null ? x.text : `${x.text} (${x.score})`).join(" · ")));
+      pending.appendChild(s);
+    }
+    pending.scrollIntoView({ block: "end" });
+  }
+
+  function setSending(on) { send.textContent = on ? "Stop" : "Send"; }
+
+  // Streams the reply token-by-token: reads the SSE body of /hybrid/chat/stream
+  // and paints each `delta` as it arrives. While in flight Send becomes Stop; Stop
+  // aborts the request, which frees the engine (the C subprocess drains/kills on
+  // disconnect) and keeps the partial reply.
+  async function ask() {
     const text = q.value.trim(); if (!text) return;
     if (text[0] === "/" && handleSlash(text)) { q.value = ""; q.focus(); return; }
-    bubble("user", text); q.value = ""; send.disabled = true;
+    bubble("user", text); q.value = "";
     const pending = bubble("bot", "");
     pending.innerHTML = '<span class="spin"></span>';
-    fetch("/hybrid/chat", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, model: state.model,
-                             backend: state.backend, use_rag: state.use_rag, use_logs: state.use_logs,
-                             history: convo.turns, summary: convo.summary }),
-    }).then(r => r.json()).then(d => {
-      if (!d.ok) { pending.textContent = "error: " + (d.error || "failed"); return; }
-      pending.textContent = d.answer || "(no answer)";
-      if (d.memory) {
-        convo = { summary: d.memory.summary || "",
-                  turns: Array.isArray(d.memory.turns) ? d.memory.turns : [] };
-        saveConvo();
+    controller = new AbortController();
+    setSending(true);
+    let acc = "", started = false;
+    try {
+      const r = await fetch("/hybrid/chat/stream", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({ message: text, model: state.model,
+                               backend: effectiveBackend(), use_rag: state.use_rag, use_logs: state.use_logs,
+                               history: convo.turns, summary: convo.summary }),
+      });
+      const reader = r.body.getReader(), dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n\n")) >= 0) {
+          const line = buf.slice(0, nl).replace(/^data: /, "");
+          buf = buf.slice(nl + 2);
+          if (!line) continue;
+          const ev = JSON.parse(line);
+          if (ev.kind === "delta") {
+            if (!started) { pending.textContent = ""; started = true; }
+            acc += ev.text; pending.textContent = acc;
+            pending.scrollIntoView({ block: "end" });
+          } else if (ev.kind === "error") {
+            pending.textContent = "error: " + (ev.error || "failed");
+          } else if (ev.kind === "done") {
+            applyDone(pending, ev);
+          }
+        }
       }
-      lastCtx = d.context || null;
-      updateCtxRing(lastCtx ? lastCtx.pct : 0);
-      if (d.sources && d.sources.length) {
-        const s = document.createElement("div"); s.className = "src";
-        s.innerHTML = "<b>retrieved</b> · ";
-        s.appendChild(document.createTextNode(
-          d.sources.map(x => x.score == null ? x.text : `${x.text} (${x.score})`).join(" · ")));
-        pending.appendChild(s);
+      if (pending.querySelector(".spin")) pending.textContent = "(no answer)";
+    } catch (e) {
+      if (e && e.name === "AbortError") {
+        // Stopped by the user: no server `done`, so keep the partial and record
+        // the turn locally so the conversation stays coherent next send.
+        pending.textContent = acc || "(stopped)";
+        if (acc) {
+          convo.turns = convo.turns.concat(
+            [{ role: "user", content: text }, { role: "assistant", content: acc }]);
+          saveConvo();
+        }
+      } else if (!started) {
+        pending.textContent = "request failed";
       }
-      pending.scrollIntoView({ block: "end" });
-    }).catch(() => { pending.textContent = "request failed"; })
-      .finally(() => { send.disabled = false; q.focus(); });
+    } finally {
+      controller = null; setSending(false); q.focus();
+    }
+  }
+
+  // Send button doubles as Stop while a reply streams.
+  function onSend() {
+    if (controller) { controller.abort(); return; }
+    ask();
   }
 
   $("newChat").addEventListener("click", newChat);
@@ -430,7 +500,7 @@
   $("modelSel").addEventListener("change", e => { state.model = e.target.value; renderControls(); });
   $("engineSeg").addEventListener("click", e => {
     const b = e.target.closest("button"); if (!b || b.disabled) return;
-    state.backend = b.dataset.engine; renderControls();
+    state.engines[state.model] = b.dataset.engine; saveSettings(); renderControls();
   });
   $("ragChk").addEventListener("change", e => { state.use_rag = e.target.checked; saveSettings(); });
   $("logChk").addEventListener("change", e => { state.use_logs = e.target.checked; saveSettings(); });
@@ -438,8 +508,8 @@
     const f = e.target.files[0]; $("kbFileName").textContent = f ? f.name : "no file selected";
   });
   $("kbUpload").addEventListener("click", upload);
-  send.addEventListener("click", ask);
-  q.addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+  send.addEventListener("click", onSend);
+  q.addEventListener("keydown", e => { if (e.key === "Enter" && !controller) ask(); });
   init(); q.focus();
 </script>
 </body>

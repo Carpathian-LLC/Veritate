@@ -60,7 +60,7 @@ root declaring large optional supplemental datasets the operator can download on
 demand. It is read by the generic data module (`extensions/data.py:39`), surfaced
 per-extension in the marketplace, and managed through `GET /extensions/<id>/data`,
 `POST /extensions/<id>/data/download`, and `POST /extensions/<id>/data/delete`
-([../api/rest_api.md](../api/rest_api.md)). Omit the file for an extension with no
+([../api/internal_api.md](../api/internal_api.md)). Omit the file for an extension with no
 supplemental data. The mechanism is platform-owned; the catalog (which datasets,
 where hosted) is owned by the extension.
 
@@ -86,7 +86,7 @@ where hosted) is owned by the extension.
 `files:int`, `size_gb:float` (measured locally), and `downloadable:bool`
 (`bool(url)`) (`extensions/data.py:79`). These are runtime fields; do not write them
 into the file. The full annotated response shape is in
-[../api/rest_api.md](../api/rest_api.md). The Trading extension's
+[../api/internal_api.md](../api/internal_api.md). The Trading extension's
 `data_catalog.json` is the reference example.
 
 ## minimal manifests
@@ -124,4 +124,4 @@ Server only, no page (registers routes under its prefix):
 
 - [entry_point.md](entry_point.md) — how `register` and `page` are consumed at startup.
 - [marketplace.md](marketplace.md) — how `id`, `name`, `version`, `description` appear in the catalog.
-- [../api/rest_api.md](../api/rest_api.md) — the platform API the page and routes call.
+- [../api/internal_api.md](../api/internal_api.md) — the platform API the page and routes call.

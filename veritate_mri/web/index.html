@@ -56,6 +56,11 @@
   power-save active &nbsp;·&nbsp; <a id="minimalModeRestoreLink" style="cursor:pointer;color:var(--highlight);border-bottom:1px dashed var(--highlight);text-decoration:none">restore</a>
 </div>
 
+<div id="lifecycleOverlay">
+  <div class="pinwheel"></div>
+  <div class="msg" id="lifecycleOverlayMsg">restoring</div>
+</div>
+
 <div class="topbar">
   <div>
     <h1>V·E·R·I·T·A·T·E<sup id="channelBadge"
@@ -141,7 +146,7 @@
     </div>
 
     <div class="wrap">
-      <div id="ch-log"><div class="hint-row">Ask a question. Pick a model in settings, or let the cloud answer.</div></div>
+      <div id="ch-log"><div class="hint-row">Ask a question. Pick one of your trained models in settings, or let the cloud answer.</div></div>
       <div class="bar">
         <div class="ctxwrap">
           <svg id="ch-ctxRing" width="34" height="34" viewBox="0 0 34 34" role="button" tabindex="0" aria-label="context used">
@@ -253,10 +258,6 @@
       </div>
       <div id="chatRow" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
         <span style="color:var(--text);font-weight:600" title="Chat-mode identity + loop control. Only applied in chat mode.">chat</span>
-        <label title="System persona prepended to chat prompts as the model's identity.">
-          persona
-          <input id="genPersona" type="text" value="You are Veritate, a helpful assistant." style="width:250px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
-        </label>
         <label title="No-repeat n-gram size in bytes. Blocks verbatim phrase loops. 0 disables.">
           no-repeat
           <input id="genRepNgram" type="number" value="16" step="1" min="0" max="64" style="width:56px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
@@ -881,6 +882,12 @@
     <h2>reading comprehension <em>4-way contextual-completion MCQ, register-matched distractors, chance = 25%</em></h2>
     <div class="body">
       <div id="learnReadingComp">no comprehension probe data yet</div>
+      <div id="learnReadingCompTraj" style="display:none;grid-template-columns:1fr 1fr;gap:24px;margin-top:10px">
+        <div><div class="meta" style="font-size:10.5px;margin-bottom:2px">trajectory &middot; EASY</div>
+          <canvas id="cReadingCompEasyL" height="180"></canvas></div>
+        <div><div class="meta" style="font-size:10.5px;margin-bottom:2px">trajectory &middot; HARD</div>
+          <canvas id="cReadingCompHardL" height="180"></canvas></div>
+      </div>
     </div>
     <details class="more"><summary>what this actually measures</summary><div class="more-content">
       <h4>the task</h4>
@@ -964,6 +971,8 @@
     <h2>writing health <em>structural quality of the model's own writing &mdash; NOT a measure of meaning</em></h2>
     <div class="body">
       <div id="learnWritingHealth">no writing-health data yet</div>
+      <canvas id="cWritingHealthL" height="200" style="margin-top:10px;display:none"></canvas>
+      <div id="learnWritingHealthSamples"></div>
     </div>
     <p class="desc">Five mathematical proxies (vocabulary variety, entity tracking, broken pronouns, duplicate words, self-perplexity) computed over generations from three fixed prompts at every checkpoint. <span style="color:var(--warm)">These tell you when the model graduates from gibberish to grammar. They cannot tell you whether the story makes sense. For example, "the volcano married a sandwich" would score fine here. "World-knowledge" coherence requires a human reader or LLM to review.</span></p>
     <details class="more"><summary>how each metric is calculated</summary><div class="more-content">
@@ -1356,6 +1365,12 @@
     <h2>reading comprehension <em>4-way contextual-completion MCQ, register-matched distractors, chance = 25%</em></h2>
     <div class="body">
       <div id="trainReadingComp">no comprehension probe data yet</div>
+      <div id="trainReadingCompTraj" style="display:none;grid-template-columns:1fr 1fr;gap:24px;margin-top:10px">
+        <div><div class="meta" style="font-size:10.5px;margin-bottom:2px">trajectory &middot; EASY</div>
+          <canvas id="cReadingCompEasyT" height="180"></canvas></div>
+        <div><div class="meta" style="font-size:10.5px;margin-bottom:2px">trajectory &middot; HARD</div>
+          <canvas id="cReadingCompHardT" height="180"></canvas></div>
+      </div>
     </div>
     <p class="desc">Per-band 4-way MCQ: given a passage prefix the model ranks the correct content word against 3 same-passage distractors. Register/length-matched distractors mean fluency alone cannot win &mdash; only context use. Chance = 25%. See the Learning tab for the full explanation.</p>
   </div>
@@ -1385,6 +1400,8 @@
     <h2>writing health <em>structural quality only &mdash; cannot detect narrative nonsense</em></h2>
     <div class="body">
       <div id="trainWritingHealth">no writing-health data yet</div>
+      <canvas id="cWritingHealthT" height="200" style="margin-top:10px;display:none"></canvas>
+      <div id="trainWritingHealthSamples"></div>
     </div>
     <p class="desc">Mathematical proxies for writing structure: vocabulary variety, entity tracking, broken pronouns, duplicate words, self-perplexity. They catch mode collapse and grammatical breakdown, but cannot tell whether a story makes sense at the world-knowledge level. See the Models tab for the full explanation.</p>
   </div>
@@ -1751,6 +1768,26 @@
             <button id="teacherTestBtn" class="action" type="button" disabled title="Save the configuration first">Test connection</button>
             <span id="teacherTestResult" class="meta" style="font-size:10.5px"></span>
           </div>
+        </div>
+      </div>
+
+      <div class="settings-row" id="apiKeyRow">
+        <div class="label">API access</div>
+        <div class="desc">Optional key gate for this box's programmatic API (<code>/v1/models</code>, <code>/v1/chat/completions</code>, <code>/generate</code>, <code>/agent/stream</code>). Off by default: on a trusted LAN these stay open. Set a key when you expose the box beyond the LAN. Dashboard pages and chat are never gated by this.</div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px;border:1px solid var(--line);border-radius:4px;padding:12px 14px;max-width:640px">
+          <div id="apiKeyState" class="meta" style="font-size:11px;color:var(--dim)">gate <b style="color:var(--dim)">disabled</b> &mdash; endpoints are open</div>
+          <div id="apiKeyValueWrap" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+            <code id="apiKeyValue" style="font-family:monospace;font-size:11px;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:5px 8px;color:var(--text);word-break:break-all;flex:1 1 240px">.</code>
+            <button id="apiKeyRevealBtn" class="action" type="button" style="padding:3px 8px;font-size:10.5px">reveal</button>
+            <button id="apiKeyCopyBtn" class="action" type="button" style="padding:3px 8px;font-size:10.5px">copy</button>
+          </div>
+          <div class="meta" id="apiKeyUsage" style="display:none;font-size:10.5px;color:var(--dim)">requests: <span id="apiKeyCount">0</span> &middot; last used: <span id="apiKeyLastUsed">never</span></div>
+          <div class="inline" style="gap:6px;margin-top:2px;flex-wrap:wrap">
+            <button id="apiKeyRotateBtn" class="action" type="button">generate key</button>
+            <button id="apiKeyClearBtn" class="action" type="button" style="display:none">clear / disable</button>
+            <span id="apiKeyStatus" class="meta" style="font-size:10.5px"></span>
+          </div>
+          <div class="meta" style="font-size:10.5px;color:var(--dim);line-height:1.5">Give this key to any client that reaches this box from beyond the LAN: it sends the key as an <code>Authorization: Bearer &lt;key&gt;</code> header on every request to the gated endpoints above.</div>
         </div>
       </div>
 

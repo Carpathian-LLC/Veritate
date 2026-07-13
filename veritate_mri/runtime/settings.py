@@ -16,7 +16,9 @@
 import json
 import os
 import random
+import secrets
 import threading
+import time
 
 from readers.paths import REPO_ROOT
 
@@ -84,9 +86,17 @@ DEFAULTS = {
     "mesh_auth_token": "",
     "tutorial_enabled": True,
     "tutorial_completed": True,
+    "api_key": "",
+    "api_key_request_count": 0,
+    "api_key_last_used_at": 0,
 }
 
 VALID_TEMPERATURE_UNITS = ("C", "F", "K")
+
+# Optional API-key gate for the programmatic API surface (/v1/*, /generate,
+# /agent/stream). Off by default (empty api_key). Minted keys carry this prefix.
+API_KEY_PREFIX = "vrt_"
+API_KEY_RANDOM_BYTES = 32
 
 KNOWN_TEACHER_PROVIDERS = (
     "carpathian", "openai", "anthropic", "gemini", "xai", "deepseek",
@@ -293,3 +303,27 @@ def update(patch):
         _write(cur)
         _CACHE = {**cur, **PUBLIC_AI_DEFAULTS}
         return dict(_CACHE)
+
+
+def generate_api_key():
+    return f"{API_KEY_PREFIX}{secrets.token_urlsafe(API_KEY_RANDOM_BYTES)}"
+
+
+def rotate_api_key():
+    return update({"api_key": generate_api_key(), "api_key_request_count": 0,
+                   "api_key_last_used_at": 0})
+
+
+def clear_api_key():
+    return update({"api_key": "", "api_key_request_count": 0,
+                   "api_key_last_used_at": 0})
+
+
+def record_api_key_use():
+    global _CACHE
+    with _LOCK:
+        cur = {**DEFAULTS, **_ensure_settings()}
+        cur["api_key_request_count"] = int(cur.get("api_key_request_count") or 0) + 1
+        cur["api_key_last_used_at"] = time.time()
+        _write(cur)
+        _CACHE = {**cur, **PUBLIC_AI_DEFAULTS}

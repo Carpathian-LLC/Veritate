@@ -18,9 +18,15 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import codecs
+import json
 import os
+import re
+import time
+import uuid
+from collections import namedtuple
 
-from flask import current_app, request
+from flask import Response, current_app, request
 
 from readers import checkpoints, models, paths
 
@@ -50,10 +56,10 @@ PLAIN_TMPL     = "<|user|>\n{msg}\n<|assistant|>\n"
 STOP_MARKERS   = ("<|end|>", "<|user|>", "<|assistant|>", "\ncontext:")
 WIRE_NEWLINE    = "\x01"       # c chat_traced encodes prompt/reply newlines as 0x01
 KEEP_CTRL_CHARS = ("\t", "\n")  # every other control byte is dropped from the answer
+STOP_HOLD       = max(len(m) for m in STOP_MARKERS)  # per-token holdback so a forming stop marker never streams
 
 CHAT_SYSTEM    = ("You are Veritate, a concise, helpful assistant. Use the conversation so far and any "
                   "provided facts to answer the user directly. No emoji, no emdash.")
-LOCAL_PERSONA  = "You are Veritate, a helpful assistant made by Carpathian."
 SUMMARY_SYSTEM = ("Condense the conversation into a brief note preserving facts, names, decisions, and "
                   "the user's goal. Plain text, no preamble.")
 HISTORY_MAX_TURNS       = 60
@@ -82,7 +88,29 @@ KB_SCOPES        = ("all", "platform", "user")
 TRAIN_LOG_SOURCES = ("plugin", "save")   # ring-buffer sources shown on the Training tab; plugin:<id> by prefix
 TRAIN_LOG_TAIL    = 15
 
+# OpenAI-compatible /v1/chat/completions wire tokens. Local trained models stream
+# true per-token deltas via the same generator /generate uses; cloud/teacher
+# complete() is non-streaming, so their streaming chunks the finished answer on
+# CHAT_STREAM_SPLIT (word + trailing whitespace) into deltas.
+OPENAI_CHAT_OBJECT  = "chat.completion"
+OPENAI_CHUNK_OBJECT = "chat.completion.chunk"
+OPENAI_FINISH_STOP  = "stop"
+CHATCMPL_PREFIX     = "chatcmpl-"
+SSE_DONE            = "data: [DONE]\n\n"
+CHAT_STREAM_SPLIT   = r"\S+\s*"
+SSE_HEADERS         = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+# Opt-in per-byte MRI telemetry: request field + response/extension key. Absent or
+# false = today's fast, non-traced serving, byte-for-byte. Applies to local trained
+# models only (remote providers expose no per-byte telemetry).
+MRI_KEY = "mri"
+
 _STATE = {}   # scope -> {"chunks": [...], "bm25": index}; built lazily, cleared by reset_index_cache
+
+# Resolved chat request: request body + retrieval + route, shared by the buffered
+# /hybrid/chat and the streaming /hybrid/chat/stream so both frame a reply identically.
+_ChatCtx = namedtuple("_ChatCtx", "message history summary facts sources complete "
+                                  "label resp_backend kind char_limit model backend messages system mri")
 
 
 # ------------------------------------------------------------------------------------
@@ -253,8 +281,13 @@ def _ensure_c(cfg, name):
         raise RuntimeError("c engine failed to spawn")
 
 
-def _generate_local(cfg, backend, prompt):
-    from .backends_routes import _chat_stop_seq, _stop_on_bytes
+def _local_events(cfg, backend, prompt, mri=False):
+    """Per-token generation event stream plus turn-stop markers for a local model.
+    Shared by the buffered (_generate_local) and true-token chat paths. mri selects
+    the full-telemetry path (C trace=True / Brain.stream) whose per-byte frames the
+    /generate MRI view consumes; default off keeps the fast path (C trace=False
+    coarse fast_byte / Brain.stream_fast lookahead), byte-for-byte as before."""
+    from .backends_routes import _chat_stop_seq
     from inference.decode import (
         NO_REPEAT_NGRAM_DEFAULT, REP_PENALTY_DEFAULT, REP_WINDOW_DEFAULT,
     )
@@ -262,10 +295,53 @@ def _generate_local(cfg, backend, prompt):
                no_repeat_ngram=NO_REPEAT_NGRAM_DEFAULT)
     if backend == "c":
         from .backends_routes import _c_engine_stream
-        events = _c_engine_stream(cfg, prompt, MAX_NEW, **rep)
+        events = _c_engine_stream(cfg, prompt, MAX_NEW, trace=mri, **rep)
+    elif mri:
+        events = _pytorch_mri_events(cfg["BRAIN"], prompt, rep)
     else:
-        events = cfg["BRAIN"].stream(prompt, max_new=MAX_NEW, **rep)
-    return _trim(collect(_stop_on_bytes(events, _chat_stop_seq(prompt))))
+        events = cfg["BRAIN"].stream_fast(prompt, mode="lookahead", max_new=MAX_NEW, **rep)
+    return events, _chat_stop_seq(prompt)
+
+
+def _pytorch_mri_events(brain, prompt, rep):
+    """Full per-byte telemetry stream (Brain.stream), backend-tagged so its frames
+    match what /generate hands the MRI view. Same sampling defaults as the fast
+    lookahead path (temperature 0.7 / top_k 40): the flag selects telemetry, never
+    sampling. Under greedy both paths are byte-identical; under sampling both draw
+    each byte fresh from the true-prefix distribution (see inference_brain.md)."""
+    for ev in brain.stream(prompt, max_new=MAX_NEW, **rep):
+        ev["backend"] = "pytorch"
+        yield ev
+
+
+def _generate_local(cfg, backend, prompt):
+    from .backends_routes import _stop_on_bytes
+    events, stop_seq = _local_events(cfg, backend, prompt)
+    return _trim(collect(_stop_on_bytes(events, stop_seq)))
+
+
+def _generate_local_mri(cfg, model, backend, messages, system):
+    """Local generation that also captures the per-byte MRI frames the /generate view
+    consumes (the meta frame, one token frame per byte, then the turn-stop frame).
+    Returns (answer, frames). Text is byte-identical to _generate_local under greedy;
+    the flag selects telemetry, never sampling (see _pytorch_mri_events)."""
+    from .backends_routes import _stop_on_bytes
+    if backend == "c":
+        _ensure_c(cfg, model)
+    else:
+        _ensure_pytorch(cfg, model)
+    events, stop_seq = _local_events(cfg, backend, _render_local(messages, system), mri=True)
+    frames, out = [], bytearray()
+    for ev in _stop_on_bytes(events, stop_seq):
+        frames.append(ev)
+        kind = ev.get("kind")
+        if kind in ("token", "fast_byte"):
+            b = ev.get("byte")
+            if b is not None:
+                out.append(int(b))
+        elif kind in ("stop", "error"):
+            break
+    return _trim(bytes(out).decode("utf-8", "replace")), frames
 
 
 class ChatUnavailable(Exception):
@@ -338,11 +414,12 @@ def _render_local(messages, system):
 
 def _system_text(kind, summary, facts):
     """Preamble for one turn. Remote models get the chat system prompt plus
-    framed summary + facts; local byte models get the persona line plus raw
-    summary + facts (rendered as a `context:` block by _render_local). Without
-    the persona a byte model invents an identity (measured 0/8 correct name)."""
+    framed summary + facts; local byte models get raw summary + facts (rendered
+    as a `context:` block by _render_local) with NO persona line: identity is
+    trained into the model, and a persona in the context channel makes the model
+    recite it every turn instead of answering."""
     if kind == "local":
-        parts = [LOCAL_PERSONA]
+        parts = []
         if summary:
             parts.append(summary)
         if facts:
@@ -360,8 +437,8 @@ def _fit_local_system(model, messages, summary, facts):
     """System text for a local byte model, budgeted so the rendered prompt fits
     the model's trained seq minus the MAX_NEW reply headroom. Over budget:
     shrink fact previews evenly, drop the lowest-scoring facts (retrieve()
-    returns best-first), then tail-trim the summary. The persona, chat markers,
-    history, and user message are never trimmed."""
+    returns best-first), then tail-trim the summary. The chat markers, history,
+    and user message are never trimmed."""
     budget = _local_seq(model) - MAX_NEW
     facts = list(facts)
     def overflow():
@@ -467,11 +544,31 @@ def _context_meter(summary, turns, char_limit):
             "pct": round(min(1.0, used / char_limit), 3)}
 
 
-def _compact(complete, summary, turns, char_limit):
-    """Fold older turns into a running summary once the memory exceeds the model's
-    context budget, keeping the last CTX_KEEP_TAIL_TURNS verbatim. Best-effort: a
-    failed summarize call leaves the history intact."""
-    if len(turns) <= CTX_KEEP_TAIL_TURNS or _context_used(summary, turns) <= char_limit:
+def _fit_tail(turns, budget):
+    """Newest whole turns whose combined content fits `budget` chars, opening on a
+    user turn. Keeps at least the final turn even when it alone exceeds budget."""
+    kept, used = [], 0
+    for m in reversed(turns):
+        used += len(m["content"])
+        if used > budget and kept:
+            break
+        kept.insert(0, m)
+    if len(kept) > 1 and kept[0]["role"] != "user":
+        kept = kept[1:]
+    return kept
+
+
+def _compact(complete, summary, turns, char_limit, kind):
+    """Bound the conversation memory to the model's context budget. A local byte
+    model cannot summarize its own history, so it slides: keep the newest turns
+    that fit char_limit and drop the older ones (no summary). Remote models fold
+    the older turns into a running summary, keeping the last CTX_KEEP_TAIL_TURNS
+    verbatim. Best-effort: a failed summarize leaves the history intact."""
+    if _context_used(summary, turns) <= char_limit:
+        return summary, turns
+    if kind == "local":
+        return "", _fit_tail(turns, char_limit)
+    if len(turns) <= CTX_KEEP_TAIL_TURNS:
         return summary, turns
     head, tail = turns[:-CTX_KEEP_TAIL_TURNS], turns[-CTX_KEEP_TAIL_TURNS:]
     rendered = "\n".join(f"{m['role']}: {m['content']}" for m in head)
@@ -498,6 +595,337 @@ def _history_in(body):
     return turns, summary
 
 
+def _openai_messages_in(body):
+    """Validate an OpenAI messages array into (conversation, system). system-role
+    turns are concatenated into the system string; the rest must be a user/assistant
+    sequence ending in a non-empty user turn. Raises ValueError for a 400."""
+    raw = body.get("messages")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("messages must be a non-empty array")
+    system_parts, conv = [], []
+    for m in raw:
+        if not isinstance(m, dict) or not isinstance(m.get("content"), str):
+            raise ValueError("each message needs a role and string content")
+        role = m.get("role")
+        if role == "system":
+            if m["content"].strip():
+                system_parts.append(m["content"].strip())
+        elif role in ("user", "assistant"):
+            conv.append({"role": role, "content": m["content"]})
+        else:
+            raise ValueError(f"unsupported role: {role}")
+    if not conv or conv[-1]["role"] != "user" or not conv[-1]["content"].strip():
+        raise ValueError("messages must end with a non-empty user turn")
+    return conv, "\n\n".join(system_parts)
+
+
+def _approx_tokens(text):
+    """Best-effort token count: byte-level models expose none, so approximate at
+    CHARS_PER_TOKEN chars per token (ceil)."""
+    return max(0, -(-len(text or "") // CHARS_PER_TOKEN))
+
+
+def _chatcmpl_id():
+    return CHATCMPL_PREFIX + uuid.uuid4().hex
+
+
+def _openai_completion(answer, conv, system, model):
+    prompt_tok = _approx_tokens(system + "".join(m["content"] for m in conv))
+    completion_tok = _approx_tokens(answer)
+    return {
+        "id":      _chatcmpl_id(),
+        "object":  OPENAI_CHAT_OBJECT,
+        "created": int(time.time()),
+        "model":   model,
+        "choices": [{
+            "index":         0,
+            "message":       {"role": "assistant", "content": answer},
+            "finish_reason": OPENAI_FINISH_STOP,
+        }],
+        "usage": {
+            "prompt_tokens":     prompt_tok,
+            "completion_tokens": completion_tok,
+            "total_tokens":      prompt_tok + completion_tok,
+        },
+    }
+
+
+def _chunk_frame(cid, created, model, delta, finish_reason):
+    payload = {
+        "id":      cid,
+        "object":  OPENAI_CHUNK_OBJECT,
+        "created": created,
+        "model":   model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    return "data: " + json.dumps(payload) + "\n\n"
+
+
+def _mri_chunk_frame(cid, created, model, frame, delta=None):
+    """A standard chat.completion.chunk carrying one MRI frame under a top-level `mri`
+    key, plus an optional assistant text delta for the byte that produced the frame.
+    Off-the-shelf OpenAI clients read the content delta and ignore the unknown key;
+    MRI-aware clients read chunk['mri']. Keeps every SSE data line a valid chunk so
+    interleaving telemetry never breaks a plain client."""
+    payload = {
+        "id":      cid,
+        "object":  OPENAI_CHUNK_OBJECT,
+        "created": created,
+        "model":   model,
+        "choices": [{"index": 0, "delta": delta or {}, "finish_reason": None}],
+        MRI_KEY:   frame,
+    }
+    return "data: " + json.dumps(payload) + "\n\n"
+
+
+def _openai_stream(complete, conv, system, model):
+    """SSE chat.completion.chunk stream: role frame, per-segment content frames, a
+    stop frame, then [DONE]. complete() is buffered, so generation errors after the
+    stream has opened surface as a single error frame (status is already 200)."""
+    def gen():
+        created, cid = int(time.time()), _chatcmpl_id()
+        try:
+            answer = (complete(conv, system) or "").strip()
+        except (ChatUnavailable, FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            yield "data: " + json.dumps(
+                {"error": {"message": user_error(e), "type": "service_unavailable"}}) + "\n\n"
+            yield SSE_DONE
+            return
+        yield _chunk_frame(cid, created, model, {"role": "assistant"}, None)
+        for seg in re.findall(CHAT_STREAM_SPLIT, answer):
+            yield _chunk_frame(cid, created, model, {"content": seg}, None)
+        yield _chunk_frame(cid, created, model, {}, OPENAI_FINISH_STOP)
+        yield SSE_DONE
+    return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
+def _local_stream_items(events, emit_frames=False):
+    """Yield ('text', delta) segments from a local generation stream (already wrapped
+    in _stop_on_bytes) and, when emit_frames is set, ('frame', ev) for each raw event
+    as it arrives so MRI telemetry interleaves with the text. Single owner of the
+    byte->text incremental UTF-8 decode plus the STOP_HOLD-char holdback that cuts a
+    forming stop marker before any of it streams; a trailing flush emits the tail."""
+    dec = codecs.getincrementaldecoder("utf-8")("replace")
+    text, sent = "", 0
+    for ev in events:
+        kind = ev.get("kind")
+        if emit_frames:
+            yield ("frame", ev)
+        if kind in ("token", "fast_byte"):
+            b = ev.get("byte")
+            if b is None:
+                continue
+            text += dec.decode(bytes((int(b) & 0xff,)))
+            safe = _sanitize_text(text)
+            emit_to = len(safe) - STOP_HOLD
+            if emit_to > sent:
+                chunk = safe[sent:emit_to]
+                if sent == 0:
+                    chunk = chunk.lstrip()
+                if chunk:
+                    yield ("text", chunk)
+                sent = emit_to
+        elif kind in ("stop", "error"):
+            break
+    final = _sanitize_text(text)
+    for stop in STOP_MARKERS:
+        final = final.split(stop)[0]
+    final = final.rstrip()
+    if len(final) > sent:
+        tail = final[sent:].lstrip() if sent == 0 else final[sent:]
+        if tail:
+            yield ("text", tail)
+
+
+def _local_delta_stream(events):
+    """Sanitized per-token text deltas (the text-only view of _local_stream_items),
+    used by the buffered/streaming chat paths that don't surface MRI frames."""
+    for tag, val in _local_stream_items(events):
+        if tag == "text":
+            yield val
+
+
+def _openai_stream_local(cfg, model, backend, conv, system, mri=False):
+    """True per-token OpenAI SSE for a local trained model: a role frame, one
+    content-delta frame per decoded segment as the model generates it, a stop
+    frame, then [DONE]. Drives the same per-token generator /generate uses. RAG is
+    not wired into this path: the local model runs on the messages + system only.
+    When mri is set, the full-telemetry path runs and each per-byte MRI frame is
+    interleaved as its own chunk-extension frame (see _mri_chunk_frame); the text
+    content chunks stay standard so off-the-shelf clients are unaffected."""
+    from .backends_routes import _stop_on_bytes
+
+    def gen():
+        created, cid = int(time.time()), _chatcmpl_id()
+        try:
+            if backend == "c":
+                _ensure_c(cfg, model)
+            else:
+                _ensure_pytorch(cfg, model)
+            events, stop_seq = _local_events(cfg, backend, _render_local(conv, system), mri=mri)
+            yield _chunk_frame(cid, created, model, {"role": "assistant"}, None)
+            for tag, val in _local_stream_items(_stop_on_bytes(events, stop_seq), emit_frames=mri):
+                if tag == "frame":
+                    yield _mri_chunk_frame(cid, created, model, val)
+                else:
+                    yield _chunk_frame(cid, created, model, {"content": val}, None)
+        except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            yield "data: " + json.dumps(
+                {"error": {"message": user_error(e), "type": "service_unavailable"}}) + "\n\n"
+            yield SSE_DONE
+            return
+        yield _chunk_frame(cid, created, model, {}, OPENAI_FINISH_STOP)
+        yield SSE_DONE
+    return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
+def _openai_stream_mri(cfg, model, backend, conv, system):
+    """OpenAI SSE for a local model that also emits per-byte MRI telemetry: a role
+    frame, then one chat.completion.chunk per MRI frame carrying that frame under `mri`
+    plus the assistant text delta for its byte, a stop frame, then [DONE]. Reuses the
+    buffered _generate_local_mri (frames already truncated at the turn-stop sequence,
+    so no per-byte stop holdback is needed), incrementally decodes each byte to text,
+    and drops leading whitespace to match the trimmed non-stream answer."""
+    def gen():
+        created, cid = int(time.time()), _chatcmpl_id()
+        try:
+            _answer, frames = _generate_local_mri(cfg, model, backend, conv, system)
+        except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            yield "data: " + json.dumps(
+                {"error": {"message": user_error(e), "type": "service_unavailable"}}) + "\n\n"
+            yield SSE_DONE
+            return
+        yield _chunk_frame(cid, created, model, {"role": "assistant"}, None)
+        dec = codecs.getincrementaldecoder("utf-8")("replace")
+        text, sent = "", 0
+        for frame in frames:
+            delta = None
+            if frame.get("kind") in ("token", "fast_byte"):
+                b = frame.get("byte")
+                if b is not None:
+                    text += dec.decode(bytes((int(b) & 0xff,)))
+                    safe = _sanitize_text(text)
+                    if len(safe) > sent:
+                        seg = safe[sent:].lstrip() if sent == 0 else safe[sent:]
+                        if seg:
+                            delta = {"content": seg}
+                        sent = len(safe)
+            yield _mri_chunk_frame(cid, created, model, frame, delta)
+        yield _chunk_frame(cid, created, model, {}, OPENAI_FINISH_STOP)
+        yield SSE_DONE
+    return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
+def _openai_mri_completion(answer, frames, conv, system, model):
+    """Non-stream MRI response: the standard OpenAI chat.completion plus the full
+    per-byte MRI frame list under a top-level `mri` key."""
+    return dict(_openai_completion(answer, conv, system, model), **{MRI_KEY: frames})
+
+
+def _chat_prepare(cfg, body):
+    """Resolve a chat request body into a _ChatCtx: message, memory, retrieval,
+    and the selected route. None when the message is empty. Shared by the buffered
+    and streaming chat endpoints so both ground and route identically."""
+    message = (body.get("message") or "").strip()
+    if not message:
+        return None
+    model = (body.get("model") or "").strip()
+    backend = (body.get("backend") or "pytorch").strip().lower()
+    use_rag = bool(body.get("use_rag"))
+    use_logs = bool(body.get("use_logs"))
+    mri = bool(body.get(MRI_KEY))
+    scope = body.get("kb_scope") if body.get("kb_scope") in KB_SCOPES else "all"
+    k = int(body.get("k") or TOP_K)
+    history, summary = _history_in(body)
+
+    docs_mode = model == VERITATE_DOCS_ID
+    if docs_mode:
+        model, use_rag, scope = CLOUD_ID, True, "platform"
+
+    facts, sources = [], []
+    if use_rag and has_corpus():
+        facts, scores = retrieve(message, k, scope=scope)
+        sources = [{"text": t, "score": s} for t, s in zip(facts, scores)]
+    if docs_mode or use_logs:
+        log_facts = training_log_lines()
+        facts = facts + log_facts
+        sources = sources + [{"text": ln, "score": None} for ln in log_facts]
+
+    complete, label, resp_backend, kind, char_limit = _resolve_route(cfg, model, backend)
+    if docs_mode:
+        label = "Veritate (platform docs)"
+    messages = history + [{"role": "user", "content": message}]
+    system = (_fit_local_system(model, messages, summary, facts)
+              if kind == "local" else _system_text(kind, summary, facts))
+    return _ChatCtx(message, history, summary, facts, sources, complete, label,
+                    resp_backend, kind, char_limit, model, backend, messages, system, mri)
+
+
+def _chat_result(ctx, answer, frames=None):
+    """Post-turn chat payload: fold the new turn into the compacted memory and
+    build the response dict returned by /hybrid/chat and the stream's done frame.
+    frames (opt-in MRI) attaches the captured per-byte frames under the mri key; the
+    stream emits them inline instead, so it passes None here to avoid duplicating them."""
+    new_turns = ctx.history + [{"role": "user", "content": ctx.message},
+                               {"role": "assistant", "content": answer}]
+    mem_summary, mem_turns = _compact(ctx.complete, ctx.summary, new_turns, ctx.char_limit, ctx.kind)
+    out = {"ok": True, "answer": answer, "model": ctx.label, "backend": ctx.resp_backend,
+           "confident": bool(ctx.facts), "sources": ctx.sources,
+           "memory": {"summary": mem_summary, "turns": mem_turns},
+           "context": _context_meter(mem_summary, mem_turns, ctx.char_limit)}
+    if frames is not None:
+        out[MRI_KEY] = frames
+    return out
+
+
+def _sse(obj):
+    return "data: " + json.dumps(obj) + "\n\n"
+
+
+def _chat_delta_stream(cfg, ctx):
+    """Tagged answer segments for the chat stream: ('text', delta) for reply text and,
+    when ctx.mri is set on a local model, ('frame', ev) for each per-byte MRI frame.
+    Local models decode true per-token via the shared generator, honoring the selected
+    engine (c or pytorch); remote models complete() buffered, then chunk word-by-word."""
+    if ctx.kind == "local":
+        from .backends_routes import _stop_on_bytes
+        if ctx.backend == "c":
+            _ensure_c(cfg, ctx.model)
+        else:
+            _ensure_pytorch(cfg, ctx.model)
+        events, stop_seq = _local_events(cfg, ctx.backend, _render_local(ctx.messages, ctx.system),
+                                         mri=ctx.mri)
+        yield from _local_stream_items(_stop_on_bytes(events, stop_seq), emit_frames=ctx.mri)
+        return
+    answer = (ctx.complete(ctx.messages, ctx.system) or "").strip()
+    for seg in re.findall(CHAT_STREAM_SPLIT, answer):
+        yield ("text", seg)
+
+
+def _hybrid_stream_response(cfg, ctx):
+    """SSE for /hybrid/chat/stream: per-token `delta` frames as the model
+    generates, then one `done` frame carrying the answer, compacted memory,
+    context gauge, and sources. Generation errors after the stream opened surface
+    as a single `error` frame (status is already 200)."""
+    def gen():
+        parts = []
+        try:
+            for tag, val in _chat_delta_stream(cfg, ctx):
+                if tag == "frame":
+                    yield _sse(val)
+                    continue
+                parts.append(val)
+                yield _sse({"kind": "delta", "text": val})
+        except ChatUnavailable as e:
+            yield _sse({"kind": "error", "error": str(e)})
+            return
+        except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            yield _sse({"kind": "error", "error": user_error(e)})
+            return
+        yield _sse(dict(_chat_result(ctx, "".join(parts).strip()), kind="done"))
+    return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
 def register(app):
     @app.route("/hybrid/health")
     def hybrid_health():
@@ -522,55 +950,101 @@ def register(app):
         return {"ok": True, "filename": name, "n_files": len(kb_files()),
                 "n_chunks": len(_kb_chunks())}
 
+    @app.route("/v1/chat/completions", methods=["POST"])
+    def openai_chat_completions():
+        """OpenAI-compatible chat completions. Wraps the same model routing as
+        /hybrid/chat (_resolve_route); temperature/max_tokens/top_k are accepted
+        for API compatibility but the wrapped generation path fixes them. Streaming
+        is true per-token for local trained models; cloud/teacher streaming chunks
+        the buffered answer. Setting mri:true on a local model returns the per-byte
+        MRI frames: interleaved as chunk-extension SSE frames when streaming, under
+        a top-level mri key when not (remote models expose no telemetry)."""
+        cfg = current_app.config
+        body = request.get_json(silent=True) or {}
+        try:
+            conv, system = _openai_messages_in(body)
+        except ValueError as e:
+            return ({"error": {"message": str(e), "type": "invalid_request_error"}}, 400)
+        model = (body.get("model") or CLOUD_ID).strip()
+        mri = bool(body.get(MRI_KEY))
+        complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, "pytorch")
+        if bool(body.get("stream")):
+            if kind == "local":
+                return _openai_stream_local(cfg, model, resp_backend, conv, system, mri=mri)
+            return _openai_stream(complete, conv, system, model)
+        if mri and kind == "local":
+            try:
+                answer, frames = _generate_local_mri(cfg, model, resp_backend, conv, system)
+            except (FileNotFoundError, RuntimeError) as e:
+                return ({"error": {"message": user_error(e), "type": "service_unavailable"}}, 503)
+            except Exception as e:
+                return ({"error": {"message": user_error(e), "type": "server_error"}}, 500)
+            return dict(_openai_completion(answer, conv, system, model), **{MRI_KEY: frames})
+        try:
+            answer = (complete(conv, system) or "").strip()
+        except ChatUnavailable as e:
+            return ({"error": {"message": str(e), "type": "service_unavailable"}}, 503)
+        except (FileNotFoundError, RuntimeError) as e:
+            return ({"error": {"message": user_error(e), "type": "service_unavailable"}}, 503)
+        except Exception as e:
+            return ({"error": {"message": user_error(e), "type": "server_error"}}, 500)
+        return _openai_completion(answer, conv, system, model)
+
+    @app.route("/v1/chat/mri", methods=["POST"])
+    def openai_chat_mri():
+        """OpenAI-shaped sibling of /v1/chat/completions that also emits per-byte MRI
+        telemetry. Same request body and model routing (_resolve_route); MRI exists only
+        for local trained byte models, so a cloud/teacher route returns 400. Streaming
+        (default on) interleaves each assistant text delta with its MRI frame in one
+        chat.completion.chunk; non-stream returns the completion plus the full frame
+        list under `mri`."""
+        cfg = current_app.config
+        body = request.get_json(silent=True) or {}
+        try:
+            conv, system = _openai_messages_in(body)
+        except ValueError as e:
+            return ({"error": {"message": str(e), "type": "invalid_request_error"}}, 400)
+        model = (body.get("model") or CLOUD_ID).strip()
+        _complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, "pytorch")
+        if kind != "local":
+            return ({"error": {"message": "mri is available only for local Veritate models",
+                               "type": "invalid_request_error"}}, 400)
+        if bool(body.get("stream", True)):
+            return _openai_stream_mri(cfg, model, resp_backend, conv, system)
+        try:
+            answer, frames = _generate_local_mri(cfg, model, resp_backend, conv, system)
+        except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            return ({"error": {"message": user_error(e), "type": "service_unavailable"}}, 503)
+        return _openai_mri_completion(answer, frames, conv, system, model)
+
     @app.route("/hybrid/chat", methods=["POST"])
     def hybrid_chat():
         cfg = current_app.config
-        body = request.get_json(silent=True) or {}
-        message = (body.get("message") or "").strip()
-        if not message:
+        ctx = _chat_prepare(cfg, request.get_json(silent=True) or {})
+        if ctx is None:
             return ({"ok": False, "error": "empty message"}, 400)
-        model = (body.get("model") or "").strip()
-        backend = (body.get("backend") or "pytorch").strip().lower()
-        use_rag = bool(body.get("use_rag"))
-        use_logs = bool(body.get("use_logs"))
-        scope = body.get("kb_scope") if body.get("kb_scope") in KB_SCOPES else "all"
-        k = int(body.get("k") or TOP_K)
-        history, summary = _history_in(body)
-
-        # Chat-page "Veritate (platform docs)" pick: the public model forced to
-        # ground on the shipped platform KB. Not a backend model of its own.
-        docs_mode = model == VERITATE_DOCS_ID
-        if docs_mode:
-            model, use_rag, scope = CLOUD_ID, True, "platform"
-
-        facts, sources = [], []
-        if use_rag and has_corpus():
-            facts, scores = retrieve(message, k, scope=scope)
-            sources = [{"text": t, "score": s} for t, s in zip(facts, scores)]
-        if docs_mode or use_logs:
-            log_facts = training_log_lines()
-            facts = facts + log_facts
-            sources = sources + [{"text": ln, "score": None} for ln in log_facts]
-
-        complete, label, resp_backend, kind, char_limit = _resolve_route(cfg, model, backend)
-        if docs_mode:
-            label = "Veritate (platform docs)"
-        messages = history + [{"role": "user", "content": message}]
-        system = (_fit_local_system(model, messages, summary, facts)
-                  if kind == "local" else _system_text(kind, summary, facts))
+        frames = None
         try:
-            answer = (complete(messages, system) or "").strip()
+            if ctx.mri and ctx.kind == "local":
+                answer, frames = _generate_local_mri(cfg, ctx.model, ctx.backend,
+                                                      ctx.messages, ctx.system)
+            else:
+                answer = (ctx.complete(ctx.messages, ctx.system) or "").strip()
         except ChatUnavailable as e:
             return ({"ok": False, "error": str(e)}, 503)
         except (FileNotFoundError, RuntimeError) as e:
             return ({"ok": False, "error": user_error(e)}, 503)
         except Exception as e:
             return ({"ok": False, "error": user_error(e)}, 500)
+        return _chat_result(ctx, answer, frames)
 
-        new_turns = history + [{"role": "user", "content": message},
-                               {"role": "assistant", "content": answer}]
-        mem_summary, mem_turns = _compact(complete, summary, new_turns, char_limit)
-        return {"ok": True, "answer": answer, "model": label, "backend": resp_backend,
-                "confident": bool(facts), "sources": sources,
-                "memory": {"summary": mem_summary, "turns": mem_turns},
-                "context": _context_meter(mem_summary, mem_turns, char_limit)}
+    @app.route("/hybrid/chat/stream", methods=["POST"])
+    def hybrid_chat_stream():
+        """Streaming twin of /hybrid/chat: per-token `delta` frames then one
+        `done` frame with the answer, memory, context gauge, and sources. Local
+        models stream true per-token on the selected engine (c or pytorch)."""
+        cfg = current_app.config
+        ctx = _chat_prepare(cfg, request.get_json(silent=True) or {})
+        if ctx is None:
+            return ({"ok": False, "error": "empty message"}, 400)
+        return _hybrid_stream_response(cfg, ctx)

@@ -178,7 +178,7 @@ def register(app):
             return ({"ok": False, "error": f"no checkpoints under models/{name}/"}, 400)
         try:
             from training import export as export_mod
-            result = export_mod.export_checkpoint(name, int(step))
+            result = export_mod.export_checkpoint(name, int(step), dtype=body.get("dtype"))
         except (FileNotFoundError, ValueError, KeyError) as e:
             logmod.error("export", f"{name} step {step}: {type(e).__name__}: {e}")
             return ({"ok": False, "error": user_error(e)}, 400)

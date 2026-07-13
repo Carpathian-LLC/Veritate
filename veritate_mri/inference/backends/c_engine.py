@@ -75,6 +75,12 @@ V8_TAIL_BYTES       = 2 + CAND_TOPK + CAND_TOPK * DLA_TOPK * DLA_ENTRY_BYTES + 2
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
+# chat_traced_loop reads the prompt with fgets(prompt_line, seq + PROMPT_FGETS_BUFSIZE).
+# fgets stores at most (size - 1) chars incl the newline, so the payload (bytes before
+# '\n') caps at seq + PROMPT_FGETS_BUFSIZE - 2. A longer line leaves residue in stdin
+# and permanently desyncs the persistent subprocess; clamp the tail (newest bytes).
+PROMPT_FGETS_BUFSIZE = 4
+
 DLA_DTYPE = np.dtype([
     ("layer",   np.uint8),
     ("pad",     np.uint8),
@@ -255,7 +261,7 @@ class CTracedSubprocess:
 
     def stream(self, prompt, temperature, top_k, max_new,
                ablate_layer=-1, ablate_neuron=-1, addons_csv="",
-               rep_window=0, rep_penalty=0.0, no_repeat_ngram=0):
+               rep_window=0, rep_penalty=0.0, no_repeat_ngram=0, do_trace=True):
         # Acquire the per-generation lock. A live generation refreshes
         # _last_frame_time on every frame; reclaim only when the holder has gone
         # silent for STREAM_LOCK_TIMEOUT_S (truly wedged, e.g. an abandoned SSE
@@ -298,6 +304,18 @@ class CTracedSubprocess:
             # newlines ride the line-based protocol as 0x01; chat_traced maps
             # them back so chat-template prompts keep their trained framing.
             p = prompt.replace("\r", "").replace("\n", "\x01")
+            # fgets(prompt_line, seq+4) stores <= seq+3 chars incl '\n'; payload caps at
+            # seq+2. tail-clamp keeps the newest bytes so an over-long line can't leave
+            # residue and desync the subprocess (engine also drains residue defensively).
+            # generation budget is seq - prompt_len with no window slide, so also
+            # reserve reply room; reserve caps at seq//2 so a pathological max_new
+            # cannot wipe out the context.
+            prompt_bytes = p.encode("latin-1", "replace")
+            seq = self.shape["seq"]
+            max_payload = min(seq + PROMPT_FGETS_BUFSIZE - 2,
+                              seq - min(int(max_new), seq // 2))
+            if len(prompt_bytes) > max_payload:
+                prompt_bytes = prompt_bytes[-max_payload:]
             # addons token: empty -> use whatever chain was set at spawn time
             # (env var path); "-" -> clear any prior chain; otherwise comma-
             # separated id list. token must contain no whitespace.
@@ -308,17 +326,18 @@ class CTracedSubprocess:
             # sampler bitwise-identical to pre-repetition-control behavior.
             header = (f"{float(temperature):.4f} {int(top_k)} {int(max_new)} "
                       f"{int(ablate_layer)} {int(ablate_neuron)} {csv_token} "
-                      f"{int(rep_window)} {float(rep_penalty):.4f} {int(no_repeat_ngram)}\n").encode("ascii")
+                      f"{int(rep_window)} {float(rep_penalty):.4f} {int(no_repeat_ngram)} "
+                      f"{1 if do_trace else 0}\n").encode("ascii")
             try:
                 self.proc.stdin.write(header)
-                self.proc.stdin.write(p.encode("latin-1", "replace") + b"\n")
+                self.proc.stdin.write(prompt_bytes + b"\n")
                 self.proc.stdin.flush()
             except (BrokenPipeError, OSError) as e:
                 # subprocess died mid-write. respawn and retry once.
                 self._spawn()
                 try:
                     self.proc.stdin.write(header)
-                    self.proc.stdin.write(p.encode("latin-1", "replace") + b"\n")
+                    self.proc.stdin.write(prompt_bytes + b"\n")
                     self.proc.stdin.flush()
                 except (BrokenPipeError, OSError) as e2:
                     raise RuntimeError(f"chat_traced respawn failed: {e2!r}")
@@ -350,6 +369,29 @@ class CTracedSubprocess:
                         saw_tend = True
                         self._last_clean = True
                         return
+                    if marker == b"FFRM":
+                        # fast frame: 12-byte tail, no payload. do_trace=0 path.
+                        rest = _read_exact(my_proc.stdout, 12)
+                        if rest is None:
+                            if my_epoch != self._epoch:
+                                return
+                            logmod.error("c_engine", "stdout closed mid-fast-frame; respawning")
+                            self._kill_and_respawn(); respawned = True
+                            raise RuntimeError("chat_traced stdout closed mid-fast-frame; subprocess respawned")
+                        pos, real_len = struct.unpack("<II", rest[:8])
+                        t_read1 = time.perf_counter_ns()
+                        trace.append({
+                            "t_read_pipe_ms":    (t_read1 - t_read0) / 1e6,
+                            "t_parse_ms":        0.0,
+                            "t_engine_inter_ms": (t_read0 - t_prev_frame_done) / 1e6,
+                            "frame_size_bytes":  16,
+                        })
+                        t_prev_frame_done = t_read1
+                        self._last_frame_time = time.monotonic()
+                        yield {"pos": int(pos), "real_len": int(real_len),
+                               "byte": int(rest[8]), "argmax_byte": int(rest[9]),
+                               "fast": True}
+                        continue
                     if marker != b"TFRM":
                         # Pipe is desynced reading garbage instead of frame magic.
                         # Cannot recover by draining; the next read offset is unknown.

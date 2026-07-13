@@ -1787,6 +1787,11 @@ int model_load(model_t* m, const char* path) {
         m->shape.heads <= 0 || m->shape.head_dim <= 0 || m->shape.ffn <= 0 ||
         m->shape.layers <= 0) { fclose(f); return -1; }
     if (m->shape.ffn > V_MAX_FFN) { fclose(f); return -1; }
+    if (m->shape.hidden > V_MAX_FFN) {
+        fprintf(stderr, "model_load: hidden %d exceeds V_MAX_FFN %d "
+                        "(int8 activation buffer)\n", m->shape.hidden, V_MAX_FFN);
+        fclose(f); return -1;
+    }
 
     // dense kernels (score_dot_v, inline attn, hadamard) are specialized to
     // head_dim 64; other head dims silently corrupt heap. refuse at load. the

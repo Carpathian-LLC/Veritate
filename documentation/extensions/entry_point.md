@@ -6,7 +6,7 @@ platform server. The registry (`extensions/registry.py`) owns the whole lifecycl
 ## the one rule
 
 An extension reaches the platform **only** through the documented HTTP API
-([../api/rest_api.md](../api/rest_api.md)) and, server-side, the model `readers` +
+([../api/internal_api.md](../api/internal_api.md)) and, server-side, the model `readers` +
 `veritate_core.load` surface. It never imports platform internals
 (`veritate_mri.*` modules, runtime state, route objects). Everything below exists
 to mount the extension; none of it grants access to internals.
@@ -65,7 +65,7 @@ Contract:
   `trainers/corpus/`, and must not import `veritate_mri` internals.
 - It returns plain JSON (Flask jsonifies dicts). The platform's global error
   handler also returns JSON, so callers can always read `r.json()`
-  ([../api/rest_api.md](../api/rest_api.md)).
+  ([../api/internal_api.md](../api/internal_api.md)).
 
 A page-only extension omits `register`; a server-only extension omits `page`.
 
@@ -104,4 +104,4 @@ no hot-reload and no per-request discovery. Consequences:
 - [manifest.md](manifest.md) — the fields this lifecycle consumes.
 - [marketplace.md](marketplace.md) — install/uninstall and restart-to-activate.
 - [authoring.md](authoring.md) — building the page and server modules.
-- [../api/rest_api.md](../api/rest_api.md) — the API surface an entry point and page call.
+- [../api/internal_api.md](../api/internal_api.md) — the API surface an entry point and page call.

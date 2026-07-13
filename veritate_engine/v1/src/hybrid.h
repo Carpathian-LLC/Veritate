@@ -101,6 +101,10 @@ void hybrid_matvec_f16_scalar(const void* w, const float* x, float* out,
                               int32_t n, int32_t k);
 void hybrid_matvec_f16_neon(const void* w, const float* x, float* out,
                             int32_t n, int32_t k);
+void hybrid_matvec_f32_avx2(const void* w, const float* x, float* out,
+                            int32_t n, int32_t k);
+void hybrid_matvec_f16_avx2(const void* w, const float* x, float* out,
+                            int32_t n, int32_t k);
 // int8 kernels: w is a hybrid_w_i8_t*. activations quantize per call through
 // hybrid_quant_act (shared, so scalar and sdot see identical int8 inputs);
 // int32 accumulation is exact, so scalar/sdot outputs are bitwise-identical.
@@ -108,11 +112,13 @@ void hybrid_matvec_i8_scalar(const void* w, const float* x, float* out,
                              int32_t n, int32_t k);
 void hybrid_matvec_i8_sdot(const void* w, const float* x, float* out,
                            int32_t n, int32_t k);
+void hybrid_matvec_i8_avx2(const void* w, const float* x, float* out,
+                           int32_t n, int32_t k);
 // symmetric per-call activation quant: qx = round(x * 127/absmax) clamped.
 // returns absmax/127; 0 when x is all-zero (caller zeroes the output).
 float hybrid_quant_act(const float* x, int32_t k, int8_t* qx);
 float hybrid_f16_to_f32(uint16_t hb);
-void hybrid_dispatch_init(int has_neon, int32_t dtype);
+void hybrid_dispatch_init(int32_t dtype);
 
 // load: f positioned after the 32-byte model header. returns NULL on failure.
 hybrid_t* hybrid_load(FILE* f, int32_t vocab, int32_t hidden, int32_t layers,

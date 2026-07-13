@@ -24,9 +24,44 @@ from ._common import open_folder
 # ------------------------------------------------------------------------------------
 # Constants
 
+# owner tag for the OpenAI-compatible /v1/models payload.
+OWNER = "veritate"
 
 # ------------------------------------------------------------------------------------
 # Functions
+
+def _model_rows():
+    """Models with at least one checkpoint, newest first. Shared source for
+    /pytorch-models and /v1/models so discovery + shape live in one place."""
+    out = []
+    cfg = current_app.config
+    cur_model = cfg.get("BRAIN_MODEL") or cfg.get("DEFAULT_MODEL")
+    for name in models.list_models():
+        step = checkpoints.latest_step(name)
+        if step is None:
+            continue
+        try: mcfg = cfg_reader.load(name) or {}
+        except Exception: mcfg = {}
+        plugin = (mcfg.get("plugin") or "").strip()
+        n_params = mcfg.get("n_params_total")
+        shape = mcfg.get("shape") or {}
+        try: mtime = os.path.getmtime(checkpoints.path_for(name, step))
+        except OSError: mtime = 0
+        out.append({
+            "name":        name,
+            "step":        int(step),
+            "is_current":  name == cur_model,
+            "plugin":      plugin,
+            "n_params":    int(n_params) if n_params else None,
+            "hidden":      shape.get("hidden"),
+            "layers":      shape.get("layers"),
+            "description": cfg_reader.description(name) or "",
+            "mtime":       mtime,
+            "capabilities": caps_reader.read(name),
+        })
+    out.sort(key=lambda r: -r["mtime"])
+    return out
+
 
 def register(app):
     @app.route("/models/git/status")
@@ -69,31 +104,21 @@ def register(app):
 
     @app.route("/pytorch-models")
     def pytorch_models_index():
-        out = []
-        cfg = current_app.config
-        cur_model = cfg.get("BRAIN_MODEL") or cfg.get("DEFAULT_MODEL")
-        for name in models.list_models():
-            step = checkpoints.latest_step(name)
-            if step is None:
-                continue
-            try: mcfg = cfg_reader.load(name) or {}
-            except Exception: mcfg = {}
-            plugin = (mcfg.get("plugin") or "").strip()
-            n_params = mcfg.get("n_params_total")
-            shape = mcfg.get("shape") or {}
-            try: mtime = os.path.getmtime(checkpoints.path_for(name, step))
-            except OSError: mtime = 0
-            out.append({
-                "name":        name,
-                "step":        int(step),
-                "is_current":  name == cur_model,
-                "plugin":      plugin,
-                "n_params":    int(n_params) if n_params else None,
-                "hidden":      shape.get("hidden"),
-                "layers":      shape.get("layers"),
-                "description": cfg_reader.description(name) or "",
-                "mtime":       mtime,
-                "capabilities": caps_reader.read(name),
-            })
-        out.sort(key=lambda r: -r["mtime"])
-        return {"models": out}
+        return {"models": _model_rows()}
+
+    @app.route("/v1/models")
+    def openai_models_index():
+        """OpenAI-compatible model list. Same source as /pytorch-models;
+        rich metadata kept as extra fields for callers that want it."""
+        data = [{
+            "id":           r["name"],
+            "object":       "model",
+            "created":      int(r["mtime"]),
+            "owned_by":     OWNER,
+            "n_params":     r["n_params"],
+            "hidden":       r["hidden"],
+            "layers":       r["layers"],
+            "capabilities": r["capabilities"],
+            "is_current":   r["is_current"],
+        } for r in _model_rows()]
+        return {"object": "list", "data": data}

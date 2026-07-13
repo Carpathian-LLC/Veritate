@@ -31,11 +31,15 @@ Validation lives inline: e.g., `device_name` capped at 15 characters at [setting
 | `mesh_role`                      | `off` / `hub` / `node` / `both`                                |
 | `teacher_provider`, `teacher_*`  | Ollama / API teacher endpoint (active config)                  |
 | `teacher_configs`                | Per-provider remembered `{api_key, model, base_url}`; `/teacher` POST swaps the matching entry into the active `teacher_*` slots on provider switch |
+| `api_key`                        | Optional Bearer key gating the programmatic API surface; empty = gate off (see [api_auth.md](api_auth.md)) |
+| `api_key_request_count`          | Count of authed programmatic API requests since the key was last set/rotated |
+| `api_key_last_used_at`           | Unix seconds of the last authed programmatic API request (0 = never) |
 | `last_acknowledged_build`        | Build notices banner cutoff                                    |
 
 ## Dependencies
 
-- [settings_routes.py](../../../veritate_mri/routes/settings_routes.py) — GET/POST `/settings` for the dashboard.
+- [settings_routes.py](../../../veritate_mri/routes/settings_routes.py) — GET/POST `/settings` for the dashboard; POST `/settings/api-key` (`{"action":"rotate"|"clear"}`) mints/clears the API key via `rotate_api_key()` / `clear_api_key()`.
+- [api_auth_routes.py](../../../veritate_mri/routes/api_auth_routes.py) — reads `api_key`, calls `record_api_key_use()` on each authed programmatic request.
 - [runtime/heartbeat.py](../../../veritate_mri/runtime/heartbeat.py) — reads consent flags.
 - [training/trainer_runner.py](../../../veritate_mri/training/trainer_runner.py) — reads `device_preference`.
 

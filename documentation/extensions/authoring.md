@@ -5,7 +5,7 @@ modifying platform code. An **extension** is a directory containing a manifest, 
 optional entry point, a self-contained page, and optional server modules. It is
 discovered, registered at startup, and installed/uninstalled through the
 marketplace. It talks to the platform **only** through the documented HTTP API
-([../api/rest_api.md](../api/rest_api.md)) plus the server-side model-loading
+([../api/internal_api.md](../api/internal_api.md)) plus the server-side model-loading
 surface.
 
 An extension is distinct from an internal **plugin** (a trainer; see
@@ -87,18 +87,18 @@ Every dashboard feature is itself a thin browser caller over a Flask route, so t
 same calls are available to an extension. Routes return JSON (dicts are
 auto-jsonified), and the global error handler also returns JSON, so a caller can
 always `r.json()` and treat any non-2xx as failure
-([../api/rest_api.md](../api/rest_api.md)). Endpoints an extension commonly uses:
+([../api/internal_api.md](../api/internal_api.md)). Endpoints an extension commonly uses:
 
 - `GET /pytorch-models` — list loadable models with shape + capability metadata.
 - `GET /meta` — current model metadata + shape.
 - `GET /generate` — byte-by-byte generation with introspection (SSE).
-- `POST /hybrid/chat` — conversational chat with RAG/teacher.
+- `POST /hybrid/chat` — conversational chat with RAG/teacher (buffered). `POST /hybrid/chat/stream` is the SSE streaming twin (same body; `delta` frames then a `done` frame).
 - `GET /runs`, `GET /run/<name>/csv` — training run data + per-step CSV.
 - `GET /settings`, `POST /settings` — user settings.
 - `GET /versions` — the version ledger.
 
 The full endpoint inventory, parameters, and response shapes are in
-[../api/rest_api.md](../api/rest_api.md). That reference is the contract: anything
+[../api/internal_api.md](../api/internal_api.md). That reference is the contract: anything
 not in it is not part of the stable surface.
 
 ## loading a user-trained model
@@ -162,5 +162,5 @@ the server runs has no effect until restart. See [marketplace.md](marketplace.md
 - [manifest.md](manifest.md) — the `manifest.json` schema.
 - [entry_point.md](entry_point.md) — discovery, `register(app)`, the startup lifecycle.
 - [marketplace.md](marketplace.md) — catalog, install/uninstall, restart-to-activate.
-- [../api/rest_api.md](../api/rest_api.md) — the platform API contract.
+- [../api/internal_api.md](../api/internal_api.md) — the platform API contract.
 - [../../developer_documentation/plugins/contract.md](../../developer_documentation/plugins/contract.md) — the internal plugin (trainer) contract; do not confuse with extensions.

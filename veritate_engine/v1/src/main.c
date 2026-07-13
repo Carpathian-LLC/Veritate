@@ -255,6 +255,19 @@ static void trace_top_predictions(const model_t* m, const int8_t* hidden, trace_
     free(logits); free(taken); free(h_b0);
 }
 
+// fgets that never leaves an over-long line's residue in stdin: reads up to
+// size-1 chars, then discards any bytes past the buffer up to and including the
+// terminating newline. keeps the line-based serving protocol in sync when a
+// caller sends a protocol line longer than the read buffer.
+static char* fgets_drain(char* buf, int size, FILE* f) {
+    if (!fgets(buf, size, f)) return NULL;
+    size_t len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n') return buf;
+    int c;
+    while ((c = getc(f)) != '\n' && c != EOF) { }
+    return buf;
+}
+
 static int chat_loop(void) {
     static model_t model;
     const char* model_path = getenv("VERITATE_MODEL_PATH");
@@ -276,7 +289,7 @@ static int chat_loop(void) {
     while (1) {
         fprintf(stderr, "> ");
         fflush(stderr);
-        if (!fgets(line, S + 2, stdin)) break;
+        if (!fgets_drain(line, S + 2, stdin)) break;
         size_t len = strlen(line);
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
         if (len == 0) continue;
@@ -339,6 +352,12 @@ static int chat_loop(void) {
 //   int16  ablation_layer         (v8 — -1 if no ablation active for this token)
 //   int16  ablation_neuron        (v8 — -1 if no ablation active for this token)
 //   'TEND' u32_pos                (8 bytes — end of turn)
+//
+// fast serving: the header carries an optional trailing trace flag (default 1).
+// with trace=0 the loop skips the lens matvec, DLA scans, and all telemetry, and
+// emits a coarse 'FFRM' frame per token instead:
+//   'FFRM' u32_pos u32_real_len u8_byte u8_argmax_byte u8_pad[2]   (16 bytes, no payload)
+// sampling is identical to the traced path, so output bytes match for one request.
 // ------------------------------------------------------------------------------------
 
 static int chat_traced_loop(void) {
@@ -413,7 +432,7 @@ static int chat_traced_loop(void) {
     char  prev_addons_csv[128] = "";
 
     while (1) {
-        if (!fgets(header, sizeof(header), stdin)) break;
+        if (!fgets_drain(header, sizeof(header), stdin)) break;
         float temp = 0.7f;
         int   top_k = 40;
         int   max_new = 200;
@@ -423,13 +442,15 @@ static int chat_traced_loop(void) {
         int   rep_window = 0;
         float rep_penalty = 0.0f;
         int   no_repeat_ngram = 0;
-        // header format: "temp top_k max_new ablate_l ablate_n [addons_csv [rep_window rep_penalty no_repeat_ngram]]\n"
+        int   do_trace = 1;
+        // header format: "temp top_k max_new ablate_l ablate_n [addons_csv [rep_window rep_penalty no_repeat_ngram [trace]]]\n"
         // addons_csv is optional; missing means "use the env-var chain or none".
         // empty token "-" explicitly clears any previously-installed chain. the
-        // trailing rep fields default to 0 (repetition control off) when absent.
-        sscanf(header, "%f %d %d %d %d %127s %d %f %d",
+        // trailing rep fields default to 0 (repetition control off) when absent;
+        // trace defaults to 1 (full frames) when absent.
+        sscanf(header, "%f %d %d %d %d %127s %d %f %d %d",
                &temp, &top_k, &max_new, &ablate_layer, &ablate_neuron, addons_csv,
-               &rep_window, &rep_penalty, &no_repeat_ngram);
+               &rep_window, &rep_penalty, &no_repeat_ngram, &do_trace);
         veritate_set_ablation(ablate_layer, ablate_neuron);
 
         // per-request addon chain swap. only rebuild when csv changes; common
@@ -448,7 +469,7 @@ static int chat_traced_loop(void) {
             strncpy(prev_addons_csv, addons_csv, sizeof(prev_addons_csv) - 1);
             prev_addons_csv[sizeof(prev_addons_csv) - 1] = '\0';
         }
-        if (!fgets(prompt_line, S + 4, stdin)) break;
+        if (!fgets_drain(prompt_line, S + 4, stdin)) break;
         size_t plen = strlen(prompt_line);
         while (plen > 0 && (prompt_line[plen - 1] == '\n' || prompt_line[plen - 1] == '\r'))
             prompt_line[--plen] = '\0';
@@ -462,7 +483,7 @@ static int chat_traced_loop(void) {
         for (int32_t i = n; i < S; i++) tokens[i] = 0;
 
         cache.len = 0;
-        forward(&model, &cache, tokens, n, hidden, trace, NULL);
+        forward(&model, &cache, tokens, n, hidden, do_trace ? trace : NULL, NULL);
 
         // addons see the prompt before the first sample, then each sampled byte.
         addon_chain_t* g_chain = addons_get_global();
@@ -488,6 +509,23 @@ static int chat_traced_loop(void) {
             if (gen_len < S) gen_bytes[gen_len++] = b;
             if (g_chain != NULL && g_chain->count > 0) {
                 addon_chain_observe(g_chain, (int)b);
+            }
+
+            // fast serving: coarse frame, no telemetry. sampling above is identical.
+            if (!do_trace) {
+                uint8_t fhdr[16];
+                memcpy(fhdr, "FFRM", 4);
+                uint32_t f_pos = (uint32_t)pos;
+                uint32_t f_rl  = (uint32_t)(cache.len);
+                memcpy(fhdr + 4, &f_pos, 4);
+                memcpy(fhdr + 8, &f_rl,  4);
+                fhdr[12] = b; fhdr[13] = ab; fhdr[14] = 0; fhdr[15] = 0;
+                fwrite(fhdr, 1, 16, stdout);
+                fflush(stdout);
+                if (b == 0) break;
+                if (cache.len >= S) break;
+                forward_decode(&model, &cache, next, hidden, NULL);
+                continue;
             }
 
             // header
@@ -645,7 +683,7 @@ static int chat_greedy_loop(int budget_override) {
     char* line = (char*)malloc((size_t)S + 4);
     uint32_t rng = 0;
     while (1) {
-        if (!fgets(line, S + 2, stdin)) break;
+        if (!fgets_drain(line, S + 2, stdin)) break;
         size_t plen = strlen(line);
         while (plen > 0 && (line[plen - 1] == '\n' || line[plen - 1] == '\r')) line[--plen] = '\0';
         if (plen == 0) continue;
@@ -756,7 +794,7 @@ static int chat_speculative_loop(int budget_override) {
     while (1) {
         fprintf(stderr, "> ");
         fflush(stderr);
-        if (!fgets(line, S + 2, stdin)) break;
+        if (!fgets_drain(line, S + 2, stdin)) break;
         size_t plen = strlen(line);
         while (plen > 0 && (line[plen - 1] == '\n' || line[plen - 1] == '\r')) line[--plen] = '\0';
         if (plen == 0) continue;

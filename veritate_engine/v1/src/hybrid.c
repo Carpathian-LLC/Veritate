@@ -129,36 +129,71 @@ void hybrid_matvec_i8_scalar(const void* w, const float* x, float* out,
 hybrid_matvec_fn hybrid_matvec_wt = hybrid_matvec_f32_scalar;
 hybrid_matvec_fn hybrid_matvec_fp = hybrid_matvec_f32_scalar;
 
-// NEON is mandatory on arm64; VERITATE_HYBRID_SCALAR=1 forces the scalar
-// references for kernel-identity checks and A/B timing.
-void hybrid_dispatch_init(int has_neon, int32_t dtype) {
+// SIMD upgrades the scalar defaults per detected arch features.
+// VERITATE_HYBRID_SCALAR=1 forces the scalar references for kernel-identity
+// checks and A/B timing.
+void hybrid_dispatch_init(int32_t dtype) {
+    cpu_features_t feat;
+    cpu_detect(&feat);
     hybrid_matvec_fp = hybrid_matvec_f32_scalar;
     hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_scalar
                      : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_scalar
                      : hybrid_matvec_f32_scalar;
-#if defined(__aarch64__) || defined(_M_ARM64)
     const char* s = getenv("VERITATE_HYBRID_SCALAR");
-    if (has_neon && !(s && *s && *s != '0')) {
+    if (s && *s && *s != '0') return;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    if (feat.neon) {
         hybrid_matvec_fp = hybrid_matvec_f32_neon;
         hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_neon
                          : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_sdot
                          : hybrid_matvec_f32_neon;
     }
-#else
-    (void)has_neon;
+#elif defined(__x86_64__) || defined(_M_X64)
+    if (feat.avx2 && feat.f16c) {
+        hybrid_matvec_fp = hybrid_matvec_f32_avx2;
+        hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_avx2
+                         : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_avx2
+                         : hybrid_matvec_f32_avx2;
+    }
 #endif
 }
 
 // ------------------------------------------------------------------------------------
-// threaded matvec — row-split across the pool, bitwise-identical to the single
-// call (each row is computed once, same kernel). only matmuls with
-// n * k >= HYBRID_MT_MIN_WORK are split. VERITATE_HYBRID_THREADS overrides the
-// worker count (1 = single-thread).
+// threaded matvec — row-split across the persistent spin-then-park pool,
+// bitwise-identical to the single call (each row is computed once, same kernel).
+// only matmuls with n * k >= HYBRID_MT_MIN_WORK are split. the worker count is
+// per-box: a one-time micro-calibration at load (hybrid_threads_init) times real
+// non-boundary decode steps on the real weights and stops at the diminishing-
+// returns knee (see the calibration note below). the knee is memory-bandwidth/
+// contention-driven, not core-count-driven, so only a measurement on the running
+// box finds it. VERITATE_HYBRID_THREADS is an explicit override that skips
+// calibration (1 = single-thread, up to pool size). row-split parity holds at
+// every count, so the calibrated pick never changes output (rule 24).
 // ------------------------------------------------------------------------------------
 
-#define HYBRID_MT_MIN_WORK  (1 << 20)
-#define HYBRID_MT_MAX       8
-#define HYBRID_MT_DEFAULT   4
+#define HYBRID_MT_MIN_WORK     (1 << 18)
+#define HYBRID_MT_MIN_WORK_I8  (1 << 23)
+#define HYBRID_MT_MAX          32
+
+// micro-calibration: warmup + a decode burst per rung whose median matches the
+// decode p50; direction-alternating passes whose medians are medianed decorrelate
+// a rung's position-in-pass from transient load. the pick is the diminishing-
+// returns knee: climb the 1,2,4,.. ladder while each rung improves on the
+// previous by at least KNEE, stop at the first that does not. the knee sits at
+// the memory-bandwidth saturation point and is reached before the over-threaded
+// rungs, so their sustained collapse (visible only under sustained load, not a
+// short calibration burst) is never selected and need not be measured for. KNEE
+// also honors the energy target: a thread is added only when it buys real speed.
+// LADDER_N caps the ladder array (powers of two under the ladder top, plus top).
+// BUDGET_MS bounds total wall cost: passes run up to PASSES but stop once the
+// budget is spent (a fast model keeps all passes; a slow model auto-trims), so
+// startup stays well under half a second on any model size.
+#define HYBRID_CALIB_WARMUP    1
+#define HYBRID_CALIB_REPS      4
+#define HYBRID_CALIB_PASSES    7
+#define HYBRID_CALIB_KNEE      0.13
+#define HYBRID_CALIB_LADDER_N  8
+#define HYBRID_CALIB_BUDGET_MS 350
 
 typedef struct {
     hybrid_matvec_fn fn;
@@ -174,34 +209,18 @@ static void hybrid_mv_worker(void* arg, int32_t idx) {
     s->fn(s->w, s->x, s->out, s->n, s->k);
 }
 
-static int32_t hybrid_threads(void) {
-    static int32_t cached = 0;
-    if (cached == 0) {
-        const char* s = getenv("VERITATE_HYBRID_THREADS");
-        int32_t nt = s && *s ? atoi(s) : HYBRID_MT_DEFAULT;
-        int32_t cap = veritate_pool_size();
-        if (nt > cap) nt = cap;
-        if (nt > HYBRID_MT_MAX) nt = HYBRID_MT_MAX;
-        cached = nt < 1 ? 1 : nt;
-    }
-    return cached;
-}
+static int32_t g_hybrid_nt = 1;
 
-// big-weight matvec entry: picks the dtype kernel, row-splits across the pool.
-// int8 spans re-derive identical qx per worker (hybrid_quant_act is
-// deterministic over the shared x), so threading stays bitwise-identical.
-// int8 threads only at 8x the fp work floor: the sdot kernel runs ~4x the fp
-// rate, so below that pool dispatch costs more than the split saves (measured:
-// 1T beats 4T for int8 at both the 121.75M and 270M shapes).
-static void hybrid_mv(const hybrid_t* h, const void* w, const float* x,
-                      float* out, int32_t n, int32_t k) {
+static int32_t hybrid_threads(void) { return g_hybrid_nt; }
+
+// row-split a big matvec across nt workers with the current dtype kernel. each
+// out[j] is computed once by one worker, so the result is bitwise-identical to
+// the single-thread call at any nt (rule 24). int8 spans re-derive identical qx
+// per worker (hybrid_quant_act is deterministic over the shared x).
+static void hybrid_mv_split(const hybrid_t* h, const void* w, const float* x,
+                            float* out, int32_t n, int32_t k, int32_t nt) {
+    if (nt <= 1) { hybrid_matvec_wt(w, x, out, n, k); return; }
     const int i8 = h->dtype == VERITATE_HYBRID_DTYPE_INT8;
-    const int64_t min_work = i8 ? (int64_t)HYBRID_MT_MIN_WORK * 8 : HYBRID_MT_MIN_WORK;
-    int32_t nt = hybrid_threads();
-    if (nt <= 1 || (int64_t)n * k < min_work) {
-        hybrid_matvec_wt(w, x, out, n, k);
-        return;
-    }
     hybrid_mv_span_t spans[HYBRID_MT_MAX];
     hybrid_w_i8_t    span_w[HYBRID_MT_MAX];
     void* args[HYBRID_MT_MAX];
@@ -228,6 +247,124 @@ static void hybrid_mv(const hybrid_t* h, const void* w, const float* x,
         used++;
     }
     veritate_pool_run(hybrid_mv_worker, args, used);
+}
+
+// big-weight matvec entry: split at the calibrated worker count above the dtype
+// work floor, else single-thread. int8 keeps a higher floor: the sdot kernel
+// runs ~4x the fp rate, so it stays 1T-optimal until re-measured on an int8 bin.
+static void hybrid_mv(const hybrid_t* h, const void* w, const float* x,
+                      float* out, int32_t n, int32_t k) {
+    const int i8 = h->dtype == VERITATE_HYBRID_DTYPE_INT8;
+    const int64_t min_work = i8 ? HYBRID_MT_MIN_WORK_I8 : HYBRID_MT_MIN_WORK;
+    int32_t nt = hybrid_threads();
+    if (nt <= 1 || (int64_t)n * k < min_work) {
+        hybrid_matvec_wt(w, x, out, n, k);
+        return;
+    }
+    hybrid_mv_split(h, w, x, out, n, k, nt);
+}
+
+// ------------------------------------------------------------------------------------
+// per-box thread calibration — see the threaded-matvec note above. runs once at
+// load (or is skipped by the VERITATE_HYBRID_THREADS override); the pick lands in
+// g_hybrid_nt for process life. output is unaffected by the pick (row-split
+// parity holds at every count), so calibration variance can never change results.
+// ------------------------------------------------------------------------------------
+
+static int32_t calib_ladder(int32_t cap, int32_t* rungs) {
+    int32_t n = 0;
+    for (int32_t t = 1; t < cap; t *= 2) rungs[n++] = t;
+    rungs[n++] = cap;
+    return n;
+}
+
+static int calib_cmp_u64(const void* a, const void* b) {
+    uint64_t x = *(const uint64_t*)a, y = *(const uint64_t*)b;
+    return (x > y) - (x < y);
+}
+
+// median per-step time of a non-boundary decode burst at nt workers. resets
+// state so every rung starts at the same low position (attention cost grows with
+// pos and would bias later rungs). the pos-0 boundary step is absorbed by the
+// warmups, which also warm the weights into cache. median (not min) so the pick
+// tracks sustained throughput, not best-case parallelism.
+static uint64_t calib_time_rung(hybrid_t* h, int32_t nt, int32_t byte) {
+    hybrid_reset(h);
+    g_hybrid_nt = nt;
+    for (int32_t r = 0; r < HYBRID_CALIB_WARMUP; r++) hybrid_step(h, byte, NULL);
+    uint64_t t[HYBRID_CALIB_REPS];
+    for (int32_t r = 0; r < HYBRID_CALIB_REPS; r++) {
+        uint64_t t0 = veritate_now_ns();
+        hybrid_step(h, byte, NULL);
+        t[r] = veritate_now_ns() - t0;
+    }
+    qsort(t, HYBRID_CALIB_REPS, sizeof(uint64_t), calib_cmp_u64);
+    return t[HYBRID_CALIB_REPS / 2];
+}
+
+static int32_t hybrid_calibrate(hybrid_t* h) {
+    // reserve one core for the dispatching thread: veritate_pool_run busy-spins
+    // on the completion count while workers run, so proposing pool_size workers
+    // guarantees the dispatcher oversubscribes. the override still reaches the
+    // full pool; auto-calibration never does.
+    int32_t cap = veritate_pool_size() - 1;
+    if (cap > HYBRID_MT_MAX) cap = HYBRID_MT_MAX;
+    if (cap < 2) return 1;
+    int32_t byte = 0;
+    for (int32_t b = 0; b < 256; b++) if (!h->boundary[b]) { byte = b; break; }
+
+    int32_t rungs[HYBRID_CALIB_LADDER_N];
+    int32_t nr = calib_ladder(cap, rungs);
+    uint64_t samp[HYBRID_CALIB_LADDER_N][HYBRID_CALIB_PASSES];
+    const uint64_t start = veritate_now_ns();
+    int32_t done = 0;
+    for (int32_t p = 0; p < HYBRID_CALIB_PASSES; p++) {
+        for (int32_t i = 0; i < nr; i++) {
+            int32_t r = (p & 1) ? nr - 1 - i : i;
+            samp[r][p] = calib_time_rung(h, rungs[r], byte);
+        }
+        done = p + 1;
+        if ((veritate_now_ns() - start) / 1000000 >= HYBRID_CALIB_BUDGET_MS) break;
+    }
+    hybrid_reset(h);
+
+    uint64_t med[HYBRID_CALIB_LADDER_N];
+    for (int32_t r = 0; r < nr; r++) {
+        qsort(samp[r], done, sizeof(uint64_t), calib_cmp_u64);
+        med[r] = samp[r][done / 2];
+    }
+    if (getenv("VERITATE_HYBRID_CALIB_LOG"))
+        for (int32_t r = 0; r < nr; r++)
+            fprintf(stderr, "  rung nt=%2d med=%.3f ms/byte\n", rungs[r], (double)med[r] / 1e6);
+
+    int32_t pick = 0;
+    for (int32_t r = 1; r < nr; r++) {
+        double impr = ((double)med[r - 1] - (double)med[r]) / (double)med[r - 1];
+        if (impr < HYBRID_CALIB_KNEE) break;
+        pick = r;
+    }
+    return rungs[pick];
+}
+
+static void hybrid_threads_init(hybrid_t* h) {
+    int32_t cap = veritate_pool_size();
+    if (cap > HYBRID_MT_MAX) cap = HYBRID_MT_MAX;
+    const char* s = getenv("VERITATE_HYBRID_THREADS");
+    uint64_t t0 = veritate_now_ns();
+    int32_t nt;
+    if (s && *s) {
+        nt = atoi(s);
+        if (nt > cap) nt = cap;
+        if (nt < 1) nt = 1;
+    } else {
+        nt = hybrid_calibrate(h);
+    }
+    g_hybrid_nt = nt;
+    if (getenv("VERITATE_HYBRID_CALIB_LOG")) {
+        fprintf(stderr, "hybrid: threads=%d (%s) pool=%d %.1fms\n", nt,
+                (s && *s) ? "override" : "calibrated", veritate_pool_size(),
+                (double)(veritate_now_ns() - t0) / 1e6);
+    }
 }
 
 // ------------------------------------------------------------------------------------
@@ -630,7 +767,7 @@ hybrid_t* hybrid_load(FILE* f, int32_t vocab, int32_t hidden, int32_t layers,
         return NULL;
     }
 
-    hybrid_dispatch_init(1, dtype);
+    hybrid_dispatch_init(dtype);
     hybrid_t* h = (hybrid_t*)calloc(1, sizeof(hybrid_t));
     if (!h) return NULL;
     h->vocab = vocab; h->hidden = hidden; h->layers = layers; h->ffn = ffn;
@@ -688,6 +825,7 @@ hybrid_t* hybrid_load(FILE* f, int32_t vocab, int32_t hidden, int32_t layers,
         hybrid_free(h); return NULL;
     }
     hybrid_reset(h);
+    hybrid_threads_init(h);
     return h;
 }
 

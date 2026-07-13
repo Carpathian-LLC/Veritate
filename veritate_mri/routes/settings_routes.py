@@ -73,6 +73,16 @@ def register(app):
     def settings_notices_route():
         return {"notices": settings_mod.pending_notices()}
 
+    @app.route("/settings/api-key", methods=["POST"])
+    def settings_api_key_route():
+        body = request.get_json(silent=True) or {}
+        action = body.get("action") or ""
+        if action == "rotate":
+            return settings_mod.rotate_api_key()
+        if action == "clear":
+            return settings_mod.clear_api_key()
+        return {"error": "action must be 'rotate' or 'clear'"}, 400
+
     @app.route("/ai/ask", methods=["POST"])
     def ai_ask_route():
         body = request.get_json(silent=True) or {}

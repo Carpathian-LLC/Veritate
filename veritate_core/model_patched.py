@@ -267,3 +267,34 @@ class VeritatePatched(nn.Module):
                 ignore_index=-1,
             )
         return logits, loss
+
+    def hidden_states(self, tokens):
+        # inference-only: trunk residual before project_byte0, for byte-native
+        # memory keys. mirrors forward with the deterministic eval-loop depth.
+        B, T = tokens.shape
+        H = self.hidden
+        x = self.embed(tokens)
+        for blk in self.blocks[:N_LOCAL_ENC]:
+            x = blk(x)
+
+        is_b, slot_of, bpos, slot_mask, S = self._boundary_slots(tokens)
+        g = x.gather(1, bpos.clamp_max(T - 1).unsqueeze(-1).expand(B, S, H))
+        g = (g + self.slot_pos_emb.weight[:S].unsqueeze(0)) * slot_mask
+        glob = self.blocks[N_LOCAL_ENC:N_LOCAL_ENC + self.glob_layers]
+        if self.global_loops > 1:
+            g_in = g
+            for r in range(self.eval_loops):
+                g = g + self.loop_inj[min(r, LOOP_MAX - 1)] * g_in
+                for blk in glob:
+                    g = blk(g)
+        else:
+            for blk in glob:
+                g = blk(g)
+
+        sel = slot_of.clamp(0, S - 1)
+        add = g.gather(1, sel.unsqueeze(-1).expand(B, T, H))
+        valid = (is_b & (slot_of < S)).unsqueeze(-1)
+        x = x + add * valid
+        for blk in self.blocks[N_LOCAL_ENC + self.glob_layers:]:
+            x = blk(x)
+        return x

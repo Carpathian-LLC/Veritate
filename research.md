@@ -19,6 +19,8 @@ Living research maps and plans still under `developer_documentation/`. They stay
 - `developer_documentation/training/efficient_architecture_research.md` : the ranked lever map (Muon, patching, recurrence, memory, MoE, MTP, MLA, distillation), each lever with a falsifier and status. Parent program; `successes.md` and `failures.md` are its outcomes.
 - `developer_documentation/training/chat_model_80m_plan.md` : the three-phase 80M chat recipe (now a proven success).
 - `developer_documentation/training/chat_model_200m_plan.md` : the chat200m scale-up plan (pretrain launched 2026-07-08) with its pre-registered gates.
+- `developer_documentation/research/long_context_memory.md` : IDEA 1 in-context streaming-state memory (needle benchmark, transfer-gap, bitwise-exact state carry). The always-on gist tier.
+- `developer_documentation/research/external_memory_retrieval.md` : IDEA 2 external addressable memory (trained byte-native key head, sub-quadratic drill-down, FAISS trillion-feasibility, natural-query transfer, productionization plan). The exact-recall tier; folds the 2026-07-11..13 `successes.md`/`failures.md` memory entries into one story.
 - `developer_documentation/platform/mem_planner.md` : memory-planning component.
 - `developer_documentation/market/market_prediction_research.md`, `developer_documentation/market/trading_model_plan.md` : market and trading research line.
 

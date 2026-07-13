@@ -19,8 +19,15 @@ dequantized to fp32 at load. Recurrent state, conv ring, KV caches, residuals,
 logits: all fp32. Quantization beyond fp16 requires the quality gates below.
 
 - Scalar C path is the reference; SIMD kernels must be bitwise-identical to it
-  (preflight rule 24). The scalar matvec accumulates in 4 interleaved partial
-  sums so a 4-lane SIMD port reproduces it exactly.
+  (preflight rule 24). The fp32/fp16 scalar matvec accumulates in 16 interleaved
+  partial sums so a 4-lane SIMD port reproduces the float reduction exactly. The
+  int8 matvec accumulates in exact int32, so any reduction order is bitwise-equal
+  and only the shared `hybrid_quant_act` + the final `acc * (scale * a_scale)`
+  fold must match: NEON `hybrid_matvec_i8_sdot` (arm64) and AVX2
+  `hybrid_matvec_i8_avx2` (x86_64) both satisfy this by construction. The AVX2
+  int8 kernel widens via `vpmovsxbw` + `vpmaddwd` (int8->int16, pairwise->int32),
+  never `vpmaddubsw` (its signed*unsigned int16 sum can saturate at these
+  ranges).
 - Logits cross the existing int32 telemetry/sampler surface scaled by
   `VERITATE_HYBRID_LOGIT_SCALE` (1024), mirroring the v9 `1/1024` convention in
   `ppl_mode`. The sampler folds that scale into the temperature
@@ -40,7 +47,7 @@ fineweb_edu_val / chat_v1_val:
 |---|---|---|---|
 | fp32 | 487.0 MB | fp32 | PASS: parity 192/192; bpb 1.4447 / 0.9899 (PyTorch: 1.44466 / 0.98989) |
 | fp16 | 243.5 MB | fp32 (exact convert) | PASS: parity 192/192; bpb identical to 4 decimals. **shipping default** |
-| int8 (dtype=2) | 126.5 MB | int8 sdot + fp32 requant | PASS (step 51000): bpb +0.0040 fineweb / +0.0020 chat_v1 vs fp16 (gate < 0.005); greedy transcripts coherent. dynamic per-call activation quant (`hybrid_quant_act`, absmax/127) + per-output-row fp32 weight scales; small tensors + embeddings stay fp32. sdot kernel ~3.9x the fp16 kernel (at the bandwidth ceiling) |
+| int8 (dtype=2) | 126.5 MB | int8 sdot + fp32 requant | PASS (step 51000): bpb +0.0040 fineweb / +0.0020 chat_v1 vs fp16 (gate < 0.005); greedy transcripts coherent. dynamic per-call activation quant (`hybrid_quant_act`, absmax/127) + per-output-row fp32 weight scales; small tensors + embeddings stay fp32. SIMD matvec: NEON `hybrid_matvec_i8_sdot` (~3.9x the fp16 kernel, at the bandwidth ceiling) and AVX2 `hybrid_matvec_i8_avx2`; both bitwise-identical to `hybrid_matvec_i8_scalar` (verified on cardinal i7-9700T + Rosetta AVX2 over real + odd-column shapes) |
 
 ## .bin layout (little-endian)
 
@@ -176,27 +183,111 @@ raising it is compat-neutral for v3-v12 bins.
 4. **Kernel identity (S4)**: every SIMD kernel bitwise-equal to the scalar
    reference on randomized shapes (rule 24).
 
-## measured performance (M3 Ultra, 64-byte greedy generations from chat prompts)
+## threaded decode: row-split across the persistent pool
 
-Threaded matvec splits rows across the pool for matmuls with n*k >= 2^20
-elements (int8: >= 2^23 — the sdot kernel runs ~4x the fp rate, so smaller
-splits lose to pool dispatch; measured 1T >= 4T for int8 at both shapes below).
-Row-splits are bitwise-identical to single-thread; `VERITATE_HYBRID_THREADS`
-overrides (default 4). p50 is a non-boundary byte, p95 a boundary byte (the
-recurrent stack fires). Prompts whose replies are boundary-dense read p50 near
-p95. Kernel bench (768x3072 matvec, single-thread): fp32 0.118 ms, fp16
-0.112 ms, int8 sdot 0.030 ms (~79 GB/s, bandwidth ceiling).
+`hybrid_mv` ([hybrid.c](../../veritate_engine/v1/src/hybrid.c)) splits the output
+rows of every weight matvec with `n*k >= HYBRID_MT_MIN_WORK` (2^18 fp / 2^23 int8)
+across the persistent worker pool
+([threadpool.c](../../veritate_engine/v1/src/threadpool.c)); each `out[j]` is
+computed entirely by one worker with the unchanged single-thread kernel, so the
+result is **bitwise-identical to single-thread at every thread count** (rule 24;
+gated by `tests/engine/test_v13_compat.py::test_v13_threaded_matches_single_thread`,
+which exports a threading-sized fp16 fixture and A/Bs default vs
+`VERITATE_HYBRID_THREADS=1`). The tiny vector ops (attention dot, recurrent state
+update, norms, sampler) stay single-thread.
 
-121.75M chat80m (step 51000; quiet-machine fp16-4T at step 48000 measured
-1.08-1.12 p50):
+The pool is **spin-then-park**: `veritate_pool_run` wakes workers by setting a
+lock-free atomic flag and blocks on a lock-free `done_count`; a condvar (POSIX)
+or SRWLOCK+CONDITION_VARIABLE (Win32) only parks a worker after a bounded idle
+spin, so an idle engine burns no cores (energy target) while an active decode
+burst keeps workers hot and pays ~sub-us wake latency. This cut per-dispatch cost
+~60x vs the prior condvar wake (single-stream decode issues 12 matvec dispatches
+per non-boundary byte, 48 per boundary byte, so wake latency dominated) and moved
+the useful-scaling knee from ~4 to ~8 cores. The worker count is chosen per box
+by auto-calibration (below), not a fixed default; `VERITATE_HYBRID_THREADS` is an
+explicit override (1 = single-thread, up to `pool_size`) that skips calibration,
+and `VERITATE_POOL_SPIN` tunes the idle spin budget. The pool is shared with the
+dense v9-v12 matmul path (`matmul_neon_sdot`, `matmul_vnni`), so the same win
+applies there and the v9 greedy golden still matches.
 
-| config | p50 ms/byte | p95 ms/byte | peak tok/s |
+### auto-calibrated worker count (per box, measured at load)
+
+The decode thread count is NOT hardcoded. The knee is memory-bandwidth /
+contention-driven, not core-count-driven (on the 24-P-core M3 Ultra, scaling is
+1T 1.74, 4T 0.80, 8T 0.68, 16T 0.75, 24T 1.97 ms/byte, so raw core count does not
+predict it), so only a measurement on the running box finds it.
+`hybrid_threads_init` runs once at `hybrid_load` (skipped when the override is
+set) and `hybrid_calibrate` ([hybrid.c](../../veritate_engine/v1/src/hybrid.c))
+times the ACTUAL non-boundary decode step (`hybrid_step` on the real loaded
+weights) at a `1,2,4,..` ladder up to `pool_size - 1` (the dispatching thread
+busy-spins on the completion count, so it keeps a core; the override may still
+reach the full `pool_size`). Each rung's per-step median (matching the decode
+p50) is medianed over direction-alternating passes; the pick is the diminishing-
+returns knee: climb while a rung beats the previous by at least
+`HYBRID_CALIB_KNEE`, stop otherwise. The knee is reached before the over-threaded
+rungs, so their sustained collapse (which a short calibration burst does not
+reproduce, only sustained decode does) is never selected. All measurement
+parameters (ladder, warmups, reps, passes, knee fraction) are named constants at
+the top of the threaded-matvec block; only the measurement is tuned, the policy
+is measured. Total calibration cost is bounded and small: ~70-340 ms one-time at
+load, dtype-independent (it calibrates the real dtype kernel).
+
+**Parity invariant:** row-split output is bitwise-identical at every worker count
+(each `out[j]` is computed once by one worker with the single-thread kernel), so
+the calibrated pick, and any run-to-run variance in it, can NEVER change decode
+output. Gated by
+`tests/engine/test_v13_compat.py::test_v13_auto_matches_single_thread` (auto path
+== `VERITATE_HYBRID_THREADS=1`, byte-identical) alongside the env-pinned
+`test_v13_threaded_matches_single_thread`.
+
+`VERITATE_HYBRID_CALIB_LOG=1` prints the picked count, pool size, calibration
+wall cost, and the per-rung `ms/byte` curve to stderr (off by default), to verify
+the pick on any new box.
+
+Measured picks (same binary, both boxes): M3 Ultra 24-P-core lands at 8-16
+(the bandwidth knee; never the 24T collapse); Intel i7-9700T (8 cores, no
+hyperthreading) lands at 4-7 and never 8, where 8 workers + the dispatcher
+oversubscribe the 8 cores and decode collapses (measured 49-62 ms/byte forced-8
+vs 2.2-2.6 auto). The prior fixed `min(pool_size, 8)` default over-threaded the
+i7 (its dual-channel DDR4 and core count saturate well below 8); auto-calibration
+makes hand-setting `VERITATE_HYBRID_THREADS` on that box unnecessary.
+
+## measured performance (M3 Ultra 24 P-core, chat80m fp16 greedy decode)
+
+Scaling curve (chat80m fp16, greedy; p50 = non-boundary byte, p95 = boundary
+byte; spin pool, 2^18 fp floor; best of 5, machine shared with a live MPS train,
+so >8T carries real load noise):
+
+| threads | p50 ms/byte | p95 ms/byte | speedup (p50) |
 |---|---|---|---|
-| fp16 4T | 1.58-1.60 | 6.6-6.7 | 418 |
-| fp16 1T | 1.98-2.00 | 8.2-8.6 | 339 |
-| int8 4T | 1.22-1.25 | 3.4-3.5 | 639 |
-| **int8 1T** | **1.17-1.18** | **3.35-3.36** | **660** |
-| int8 1T E-core (`taskpolicy -b`) | 3.8-4.1 | 14.1-14.5 | 187 |
+| 1  | 1.74 | 7.01 | 1.00x |
+| 2  | 1.31 | 4.83 | 1.33x |
+| 4  | 0.80 | 2.79 | 2.17x |
+| **8 (default)** | **0.68** | **2.22** | **2.56x** |
+| 12 | 0.72 | 2.25 | 2.43x |
+| 16 | 0.75 | 2.25 | 2.31x |
+| 24 | 1.97 | 8.34 | collapse (only 24 P-cores; E-core + oversubscription) |
+
+8 threads is the robust knee here: ~2.5-3x at low variance, and it honors the
+energy target (8 of 24 P-cores for ~90% of the best case). 16T edges ahead only
+on a fully quiet box (measured 0.52 p50 there, ~3.4x) and regresses under load;
+auto-calibration lands at 8, or 16 when 16 genuinely wins that box's measurement,
+and never the 24T collapse (the ladder caps at `pool_size - 1`). This 8-16 knee
+is what the per-box calibration converges to on this hardware; it is measured, not
+hardcoded. Prior condvar pool at the same 8T
+was 1.75x (1.04 p50); the spin pool + 2^18 floor is the 2.56x. At the knee decode
+moves ~57 MB / 0.68 ms ~= 84 GB/s, still ~10x under the ~800 GB/s bandwidth floor:
+the remaining ceiling is per-byte serial work (attention, recurrent state,
+sampling) plus dispatch count, not raw bandwidth. Extracting the leftover cores
+needs a second unit of work per model pass (speculative / n-gram-lookahead verify
+against the byte-exact `project_byte0`), not more matvec threads.
+
+Kernel bench (768x3072 matvec, single-thread): fp32 0.118 ms, fp16 0.112 ms,
+int8 sdot 0.030 ms (~79 GB/s). The int8 split floor is held at 2^23 (1T-optimal
+on the prior pool at this size); it is worth a spin-pool re-measure once an int8
+bin is on the box.
+
+## measured performance (condvar-era, superseded fp16 rows)
 
 200m-class shape (h1024, 4 local + 16 global blocks, ffn 4096, heads 16,
 seq 1024; 270.8M params by the same manifest-shape convention; random weights,
