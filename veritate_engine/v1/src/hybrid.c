@@ -129,23 +129,32 @@ void hybrid_matvec_i8_scalar(const void* w, const float* x, float* out,
 hybrid_matvec_fn hybrid_matvec_wt = hybrid_matvec_f32_scalar;
 hybrid_matvec_fn hybrid_matvec_fp = hybrid_matvec_f32_scalar;
 
-// NEON is mandatory on arm64; VERITATE_HYBRID_SCALAR=1 forces the scalar
-// references for kernel-identity checks and A/B timing.
-void hybrid_dispatch_init(int has_neon, int32_t dtype) {
+// SIMD upgrades the scalar defaults per detected arch features.
+// VERITATE_HYBRID_SCALAR=1 forces the scalar references for kernel-identity
+// checks and A/B timing. int8 x86 stays scalar: no avx2 int8 matvec yet.
+void hybrid_dispatch_init(int32_t dtype) {
+    cpu_features_t feat;
+    cpu_detect(&feat);
     hybrid_matvec_fp = hybrid_matvec_f32_scalar;
     hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_scalar
                      : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_scalar
                      : hybrid_matvec_f32_scalar;
-#if defined(__aarch64__) || defined(_M_ARM64)
     const char* s = getenv("VERITATE_HYBRID_SCALAR");
-    if (has_neon && !(s && *s && *s != '0')) {
+    if (s && *s && *s != '0') return;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    if (feat.neon) {
         hybrid_matvec_fp = hybrid_matvec_f32_neon;
         hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_neon
                          : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_sdot
                          : hybrid_matvec_f32_neon;
     }
-#else
-    (void)has_neon;
+#elif defined(__x86_64__) || defined(_M_X64)
+    if (feat.avx2 && feat.f16c) {
+        hybrid_matvec_fp = hybrid_matvec_f32_avx2;
+        hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_avx2
+                         : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_scalar
+                         : hybrid_matvec_f32_avx2;
+    }
 #endif
 }
 
@@ -629,7 +638,7 @@ hybrid_t* hybrid_load(FILE* f, int32_t vocab, int32_t hidden, int32_t layers,
         return NULL;
     }
 
-    hybrid_dispatch_init(1, dtype);
+    hybrid_dispatch_init(dtype);
     hybrid_t* h = (hybrid_t*)calloc(1, sizeof(hybrid_t));
     if (!h) return NULL;
     h->vocab = vocab; h->hidden = hidden; h->layers = layers; h->ffn = ffn;

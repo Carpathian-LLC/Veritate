@@ -43,7 +43,9 @@
 #define CPUID_LEAF_BRAND0  0x80000002
 #define CPUID_LEAF_BRAND1  0x80000003
 #define CPUID_LEAF_BRAND2  0x80000004
+#define CPUID_LEAF_FEAT    1
 #define CPUID_LEAF_EXT     7
+#define CPUID_BIT_F16C     29
 #define CPUID_BIT_AVX2     5
 #define CPUID_BIT_AVX512F  16
 #define CPUID_BIT_VNNI     11
@@ -70,6 +72,9 @@ void cpu_detect(cpu_features_t* out) {
     cpuidex(regs, CPUID_LEAF_BRAND0, 0); memcpy(out->brand,      regs, 16);
     cpuidex(regs, CPUID_LEAF_BRAND1, 0); memcpy(out->brand + 16, regs, 16);
     cpuidex(regs, CPUID_LEAF_BRAND2, 0); memcpy(out->brand + 32, regs, 16);
+
+    cpuidex(regs, CPUID_LEAF_FEAT, 0);
+    out->f16c        = (regs[2] >> CPUID_BIT_F16C)    & 1;
 
     cpuidex(regs, CPUID_LEAF_EXT, 0);
     out->avx2        = (regs[1] >> CPUID_BIT_AVX2)    & 1;
@@ -103,6 +108,7 @@ void cpu_print(const cpu_features_t* feat) {
     printf("cpu: %s\n", feat->brand);
     printf("features:");
     if (feat->avx2)        printf(" avx2");
+    if (feat->f16c)        printf(" f16c");
     if (feat->avx512f)     printf(" avx512f");
     if (feat->avx512_vnni) printf(" avx512_vnni");
     if (feat->neon)        printf(" neon");

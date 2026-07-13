@@ -2692,6 +2692,9 @@ function refreshPytorchModels() {
       sel.appendChild(o);
     }
     sel.disabled = false;
+    // Caps just landed; re-gate the mode picker so chat/agent enable without a
+    // reload (the picker was gated on backend-switch before this async fetch).
+    if (typeof _applyModeAvailability === "function") _applyModeAvailability();
   }).catch(err => {
     fillSelectFallback("cModel", `endpoint missing — restart server (${err.message || err})`);
   });
@@ -10692,6 +10695,7 @@ function _appUpdatePullWithGuards() {
     }
 
     if (lab) { lab.textContent = willReload ? "pulling + reloading…" : "pulling…"; lab.style.color = "var(--warm)"; }
+    _lifecycleOverlayShow("updating");
     return fetch("/app/update_pull", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -10702,6 +10706,7 @@ function _appUpdatePullWithGuards() {
       }),
     }).then(r => r.json()).then(res => {
       if (res && res.status) _renderUpdateStatus(res.status);
+      if (!(res && res.ok && willReload)) _lifecycleOverlayHide();
       if (lab) {
         if (res && res.ok) {
           lab.textContent = willReload ? "pulled, reloading…" : "pulled";
@@ -10722,7 +10727,7 @@ function _appUpdatePullWithGuards() {
       }
     });
   })
-    .catch(e => { if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
+    .catch(e => { _lifecycleOverlayHide(); if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
     .finally(() => { if (upb) upb.disabled = false; _refreshUpdateStatus(); });
 }
 

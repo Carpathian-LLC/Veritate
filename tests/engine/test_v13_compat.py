@@ -46,8 +46,10 @@ def _engine():
     return exe
 
 
-def _greedy(exe, bin_path):
+def _greedy(exe, bin_path, scalar=False):
     env = dict(os.environ, VERITATE_MODEL_PATH=bin_path)
+    if scalar:
+        env["VERITATE_HYBRID_SCALAR"] = "1"
     p = subprocess.run([exe, "chat_greedy", BUDGET], input=PROMPTS,
                        capture_output=True, env=env, timeout=300)
     assert p.returncode == 0, p.stderr.decode(errors="replace")
@@ -65,3 +67,9 @@ def test_v13_fixture_loads_and_generates():
     """v13 fixture loads and emits the full greedy budget for every turn."""
     out = _greedy(_engine(), V13_FIXTURE)
     assert len(out) == N_TURNS * (int(BUDGET) + 1)
+
+
+def test_v13_simd_matches_scalar():
+    """v13 hybrid SIMD matvec (neon/avx2) greedy-decodes byte-identically to scalar."""
+    exe = _engine()
+    assert _greedy(exe, V13_FIXTURE) == _greedy(exe, V13_FIXTURE, scalar=True)

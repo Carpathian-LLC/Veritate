@@ -22,6 +22,7 @@
 typedef struct {
     // x86_64
     int avx2;
+    int f16c;
     int avx512f;
     int avx512_vnni;
     // arm64
