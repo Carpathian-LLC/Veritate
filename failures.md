@@ -2,6 +2,22 @@
 
 Falsified approaches. Each entry: what was tested, the measured result that killed it, and the retry condition. An approach on this list is dead until its retry condition is met. Entries are research outcomes, not bug fixes. Entries arrive here from `ideas.md` when an idea hits its kill line; index at `research.md`.
 
+## 2026-07-13: hard-negative mining for the key head does NOT lift top-1 retrieval precision (the ceiling is feature quality, not the negative recipe)
+
+- Tested: the natural-query bottleneck is top-1 precision on the HARD store (fineweb + competing real facts), where stock InfoNCE with 512 random store-distractor negatives lands recall@1 ~0.32-0.37 on held-out topics. Standard fix for exactly this: mine HARD negatives — each step draw a random 4096-distractor window, score against the batch queries, use the top-512 hardest (with gradient) as negatives instead of uniform random. Compared baseline vs hard-neg heads on the same held-out natural-query split, retrieval-only. Code `experiments/v2/memory/eval_teacher_hardneg.py`.
+- Result: no lift, target metric slightly DOWN. hard-store recall@1 baseline 0.351 -> hardneg 0.327 (delta -0.024, within run-to-run noise); hard-store recall@5 0.620 -> 0.637; fineweb (easy) @1 0.444 -> 0.450, @5 0.713 -> 0.737. Mining the hardest competitors did not improve top-1 precision on the semantically-competitive store it was designed for.
+- Cause: the limit is not the negative-sampling strategy, it is the FROZEN trunk feature quality. chat200m's pooled residual does not resolve semantically-competitive real facts finely enough, and no negative recipe recovers resolution the features never had — over-focusing on a few confusable pairs can even trade away general separation (the small hard@1 regression). This CONFIRMS BY ELIMINATION that retrieval precision is feature-bound: the lever is a richer trunk (the 800M), not a smarter head recipe.
+- Retry condition: re-run on the 800M's features (richer residual may make hard-neg mining pay off, or may lift recall@1 enough that mining is moot) — `eval_teacher_hardneg.py` is model-agnostic. Do NOT re-chase head-training recipes on chat200m features; the ceiling is the features.
+- Run: `experiments/v2/memory/eval_teacher_hardneg.py`.
+
+## 2026-07-13: multi-leaf (top-k) context injection to convert recall@5 into grounding FAILS on the small generator
+
+- Tested: the obvious productionization lever off the natural-query eval. Retrieval recall@5 (~0.63) is ~2x recall@1 (~0.37), and serving already injects up to CTX_LEAVES=3 leaves, so the hypothesis was: inject the top-k retrieved leaves (not just top-1) into context and the extra recall converts to more grounded answers. Measured end-to-end grounded_acc on chat200m over held-out natural-query topics, hard store, n=100, at k=1/3/5. Code `experiments/v2/memory/eval_teacher_topk.py`.
+- Result: grounding gets WORSE with more leaves. top-1 grounded_acc 0.130, top-3 0.120, top-5 0.080 (retrieval recall@1 0.350, bare 0.010). The recall@5 gain does NOT transfer to end-to-end; adding candidate leaves monotonically hurts.
+- Cause: chat200m cannot disambiguate among candidates. One clean leaf -> it copies the answer; five leaves -> the gold fact is present more often (higher recall@5) but the k-1 distractor leaves actively mislead a 200M copy-limited generator, and it cannot select which leaf to copy. Multi-candidate context is a burden, not a help, for a weak generator. This localizes the end-to-end bottleneck precisely: it is top-1 retrieval PRECISION plus generator disambiguation, NOT recall@k coverage.
+- Retry condition: a generator strong enough to select among candidates (the 800M when trained, or a platform-served larger model) — re-run eval_teacher_topk.py and look for top-k >= top-1; OR a re-ranker that collapses k candidates to the single best leaf before injection. Do NOT raise serving TOP_K for the small local model on the assumption more context helps — for chat200m, top-1 injection is best (this test prevented a net-negative serving change). k remains a per-model tuning knob.
+- Run: `experiments/v2/memory/eval_teacher_topk.py`.
+
 ## 2026-06-27: from-scratch dense byte-level 2.5B coder
 
 - Tested: `veritate_3b` (2.52B dense, vocab=256) pretrained from scratch on distilled Python chat corpus, dashboard run.

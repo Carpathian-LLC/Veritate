@@ -48,3 +48,6 @@ extensions/installed/
 # Standalone local fact dataset + its watchdog: local-only (not for the repo).
 /facts/
 /facts_pipeline/
+
+# Others
+*handoff*.md
