@@ -1,89 +1,93 @@
 /* Developed by Carpathian, LLC. Distribution Not Authorized. */
 /* chat_tab.css : the front-door chat, ported into the dashboard's Chat tab.
-   Every rule is scoped under #chatMount and the palette vars are redefined on
-   the mount so the chat keeps its own look regardless of the dashboard theme.
-   The spin keyframe is renamed (chspin) to avoid clashing with the dashboard's
-   own @keyframes spin. Ids in the markup are prefixed "ch-". */
+   Skinned to the dashboard tokens (:root palette + the monospace body font) so
+   it reads as native platform UI: only chat-specific colors (--me user bubble,
+   --field input) are declared here, the rest inherit. The spin keyframe is
+   renamed (chspin) to avoid clashing with the dashboard's own @keyframes spin.
+   Ids in the markup are prefixed "ch-". chatTabInit() sizes the panel to the
+   viewport each activation/resize so the composer never clips the bottom. */
 
-#chatMount { --bg:#06090f; --panel:#0d111a; --line:#1d2536; --text:#e6ecf5;
-             --soft:#9fb0c8; --dim:#5f6f88; --accent:#6aa6ff; --me:#15233a; --field:#11161f;
-             background:var(--bg); color:var(--text);
-             font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-             border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-#chatMount, #chatMount * { box-sizing:border-box; }
+#chatMount { --me:#1a2030; --field:#0a0c12; background:var(--bg); color:var(--text); }
 
 #chatMount header { display:flex; align-items:center; justify-content:space-between;
-                    padding:12px 18px; border-bottom:1px solid var(--line); }
+                    padding:4px 2px 10px; border-bottom:1px solid var(--line); }
 #chatMount header .meta { color:var(--dim); font-size:12px; }
 #chatMount header .meta b { color:var(--soft); font-weight:600; }
 #chatMount header .actions { display:flex; align-items:center; gap:14px; }
-#chatMount header a, #chatMount .gear { color:var(--soft); font-size:13px; text-decoration:none;
+#chatMount header a, #chatMount .gear { color:var(--soft); font-size:12px; text-decoration:none;
                     cursor:pointer; background:none; border:none; font:inherit; }
 #chatMount header a:hover, #chatMount .gear:hover { color:var(--text); }
 
 #chatMount #ch-settings { display:none; border-bottom:1px solid var(--line); background:var(--panel); }
 #chatMount #ch-settings.open { display:block; }
 #chatMount #ch-settings.open ~ .wrap { filter:blur(4px); pointer-events:none; user-select:none; }
-#chatMount #ch-settings .panel { max-width:760px; margin:0 auto; padding:20px 18px;
-                    display:flex; flex-direction:column; gap:20px; }
+#chatMount #ch-settings .panel { max-width:760px; margin:0 auto; padding:18px 2px;
+                    display:flex; flex-direction:column; gap:18px; }
 #chatMount .sgroup { display:flex; flex-direction:column; gap:9px; }
 #chatMount .srow { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-#chatMount .srow > .lbl { color:var(--soft); font-size:10.5px; letter-spacing:.13em;
+#chatMount .srow > .lbl { color:var(--dim); font-size:9px; letter-spacing:.14em;
                     text-transform:uppercase; font-weight:600; width:88px; flex:none; }
 #chatMount .link { color:var(--accent); font-size:12px; text-decoration:none; margin-left:102px; }
 #chatMount .link:hover { text-decoration:underline; }
-#chatMount .hint { color:var(--dim); font-size:11.5px; margin-left:102px; }
+#chatMount .hint { color:var(--dim); font-size:11px; margin-left:102px; }
 
 #chatMount select { background:var(--field); border:1px solid var(--line); color:var(--text);
-                    padding:8px 10px; font:inherit; border-radius:6px; min-width:240px; }
+                    padding:6px 8px; font:inherit; border-radius:3px; min-width:240px; }
 #chatMount select:disabled { opacity:.5; }
-#chatMount .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
-#chatMount .seg button { background:var(--field); color:var(--soft); border:none; padding:8px 16px;
+#chatMount select:focus { outline:none; border-color:var(--soft); }
+#chatMount .seg { display:inline-flex; border:1px solid var(--line); border-radius:3px; overflow:hidden; }
+#chatMount .seg button { background:var(--field); color:var(--soft); border:none; padding:6px 14px;
                     font:inherit; cursor:pointer; }
-#chatMount .seg button.on { background:var(--accent); color:#06121f; font-weight:600; }
+#chatMount .seg button.on { background:var(--accent); color:#000; font-weight:600; }
 #chatMount .seg button:disabled { opacity:.35; cursor:default; }
-#chatMount .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:13.5px; cursor:pointer; }
+#chatMount .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:12.5px; cursor:pointer; }
 #chatMount .check input { width:15px; height:15px; accent-color:var(--accent); }
 
 #chatMount .kb { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-left:102px; }
 #chatMount .filebtn { background:var(--field); border:1px solid var(--line); color:var(--text);
-                    padding:8px 13px; border-radius:6px; cursor:pointer; font-size:13px; }
-#chatMount .filebtn:hover { border-color:var(--accent); }
+                    padding:6px 12px; border-radius:3px; cursor:pointer; font-size:12px; }
+#chatMount .filebtn:hover { border-color:var(--soft); }
 #chatMount .fname { color:var(--dim); font-size:12px; max-width:220px; overflow:hidden;
                     text-overflow:ellipsis; white-space:nowrap; }
-#chatMount .btn { background:var(--accent); color:#06121f; font-weight:600; border:none;
-                    padding:8px 15px; border-radius:6px; cursor:pointer; font:inherit; }
+#chatMount .btn { background:var(--accent); color:#000; font-weight:600; border:none;
+                    padding:6px 14px; border-radius:3px; cursor:pointer; font:inherit; }
+#chatMount .btn:hover { background:#80b4ff; }
 #chatMount .btn:disabled { opacity:.4; cursor:default; }
 
-/* The chat is a self-contained panel inside the tab: fixed height, the message
-   log scrolls internally, the composer stays pinned at the bottom. */
-#chatMount .wrap { display:flex; flex-direction:column; height:calc(100vh - 190px); min-height:460px;
-                    max-width:760px; margin:0 auto; padding:18px; transition:filter .15s ease; }
-#chatMount #ch-log { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column;
-                    gap:14px; padding-bottom:20px; }
-#chatMount .msg { max-width:86%; padding:10px 13px; border-radius:10px; white-space:pre-wrap; }
-#chatMount .user { align-self:flex-end; background:var(--me); }
+/* The chat is a self-contained panel: the message log scrolls internally, the
+   composer keeps its size at the bottom. chatTabInit() sets the exact height each
+   activation/resize; the calc is the pre-init fallback (kept conservative so it
+   cannot clip even with the HUD band showing; dvh tracks the real viewport). */
+#chatMount .wrap { display:flex; flex-direction:column; height:calc(100dvh - 240px);
+                    max-width:760px; margin:0 auto; padding:6px 2px; transition:filter .15s ease; }
+#chatMount #ch-log { flex:1 1 0; min-height:0; overflow-y:auto; display:flex; flex-direction:column;
+                    gap:12px; padding-bottom:16px; }
+#chatMount .msg { max-width:86%; padding:9px 12px; border-radius:5px; white-space:pre-wrap; line-height:1.5; }
+#chatMount .user { align-self:flex-end; background:var(--me); border:1px solid var(--line); }
 #chatMount .bot { align-self:flex-start; background:var(--panel); border:1px solid var(--line); }
 #chatMount .bot .src { margin-top:9px; padding-top:8px; border-top:1px solid var(--line);
-                    font-size:11.5px; color:var(--dim); }
+                    font-size:11px; color:var(--dim); }
 #chatMount .bot .src b { color:var(--accent); font-weight:600; }
-#chatMount .bar { position:sticky; bottom:0; background:var(--bg); padding:12px 0 6px;
-                    display:flex; align-items:center; gap:8px; border-top:1px solid var(--line); }
+#chatMount .bar { flex:none; background:var(--bg); padding:12px 0 4px;
+                    display:flex; align-items:center; gap:8px; }
 #chatMount .ctxwrap { position:relative; flex:none; display:flex; align-items:center; }
 #chatMount #ch-ctxRing { cursor:pointer; }
+#chatMount #ch-ctxRing:focus { outline:none; }
 #chatMount #ch-ctxRing:hover #ch-ctxPct { fill:var(--text); }
 #chatMount .ctxpop { position:absolute; bottom:135%; left:0; width:248px; background:var(--panel);
-                    border:1px solid var(--line); border-radius:8px; padding:11px 13px; font-size:12px;
+                    border:1px solid var(--line); border-radius:5px; padding:11px 13px; font-size:12px;
                     color:var(--soft); line-height:1.5; box-shadow:0 8px 28px rgba(0,0,0,.45); z-index:6; }
 #chatMount .ctxpop b { color:var(--text); font-weight:600; }
 #chatMount .ctxpop-detail { margin-top:7px; padding-top:7px; border-top:1px solid var(--line); color:var(--dim); }
 #chatMount .settings-close { align-self:stretch; margin-top:4px; background:var(--field); color:var(--text);
-                    border:1px solid var(--line); border-radius:6px; padding:11px; font:inherit; cursor:pointer; }
-#chatMount .settings-close:hover { border-color:var(--accent); }
-#chatMount #ch-q { flex:1; background:var(--field); border:1px solid var(--line); color:var(--text);
-                    padding:11px 13px; border-radius:8px; font:inherit; }
-#chatMount #ch-send { background:var(--accent); color:#06121f; font-weight:600; border:none;
-                    padding:0 18px; border-radius:8px; cursor:pointer; }
+                    border:1px solid var(--line); border-radius:3px; padding:10px; font:inherit; cursor:pointer; }
+#chatMount .settings-close:hover { border-color:var(--soft); }
+#chatMount #ch-q { flex:1; min-width:0; background:var(--field); border:1px solid var(--line); color:var(--text);
+                    padding:9px 12px; border-radius:3px; font:inherit; }
+#chatMount #ch-q:focus { outline:none; border-color:var(--soft); }
+#chatMount #ch-send { background:var(--accent); color:#000; font-weight:600; border:none;
+                    padding:9px 18px; border-radius:3px; cursor:pointer; }
+#chatMount #ch-send:hover { background:#80b4ff; }
 #chatMount #ch-send:disabled { opacity:.5; cursor:default; }
 #chatMount .hint-row { color:var(--dim); font-size:12px; text-align:center; padding:30px 0; }
 #chatMount .spin { display:inline-block; width:15px; height:15px; border:2px solid var(--line);

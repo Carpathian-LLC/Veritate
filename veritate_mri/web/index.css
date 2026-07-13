@@ -57,6 +57,9 @@
   .tab.active { color: #fff; background: var(--panel); border-color: var(--line); position: relative; top: 1px; }
   .tab-body { display: none; }
   .tab-body.active { display: block; }
+  /* chat sizes itself to the viewport; drop the page's bottom padding so its
+     composer sits at the fold instead of below a phantom scroll region. */
+  body:has(.tab-body[data-tab="chat"].active) { padding-bottom: 0; }
 
   /* extensions menu: collapses installed extensions into one tab entry */
   .ext-library { display: inline-flex; align-items: center; padding: 0 14px; font-size: 13px; font-weight: 500; color: var(--dim); cursor: pointer; border-left: 1px solid var(--line); user-select: none; }
@@ -158,6 +161,8 @@
   #cLrT, #cTpsT, #cGnT { height: 100px; }
   #cConfEvoT, #cConfEvoL { height: 160px; }
   #cReadGradeT, #cReadGradeL { height: 200px; }
+  #cWritingHealthT, #cWritingHealthL { height: 200px; }
+  #cReadingCompEasyT, #cReadingCompHardT, #cReadingCompEasyL, #cReadingCompHardL { height: 180px; }
   #cCoactL { height: 200px; }
   #cSurpriseL { height: 200px; }
   .bio-scroll { overflow: auto; max-height: 240px; }
@@ -176,6 +181,9 @@
   .panel.expanded #cLrT, .panel.expanded #cTpsT, .panel.expanded #cGnT { height: 200px; }
   .panel.expanded #cConfEvoT, .panel.expanded #cConfEvoL { height: 320px; }
   .panel.expanded #cReadGradeT, .panel.expanded #cReadGradeL { height: 260px; }
+  .panel.expanded #cWritingHealthT, .panel.expanded #cWritingHealthL { height: 300px; }
+  .panel.expanded #cReadingCompEasyT, .panel.expanded #cReadingCompHardT,
+  .panel.expanded #cReadingCompEasyL, .panel.expanded #cReadingCompHardL { height: 280px; }
   .panel.expanded #cCoactL { height: 420px; }
   .panel.expanded #cSurpriseL { height: 360px; }
   .panel.expanded .bio-scroll { max-height: 720px; }
@@ -434,6 +442,18 @@
                         border-radius: 50%; z-index: 51; animation: spin 0.7s linear infinite;
                         pointer-events: none; }
   .is-loading.is-loading-sm::before { width: 14px; height: 14px; margin: -7px 0 0 -7px; border-width: 2px; }
+
+  /* Full-screen relaunch overlay. Greys the whole app and centers a pinwheel +
+     label while the server relaunches (power-save restore, soft reload, reload
+     python). Visible on any tab so the action never looks dead. */
+  #lifecycleOverlay { position: fixed; inset: 0; z-index: 9000; display: none;
+                      flex-direction: column; align-items: center; justify-content: center;
+                      gap: 16px; background: rgba(10, 12, 18, 0.55); backdrop-filter: blur(2px); }
+  #lifecycleOverlay.on { display: flex; }
+  #lifecycleOverlay .pinwheel { width: 46px; height: 46px; border: 4px solid var(--dim);
+                                border-top-color: var(--warm); border-radius: 50%;
+                                animation: spin 0.7s linear infinite; }
+  #lifecycleOverlay .msg { color: var(--text); font-size: 14px; letter-spacing: .06em; }
 
   /* Inline pulse dot for status text — for polling refreshes that shouldn't
      trigger a full overlay (no flicker on 1-second polls). */

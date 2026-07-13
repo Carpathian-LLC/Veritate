@@ -11,6 +11,8 @@
   const TEACHER_ID = "teacher";
   const TEACHER_PREFIX = "teacher:";
   const VERITATE_DOCS_ID = "veritate_docs";   // grounds the public model on the platform docs
+  const WRAP_FIT_GAP = 16;      // px of breathing room below the composer
+  const WRAP_MIN_HEIGHT = 200;  // px floor so a very short window still shows log + composer
 
   const mount = document.getElementById("chatMount");
   if (!mount) return;
@@ -43,7 +45,7 @@
   function newChat() {
     convo = { summary: "", turns: [] }; saveConvo();
     lastCtx = null;
-    log.innerHTML = '<div class="hint-row">Ask a question. Pick a model in settings, or let the cloud answer.</div>';
+    log.innerHTML = '<div class="hint-row">Ask a question. Pick one of your trained models in settings, or let the cloud answer.</div>';
     updateCtxRing(0); q.focus();
   }
 
@@ -253,12 +255,28 @@
       .finally(() => { send.disabled = false; q.focus(); });
   }
 
+  // Size the panel to the space actually below the chrome (topbar + tabs + an
+  // on/off HUD) so the composer never drops below the fold. Guarded so the
+  // ResizeObserver settles instead of looping.
+  function fitWrap() {
+    const w = mount.querySelector(".wrap");
+    if (!w || !w.offsetParent) return;
+    const target = Math.max(WRAP_MIN_HEIGHT,
+                            window.innerHeight - w.getBoundingClientRect().top - WRAP_FIT_GAP);
+    if (Math.abs(parseFloat(w.style.height || "0") - target) < 1) return;
+    w.style.height = target + "px";
+  }
+
   let wired = false;
-  // Called by activateTab("chat") on first open. Wires listeners + kicks off the
-  // network init once; subsequent calls only refocus the input.
+  // Called by activateTab("chat") on every open. Refits the panel each time;
+  // wires listeners + kicks off the network init once, refocuses thereafter.
   window.chatTabInit = function () {
+    fitWrap();
     if (wired) { q.focus(); return; }
     wired = true;
+
+    window.addEventListener("resize", fitWrap);
+    if (window.ResizeObserver) new ResizeObserver(fitWrap).observe(document.body);
 
     $("newChat").addEventListener("click", newChat);
     $("gear").addEventListener("click", () => $("settings").classList.toggle("open"));

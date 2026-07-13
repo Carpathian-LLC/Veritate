@@ -1871,20 +1871,13 @@ function showAgentEmpty(reason) {
 const CHATML_IM_START = "<|im_start|>";
 const CHATML_IM_END   = "<|im_end|>";
 const CHATML_EOT      = "<|endoftext|>";
-const CHAT_SYSTEM_TAG    = "<|system|>";
 const CHAT_USER_TAG      = "<|user|>";
 const CHAT_ASSISTANT_TAG = "<|assistant|>";
 const CHAT_END_TAG       = "<|end|>";
-const DEFAULT_PERSONA    = "You are Veritate, a helpful assistant.";
-function chatPersona() {
-  const el = $("genPersona");
-  const v = el ? (el.value || "").trim() : "";
-  return v || DEFAULT_PERSONA;
-}
-// Prepend the trained system turn so the model has an identity to answer with,
-// then the user/assistant frame it learned in SFT (build_chat_corpus template).
+// No persona/system turn: identity is trained into the model; a persona in the
+// prompt made the byte model recite it every turn (removed 2026-07-13).
 function wrapChat(prompt) {
-  return `${CHAT_SYSTEM_TAG}\n${chatPersona()}\n${CHAT_USER_TAG}\n${prompt}\n${CHAT_ASSISTANT_TAG}\n`;
+  return `${CHAT_USER_TAG}\n${prompt}\n${CHAT_ASSISTANT_TAG}\n`;
 }
 function stripChatResponse(text) {
   // Trim at the first end-of-turn / next-turn marker (either framing).
@@ -2559,6 +2552,8 @@ function activateTab(name) {
       if (classroomStateL.loaded) {
         render_confidence_evo(classroomRefsL, classroomStateL.run, classroomStateL.steps, classroomStateL.confByStep);
         render_reading_level(classroomRefsL, classroomStateL.run, classroomStateL.gradesSteps, classroomStateL.gradesByStep, true, classroomStateL.config);
+        render_writing_health(classroomRefsL, classroomStateL.run, classroomStateL.writingSteps, classroomStateL.writingByStep, true, classroomStateL.config);
+        render_reading_comprehension(classroomRefsL, classroomStateL.run, classroomStateL.compSteps, classroomStateL.compByStep, true, classroomStateL.config);
       }
     });
   } else if (name === "training") {
@@ -2573,6 +2568,8 @@ function activateTab(name) {
       if (classroomState.loaded) {
         render_confidence_evo(classroomRefsT, classroomState.run, classroomState.steps, classroomState.confByStep);
         render_reading_level(classroomRefsT, classroomState.run, classroomState.gradesSteps, classroomState.gradesByStep, true, classroomState.config);
+        render_writing_health(classroomRefsT, classroomState.run, classroomState.writingSteps, classroomState.writingByStep, true, classroomState.config);
+        render_reading_comprehension(classroomRefsT, classroomState.run, classroomState.compSteps, classroomState.compByStep, true, classroomState.config);
       }
     });
   } else if (name === "wiki") {
@@ -2870,7 +2867,6 @@ const _GenPrefs = (() => {
     ["ablNeuron", "value"],
     ["genFastMode", "value"],
     ["genConstrained", "value"],
-    ["genPersona", "value"],
     ["genRepNgram", "value"],
     ["genRepPenalty", "value"],
     ["genRepWindow", "value"],
@@ -4477,6 +4473,12 @@ const cConfEvoT = $("cConfEvoT"), ctxConfEvoT = cConfEvoT.getContext("2d");
 const cConfEvoL = $("cConfEvoL"), ctxConfEvoL = cConfEvoL.getContext("2d");
 const cReadGradeT = $("cReadGradeT"), ctxReadGradeT = cReadGradeT.getContext("2d");
 const cReadGradeL = $("cReadGradeL"), ctxReadGradeL = cReadGradeL.getContext("2d");
+const cWritingHealthT = $("cWritingHealthT"), ctxWritingHealthT = cWritingHealthT.getContext("2d");
+const cWritingHealthL = $("cWritingHealthL"), ctxWritingHealthL = cWritingHealthL.getContext("2d");
+const cReadingCompEasyT = $("cReadingCompEasyT"), ctxReadingCompEasyT = cReadingCompEasyT.getContext("2d");
+const cReadingCompHardT = $("cReadingCompHardT"), ctxReadingCompHardT = cReadingCompHardT.getContext("2d");
+const cReadingCompEasyL = $("cReadingCompEasyL"), ctxReadingCompEasyL = cReadingCompEasyL.getContext("2d");
+const cReadingCompHardL = $("cReadingCompHardL"), ctxReadingCompHardL = cReadingCompHardL.getContext("2d");
 
 // classroom panel refs — one set per tab. render functions key off these.
 const classroomRefsT = {
@@ -4493,8 +4495,16 @@ const classroomRefsT = {
   reasoningLevelId: "trainReasoningLevel",
   conceptsId:      "trainConcepts",
   conceptsHoverId: "trainConceptsHover",
-  writingHealthId: "trainWritingHealth",
-  readingCompId:   "trainReadingComp",
+  writingHealthId:  "trainWritingHealth",
+  writingCanvas:    cWritingHealthT,
+  writingCtx:       ctxWritingHealthT,
+  writingSamplesId: "trainWritingHealthSamples",
+  readingCompId:     "trainReadingComp",
+  readingCompTrajId: "trainReadingCompTraj",
+  compCanvasEasy:    cReadingCompEasyT,
+  compCtxEasy:       ctxReadingCompEasyT,
+  compCanvasHard:    cReadingCompHardT,
+  compCtxHard:       ctxReadingCompHardT,
 };
 const classroomRefsL = {
   sizeMeterId: "learnSizeMeter",
@@ -4513,8 +4523,16 @@ const classroomRefsL = {
   pruneBodyId:     "pruneBody",
   pruneTitleId:    "pruneTitle",
   pruneSubtitleId: "pruneSubtitle",
-  writingHealthId: "learnWritingHealth",
-  readingCompId:   "learnReadingComp",
+  writingHealthId:  "learnWritingHealth",
+  writingCanvas:    cWritingHealthL,
+  writingCtx:       ctxWritingHealthL,
+  writingSamplesId: "learnWritingHealthSamples",
+  readingCompId:     "learnReadingComp",
+  readingCompTrajId: "learnReadingCompTraj",
+  compCanvasEasy:    cReadingCompEasyL,
+  compCtxEasy:       ctxReadingCompEasyL,
+  compCanvasHard:    cReadingCompHardL,
+  compCtxHard:       ctxReadingCompHardL,
 };
 
 function makeClassroomState() {
@@ -5945,145 +5963,132 @@ function _whTone(metric, v, prev) {
   return tone === "green" ? "#5dff9b" : tone === "warm" ? "var(--warm)" : "var(--hot)";
 }
 
+// Legend colors avoid green/yellow/orange/red (those mean status). Picked for
+// high mutual contrast; the metric tiles carry the matching swatch so they
+// double as the trajectory chart's color key.
+const WH_COLORS = {
+  distinct_3:        "#ff3db8",
+  lex_chain_density: "#3dd6ff",
+  pronoun_unbacked:  "#9b3dff",
+  repeat_rate:       "#ffb3ff",
+  pmi:               "#3dffd6",
+  self_ppl:          "#5d7dff",
+};
+// Metrics drawn as trajectory lines. self_ppl lives on a different scale and is
+// shown as a tile only; pmi drops out when no bigram index exists (score null).
+const WH_TRAJ_METRICS = ["distinct_3", "lex_chain_density", "pronoun_unbacked", "repeat_rate", "pmi"];
+
+// One KPI tile per metric: swatch + label, then value + trend, then target.
+function _whTile(m, v, prevV, prevStep) {
+  const tone = _whTone(m, v, prevV);
+  const arrow = m.higher ? "≥" : "≤";
+  const swatch = `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${WH_COLORS[m.id] || "#fff"};flex:0 0 auto"></span>`;
+  let trend = "";
+  if (prevV != null && v != null) {
+    const tol = (m.higher ? 0.02 : 0.005) * Math.max(m.target, 0.01);
+    const dv = v - prevV;
+    if (Math.abs(dv) <= tol) trend = `<span class="meta" style="font-size:12px;color:var(--dim)">→</span>`;
+    else {
+      const goodDir = m.higher ? (dv > 0) : (dv < 0);
+      const trendColor = goodDir ? "#5dff9b" : "var(--hot)";
+      trend = `<span style="font-size:13px;color:${trendColor}" title="vs step ${prevStep}: ${dv > 0 ? "+" : ""}${dv.toFixed(3)}">${dv > 0 ? "↑" : "↓"}</span>`;
+    }
+  }
+  return `<div title="${escapeHtml(m.blurb)}" style="background:rgba(255,255,255,.03);padding:8px 10px;border-left:3px solid ${tone};border-radius:4px;display:flex;flex-direction:column;gap:3px">
+    <div class="meta" style="font-size:10.5px;display:flex;align-items:center;gap:5px">${swatch}<span>${m.label}</span></div>
+    <div style="display:flex;align-items:baseline;gap:6px">
+      <b style="color:${tone};font-size:16px;line-height:1">${v == null ? "—" : m.fmt(v)}</b>${trend}
+    </div>
+    <div class="meta" style="font-size:10px;color:var(--dim)">target ${arrow} ${m.target}</div>
+  </div>`;
+}
+
 function render_writing_health(refs, run, writingSteps, writingByStep, haveCheckpoints, config) {
   const root = $(refs.writingHealthId);
   if (!root) return;
+  const canvas = refs.writingCanvas, ctx = refs.writingCtx;
+  const samplesRoot = refs.writingSamplesId ? $(refs.writingSamplesId) : null;
+  const clearAux = () => { if (canvas) canvas.style.display = "none"; if (samplesRoot) samplesRoot.innerHTML = ""; };
   if (!writingSteps || writingSteps.length === 0) {
     root.innerHTML = haveCheckpoints
       ? `<span style="color:var(--hot)">No writing-health dumps yet for this run.</span>`
       : `<span style="color:var(--warm)">No checkpoint yet.</span>`;
+    clearAux();
     return;
   }
   const latestStep = writingSteps[writingSteps.length - 1];
   const latest = writingByStep[latestStep];
   if (!latest || !latest.aggregate) {
     root.innerHTML = `<span class="meta">writing_health_step_${latestStep}.json missing aggregate field</span>`;
+    clearAux();
     return;
   }
 
-  let html = "";
-  // Silently omit the PMI metric when no bigram index exists for this corpus.
-  // The legend below still renders the other writing-health metrics; PMI just
-  // doesn't appear. (Previously this surfaced a developer CLI command to end
-  // users, which was confusing and not actionable from the dashboard.)
-  const cfg = latest.config || {};
-
-  // Legend colors avoid green/yellow/orange/red (those mean status: good/close/bad).
-  // Picked for high mutual contrast: hot pink, electric cyan, deep violet, magenta,
-  // teal, slate. Each is well-separated in hue and lightness.
-  const WH_COLORS = {
-    distinct_3:        "#ff3db8",   // hot magenta-pink
-    lex_chain_density: "#3dd6ff",   // electric cyan
-    pronoun_unbacked:  "#9b3dff",   // deep violet
-    repeat_rate:       "#ffb3ff",   // light pink
-    pmi:               "#3dffd6",   // teal
-    self_ppl:          "#5d7dff",   // royal blue
-  };
-  // Prev-step record for trend-aware tinting. If a metric is moving the
-  // wrong way vs. the previous checkpoint, _whTone downgrades the color.
   const prevStep = writingSteps.length >= 2 ? writingSteps[writingSteps.length - 2] : null;
   const prevAgg = prevStep != null ? (writingByStep[prevStep] || {}).aggregate : null;
-  html += `<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));gap:8px 12px;margin-bottom:10px">`;
+
+  // Metric tiles.
+  let html = `<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:10px">`;
   for (const m of WRITING_METRICS) {
-    const v = latest.aggregate[m.id];
-    const prevV = prevAgg ? prevAgg[m.id] : null;
-    const tone = _whTone(m, v, prevV);
-    const arrow = m.higher ? "≥" : "≤";
-    const swatch = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${WH_COLORS[m.id] || "#fff"};margin-right:5px;vertical-align:middle"></span>`;
-    // Trend indicator: ↑/↓/→ next to the value. Color it by whether the
-    // direction is good or bad for this metric.
-    let trend = "";
-    if (prevV != null && v != null) {
-      const tol = (m.higher ? 0.02 : 0.005) * Math.max(m.target, 0.01);
-      const dv = v - prevV;
-      if (Math.abs(dv) <= tol) trend = `<span class="meta" style="font-size:10px;margin-left:4px;color:var(--dim)">→</span>`;
-      else {
-        const goodDir = m.higher ? (dv > 0) : (dv < 0);
-        const arrowChar = dv > 0 ? "↑" : "↓";
-        const trendColor = goodDir ? "#5dff9b" : "var(--hot)";
-        trend = `<span style="font-size:11px;margin-left:4px;color:${trendColor}" title="vs step ${prevStep}: ${dv > 0 ? "+" : ""}${dv.toFixed(3)}">${arrowChar}</span>`;
-      }
-    }
-    html += `<div title="${escapeHtml(m.blurb)}" style="background:rgba(255,255,255,.02);padding:6px 8px;border-left:3px solid ${tone};border-radius:3px">
-      <div class="meta" style="font-size:10.5px">${swatch}${m.label}</div>
-      <b style="color:${tone};font-size:14px">${v == null ? "—" : m.fmt(v)}</b>${trend}
-      <span class="meta" style="font-size:10px;margin-left:6px">${arrow} ${m.target}</span>
-    </div>`;
+    html += _whTile(m, latest.aggregate[m.id], prevAgg ? prevAgg[m.id] : null, prevStep);
   }
   html += `</div>`;
-
-  // Trajectory: HTML chip-legend (matches reading-level style), then canvas.
-  const trajMetrics = ["distinct_3", "lex_chain_density", "pronoun_unbacked", "repeat_rate", "pmi"];
-  if (writingSteps.length >= 2) {
-    let lhtml = `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;font-size:11px;margin:6px 0 4px">`;
-    for (const id of trajMetrics) {
-      const lbl = (WRITING_METRICS.find(m => m.id === id) || {}).label || id;
-      lhtml += `<span style="display:inline-flex;align-items:center;gap:5px"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${WH_COLORS[id] || "#fff"}"></span>${lbl}</span>`;
-    }
-    lhtml += `</div>`;
-    html += lhtml;
-    html += `<canvas id="${refs.writingHealthId}_traj" height="200" style="width:100%;height:200px;background:rgba(255,255,255,.02);border-radius:4px"></canvas>`;
-    html += `<div class="meta" style="margin:4px 0 8px;font-size:10px">trajectory: each line is one metric, score 0 (untrained) → 1 (ideal). UP = better. All lines start at 0 at step 0.</div>`;
-  }
-
-  // Latest-step sample preview.
-  if (Array.isArray(latest.samples) && latest.samples.length > 0) {
-    html += `<div class="meta" style="margin:10px 0 4px;font-size:10.5px">latest generations (step ${latestStep})</div>`;
-    html += `<div style="display:flex;flex-direction:column;gap:6px">`;
-    for (const s of latest.samples) {
-      const promptHtml = `<span class="meta" style="font-style:italic">${escapeHtml(s.prompt)}</span>`;
-      const genHtml = escapeHtml(s.generation || "");
-      html += `<div style="background:rgba(255,255,255,.03);padding:6px 8px;border-radius:4px;font-size:11px;line-height:1.4;white-space:pre-wrap">${promptHtml}<span style="color:var(--text)">${genHtml}</span></div>`;
-    }
-    html += `</div>`;
-  }
-
   root.innerHTML = html;
 
   // Trajectory: each line is a per-metric SCORE in [0..1] where 1 = ideal,
   // 0 = untrained baseline. All lines anchor at (step 0, score 0), mirroring
-  // how the reading-level chart anchors every band at fluency=0% at random
-  // init. Up = better. This is the same pattern as the reading-level chart.
-  const canvas = document.getElementById(`${refs.writingHealthId}_traj`);
-  if (canvas && writingSteps.length >= 1) {
-    const ctx = canvas.getContext("2d");
-    const metricById = {};
-    for (const m of WRITING_METRICS) metricById[m.id] = m;
-    const series = trajMetrics.map(id => {
-      const m = metricById[id];
-      if (!m || typeof m.score !== "function") return null;
-      const points = [{ x: 0, y: 0 }];   // anchor every line at the random-init baseline
-      for (const step of writingSteps) {
-        const r = writingByStep[step];
-        if (!r || !r.aggregate) continue;
-        const v = r.aggregate[id];
-        const s = m.score(v);
-        if (s == null) continue;
-        points.push({ x: step, y: s });
-      }
-      return { color: WH_COLORS[id] || "#fff", points, lw: 1.5, dots: true };
-    }).filter(s => s && s.points.length > 1);   // need a real measurement, not just origin
+  // the reading-level chart. Canvas is a fixed element (observed by the resize
+  // observer at load) so it re-fits crisply on resize instead of stretching.
+  const metricById = {};
+  for (const m of WRITING_METRICS) metricById[m.id] = m;
+  const series = WH_TRAJ_METRICS.map(id => {
+    const m = metricById[id];
+    if (!m || typeof m.score !== "function") return null;
+    const points = [{ x: 0, y: 0 }];   // anchor every line at the random-init baseline
+    for (const step of writingSteps) {
+      const r = writingByStep[step];
+      if (!r || !r.aggregate) continue;
+      const s = m.score(r.aggregate[id]);
+      if (s == null) continue;
+      points.push({ x: step, y: s });
+    }
+    return { color: WH_COLORS[id] || "#fff", points, lw: 1.5, dots: true };
+  }).filter(s => s && s.points.length > 1);   // need a real measurement, not just origin
+
+  if (canvas && series.length > 0) {
+    canvas.style.display = "";
     const totalSteps = (config && config.training_args && config.training_args.total_steps) || null;
     plotTrainSeries(canvas, ctx, series, {
       yMinFloor: 0,
       yMaxCeil:  1.08,
-      // Same anti-clumping fix as the reading-level chart: zoom y to the
-      // current data range so early-training scores (0.05-0.15 territory)
-      // spread out vertically. IDEAL=1.0 turns into a top-edge marker until
-      // the model gets close.
-      yAutoFit: true,
-      yAutoPad: 1.30,
+      yAutoFit:  true,
+      yAutoPad:  1.30,
       xMinFloor: 0,
       xMaxCeil:  totalSteps || undefined,
-      // Match the reading-level chart: log-x spreads the early checkpoints out
-      // so the first few probes don't pile up against the left axis.
-      logX: true,
+      logX:      true,
       yTitle:    "score (1.0 = ideal, 0 = untrained)",
-      thresholdLines: [
-        { y: 1.0, color: "#5dff9b", label: "IDEAL", lineDash: [4, 3] },
-      ],
+      thresholdLines: [{ y: 1.0, color: "#5dff9b", label: "IDEAL", lineDash: [4, 3] }],
     });
+  } else if (canvas) {
+    canvas.style.display = "none";
   }
+
+  // Trajectory caption + latest-generation samples, below the chart.
+  let aux = "";
+  if (series.length > 0) {
+    aux += `<div class="meta" style="margin:6px 0 8px;font-size:10px">trajectory: each line is one structural metric, score 0 (untrained) → 1 (ideal). up = better. the tiles above are the color key; self-perplexity isn't plotted.</div>`;
+  }
+  if (Array.isArray(latest.samples) && latest.samples.length > 0) {
+    aux += `<div class="meta" style="margin:10px 0 4px;font-size:10.5px">latest generations (step ${latestStep})</div>`;
+    aux += `<div style="display:flex;flex-direction:column;gap:6px">`;
+    for (const s of latest.samples) {
+      const promptHtml = `<span class="meta" style="font-style:italic">${escapeHtml(s.prompt)}</span>`;
+      const genHtml = escapeHtml(s.generation || "");
+      aux += `<div style="background:rgba(255,255,255,.03);padding:6px 8px;border-radius:4px;font-size:11px;line-height:1.4;white-space:pre-wrap">${promptHtml}<span style="color:var(--text)">${genHtml}</span></div>`;
+    }
+    aux += `</div>`;
+  }
+  if (samplesRoot) samplesRoot.innerHTML = aux;
 }
 
 // ---------- reading comprehension ----------------------------------------
@@ -6133,10 +6138,8 @@ function _renderCompBandRow(g, e, accLabel) {
     ${accCell}`;
 }
 
-function _renderCompTrajectory(canvasId, compSteps, compByStep, modeKey, config) {
-  const canvas = document.getElementById(canvasId);
+function _renderCompTrajectory(canvas, ctx, compSteps, compByStep, modeKey, config) {
   if (!canvas) return;
-  const ctx = canvas.getContext("2d");
   const bandSeries = GRADE_ORDER.map(g => ({ g, points: [{ x: 0, y: 0.25 }] }));
   for (const step of compSteps) {
     const r = compByStep[step];
@@ -6172,16 +6175,20 @@ function _renderCompTrajectory(canvasId, compSteps, compByStep, modeKey, config)
 function render_reading_comprehension(refs, run, compSteps, compByStep, haveCheckpoints, config) {
   const root = $(refs.readingCompId);
   if (!root) return;
+  const trajWrap = refs.readingCompTrajId ? $(refs.readingCompTrajId) : null;
+  const hideTraj = () => { if (trajWrap) trajWrap.style.display = "none"; };
   if (!compSteps || compSteps.length === 0) {
     root.innerHTML = haveCheckpoints
       ? `<span style="color:var(--hot)">Reading-comprehension probe not yet recorded for this run.</span>`
       : `<span style="color:var(--warm)">No checkpoint yet.</span>`;
+    hideTraj();
     return;
   }
   const latestStep = compSteps[compSteps.length - 1];
   const latest = compByStep[latestStep];
   if (!latest) {
     root.innerHTML = `<span class="meta">reading_comprehension_step_${latestStep}.json missing</span>`;
+    hideTraj();
     return;
   }
   // Backwards compat: pre-v2 artifacts only have top-level "bands"/"overall_accuracy"
@@ -6229,18 +6236,13 @@ function render_reading_comprehension(refs, run, compSteps, compByStep, haveChec
   }
   html += `</div>`;
 
-  // Two trajectories, also side-by-side.
-  html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">`;
-  html += `<div><div class="meta" style="font-size:10.5px;margin-bottom:2px">trajectory &middot; EASY</div>
-           <canvas id="${refs.readingCompId}_traj_easy" height="180" style="width:100%;height:180px;background:rgba(255,255,255,.02);border-radius:4px"></canvas></div>`;
-  html += `<div><div class="meta" style="font-size:10.5px;margin-bottom:2px">trajectory &middot; HARD</div>
-           <canvas id="${refs.readingCompId}_traj_hard" height="180" style="width:100%;height:180px;background:rgba(255,255,255,.02);border-radius:4px"></canvas></div>`;
-  html += `</div>`;
-
   root.innerHTML = html;
 
-  _renderCompTrajectory(`${refs.readingCompId}_traj_easy`, compSteps, compByStep, "easy", config);
-  _renderCompTrajectory(`${refs.readingCompId}_traj_hard`, compSteps, compByStep, "hard", config);
+  // Trajectories draw into fixed canvases (siblings of root, observed by the
+  // resize observer at load) so they re-fit crisply instead of stretching.
+  if (trajWrap) trajWrap.style.display = "grid";
+  _renderCompTrajectory(refs.compCanvasEasy, refs.compCtxEasy, compSteps, compByStep, "easy", config);
+  _renderCompTrajectory(refs.compCanvasHard, refs.compCtxHard, compSteps, compByStep, "hard", config);
 }
 
 // load classroom panels for a model name into the supplied (state, refs) pair.
@@ -6883,6 +6885,8 @@ function redrawAllVisible() {
     if (classroomStateL.loaded) {
       render_confidence_evo(classroomRefsL, classroomStateL.run, classroomStateL.steps, classroomStateL.confByStep);
       render_reading_level(classroomRefsL, classroomStateL.run, classroomStateL.gradesSteps, classroomStateL.gradesByStep, true, classroomStateL.config);
+      render_writing_health(classroomRefsL, classroomStateL.run, classroomStateL.writingSteps, classroomStateL.writingByStep, true, classroomStateL.config);
+      render_reading_comprehension(classroomRefsL, classroomStateL.run, classroomStateL.compSteps, classroomStateL.compByStep, true, classroomStateL.config);
     }
   }
   if (document.querySelector('.tab-body[data-tab="training"]').classList.contains("active") && trainLastText) {
@@ -6891,6 +6895,8 @@ function redrawAllVisible() {
     if (classroomState.loaded) {
       render_confidence_evo(classroomRefsT, classroomState.run, classroomState.steps, classroomState.confByStep);
       render_reading_level(classroomRefsT, classroomState.run, classroomState.gradesSteps, classroomState.gradesByStep, true, classroomState.config);
+      render_writing_health(classroomRefsT, classroomState.run, classroomState.writingSteps, classroomState.writingByStep, true, classroomState.config);
+      render_reading_comprehension(classroomRefsT, classroomState.run, classroomState.compSteps, classroomState.compByStep, true, classroomState.config);
     }
   }
 }
@@ -10706,6 +10712,19 @@ function _lifecycleSetButtonsDisabled(disabled) {
   if (mmb) mmb.disabled = disabled;
 }
 
+function _lifecycleOverlayShow(msg) {
+  const ov = $("lifecycleOverlay");
+  if (!ov) return;
+  const m = $("lifecycleOverlayMsg");
+  if (m) m.textContent = msg;
+  ov.classList.add("on");
+}
+
+function _lifecycleOverlayHide() {
+  const ov = $("lifecycleOverlay");
+  if (ov) ov.classList.remove("on");
+}
+
 // Tabs that depend on the pytorch brain or analytics/sync threads being
 // alive. In minimal mode the server's eager-load + sync threads are skipped,
 // so these tabs render but their backend calls return empty/inert — hide
@@ -10757,6 +10776,7 @@ function _lifecycleMinimalToggle() {
   const btn   = $("minimalModeBtn");
   const target = btn && /restore/i.test(btn.textContent) ? false : true;
   _lifecycleSetButtonsDisabled(true);
+  _lifecycleOverlayShow(target ? "entering power-save" : "restoring");
   if (label) {
     label.textContent = target ? "switching to power-save mode..." : "restoring full mode...";
     label.style.color = "var(--highlight)";
@@ -10768,6 +10788,7 @@ function _lifecycleMinimalToggle() {
     .then(res => {
       if (!res.ok) {
         if (label) { label.textContent = `failed: ${res.error || "unknown"}`; label.style.color = "var(--hot)"; }
+        _lifecycleOverlayHide();
         _lifecycleSetButtonsDisabled(false);
         return;
       }
@@ -10776,6 +10797,7 @@ function _lifecycleMinimalToggle() {
     })
     .catch(e => {
       if (label) { label.textContent = `request failed: ${e.message || e}`; label.style.color = "var(--hot)"; }
+      _lifecycleOverlayHide();
       _lifecycleSetButtonsDisabled(false);
     });
 }
@@ -10794,6 +10816,7 @@ function _lifecycleWaitForServer(label) {
       .catch(() => {
         if (attempts >= maxAttempts) {
           if (label) { label.textContent = "server did not come back. relaunch manually."; label.style.color = "var(--hot)"; }
+          _lifecycleOverlayHide();
           _lifecycleSetButtonsDisabled(false);
           return;
         }
@@ -10806,6 +10829,7 @@ function _lifecycleWaitForServer(label) {
 function _lifecycleSoftReload() {
   const label = $("lifecycleStatus");
   _lifecycleSetButtonsDisabled(true);
+  _lifecycleOverlayShow("reloading");
   if (label) { label.textContent = "soft reloading..."; label.style.color = "var(--data-pos)"; }
   fetch("/lifecycle/soft_reload", { method: "POST" })
     .then(r => {
@@ -10817,6 +10841,7 @@ function _lifecycleSoftReload() {
     .then(res => {
       if (!res.ok) {
         if (label) { label.textContent = `failed: ${res.error || "unknown"}`; label.style.color = "var(--hot)"; }
+        _lifecycleOverlayHide();
         _lifecycleSetButtonsDisabled(false);
         return;
       }
@@ -10825,6 +10850,7 @@ function _lifecycleSoftReload() {
     })
     .catch(e => {
       if (label) { label.textContent = `request failed: ${e.message || e}`; label.style.color = "var(--hot)"; }
+      _lifecycleOverlayHide();
       _lifecycleSetButtonsDisabled(false);
     });
 }
@@ -10832,12 +10858,14 @@ function _lifecycleSoftReload() {
 function _lifecycleRestart() {
   const label = $("lifecycleStatus");
   _lifecycleSetButtonsDisabled(true);
+  _lifecycleOverlayShow("restarting");
   if (label) { label.textContent = "reloading python..."; label.style.color = "var(--warm)"; }
   fetch("/lifecycle/restart", { method: "POST" })
     .then(r => r.json())
     .then(res => {
       if (!res.ok) {
         if (label) { label.textContent = `failed: ${res.error || "unknown"}`; label.style.color = "var(--hot)"; }
+        _lifecycleOverlayHide();
         _lifecycleSetButtonsDisabled(false);
         return;
       }
@@ -10846,6 +10874,7 @@ function _lifecycleRestart() {
     })
     .catch(e => {
       if (label) { label.textContent = _backendErrMsg(e); label.style.color = "var(--hot)"; }
+      _lifecycleOverlayHide();
       _lifecycleSetButtonsDisabled(false);
     });
 }

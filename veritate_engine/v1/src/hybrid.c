@@ -158,7 +158,6 @@ void hybrid_dispatch_init(int has_neon, int32_t dtype) {
 
 #define HYBRID_MT_MIN_WORK  (1 << 20)
 #define HYBRID_MT_MAX       8
-#define HYBRID_MT_DEFAULT   4
 
 typedef struct {
     hybrid_matvec_fn fn;
@@ -177,9 +176,9 @@ static void hybrid_mv_worker(void* arg, int32_t idx) {
 static int32_t hybrid_threads(void) {
     static int32_t cached = 0;
     if (cached == 0) {
-        const char* s = getenv("VERITATE_HYBRID_THREADS");
-        int32_t nt = s && *s ? atoi(s) : HYBRID_MT_DEFAULT;
         int32_t cap = veritate_pool_size();
+        const char* s = getenv("VERITATE_HYBRID_THREADS");
+        int32_t nt = s && *s ? atoi(s) : cap;
         if (nt > cap) nt = cap;
         if (nt > HYBRID_MT_MAX) nt = HYBRID_MT_MAX;
         cached = nt < 1 ? 1 : nt;

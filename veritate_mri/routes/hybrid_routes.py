@@ -53,7 +53,6 @@ KEEP_CTRL_CHARS = ("\t", "\n")  # every other control byte is dropped from the a
 
 CHAT_SYSTEM    = ("You are Veritate, a concise, helpful assistant. Use the conversation so far and any "
                   "provided facts to answer the user directly. No emoji, no emdash.")
-LOCAL_PERSONA  = "You are Veritate, a helpful assistant made by Carpathian."
 SUMMARY_SYSTEM = ("Condense the conversation into a brief note preserving facts, names, decisions, and "
                   "the user's goal. Plain text, no preamble.")
 HISTORY_MAX_TURNS       = 60
@@ -338,11 +337,12 @@ def _render_local(messages, system):
 
 def _system_text(kind, summary, facts):
     """Preamble for one turn. Remote models get the chat system prompt plus
-    framed summary + facts; local byte models get the persona line plus raw
-    summary + facts (rendered as a `context:` block by _render_local). Without
-    the persona a byte model invents an identity (measured 0/8 correct name)."""
+    framed summary + facts; local byte models get raw summary + facts (rendered
+    as a `context:` block by _render_local) with NO persona line: identity is
+    trained into the model, and a persona in the context channel makes the model
+    recite it every turn instead of answering."""
     if kind == "local":
-        parts = [LOCAL_PERSONA]
+        parts = []
         if summary:
             parts.append(summary)
         if facts:
@@ -360,8 +360,8 @@ def _fit_local_system(model, messages, summary, facts):
     """System text for a local byte model, budgeted so the rendered prompt fits
     the model's trained seq minus the MAX_NEW reply headroom. Over budget:
     shrink fact previews evenly, drop the lowest-scoring facts (retrieve()
-    returns best-first), then tail-trim the summary. The persona, chat markers,
-    history, and user message are never trimmed."""
+    returns best-first), then tail-trim the summary. The chat markers, history,
+    and user message are never trimmed."""
     budget = _local_seq(model) - MAX_NEW
     facts = list(facts)
     def overflow():
