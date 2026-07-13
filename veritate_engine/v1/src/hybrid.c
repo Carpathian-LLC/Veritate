@@ -161,19 +161,31 @@ void hybrid_dispatch_init(int32_t dtype) {
 // ------------------------------------------------------------------------------------
 // threaded matvec — row-split across the persistent spin-then-park pool,
 // bitwise-identical to the single call (each row is computed once, same kernel).
-// only matmuls with n * k >= HYBRID_MT_MIN_WORK are split. default worker count
-// is min(pool_size, HYBRID_MT_DEFAULT); VERITATE_HYBRID_THREADS overrides up to
-// the pool size (1 = single-thread).
-// tuning is measured on M3 Ultra chat80m fp16 greedy decode (2026-07-13): the
-// spin pool cut per-dispatch latency ~60x vs the prior condvar pool, so the fp
-// split floor drops to 2^18 (proj/gate matvecs now pay off) and 8 threads is the
-// robust knee at 2.56x over 1T. beyond 8 gains are load-sensitive; 24 collapses.
+// only matmuls with n * k >= HYBRID_MT_MIN_WORK are split. the worker count is
+// per-box: a one-time micro-calibration at load (hybrid_threads_init) times the
+// real dtype kernel over a synthetic weight set the size of a decode byte's
+// weight stream, at a 1,2,4,.. ladder up to the P-core count, and stops at the
+// knee (first rung that fails to improve by HYBRID_CALIB_KNEE_FRAC). the knee is
+// memory-bandwidth/contention-driven, not core-count-driven, so only a
+// measurement on the running box finds it. VERITATE_HYBRID_THREADS is an
+// explicit override that skips calibration (1 = single-thread, up to pool size).
+// row-split parity holds at every count, so the calibrated pick never changes
+// output (rule 24).
 // ------------------------------------------------------------------------------------
 
 #define HYBRID_MT_MIN_WORK     (1 << 18)
 #define HYBRID_MT_MIN_WORK_I8  (1 << 23)
-#define HYBRID_MT_DEFAULT      8
 #define HYBRID_MT_MAX          32
+
+// micro-calibration: synthetic weight bytes (~one non-boundary decode byte of
+// traffic, sized past the LLC so each rep streams RAM), warmup + measured reps
+// per ladder rung (min kept), the marginal-improvement floor to add a rung, and
+// the ladder-array cap (powers of two under pool size, plus pool size).
+#define HYBRID_CALIB_BYTES     (64u << 20)
+#define HYBRID_CALIB_WARMUP    1
+#define HYBRID_CALIB_REPS      4
+#define HYBRID_CALIB_KNEE_FRAC 0.10
+#define HYBRID_CALIB_LADDER_N  8
 
 typedef struct {
     hybrid_matvec_fn fn;

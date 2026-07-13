@@ -36,6 +36,7 @@
     #define POOL_CV_SIGNAL(c) WakeConditionVariable(c)
 #else
     #include <pthread.h>
+    #include <time.h>
     #include <unistd.h>
     #if defined(__APPLE__)
         #include <sys/sysctl.h>
@@ -103,6 +104,23 @@ static int              pool_init_lock_ready = 0;
 #else
 static pthread_mutex_t  pool_init_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
+
+// ------------------------------------------------------------------------------------
+
+uint64_t veritate_now_ns(void) {
+#if defined(_WIN32)
+    LARGE_INTEGER f, c;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&c);
+    uint64_t whole = (uint64_t)(c.QuadPart / f.QuadPart) * 1000000000ULL;
+    uint64_t frac  = (uint64_t)(c.QuadPart % f.QuadPart) * 1000000000ULL / (uint64_t)f.QuadPart;
+    return whole + frac;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+#endif
+}
 
 // ------------------------------------------------------------------------------------
 

@@ -24,6 +24,7 @@ import os
 import re
 import time
 import uuid
+from collections import namedtuple
 
 from flask import Response, current_app, request
 
@@ -99,7 +100,17 @@ SSE_DONE            = "data: [DONE]\n\n"
 CHAT_STREAM_SPLIT   = r"\S+\s*"
 SSE_HEADERS         = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
+# Opt-in per-byte MRI telemetry: request field + response/extension key. Absent or
+# false = today's fast, non-traced serving, byte-for-byte. Applies to local trained
+# models only (remote providers expose no per-byte telemetry).
+MRI_KEY = "mri"
+
 _STATE = {}   # scope -> {"chunks": [...], "bm25": index}; built lazily, cleared by reset_index_cache
+
+# Resolved chat request: request body + retrieval + route, shared by the buffered
+# /hybrid/chat and the streaming /hybrid/chat/stream so both frame a reply identically.
+_ChatCtx = namedtuple("_ChatCtx", "message history summary facts sources complete "
+                                  "label resp_backend kind char_limit model backend messages system")
 
 
 # ------------------------------------------------------------------------------------
@@ -270,9 +281,12 @@ def _ensure_c(cfg, name):
         raise RuntimeError("c engine failed to spawn")
 
 
-def _local_events(cfg, backend, prompt):
+def _local_events(cfg, backend, prompt, mri=False):
     """Per-token generation event stream plus turn-stop markers for a local model.
-    Shared by the buffered (_generate_local) and true-token chat paths."""
+    Shared by the buffered (_generate_local) and true-token chat paths. mri selects
+    the full-telemetry path (C trace=True / Brain.stream) whose per-byte frames the
+    /generate MRI view consumes; default off keeps the fast path (C trace=False
+    coarse fast_byte / Brain.stream_fast lookahead), byte-for-byte as before."""
     from .backends_routes import _chat_stop_seq
     from inference.decode import (
         NO_REPEAT_NGRAM_DEFAULT, REP_PENALTY_DEFAULT, REP_WINDOW_DEFAULT,
@@ -281,16 +295,53 @@ def _local_events(cfg, backend, prompt):
                no_repeat_ngram=NO_REPEAT_NGRAM_DEFAULT)
     if backend == "c":
         from .backends_routes import _c_engine_stream
-        events = _c_engine_stream(cfg, prompt, MAX_NEW, **rep)
+        events = _c_engine_stream(cfg, prompt, MAX_NEW, trace=mri, **rep)
+    elif mri:
+        events = _pytorch_mri_events(cfg["BRAIN"], prompt, rep)
     else:
         events = cfg["BRAIN"].stream_fast(prompt, mode="lookahead", max_new=MAX_NEW, **rep)
     return events, _chat_stop_seq(prompt)
+
+
+def _pytorch_mri_events(brain, prompt, rep):
+    """Full per-byte telemetry stream (Brain.stream), backend-tagged so its frames
+    match what /generate hands the MRI view. Same sampling defaults as the fast
+    lookahead path (temperature 0.7 / top_k 40): the flag selects telemetry, never
+    sampling. Under greedy both paths are byte-identical; under sampling both draw
+    each byte fresh from the true-prefix distribution (see inference_brain.md)."""
+    for ev in brain.stream(prompt, max_new=MAX_NEW, **rep):
+        ev["backend"] = "pytorch"
+        yield ev
 
 
 def _generate_local(cfg, backend, prompt):
     from .backends_routes import _stop_on_bytes
     events, stop_seq = _local_events(cfg, backend, prompt)
     return _trim(collect(_stop_on_bytes(events, stop_seq)))
+
+
+def _generate_local_mri(cfg, model, backend, messages, system):
+    """Local generation that also captures the per-byte MRI frames the /generate view
+    consumes (the meta frame, one token frame per byte, then the turn-stop frame).
+    Returns (answer, frames). Text is byte-identical to _generate_local under greedy;
+    the flag selects telemetry, never sampling (see _pytorch_mri_events)."""
+    from .backends_routes import _stop_on_bytes
+    if backend == "c":
+        _ensure_c(cfg, model)
+    else:
+        _ensure_pytorch(cfg, model)
+    events, stop_seq = _local_events(cfg, backend, _render_local(messages, system), mri=True)
+    frames, out = [], bytearray()
+    for ev in _stop_on_bytes(events, stop_seq):
+        frames.append(ev)
+        kind = ev.get("kind")
+        if kind in ("token", "fast_byte"):
+            b = ev.get("byte")
+            if b is not None:
+                out.append(int(b))
+        elif kind in ("stop", "error"):
+            break
+    return _trim(bytes(out).decode("utf-8", "replace")), frames
 
 
 class ChatUnavailable(Exception):
@@ -590,6 +641,22 @@ def _chunk_frame(cid, created, model, delta, finish_reason):
     return "data: " + json.dumps(payload) + "\n\n"
 
 
+def _mri_chunk_frame(cid, created, model, frame):
+    """A standard chat.completion.chunk (empty delta) carrying one MRI frame under a
+    top-level `mri` key. Off-the-shelf OpenAI clients see an empty content delta and
+    ignore the unknown key; MRI-aware clients read chunk['mri']. Keeps every SSE
+    data line a valid chunk so interleaving telemetry never breaks a plain client."""
+    payload = {
+        "id":      cid,
+        "object":  OPENAI_CHUNK_OBJECT,
+        "created": created,
+        "model":   model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
+        MRI_KEY:   frame,
+    }
+    return "data: " + json.dumps(payload) + "\n\n"
+
+
 def _openai_stream(complete, conv, system, model):
     """SSE chat.completion.chunk stream: role frame, per-segment content frames, a
     stop frame, then [DONE]. complete() is buffered, so generation errors after the
@@ -674,6 +741,99 @@ def _openai_stream_local(cfg, model, backend, conv, system):
     return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
 
 
+def _chat_prepare(cfg, body):
+    """Resolve a chat request body into a _ChatCtx: message, memory, retrieval,
+    and the selected route. None when the message is empty. Shared by the buffered
+    and streaming chat endpoints so both ground and route identically."""
+    message = (body.get("message") or "").strip()
+    if not message:
+        return None
+    model = (body.get("model") or "").strip()
+    backend = (body.get("backend") or "pytorch").strip().lower()
+    use_rag = bool(body.get("use_rag"))
+    use_logs = bool(body.get("use_logs"))
+    scope = body.get("kb_scope") if body.get("kb_scope") in KB_SCOPES else "all"
+    k = int(body.get("k") or TOP_K)
+    history, summary = _history_in(body)
+
+    docs_mode = model == VERITATE_DOCS_ID
+    if docs_mode:
+        model, use_rag, scope = CLOUD_ID, True, "platform"
+
+    facts, sources = [], []
+    if use_rag and has_corpus():
+        facts, scores = retrieve(message, k, scope=scope)
+        sources = [{"text": t, "score": s} for t, s in zip(facts, scores)]
+    if docs_mode or use_logs:
+        log_facts = training_log_lines()
+        facts = facts + log_facts
+        sources = sources + [{"text": ln, "score": None} for ln in log_facts]
+
+    complete, label, resp_backend, kind, char_limit = _resolve_route(cfg, model, backend)
+    if docs_mode:
+        label = "Veritate (platform docs)"
+    messages = history + [{"role": "user", "content": message}]
+    system = (_fit_local_system(model, messages, summary, facts)
+              if kind == "local" else _system_text(kind, summary, facts))
+    return _ChatCtx(message, history, summary, facts, sources, complete, label,
+                    resp_backend, kind, char_limit, model, backend, messages, system)
+
+
+def _chat_result(ctx, answer):
+    """Post-turn chat payload: fold the new turn into the compacted memory and
+    build the response dict returned by /hybrid/chat and the stream's done frame."""
+    new_turns = ctx.history + [{"role": "user", "content": ctx.message},
+                               {"role": "assistant", "content": answer}]
+    mem_summary, mem_turns = _compact(ctx.complete, ctx.summary, new_turns, ctx.char_limit)
+    return {"ok": True, "answer": answer, "model": ctx.label, "backend": ctx.resp_backend,
+            "confident": bool(ctx.facts), "sources": ctx.sources,
+            "memory": {"summary": mem_summary, "turns": mem_turns},
+            "context": _context_meter(mem_summary, mem_turns, ctx.char_limit)}
+
+
+def _sse(obj):
+    return "data: " + json.dumps(obj) + "\n\n"
+
+
+def _chat_delta_stream(cfg, ctx):
+    """Per-segment answer text for the chat stream. Local models decode true
+    per-token via the shared generator, honoring the selected engine (c or
+    pytorch); remote models complete() buffered, then chunk the answer word-by-word."""
+    if ctx.kind == "local":
+        from .backends_routes import _stop_on_bytes
+        if ctx.backend == "c":
+            _ensure_c(cfg, ctx.model)
+        else:
+            _ensure_pytorch(cfg, ctx.model)
+        events, stop_seq = _local_events(cfg, ctx.backend, _render_local(ctx.messages, ctx.system))
+        yield from _local_delta_stream(_stop_on_bytes(events, stop_seq))
+        return
+    answer = (ctx.complete(ctx.messages, ctx.system) or "").strip()
+    for seg in re.findall(CHAT_STREAM_SPLIT, answer):
+        yield seg
+
+
+def _hybrid_stream_response(cfg, ctx):
+    """SSE for /hybrid/chat/stream: per-token `delta` frames as the model
+    generates, then one `done` frame carrying the answer, compacted memory,
+    context gauge, and sources. Generation errors after the stream opened surface
+    as a single `error` frame (status is already 200)."""
+    def gen():
+        parts = []
+        try:
+            for delta in _chat_delta_stream(cfg, ctx):
+                parts.append(delta)
+                yield _sse({"kind": "delta", "text": delta})
+        except ChatUnavailable as e:
+            yield _sse({"kind": "error", "error": str(e)})
+            return
+        except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            yield _sse({"kind": "error", "error": user_error(e)})
+            return
+        yield _sse(dict(_chat_result(ctx, "".join(parts).strip()), kind="done"))
+    return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
 def register(app):
     @app.route("/hybrid/health")
     def hybrid_health():
@@ -729,53 +889,26 @@ def register(app):
 
     @app.route("/hybrid/chat", methods=["POST"])
     def hybrid_chat():
-        cfg = current_app.config
-        body = request.get_json(silent=True) or {}
-        message = (body.get("message") or "").strip()
-        if not message:
+        ctx = _chat_prepare(current_app.config, request.get_json(silent=True) or {})
+        if ctx is None:
             return ({"ok": False, "error": "empty message"}, 400)
-        model = (body.get("model") or "").strip()
-        backend = (body.get("backend") or "pytorch").strip().lower()
-        use_rag = bool(body.get("use_rag"))
-        use_logs = bool(body.get("use_logs"))
-        scope = body.get("kb_scope") if body.get("kb_scope") in KB_SCOPES else "all"
-        k = int(body.get("k") or TOP_K)
-        history, summary = _history_in(body)
-
-        # Chat-page "Veritate (platform docs)" pick: the public model forced to
-        # ground on the shipped platform KB. Not a backend model of its own.
-        docs_mode = model == VERITATE_DOCS_ID
-        if docs_mode:
-            model, use_rag, scope = CLOUD_ID, True, "platform"
-
-        facts, sources = [], []
-        if use_rag and has_corpus():
-            facts, scores = retrieve(message, k, scope=scope)
-            sources = [{"text": t, "score": s} for t, s in zip(facts, scores)]
-        if docs_mode or use_logs:
-            log_facts = training_log_lines()
-            facts = facts + log_facts
-            sources = sources + [{"text": ln, "score": None} for ln in log_facts]
-
-        complete, label, resp_backend, kind, char_limit = _resolve_route(cfg, model, backend)
-        if docs_mode:
-            label = "Veritate (platform docs)"
-        messages = history + [{"role": "user", "content": message}]
-        system = (_fit_local_system(model, messages, summary, facts)
-                  if kind == "local" else _system_text(kind, summary, facts))
         try:
-            answer = (complete(messages, system) or "").strip()
+            answer = (ctx.complete(ctx.messages, ctx.system) or "").strip()
         except ChatUnavailable as e:
             return ({"ok": False, "error": str(e)}, 503)
         except (FileNotFoundError, RuntimeError) as e:
             return ({"ok": False, "error": user_error(e)}, 503)
         except Exception as e:
             return ({"ok": False, "error": user_error(e)}, 500)
+        return _chat_result(ctx, answer)
 
-        new_turns = history + [{"role": "user", "content": message},
-                               {"role": "assistant", "content": answer}]
-        mem_summary, mem_turns = _compact(complete, summary, new_turns, char_limit)
-        return {"ok": True, "answer": answer, "model": label, "backend": resp_backend,
-                "confident": bool(facts), "sources": sources,
-                "memory": {"summary": mem_summary, "turns": mem_turns},
-                "context": _context_meter(mem_summary, mem_turns, char_limit)}
+    @app.route("/hybrid/chat/stream", methods=["POST"])
+    def hybrid_chat_stream():
+        """Streaming twin of /hybrid/chat: per-token `delta` frames then one
+        `done` frame with the answer, memory, context gauge, and sources. Local
+        models stream true per-token on the selected engine (c or pytorch)."""
+        cfg = current_app.config
+        ctx = _chat_prepare(cfg, request.get_json(silent=True) or {})
+        if ctx is None:
+            return ({"ok": False, "error": "empty message"}, 400)
+        return _hybrid_stream_response(cfg, ctx)

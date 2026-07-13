@@ -4,11 +4,13 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - route tests for POST /v1/chat/completions (OpenAI-compatible). _resolve_route is
-#   stubbed so no model loads (rule 33); assertions cover the non-stream envelope,
-#   the buffered cloud/teacher SSE stream, the local true per-token generator (stubbed
-#   byte-event stream, no torch), stop-marker holdback, stream dispatch, and body
-#   validation.
+# - route tests for POST /v1/chat/completions (OpenAI-compatible) and the chat-page
+#   POST /hybrid/chat/stream SSE. _resolve_route is stubbed so no model loads (rule 33);
+#   assertions cover the non-stream envelope, the buffered cloud/teacher SSE stream, the
+#   local true per-token generator (stubbed byte-event stream, no torch), stop-marker
+#   holdback, stream dispatch, body validation, the /hybrid/chat/stream delta+done frames,
+#   its done-frame memory/context/sources, and that a local stream honors the selected
+#   c engine.
 # tests/mri/test_openai_chat.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -149,3 +151,64 @@ def test_unavailable_provider_is_503(monkeypatch):
     r = _client(monkeypatch, raises=H.ChatUnavailable("no key")).post(
         "/v1/chat/completions", json={"model": "m", "messages": [{"role": "user", "content": "hi"}]})
     assert r.status_code == 503
+
+
+def _hybrid_frames(resp):
+    """Parse a /hybrid/chat/stream SSE body into its event dicts."""
+    out = []
+    for f in resp.get_data(as_text=True).split("\n\n"):
+        f = f.strip()
+        if f.startswith("data: "):
+            out.append(json.loads(f[len("data: "):]))
+    return out
+
+
+def test_hybrid_stream_is_sse_and_reassembles(monkeypatch):
+    """/hybrid/chat/stream is text/event-stream whose delta frames reassemble the answer."""
+    r = _client(monkeypatch).post("/hybrid/chat/stream", json={"model": "m", "message": "hi"})
+    assert "text/event-stream" in r.content_type
+    frames = _hybrid_frames(r)
+    deltas = "".join(f["text"] for f in frames if f["kind"] == "delta")
+    assert deltas == ANSWER
+
+
+def test_hybrid_stream_done_carries_memory_and_context(monkeypatch):
+    """The terminal done frame carries the full answer, the new turns, sources, and the context gauge."""
+    r = _client(monkeypatch).post("/hybrid/chat/stream", json={"model": "m", "message": "hi"})
+    done = _hybrid_frames(r)[-1]
+    assert done["kind"] == "done"
+    assert done["answer"] == ANSWER
+    assert [t["role"] for t in done["memory"]["turns"]] == ["user", "assistant"]
+    assert done["context"]["turns"] == 2
+    assert "sources" in done
+
+
+def test_hybrid_stream_empty_message_is_400(monkeypatch):
+    """An empty chat message is rejected before the stream opens."""
+    r = _client(monkeypatch).post("/hybrid/chat/stream", json={"model": "m", "message": "  "})
+    assert r.status_code == 400
+
+
+def test_hybrid_stream_unavailable_emits_error_frame(monkeypatch):
+    """A ChatUnavailable after the stream opened surfaces as an error frame, not a 503."""
+    r = _client(monkeypatch, raises=H.ChatUnavailable("no key")).post(
+        "/hybrid/chat/stream", json={"model": "m", "message": "hi"})
+    assert r.status_code == 200
+    errs = [f for f in _hybrid_frames(r) if f["kind"] == "error"]
+    assert errs and errs[0]["error"] == "no key"
+
+
+def test_hybrid_stream_local_honors_c_engine(monkeypatch):
+    """A local stream with backend='c' decodes via _ensure_c (the selected engine), not pytorch."""
+    from routes import backends_routes as B
+    calls = []
+    monkeypatch.setattr(H, "_ensure_c", lambda cfg, name: calls.append("c"))
+    monkeypatch.setattr(H, "_ensure_pytorch", lambda cfg, name: calls.append("pytorch"))
+    monkeypatch.setattr(H, "_local_events", lambda cfg, backend, prompt: (_events(LOCAL_ANSWER), []))
+    monkeypatch.setattr(B, "_stop_on_bytes", lambda events, stop: events)
+    r = _client(monkeypatch, kind="local").post(
+        "/hybrid/chat/stream", json={"model": "m", "backend": "c", "message": "hi"})
+    frames = _hybrid_frames(r)
+    assert calls == ["c"]
+    assert "".join(f["text"] for f in frames if f["kind"] == "delta") == LOCAL_ANSWER
+    assert frames[-1]["kind"] == "done" and frames[-1]["answer"] == LOCAL_ANSWER

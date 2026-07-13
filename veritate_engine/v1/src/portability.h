@@ -44,4 +44,7 @@ typedef void (*veritate_work_fn)(void* arg, int32_t worker_idx);
 int32_t veritate_pool_size(void);
 void    veritate_pool_run (veritate_work_fn fn, void* const* args, int32_t n);
 
+// monotonic clock in nanoseconds. micro-calibration timing only.
+uint64_t veritate_now_ns(void);
+
 #endif

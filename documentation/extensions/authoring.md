@@ -92,7 +92,7 @@ always `r.json()` and treat any non-2xx as failure
 - `GET /pytorch-models` — list loadable models with shape + capability metadata.
 - `GET /meta` — current model metadata + shape.
 - `GET /generate` — byte-by-byte generation with introspection (SSE).
-- `POST /hybrid/chat` — conversational chat with RAG/teacher.
+- `POST /hybrid/chat` — conversational chat with RAG/teacher (buffered). `POST /hybrid/chat/stream` is the SSE streaming twin (same body; `delta` frames then a `done` frame).
 - `GET /runs`, `GET /run/<name>/csv` — training run data + per-step CSV.
 - `GET /settings`, `POST /settings` — user settings.
 - `GET /versions` — the version ledger.
