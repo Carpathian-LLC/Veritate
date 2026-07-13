@@ -661,17 +661,18 @@ def _chunk_frame(cid, created, model, delta, finish_reason):
     return "data: " + json.dumps(payload) + "\n\n"
 
 
-def _mri_chunk_frame(cid, created, model, frame):
-    """A standard chat.completion.chunk (empty delta) carrying one MRI frame under a
-    top-level `mri` key. Off-the-shelf OpenAI clients see an empty content delta and
-    ignore the unknown key; MRI-aware clients read chunk['mri']. Keeps every SSE
-    data line a valid chunk so interleaving telemetry never breaks a plain client."""
+def _mri_chunk_frame(cid, created, model, frame, delta=None):
+    """A standard chat.completion.chunk carrying one MRI frame under a top-level `mri`
+    key, plus an optional assistant text delta for the byte that produced the frame.
+    Off-the-shelf OpenAI clients read the content delta and ignore the unknown key;
+    MRI-aware clients read chunk['mri']. Keeps every SSE data line a valid chunk so
+    interleaving telemetry never breaks a plain client."""
     payload = {
         "id":      cid,
         "object":  OPENAI_CHUNK_OBJECT,
         "created": created,
         "model":   model,
-        "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
+        "choices": [{"index": 0, "delta": delta or {}, "finish_reason": None}],
         MRI_KEY:   frame,
     }
     return "data: " + json.dumps(payload) + "\n\n"
@@ -776,6 +777,49 @@ def _openai_stream_local(cfg, model, backend, conv, system, mri=False):
         yield _chunk_frame(cid, created, model, {}, OPENAI_FINISH_STOP)
         yield SSE_DONE
     return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
+def _openai_stream_mri(cfg, model, backend, conv, system):
+    """OpenAI SSE for a local model that also emits per-byte MRI telemetry: a role
+    frame, then one chat.completion.chunk per MRI frame carrying that frame under `mri`
+    plus the assistant text delta for its byte, a stop frame, then [DONE]. Reuses the
+    buffered _generate_local_mri (frames already truncated at the turn-stop sequence,
+    so no per-byte stop holdback is needed), incrementally decodes each byte to text,
+    and drops leading whitespace to match the trimmed non-stream answer."""
+    def gen():
+        created, cid = int(time.time()), _chatcmpl_id()
+        try:
+            _answer, frames = _generate_local_mri(cfg, model, backend, conv, system)
+        except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            yield "data: " + json.dumps(
+                {"error": {"message": user_error(e), "type": "service_unavailable"}}) + "\n\n"
+            yield SSE_DONE
+            return
+        yield _chunk_frame(cid, created, model, {"role": "assistant"}, None)
+        dec = codecs.getincrementaldecoder("utf-8")("replace")
+        text, sent = "", 0
+        for frame in frames:
+            delta = None
+            if frame.get("kind") in ("token", "fast_byte"):
+                b = frame.get("byte")
+                if b is not None:
+                    text += dec.decode(bytes((int(b) & 0xff,)))
+                    safe = _sanitize_text(text)
+                    if len(safe) > sent:
+                        seg = safe[sent:].lstrip() if sent == 0 else safe[sent:]
+                        if seg:
+                            delta = {"content": seg}
+                        sent = len(safe)
+            yield _mri_chunk_frame(cid, created, model, frame, delta)
+        yield _chunk_frame(cid, created, model, {}, OPENAI_FINISH_STOP)
+        yield SSE_DONE
+    return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
+def _openai_mri_completion(answer, frames, conv, system, model):
+    """Non-stream MRI response: the standard OpenAI chat.completion plus the full
+    per-byte MRI frame list under a top-level `mri` key."""
+    return dict(_openai_completion(answer, conv, system, model), **{MRI_KEY: frames})
 
 
 def _chat_prepare(cfg, body):
@@ -945,6 +989,33 @@ def register(app):
         except Exception as e:
             return ({"error": {"message": user_error(e), "type": "server_error"}}, 500)
         return _openai_completion(answer, conv, system, model)
+
+    @app.route("/v1/chat/mri", methods=["POST"])
+    def openai_chat_mri():
+        """OpenAI-shaped sibling of /v1/chat/completions that also emits per-byte MRI
+        telemetry. Same request body and model routing (_resolve_route); MRI exists only
+        for local trained byte models, so a cloud/teacher route returns 400. Streaming
+        (default on) interleaves each assistant text delta with its MRI frame in one
+        chat.completion.chunk; non-stream returns the completion plus the full frame
+        list under `mri`."""
+        cfg = current_app.config
+        body = request.get_json(silent=True) or {}
+        try:
+            conv, system = _openai_messages_in(body)
+        except ValueError as e:
+            return ({"error": {"message": str(e), "type": "invalid_request_error"}}, 400)
+        model = (body.get("model") or CLOUD_ID).strip()
+        _complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, "pytorch")
+        if kind != "local":
+            return ({"error": {"message": "mri is available only for local Veritate models",
+                               "type": "invalid_request_error"}}, 400)
+        if bool(body.get("stream", True)):
+            return _openai_stream_mri(cfg, model, resp_backend, conv, system)
+        try:
+            answer, frames = _generate_local_mri(cfg, model, resp_backend, conv, system)
+        except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            return ({"error": {"message": user_error(e), "type": "service_unavailable"}}, 503)
+        return _openai_mri_completion(answer, frames, conv, system, model)
 
     @app.route("/hybrid/chat", methods=["POST"])
     def hybrid_chat():

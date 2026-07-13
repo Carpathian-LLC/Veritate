@@ -4,7 +4,7 @@ The box's programmatic API: the surface an outside client (another server, an ap
 
 Two shapes:
 
-- **OpenAI-compatible** (`/v1/models`, `/v1/chat/completions`) — point any OpenAI client at the base URL.
+- **OpenAI-compatible** (`/v1/models`, `/v1/chat/completions`, `/v1/chat/mri`) — point any OpenAI client at the base URL.
 - **Native SSE** (`/generate`, `/agent/stream`) — byte-level generation and agent traces with full telemetry.
 
 For the complete platform contract that on-box extensions code against (models, runs, training, settings, and everything else), see [internal_api.md](internal_api.md).
@@ -51,6 +51,22 @@ OpenAI-compatible chat completions.
 
 ```bash
 curl http://<box-ip>:8001/v1/chat/completions \
+  -H "Authorization: Bearer <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "<name>", "messages": [{"role": "user", "content": "hello"}]}'
+```
+
+### POST /v1/chat/mri
+
+OpenAI-shaped sibling of `/v1/chat/completions` that also streams per-byte MRI (model-internals) telemetry, so a client gets reply text and interpretability frames in one stream. Local trained byte models only.
+
+- Body: identical to `/v1/chat/completions` (`model`, `messages`, `stream`, optional `temperature`, `max_tokens`, `top_k`). `stream` defaults to `true` here.
+- Stream response: `text/event-stream` of `chat.completion.chunk` frames. A role frame, then one chunk per MRI frame carrying that frame under a top-level `mri` key plus the assistant text delta for its byte in `choices[0].delta.content`, then a `finish_reason:"stop"` frame, then `data: [DONE]`. A plain OpenAI client reads the content deltas and ignores `mri`.
+- Non-stream response: the standard OpenAI `chat.completion` plus the full per-byte MRI frame list under a top-level `mri` key.
+- Errors: `400` bad body or a non-local (cloud/teacher) model, which has no MRI; `503` model unavailable.
+
+```bash
+curl http://<box-ip>:8001/v1/chat/mri \
   -H "Authorization: Bearer <key>" \
   -H "Content-Type: application/json" \
   -d '{"model": "<name>", "messages": [{"role": "user", "content": "hello"}]}'
