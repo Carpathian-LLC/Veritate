@@ -12,6 +12,7 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import json
 import os
 import subprocess
 import sys
@@ -19,8 +20,9 @@ import sys
 import pytest
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-if os.path.join(REPO_ROOT, "veritate_mri") not in sys.path:
-    sys.path.insert(0, os.path.join(REPO_ROOT, "veritate_mri"))
+for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from readers import paths
 
@@ -34,6 +36,9 @@ V13_FIXTURE  = os.path.join(FIXTURES, "hybrid_v13_fixture.bin")
 PROMPTS      = b"Hello world\nabc def\nOnce upon a time\n"
 BUDGET       = "32"
 N_TURNS      = 3
+I8_SHAPE     = {"vocab": 256, "hidden": 32, "global": 3, "ffn": 64, "heads": 4, "seq": 64}
+I8_NAME      = "tiny_hybrid_i8"
+I8_STEP      = 10
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -73,3 +78,29 @@ def test_v13_simd_matches_scalar():
     """v13 hybrid SIMD matvec (neon/avx2) greedy-decodes byte-identically to scalar."""
     exe = _engine()
     assert _greedy(exe, V13_FIXTURE) == _greedy(exe, V13_FIXTURE, scalar=True)
+
+
+def _export_int8_fixture(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    from training import export
+    from veritate_core.model_patched import VeritatePatched
+    s = I8_SHAPE
+    torch.manual_seed(0)
+    model = VeritatePatched(s["vocab"], s["hidden"], s["global"], s["ffn"], s["heads"],
+                            s["seq"], global_mixer="recurrent", state_rule="gla")
+    mdir = tmp_path / I8_NAME / "checkpoints"
+    mdir.mkdir(parents=True)
+    torch.save({"model": model.state_dict()}, mdir / f"step_{I8_STEP}.pt")
+    cfg = {"shape": {k: s[k] for k in ("vocab", "hidden", "ffn", "heads", "seq")} | {"layers": s["global"]},
+           "training_args": {"trunk": "hybrid", "state_rule": "gla"}}
+    with open(tmp_path / I8_NAME / "config.json", "w", encoding="utf-8") as f:
+        json.dump(cfg, f)
+    monkeypatch.setattr(paths, "MODELS_ROOT", str(tmp_path))
+    return export.export_checkpoint(I8_NAME, I8_STEP, dtype="int8")["path"]
+
+
+def test_v13_int8_simd_matches_scalar(tmp_path, monkeypatch):
+    """v13 int8 hybrid SIMD matvec (avx2/sdot) greedy-decodes byte-identically to scalar."""
+    exe = _engine()
+    bin_path = _export_int8_fixture(tmp_path, monkeypatch)
+    assert _greedy(exe, bin_path) == _greedy(exe, bin_path, scalar=True)

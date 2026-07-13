@@ -274,7 +274,7 @@ def _build_c_mri_frame(raw, fwd_ms, shape):
 
 def _c_engine_stream(cfg, prompt, max_new, temperature=0.7, top_k=40,
                      ablate_layer=-1, ablate_neuron=-1, addons_csv="",
-                     rep_window=0, rep_penalty=0.0, no_repeat_ngram=0):
+                     rep_window=0, rep_penalty=0.0, no_repeat_ngram=0, trace=False):
     sub = cfg["C_SUBPROCESS"]
     if sub is None:
         yield {"kind": "error", "message": "c chat_traced subprocess not running"}
@@ -306,11 +306,17 @@ def _c_engine_stream(cfg, prompt, max_new, temperature=0.7, top_k=40,
         for raw in sub.stream(prompt, temperature, top_k, max_new,
                               ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
                               addons_csv=addons_csv, rep_window=rep_window,
-                              rep_penalty=rep_penalty, no_repeat_ngram=no_repeat_ngram):
+                              rep_penalty=rep_penalty, no_repeat_ngram=no_repeat_ngram,
+                              do_trace=trace):
             now = time.perf_counter()
             fwd_ms = (now - last) * 1000.0
             last = now
-            yield _build_c_mri_frame(raw, fwd_ms, shape)
+            if raw.get("fast"):
+                yield {"kind": "fast_byte", "byte": int(raw["byte"]),
+                       "argmax_byte": int(raw["argmax_byte"]), "T": int(raw["real_len"]),
+                       "ms_per_byte": round(fwd_ms, 2), "backend": "c"}
+            else:
+                yield _build_c_mri_frame(raw, fwd_ms, shape)
     except Exception as e:
         yield {"kind": "error", "message": f"c stream: {e}"}
 
@@ -762,7 +768,7 @@ def register(app):
                                             ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
                                             addons_csv=",".join(addons_sel),
                                             rep_window=rep_window, rep_penalty=rep_penalty,
-                                            no_repeat_ngram=no_repeat_ngram)
+                                            no_repeat_ngram=no_repeat_ngram, trace=True)
                     stop_seq = _chat_stop_seq(prompt)
                     for ev in _stop_on_bytes(base, stop_seq):
                         yield f"data: {json.dumps(ev)}\n\n"

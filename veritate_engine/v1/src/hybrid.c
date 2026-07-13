@@ -131,7 +131,7 @@ hybrid_matvec_fn hybrid_matvec_fp = hybrid_matvec_f32_scalar;
 
 // SIMD upgrades the scalar defaults per detected arch features.
 // VERITATE_HYBRID_SCALAR=1 forces the scalar references for kernel-identity
-// checks and A/B timing. int8 x86 stays scalar: no avx2 int8 matvec yet.
+// checks and A/B timing.
 void hybrid_dispatch_init(int32_t dtype) {
     cpu_features_t feat;
     cpu_detect(&feat);
@@ -152,7 +152,7 @@ void hybrid_dispatch_init(int32_t dtype) {
     if (feat.avx2 && feat.f16c) {
         hybrid_matvec_fp = hybrid_matvec_f32_avx2;
         hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_avx2
-                         : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_scalar
+                         : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_avx2
                          : hybrid_matvec_f32_avx2;
     }
 #endif

@@ -255,7 +255,7 @@ class CTracedSubprocess:
 
     def stream(self, prompt, temperature, top_k, max_new,
                ablate_layer=-1, ablate_neuron=-1, addons_csv="",
-               rep_window=0, rep_penalty=0.0, no_repeat_ngram=0):
+               rep_window=0, rep_penalty=0.0, no_repeat_ngram=0, do_trace=True):
         # Acquire the per-generation lock. A live generation refreshes
         # _last_frame_time on every frame; reclaim only when the holder has gone
         # silent for STREAM_LOCK_TIMEOUT_S (truly wedged, e.g. an abandoned SSE
@@ -308,7 +308,8 @@ class CTracedSubprocess:
             # sampler bitwise-identical to pre-repetition-control behavior.
             header = (f"{float(temperature):.4f} {int(top_k)} {int(max_new)} "
                       f"{int(ablate_layer)} {int(ablate_neuron)} {csv_token} "
-                      f"{int(rep_window)} {float(rep_penalty):.4f} {int(no_repeat_ngram)}\n").encode("ascii")
+                      f"{int(rep_window)} {float(rep_penalty):.4f} {int(no_repeat_ngram)} "
+                      f"{1 if do_trace else 0}\n").encode("ascii")
             try:
                 self.proc.stdin.write(header)
                 self.proc.stdin.write(p.encode("latin-1", "replace") + b"\n")
@@ -350,6 +351,29 @@ class CTracedSubprocess:
                         saw_tend = True
                         self._last_clean = True
                         return
+                    if marker == b"FFRM":
+                        # fast frame: 12-byte tail, no payload. do_trace=0 path.
+                        rest = _read_exact(my_proc.stdout, 12)
+                        if rest is None:
+                            if my_epoch != self._epoch:
+                                return
+                            logmod.error("c_engine", "stdout closed mid-fast-frame; respawning")
+                            self._kill_and_respawn(); respawned = True
+                            raise RuntimeError("chat_traced stdout closed mid-fast-frame; subprocess respawned")
+                        pos, real_len = struct.unpack("<II", rest[:8])
+                        t_read1 = time.perf_counter_ns()
+                        trace.append({
+                            "t_read_pipe_ms":    (t_read1 - t_read0) / 1e6,
+                            "t_parse_ms":        0.0,
+                            "t_engine_inter_ms": (t_read0 - t_prev_frame_done) / 1e6,
+                            "frame_size_bytes":  16,
+                        })
+                        t_prev_frame_done = t_read1
+                        self._last_frame_time = time.monotonic()
+                        yield {"pos": int(pos), "real_len": int(real_len),
+                               "byte": int(rest[8]), "argmax_byte": int(rest[9]),
+                               "fast": True}
+                        continue
                     if marker != b"TFRM":
                         # Pipe is desynced reading garbage instead of frame magic.
                         # Cannot recover by draining; the next read offset is unknown.

@@ -19,8 +19,15 @@ dequantized to fp32 at load. Recurrent state, conv ring, KV caches, residuals,
 logits: all fp32. Quantization beyond fp16 requires the quality gates below.
 
 - Scalar C path is the reference; SIMD kernels must be bitwise-identical to it
-  (preflight rule 24). The scalar matvec accumulates in 4 interleaved partial
-  sums so a 4-lane SIMD port reproduces it exactly.
+  (preflight rule 24). The fp32/fp16 scalar matvec accumulates in 16 interleaved
+  partial sums so a 4-lane SIMD port reproduces the float reduction exactly. The
+  int8 matvec accumulates in exact int32, so any reduction order is bitwise-equal
+  and only the shared `hybrid_quant_act` + the final `acc * (scale * a_scale)`
+  fold must match: NEON `hybrid_matvec_i8_sdot` (arm64) and AVX2
+  `hybrid_matvec_i8_avx2` (x86_64) both satisfy this by construction. The AVX2
+  int8 kernel widens via `vpmovsxbw` + `vpmaddwd` (int8->int16, pairwise->int32),
+  never `vpmaddubsw` (its signed*unsigned int16 sum can saturate at these
+  ranges).
 - Logits cross the existing int32 telemetry/sampler surface scaled by
   `VERITATE_HYBRID_LOGIT_SCALE` (1024), mirroring the v9 `1/1024` convention in
   `ppl_mode`. The sampler folds that scale into the temperature
@@ -40,7 +47,7 @@ fineweb_edu_val / chat_v1_val:
 |---|---|---|---|
 | fp32 | 487.0 MB | fp32 | PASS: parity 192/192; bpb 1.4447 / 0.9899 (PyTorch: 1.44466 / 0.98989) |
 | fp16 | 243.5 MB | fp32 (exact convert) | PASS: parity 192/192; bpb identical to 4 decimals. **shipping default** |
-| int8 (dtype=2) | 126.5 MB | int8 sdot + fp32 requant | PASS (step 51000): bpb +0.0040 fineweb / +0.0020 chat_v1 vs fp16 (gate < 0.005); greedy transcripts coherent. dynamic per-call activation quant (`hybrid_quant_act`, absmax/127) + per-output-row fp32 weight scales; small tensors + embeddings stay fp32. sdot kernel ~3.9x the fp16 kernel (at the bandwidth ceiling) |
+| int8 (dtype=2) | 126.5 MB | int8 sdot + fp32 requant | PASS (step 51000): bpb +0.0040 fineweb / +0.0020 chat_v1 vs fp16 (gate < 0.005); greedy transcripts coherent. dynamic per-call activation quant (`hybrid_quant_act`, absmax/127) + per-output-row fp32 weight scales; small tensors + embeddings stay fp32. SIMD matvec: NEON `hybrid_matvec_i8_sdot` (~3.9x the fp16 kernel, at the bandwidth ceiling) and AVX2 `hybrid_matvec_i8_avx2`; both bitwise-identical to `hybrid_matvec_i8_scalar` (verified on cardinal i7-9700T + Rosetta AVX2 over real + odd-column shapes) |
 
 ## .bin layout (little-endian)
 

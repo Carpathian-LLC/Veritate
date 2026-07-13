@@ -112,6 +112,8 @@ void hybrid_matvec_i8_scalar(const void* w, const float* x, float* out,
                              int32_t n, int32_t k);
 void hybrid_matvec_i8_sdot(const void* w, const float* x, float* out,
                            int32_t n, int32_t k);
+void hybrid_matvec_i8_avx2(const void* w, const float* x, float* out,
+                           int32_t n, int32_t k);
 // symmetric per-call activation quant: qx = round(x * 127/absmax) clamped.
 // returns absmax/127; 0 when x is all-zero (caller zeroes the output).
 float hybrid_quant_act(const float* x, int32_t k, int8_t* qx);
