@@ -75,6 +75,12 @@ V8_TAIL_BYTES       = 2 + CAND_TOPK + CAND_TOPK * DLA_TOPK * DLA_ENTRY_BYTES + 2
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
+# chat_traced_loop reads the prompt with fgets(prompt_line, seq + PROMPT_FGETS_BUFSIZE).
+# fgets stores at most (size - 1) chars incl the newline, so the payload (bytes before
+# '\n') caps at seq + PROMPT_FGETS_BUFSIZE - 2. A longer line leaves residue in stdin
+# and permanently desyncs the persistent subprocess; clamp the tail (newest bytes).
+PROMPT_FGETS_BUFSIZE = 4
+
 DLA_DTYPE = np.dtype([
     ("layer",   np.uint8),
     ("pad",     np.uint8),
@@ -298,6 +304,18 @@ class CTracedSubprocess:
             # newlines ride the line-based protocol as 0x01; chat_traced maps
             # them back so chat-template prompts keep their trained framing.
             p = prompt.replace("\r", "").replace("\n", "\x01")
+            # fgets(prompt_line, seq+4) stores <= seq+3 chars incl '\n'; payload caps at
+            # seq+2. tail-clamp keeps the newest bytes so an over-long line can't leave
+            # residue and desync the subprocess (engine also drains residue defensively).
+            # generation budget is seq - prompt_len with no window slide, so also
+            # reserve reply room; reserve caps at seq//2 so a pathological max_new
+            # cannot wipe out the context.
+            prompt_bytes = p.encode("latin-1", "replace")
+            seq = self.shape["seq"]
+            max_payload = min(seq + PROMPT_FGETS_BUFSIZE - 2,
+                              seq - min(int(max_new), seq // 2))
+            if len(prompt_bytes) > max_payload:
+                prompt_bytes = prompt_bytes[-max_payload:]
             # addons token: empty -> use whatever chain was set at spawn time
             # (env var path); "-" -> clear any prior chain; otherwise comma-
             # separated id list. token must contain no whitespace.
@@ -312,14 +330,14 @@ class CTracedSubprocess:
                       f"{1 if do_trace else 0}\n").encode("ascii")
             try:
                 self.proc.stdin.write(header)
-                self.proc.stdin.write(p.encode("latin-1", "replace") + b"\n")
+                self.proc.stdin.write(prompt_bytes + b"\n")
                 self.proc.stdin.flush()
             except (BrokenPipeError, OSError) as e:
                 # subprocess died mid-write. respawn and retry once.
                 self._spawn()
                 try:
                     self.proc.stdin.write(header)
-                    self.proc.stdin.write(p.encode("latin-1", "replace") + b"\n")
+                    self.proc.stdin.write(prompt_bytes + b"\n")
                     self.proc.stdin.flush()
                 except (BrokenPipeError, OSError) as e2:
                     raise RuntimeError(f"chat_traced respawn failed: {e2!r}")

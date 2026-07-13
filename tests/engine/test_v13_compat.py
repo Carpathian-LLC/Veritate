@@ -118,3 +118,11 @@ def test_v13_threaded_matches_single_thread(tmp_path, monkeypatch):
     exe = _engine()
     bin_path = _export_fixture(tmp_path, monkeypatch, MT_SHAPE, MT_NAME, "fp16")
     assert _greedy(exe, bin_path, threads=MT_THREADS) == _greedy(exe, bin_path, threads=1)
+
+
+def test_v13_auto_matches_single_thread(tmp_path, monkeypatch):
+    """v13 auto-calibrated thread count greedy-decodes byte-identically to VERITATE_HYBRID_THREADS=1."""
+    exe = _engine()
+    monkeypatch.delenv("VERITATE_HYBRID_THREADS", raising=False)
+    bin_path = _export_fixture(tmp_path, monkeypatch, MT_SHAPE, MT_NAME, "fp16")
+    assert _greedy(exe, bin_path, threads=None) == _greedy(exe, bin_path, threads=1)

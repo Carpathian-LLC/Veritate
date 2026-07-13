@@ -203,11 +203,54 @@ spin, so an idle engine burns no cores (energy target) while an active decode
 burst keeps workers hot and pays ~sub-us wake latency. This cut per-dispatch cost
 ~60x vs the prior condvar wake (single-stream decode issues 12 matvec dispatches
 per non-boundary byte, 48 per boundary byte, so wake latency dominated) and moved
-the useful-scaling knee from ~4 to ~8 cores. `VERITATE_HYBRID_THREADS` overrides
-the worker count (default `min(pool_size, 8)`, override up to `pool_size`, 1 =
-single-thread); `VERITATE_POOL_SPIN` tunes the idle spin budget. The pool is
-shared with the dense v9-v12 matmul path (`matmul_neon_sdot`, `matmul_vnni`), so
-the same win applies there and the v9 greedy golden still matches.
+the useful-scaling knee from ~4 to ~8 cores. The worker count is chosen per box
+by auto-calibration (below), not a fixed default; `VERITATE_HYBRID_THREADS` is an
+explicit override (1 = single-thread, up to `pool_size`) that skips calibration,
+and `VERITATE_POOL_SPIN` tunes the idle spin budget. The pool is shared with the
+dense v9-v12 matmul path (`matmul_neon_sdot`, `matmul_vnni`), so the same win
+applies there and the v9 greedy golden still matches.
+
+### auto-calibrated worker count (per box, measured at load)
+
+The decode thread count is NOT hardcoded. The knee is memory-bandwidth /
+contention-driven, not core-count-driven (on the 24-P-core M3 Ultra, scaling is
+1T 1.74, 4T 0.80, 8T 0.68, 16T 0.75, 24T 1.97 ms/byte, so raw core count does not
+predict it), so only a measurement on the running box finds it.
+`hybrid_threads_init` runs once at `hybrid_load` (skipped when the override is
+set) and `hybrid_calibrate` ([hybrid.c](../../veritate_engine/v1/src/hybrid.c))
+times the ACTUAL non-boundary decode step (`hybrid_step` on the real loaded
+weights) at a `1,2,4,..` ladder up to `pool_size - 1` (the dispatching thread
+busy-spins on the completion count, so it keeps a core; the override may still
+reach the full `pool_size`). Each rung's per-step median (matching the decode
+p50) is medianed over direction-alternating passes; the pick is the diminishing-
+returns knee: climb while a rung beats the previous by at least
+`HYBRID_CALIB_KNEE`, stop otherwise. The knee is reached before the over-threaded
+rungs, so their sustained collapse (which a short calibration burst does not
+reproduce, only sustained decode does) is never selected. All measurement
+parameters (ladder, warmups, reps, passes, knee fraction) are named constants at
+the top of the threaded-matvec block; only the measurement is tuned, the policy
+is measured. Total calibration cost is bounded and small: ~70-340 ms one-time at
+load, dtype-independent (it calibrates the real dtype kernel).
+
+**Parity invariant:** row-split output is bitwise-identical at every worker count
+(each `out[j]` is computed once by one worker with the single-thread kernel), so
+the calibrated pick, and any run-to-run variance in it, can NEVER change decode
+output. Gated by
+`tests/engine/test_v13_compat.py::test_v13_auto_matches_single_thread` (auto path
+== `VERITATE_HYBRID_THREADS=1`, byte-identical) alongside the env-pinned
+`test_v13_threaded_matches_single_thread`.
+
+`VERITATE_HYBRID_CALIB_LOG=1` prints the picked count, pool size, calibration
+wall cost, and the per-rung `ms/byte` curve to stderr (off by default), to verify
+the pick on any new box.
+
+Measured picks (same binary, both boxes): M3 Ultra 24-P-core lands at 8-16
+(the bandwidth knee; never the 24T collapse); Intel i7-9700T (8 cores, no
+hyperthreading) lands at 4-7 and never 8, where 8 workers + the dispatcher
+oversubscribe the 8 cores and decode collapses (measured 49-62 ms/byte forced-8
+vs 2.2-2.6 auto). The prior fixed `min(pool_size, 8)` default over-threaded the
+i7 (its dual-channel DDR4 and core count saturate well below 8); auto-calibration
+makes hand-setting `VERITATE_HYBRID_THREADS` on that box unnecessary.
 
 ## measured performance (M3 Ultra 24 P-core, chat80m fp16 greedy decode)
 
@@ -225,10 +268,13 @@ so >8T carries real load noise):
 | 16 | 0.75 | 2.25 | 2.31x |
 | 24 | 1.97 | 8.34 | collapse (only 24 P-cores; E-core + oversubscription) |
 
-8 threads is the robust knee: ~2.5-3x at low variance, and it honors the energy
-target (8 of 24 P-cores for ~90% of the best case). 16T edges ahead only on a
-fully quiet box (measured 0.52 p50 there, ~3.4x) and regresses under load, so it
-is opt-in via the override, not the default. Prior condvar pool at the same 8T
+8 threads is the robust knee here: ~2.5-3x at low variance, and it honors the
+energy target (8 of 24 P-cores for ~90% of the best case). 16T edges ahead only
+on a fully quiet box (measured 0.52 p50 there, ~3.4x) and regresses under load;
+auto-calibration lands at 8, or 16 when 16 genuinely wins that box's measurement,
+and never the 24T collapse (the ladder caps at `pool_size - 1`). This 8-16 knee
+is what the per-box calibration converges to on this hardware; it is measured, not
+hardcoded. Prior condvar pool at the same 8T
 was 1.75x (1.04 p50); the spin pool + 2^18 floor is the 2.56x. At the knee decode
 moves ~57 MB / 0.68 ms ~= 84 GB/s, still ~10x under the ~800 GB/s bandwidth floor:
 the remaining ceiling is per-byte serial work (attention, recurrent state,

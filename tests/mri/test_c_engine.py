@@ -54,6 +54,17 @@ def _gen(sub, n=6):
     return out
 
 
+def _run_turn(sub, prompt, max_new=2):
+    """Fully consume one turn (to TEND); return (first frame's real_len, frame count)."""
+    first_real_len = None
+    frames = 0
+    for fr in sub.stream(prompt, 0.2, 1, max_new):
+        if first_real_len is None:
+            first_real_len = fr.get("real_len")
+        frames += 1
+    return first_real_len, frames
+
+
 def test_fresh_stream_produces_bytes_and_ends_clean():
     """A fresh subprocess streams bytes and marks the pipe clean after TEND."""
     sub = _sub_or_skip()
@@ -118,4 +129,33 @@ def test_healthy_slow_holder_is_not_reclaimed(monkeypatch):
         assert sub._epoch == epoch0  # healthy holder never reclaimed
     finally:
         stop["v"] = True
+        sub.close()
+
+
+def test_overlong_prompt_keeps_following_turn_in_sync():
+    """An over-long prompt is tail-clamped leaving reply room: the long turn generates, the next short turn reports its true real_len."""
+    sub = _sub_or_skip()
+    try:
+        seq = sub.shape["seq"]
+        max_new = 8
+        rl_long, frames_long = _run_turn(sub, "x" * (seq * 2), max_new=max_new)
+        assert rl_long == seq - min(max_new, seq // 2)  # clamp reserves reply room
+        assert frames_long > 0                           # long turn actually generates
+        rl_short, _ = _run_turn(sub, "hi")
+        assert rl_short == 2                             # following 2-byte turn in sync
+    finally:
+        sub.close()
+
+
+def test_overlong_prompt_does_not_respawn_backend():
+    """An over-long prompt is handled in-band: the subprocess is not killed/respawned as a desync."""
+    sub = _sub_or_skip()
+    try:
+        pid0 = sub.proc.pid
+        _run_turn(sub, "x" * (sub.shape["seq"] * 2))
+        rl, frames = _run_turn(sub, "hi")
+        assert rl == 2 and frames > 0
+        assert sub.proc.pid == pid0
+        assert sub._last_clean is True
+    finally:
         sub.close()

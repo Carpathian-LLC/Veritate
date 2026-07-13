@@ -163,15 +163,12 @@ void hybrid_dispatch_init(int32_t dtype) {
 // bitwise-identical to the single call (each row is computed once, same kernel).
 // only matmuls with n * k >= HYBRID_MT_MIN_WORK are split. the worker count is
 // per-box: a one-time micro-calibration at load (hybrid_threads_init) times real
-// non-boundary decode steps (the actual objective, on the real weights) at a
-// 1,2,4,.. ladder up to one below the P-core count (the dispatcher keeps a
-// core), then picks the smallest count within
-// HYBRID_CALIB_SLACK of the best time. the knee is memory-bandwidth/contention-
-// driven, not core-count-driven, so only a measurement on the running box finds
-// it, and the smallest-within-slack rule rejects the over-thread collapse and
-// honors the energy target. VERITATE_HYBRID_THREADS is an explicit override that
-// skips calibration (1 = single-thread, up to pool size). row-split parity holds
-// at every count, so the calibrated pick never changes output (rule 24).
+// non-boundary decode steps on the real weights and stops at the diminishing-
+// returns knee (see the calibration note below). the knee is memory-bandwidth/
+// contention-driven, not core-count-driven, so only a measurement on the running
+// box finds it. VERITATE_HYBRID_THREADS is an explicit override that skips
+// calibration (1 = single-thread, up to pool size). row-split parity holds at
+// every count, so the calibrated pick never changes output (rule 24).
 // ------------------------------------------------------------------------------------
 
 #define HYBRID_MT_MIN_WORK     (1 << 18)
@@ -188,11 +185,15 @@ void hybrid_dispatch_init(int32_t dtype) {
 // short calibration burst) is never selected and need not be measured for. KNEE
 // also honors the energy target: a thread is added only when it buys real speed.
 // LADDER_N caps the ladder array (powers of two under the ladder top, plus top).
+// BUDGET_MS bounds total wall cost: passes run up to PASSES but stop once the
+// budget is spent (a fast model keeps all passes; a slow model auto-trims), so
+// startup stays well under half a second on any model size.
 #define HYBRID_CALIB_WARMUP    1
 #define HYBRID_CALIB_REPS      4
 #define HYBRID_CALIB_PASSES    7
 #define HYBRID_CALIB_KNEE      0.13
 #define HYBRID_CALIB_LADDER_N  8
+#define HYBRID_CALIB_BUDGET_MS 350
 
 typedef struct {
     hybrid_matvec_fn fn;
@@ -315,21 +316,26 @@ static int32_t hybrid_calibrate(hybrid_t* h) {
     int32_t rungs[HYBRID_CALIB_LADDER_N];
     int32_t nr = calib_ladder(cap, rungs);
     uint64_t samp[HYBRID_CALIB_LADDER_N][HYBRID_CALIB_PASSES];
-    for (int32_t p = 0; p < HYBRID_CALIB_PASSES; p++)
+    const uint64_t start = veritate_now_ns();
+    int32_t done = 0;
+    for (int32_t p = 0; p < HYBRID_CALIB_PASSES; p++) {
         for (int32_t i = 0; i < nr; i++) {
             int32_t r = (p & 1) ? nr - 1 - i : i;
             samp[r][p] = calib_time_rung(h, rungs[r], byte);
         }
+        done = p + 1;
+        if ((veritate_now_ns() - start) / 1000000 >= HYBRID_CALIB_BUDGET_MS) break;
+    }
     hybrid_reset(h);
 
     uint64_t med[HYBRID_CALIB_LADDER_N];
     for (int32_t r = 0; r < nr; r++) {
-        qsort(samp[r], HYBRID_CALIB_PASSES, sizeof(uint64_t), calib_cmp_u64);
-        med[r] = samp[r][HYBRID_CALIB_PASSES / 2];
+        qsort(samp[r], done, sizeof(uint64_t), calib_cmp_u64);
+        med[r] = samp[r][done / 2];
     }
     if (getenv("VERITATE_HYBRID_CALIB_LOG"))
         for (int32_t r = 0; r < nr; r++)
-            fprintf(stderr, "  rung nt=%2d med=%.3fms\n", rungs[r], (double)med[r] / 1e3);
+            fprintf(stderr, "  rung nt=%2d med=%.3f ms/byte\n", rungs[r], (double)med[r] / 1e6);
 
     int32_t pick = 0;
     for (int32_t r = 1; r < nr; r++) {

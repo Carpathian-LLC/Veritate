@@ -80,7 +80,6 @@ typedef struct {
     _Atomic int32_t  parked;
     pool_mu_t        wake_mu;
     pool_cv_t        wake_cv;
-    int              alive;
 #if defined(_WIN32)
     HANDLE thread;
 #else
@@ -88,6 +87,8 @@ typedef struct {
 #endif
 } pool_worker_t;
 
+// invariant: a single thread ever calls veritate_pool_run (the decode driver);
+// pool_ready is read without a fence and workers own no cross-dispatch state.
 static pool_worker_t   pool[POOL_DEFAULT_CAP];
 static int32_t         pool_n = 0;
 static int             pool_ready = 0;
@@ -166,7 +167,6 @@ static void* worker_loop(void* raw) {
             POOL_MU_UNLOCK(&w->wake_mu);
         }
         atomic_store_explicit(&w->wake_flag, 0, memory_order_relaxed);
-        if (!w->alive) break;
         w->fn(w->arg, w->worker_idx);
         atomic_fetch_add_explicit(&pool_done_count, 1, memory_order_seq_cst);
         if (atomic_load_explicit(&pool_main_waiting, memory_order_seq_cst)) {
@@ -204,7 +204,6 @@ static void pool_init_once(void) {
             pool[t].fn         = NULL;
             pool[t].arg        = NULL;
             pool[t].worker_idx = t;
-            pool[t].alive      = 1;
             atomic_store_explicit(&pool[t].wake_flag, 0, memory_order_relaxed);
             atomic_store_explicit(&pool[t].parked,    0, memory_order_relaxed);
             POOL_MU_INIT(&pool[t].wake_mu);
