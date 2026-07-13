@@ -34,20 +34,27 @@ The provider callback `_TRAINING_FN` is set at [app.py:233](../../../veritate_mr
 
 Without the fallback, presence pings falsely report idle during direct-script training, and the Carpathian dashboard flips the device offline mid-run.
 
+Both paths run the training name through the shared `_enrich_with_config` ([app.py:219](../../../veritate_mri/app.py#L219)) to attach `model_name`, `n_params`, and the `shape` summary (hidden/layers/ffn/heads/seq/...). It normalizes the name (as-is, then slugified) to the model dir, and resolves each shape field from the config's top-level `shape` block, falling back to `training_args` (the same resolution `export.shape_from_config` uses), so hidden/layers populate whenever the model's config exists on the box — including direct-script runs. Enrichment ships only when `share_current_training` is on.
+
 ## Tiers
 
-The `analytics_advanced_enabled` setting gates which fields ship:
+The identifying training block is gated by its own dedicated setting, independent of the broad analytics tier:
 
-- Off — only `training_active: true` in the presence payload.
-- On — full block: `plugin_id`, `started_at`, `model_name`, `n_params`, `shape`.
+- `share_current_training` (default **on**):
+  - On — the training block ships: `plugin_id`, `started_at`, `model_name`, `n_params`, `shape`.
+  - Off — only `training_active: true` in the presence payload (active/idle flag, no identity).
 
-`heartbeat_send_errors` gates whether per-error detail (source + message) accompanies the count.
+`analytics_advanced_enabled` (default **on**) gates the machine/analytics fields: host token, os/arch, total runtime, n_models, models_hash, the once-per-machine hardware block, and the training-start events buffer. It no longer gates the current-training identity — that moved to `share_current_training`.
+
+`heartbeat_send_errors` (default **on**) gates whether per-error detail (source + message) accompanies the count.
+
+A fresh box therefore ships its current training model name + shape by default; each toggle lets the user opt out.
 
 ## Dependencies
 
 - [training/trainer_runner.py](../../../veritate_mri/training/trainer_runner.py) — primary detection path.
 - `models/<name>/train.csv` — fallback detection path.
-- [runtime/settings.py](../../../veritate_mri/runtime/settings.py) — `heartbeat_enabled`, `analytics_advanced_enabled`, `diagnostics_logs_enabled`, `device_name`.
+- [runtime/settings.py](../../../veritate_mri/runtime/settings.py) — `heartbeat_enabled`, `analytics_advanced_enabled`, `share_current_training`, `diagnostics_logs_enabled`, `device_name`.
 - [runtime/sys_metrics.py](../../../veritate_mri/runtime/sys_metrics.py) — hardware block in the analytics tier.
 
 ## Pitfalls

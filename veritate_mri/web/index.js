@@ -10163,6 +10163,8 @@ function _applySettingsToUI(s) {
   _applyHudVisibility(!!s.hud_enabled, !!s.hud_detailed);
   const adv = $("analyticsAdvancedEnable");
   if (adv) adv.checked = !!s.analytics_advanced_enabled;
+  const shareTrain = $("shareCurrentTrainingEnable");
+  if (shareTrain) shareTrain.checked = !!s.share_current_training;
   const diag = $("diagnosticsLogsEnable");
   if (diag) diag.checked = !!s.diagnostics_logs_enabled;
   const dev = $("devicePreferenceSelect");
@@ -12634,8 +12636,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const autoBtn = $("trainAutoTuneBtn");
   if (autoBtn) autoBtn.addEventListener("click", _autoTuneOpen);
-  const sysTuneBtn = $("sysAutoTuneBtn");
-  if (sysTuneBtn) sysTuneBtn.addEventListener("click", _autoTuneOpen);
   const tuneStart = $("autoTuneStart");
   if (tuneStart) tuneStart.addEventListener("click", _autoTuneStart);
   const tuneStop = $("autoTuneStop");
@@ -12676,6 +12676,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const adv = $("analyticsAdvancedEnable");
   if (adv) adv.addEventListener("change", () => {
     _saveSettings({ analytics_advanced_enabled: adv.checked });
+  });
+  const shareTrain = $("shareCurrentTrainingEnable");
+  if (shareTrain) shareTrain.addEventListener("change", () => {
+    _saveSettings({ share_current_training: shareTrain.checked });
   });
   const diag = $("diagnosticsLogsEnable");
   if (diag) diag.addEventListener("change", () => {

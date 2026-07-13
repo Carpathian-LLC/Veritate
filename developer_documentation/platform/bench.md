@@ -40,7 +40,7 @@ Bench plans at batch 1 (the ramp explores batch); a real run plans at its config
 
 ## dashboard flow (Auto tune)
 
-1. Auto tune (Training tab next to the memory estimate, or Settings next to Detect system) opens a modal listing bench-capable trainers.
+1. Auto tune (Training tab next to the memory estimate) opens a modal listing bench-capable trainers.
 2. Start launches the trainer through the normal runner (`POST /trainers/run` with `bench: true`); single-instance enforcement means it cannot touch a live training run.
 3. The modal tails `bench:` lines from the log-ring SSE stream and renders them live; `BENCH_RESULT` ends the run.
 4. The recommendation is the throughput sweet spot (fastest measured batch, capped by the MPS INT_MAX attention-tensor limit), with lr sqrt-scaled from the manifest pair and cadence scaled to total_steps. The modal shows the memory strategy (the plan tier); when the size only fits by paging the optimizer to NVMe it says so and notes the tok/s is disk-bound.

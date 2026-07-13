@@ -22,7 +22,8 @@ Validation lives inline: e.g., `device_name` capped at 15 characters at [setting
 | `pytorch_idle_unload_secs`       | Idle watcher timeout                                           |
 | `heartbeat_enabled`              | Master switch for the Carpathian webhook                       |
 | `heartbeat_send_errors`          | Include error detail in presence pings                         |
-| `analytics_advanced_enabled`     | Include full training payload (not just `training_active`)     |
+| `analytics_advanced_enabled`     | Include host/os/arch, runtime totals, model counts, hardware block, training-start events (default on) |
+| `share_current_training`         | Include the current training model's name + shape in presence pings; off ships only `training_active` (default on) |
 | `diagnostics_logs_enabled`       | Send the diagnostics payload alongside presence                |
 | `device_preference`              | `auto` / `cpu` / `mps` / `cuda` for trainers                   |
 | `device_name`                    | Display name (max 15 chars) shown on Carpathian dashboard      |

@@ -219,16 +219,28 @@ def main():
     def _enrich_with_config(out, name):
         """Attach model_name + n_params + shape summary to a training payload
         when the model has a config.json. Shared by the primary and fallback
-        detectors so both ship the same envelope shape."""
+        detectors so both ship the same envelope shape. Name resolves as-is then
+        slugified (display name -> dir). Each shape field reads from the
+        top-level `shape` block, falling back to `training_args` (the same
+        resolution export.shape_from_config uses), so hidden/layers populate
+        even when a trainer persisted them only under training_args."""
+        if name and not models.exists(name):
+            name = models.slugify_user_name(name)
         if not name or not models.exists(name):
             return
         try:
             cfg   = cfg_reader.load(name) or {}
             shape = cfg.get("shape") or {}
+            ta    = cfg.get("training_args") or {}
             out["model_name"] = name
-            out["n_params"]   = int(cfg.get("n_params_total") or 0) or None
+            n_params = cfg.get("n_params_total") or ta.get("n_params_total")
+            out["n_params"]   = int(n_params or 0) or None
             keep = ("hidden", "layers", "ffn", "heads", "seq", "n_predict", "rope_base")
-            summary = {k: shape[k] for k in keep if k in shape}
+            summary = {}
+            for k in keep:
+                v = shape.get(k, ta.get(k))
+                if v is not None:
+                    summary[k] = v
             if summary:
                 out["shape"] = summary
         except Exception:
