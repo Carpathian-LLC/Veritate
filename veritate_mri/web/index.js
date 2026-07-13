@@ -10187,6 +10187,42 @@ function _applySettingsToUI(s) {
   if (aiBlurb) aiBlurb.textContent = s.ai_assist_blurb || "";
   _aiUpdateEffectiveLine(s);
   if (typeof _AI !== "undefined" && _AI && _AI.applyEnabled) _AI.applyEnabled(!!s.ai_enabled);
+  _apiKeyApply(s);
+}
+
+// ---- api access key ----
+const apiKeyState = { revealed: false };
+
+function _apiKeyMask(key) {
+  if (!key) return "";
+  if (key.length <= 12) return "••••";
+  return key.slice(0, 8) + "…" + key.slice(-4);
+}
+
+function _apiKeyApply(s) {
+  const wrap = $("apiKeyValueWrap");
+  if (!wrap) return;
+  const key = s.api_key || "";
+  const on = !!key;
+  const stateEl = $("apiKeyState");
+  if (stateEl) {
+    stateEl.innerHTML = on
+      ? 'gate <b style="color:var(--data-pos)">enabled</b> &mdash; Bearer key required'
+      : 'gate <b style="color:var(--dim)">disabled</b> &mdash; endpoints are open';
+  }
+  wrap.style.display = on ? "flex" : "none";
+  $("apiKeyUsage").style.display = on ? "" : "none";
+  $("apiKeyClearBtn").style.display = on ? "" : "none";
+  $("apiKeyRotateBtn").textContent = on ? "rotate" : "generate key";
+  if (on) {
+    const valEl = $("apiKeyValue");
+    valEl.dataset.key = key;
+    valEl.textContent = apiKeyState.revealed ? key : _apiKeyMask(key);
+    $("apiKeyRevealBtn").textContent = apiKeyState.revealed ? "hide" : "reveal";
+    $("apiKeyCount").textContent = s.api_key_request_count || 0;
+    const ts = s.api_key_last_used_at || 0;
+    $("apiKeyLastUsed").textContent = ts ? new Date(ts * 1000).toLocaleString() : "never";
+  }
 }
 
 function _aiUpdateEffectiveLine(s) {
@@ -12808,6 +12844,50 @@ document.addEventListener("DOMContentLoaded", () => {
                   ai_api_key_user:  ($("aiApiKeyUser").value  || "").trim() };
       _aiUpdateEffectiveLine(s);
     });
+  });
+
+  // api access key wiring
+  const _apiKeyAction = (action, confirmMsg) => {
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    const lab = $("apiKeyStatus");
+    if (lab) { lab.textContent = "working…"; lab.style.color = "var(--warm)"; }
+    fetch("/settings/api-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    })
+      .then(r => r.json())
+      .then(s => {
+        if (s && s.error) throw new Error(s.error);
+        apiKeyState.revealed = (action === "rotate");
+        settingsState.current = s;
+        _apiKeyApply(s);
+        if (lab) { lab.textContent = action === "rotate" ? "key set" : "cleared"; lab.style.color = "var(--data-pos)"; }
+      })
+      .catch(e => { if (lab) { lab.textContent = e.message || "failed"; lab.style.color = "var(--hot)"; } });
+  };
+  const apiRotate = $("apiKeyRotateBtn");
+  if (apiRotate) apiRotate.addEventListener("click", () => {
+    const on = !!(settingsState.current && settingsState.current.api_key);
+    _apiKeyAction("rotate", on ? "Rotate the API key? The current key stops working immediately." : "");
+  });
+  const apiClear = $("apiKeyClearBtn");
+  if (apiClear) apiClear.addEventListener("click", () => {
+    _apiKeyAction("clear", "Clear the API key and reopen the API to any LAN client?");
+  });
+  const apiReveal = $("apiKeyRevealBtn");
+  if (apiReveal) apiReveal.addEventListener("click", () => {
+    apiKeyState.revealed = !apiKeyState.revealed;
+    if (settingsState.current) _apiKeyApply(settingsState.current);
+  });
+  const apiCopy = $("apiKeyCopyBtn");
+  if (apiCopy) apiCopy.addEventListener("click", () => {
+    const key = ($("apiKeyValue").dataset.key) || "";
+    if (!key) return;
+    navigator.clipboard.writeText(key).then(() => {
+      const lab = $("apiKeyStatus");
+      if (lab) { lab.textContent = "copied"; lab.style.color = "var(--data-pos)"; }
+    }).catch(() => {});
   });
 
   // teacher model wiring

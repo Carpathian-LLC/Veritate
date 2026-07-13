@@ -135,9 +135,10 @@ from routes import (
     lifecycle_routes, logs_routes, mesh_routes, models_routes,
     trainers_routes, pruning_routes, runs_routes, settings_routes, sys_routes,
     teacher_routes, train_routes, wiki_routes, hybrid_routes, rag_routes,
-    auth_routes, extensions_routes, hallucination_routes,
+    auth_routes, api_auth_routes, extensions_routes, hallucination_routes,
 )
 auth_routes.register(app)
+api_auth_routes.register(app)
 atlas_routes.register(app)
 backends_routes.register(app)
 corpus_routes.register(app)

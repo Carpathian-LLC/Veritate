@@ -18,9 +18,14 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import codecs
+import json
 import os
+import re
+import time
+import uuid
 
-from flask import current_app, request
+from flask import Response, current_app, request
 
 from readers import checkpoints, models, paths
 
@@ -50,6 +55,7 @@ PLAIN_TMPL     = "<|user|>\n{msg}\n<|assistant|>\n"
 STOP_MARKERS   = ("<|end|>", "<|user|>", "<|assistant|>", "\ncontext:")
 WIRE_NEWLINE    = "\x01"       # c chat_traced encodes prompt/reply newlines as 0x01
 KEEP_CTRL_CHARS = ("\t", "\n")  # every other control byte is dropped from the answer
+STOP_HOLD       = max(len(m) for m in STOP_MARKERS)  # per-token holdback so a forming stop marker never streams
 
 CHAT_SYSTEM    = ("You are Veritate, a concise, helpful assistant. Use the conversation so far and any "
                   "provided facts to answer the user directly. No emoji, no emdash.")
@@ -80,6 +86,18 @@ VERITATE_DOCS_ID = "veritate_docs"   # chat-page-only pick: public model grounde
 KB_SCOPES        = ("all", "platform", "user")
 TRAIN_LOG_SOURCES = ("plugin", "save")   # ring-buffer sources shown on the Training tab; plugin:<id> by prefix
 TRAIN_LOG_TAIL    = 15
+
+# OpenAI-compatible /v1/chat/completions wire tokens. Local trained models stream
+# true per-token deltas via the same generator /generate uses; cloud/teacher
+# complete() is non-streaming, so their streaming chunks the finished answer on
+# CHAT_STREAM_SPLIT (word + trailing whitespace) into deltas.
+OPENAI_CHAT_OBJECT  = "chat.completion"
+OPENAI_CHUNK_OBJECT = "chat.completion.chunk"
+OPENAI_FINISH_STOP  = "stop"
+CHATCMPL_PREFIX     = "chatcmpl-"
+SSE_DONE            = "data: [DONE]\n\n"
+CHAT_STREAM_SPLIT   = r"\S+\s*"
+SSE_HEADERS         = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 _STATE = {}   # scope -> {"chunks": [...], "bm25": index}; built lazily, cleared by reset_index_cache
 
@@ -252,8 +270,10 @@ def _ensure_c(cfg, name):
         raise RuntimeError("c engine failed to spawn")
 
 
-def _generate_local(cfg, backend, prompt):
-    from .backends_routes import _chat_stop_seq, _stop_on_bytes
+def _local_events(cfg, backend, prompt):
+    """Per-token generation event stream plus turn-stop markers for a local model.
+    Shared by the buffered (_generate_local) and true-token chat paths."""
+    from .backends_routes import _chat_stop_seq
     from inference.decode import (
         NO_REPEAT_NGRAM_DEFAULT, REP_PENALTY_DEFAULT, REP_WINDOW_DEFAULT,
     )
@@ -264,7 +284,13 @@ def _generate_local(cfg, backend, prompt):
         events = _c_engine_stream(cfg, prompt, MAX_NEW, **rep)
     else:
         events = cfg["BRAIN"].stream(prompt, max_new=MAX_NEW, **rep)
-    return _trim(collect(_stop_on_bytes(events, _chat_stop_seq(prompt))))
+    return events, _chat_stop_seq(prompt)
+
+
+def _generate_local(cfg, backend, prompt):
+    from .backends_routes import _stop_on_bytes
+    events, stop_seq = _local_events(cfg, backend, prompt)
+    return _trim(collect(_stop_on_bytes(events, stop_seq)))
 
 
 class ChatUnavailable(Exception):
@@ -498,6 +524,156 @@ def _history_in(body):
     return turns, summary
 
 
+def _openai_messages_in(body):
+    """Validate an OpenAI messages array into (conversation, system). system-role
+    turns are concatenated into the system string; the rest must be a user/assistant
+    sequence ending in a non-empty user turn. Raises ValueError for a 400."""
+    raw = body.get("messages")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("messages must be a non-empty array")
+    system_parts, conv = [], []
+    for m in raw:
+        if not isinstance(m, dict) or not isinstance(m.get("content"), str):
+            raise ValueError("each message needs a role and string content")
+        role = m.get("role")
+        if role == "system":
+            if m["content"].strip():
+                system_parts.append(m["content"].strip())
+        elif role in ("user", "assistant"):
+            conv.append({"role": role, "content": m["content"]})
+        else:
+            raise ValueError(f"unsupported role: {role}")
+    if not conv or conv[-1]["role"] != "user" or not conv[-1]["content"].strip():
+        raise ValueError("messages must end with a non-empty user turn")
+    return conv, "\n\n".join(system_parts)
+
+
+def _approx_tokens(text):
+    """Best-effort token count: byte-level models expose none, so approximate at
+    CHARS_PER_TOKEN chars per token (ceil)."""
+    return max(0, -(-len(text or "") // CHARS_PER_TOKEN))
+
+
+def _chatcmpl_id():
+    return CHATCMPL_PREFIX + uuid.uuid4().hex
+
+
+def _openai_completion(answer, conv, system, model):
+    prompt_tok = _approx_tokens(system + "".join(m["content"] for m in conv))
+    completion_tok = _approx_tokens(answer)
+    return {
+        "id":      _chatcmpl_id(),
+        "object":  OPENAI_CHAT_OBJECT,
+        "created": int(time.time()),
+        "model":   model,
+        "choices": [{
+            "index":         0,
+            "message":       {"role": "assistant", "content": answer},
+            "finish_reason": OPENAI_FINISH_STOP,
+        }],
+        "usage": {
+            "prompt_tokens":     prompt_tok,
+            "completion_tokens": completion_tok,
+            "total_tokens":      prompt_tok + completion_tok,
+        },
+    }
+
+
+def _chunk_frame(cid, created, model, delta, finish_reason):
+    payload = {
+        "id":      cid,
+        "object":  OPENAI_CHUNK_OBJECT,
+        "created": created,
+        "model":   model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    return "data: " + json.dumps(payload) + "\n\n"
+
+
+def _openai_stream(complete, conv, system, model):
+    """SSE chat.completion.chunk stream: role frame, per-segment content frames, a
+    stop frame, then [DONE]. complete() is buffered, so generation errors after the
+    stream has opened surface as a single error frame (status is already 200)."""
+    def gen():
+        created, cid = int(time.time()), _chatcmpl_id()
+        try:
+            answer = (complete(conv, system) or "").strip()
+        except (ChatUnavailable, FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            yield "data: " + json.dumps(
+                {"error": {"message": user_error(e), "type": "service_unavailable"}}) + "\n\n"
+            yield SSE_DONE
+            return
+        yield _chunk_frame(cid, created, model, {"role": "assistant"}, None)
+        for seg in re.findall(CHAT_STREAM_SPLIT, answer):
+            yield _chunk_frame(cid, created, model, {"content": seg}, None)
+        yield _chunk_frame(cid, created, model, {}, OPENAI_FINISH_STOP)
+        yield SSE_DONE
+    return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
+def _local_delta_stream(events):
+    """Sanitized per-token text deltas from a local generation stream (already
+    wrapped in _stop_on_bytes). Decodes bytes incrementally as UTF-8 and holds back
+    a STOP_HOLD-char tail so a forming stop marker is cut before any of it streams;
+    a trailing flush emits the remainder past the last emitted point."""
+    dec = codecs.getincrementaldecoder("utf-8")("replace")
+    text, sent = "", 0
+    for ev in events:
+        kind = ev.get("kind")
+        if kind in ("token", "fast_byte"):
+            b = ev.get("byte")
+            if b is None:
+                continue
+            text += dec.decode(bytes((int(b) & 0xff,)))
+            safe = _sanitize_text(text)
+            emit_to = len(safe) - STOP_HOLD
+            if emit_to > sent:
+                chunk = safe[sent:emit_to]
+                if sent == 0:
+                    chunk = chunk.lstrip()
+                if chunk:
+                    yield chunk
+                sent = emit_to
+        elif kind in ("stop", "error"):
+            break
+    final = _sanitize_text(text)
+    for stop in STOP_MARKERS:
+        final = final.split(stop)[0]
+    final = final.rstrip()
+    if len(final) > sent:
+        tail = final[sent:].lstrip() if sent == 0 else final[sent:]
+        if tail:
+            yield tail
+
+
+def _openai_stream_local(cfg, model, backend, conv, system):
+    """True per-token OpenAI SSE for a local trained model: a role frame, one
+    content-delta frame per decoded segment as the model generates it, a stop
+    frame, then [DONE]. Drives the same per-token generator /generate uses. RAG is
+    not wired into this path: the local model runs on the messages + system only."""
+    from .backends_routes import _stop_on_bytes
+
+    def gen():
+        created, cid = int(time.time()), _chatcmpl_id()
+        try:
+            if backend == "c":
+                _ensure_c(cfg, model)
+            else:
+                _ensure_pytorch(cfg, model)
+            events, stop_seq = _local_events(cfg, backend, _render_local(conv, system))
+            yield _chunk_frame(cid, created, model, {"role": "assistant"}, None)
+            for delta in _local_delta_stream(_stop_on_bytes(events, stop_seq)):
+                yield _chunk_frame(cid, created, model, {"content": delta}, None)
+        except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            yield "data: " + json.dumps(
+                {"error": {"message": user_error(e), "type": "service_unavailable"}}) + "\n\n"
+            yield SSE_DONE
+            return
+        yield _chunk_frame(cid, created, model, {}, OPENAI_FINISH_STOP)
+        yield SSE_DONE
+    return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
 def register(app):
     @app.route("/hybrid/health")
     def hybrid_health():
@@ -521,6 +697,35 @@ def register(app):
             return ({"ok": False, "error": user_error(e, "save upload")}, 500)
         return {"ok": True, "filename": name, "n_files": len(kb_files()),
                 "n_chunks": len(_kb_chunks())}
+
+    @app.route("/v1/chat/completions", methods=["POST"])
+    def openai_chat_completions():
+        """OpenAI-compatible chat completions. Wraps the same model routing as
+        /hybrid/chat (_resolve_route); temperature/max_tokens/top_k are accepted
+        for API compatibility but the wrapped generation path fixes them. Streaming
+        is true per-token for local trained models; cloud/teacher streaming chunks
+        the buffered answer."""
+        cfg = current_app.config
+        body = request.get_json(silent=True) or {}
+        try:
+            conv, system = _openai_messages_in(body)
+        except ValueError as e:
+            return ({"error": {"message": str(e), "type": "invalid_request_error"}}, 400)
+        model = (body.get("model") or CLOUD_ID).strip()
+        complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, "pytorch")
+        if bool(body.get("stream")):
+            if kind == "local":
+                return _openai_stream_local(cfg, model, resp_backend, conv, system)
+            return _openai_stream(complete, conv, system, model)
+        try:
+            answer = (complete(conv, system) or "").strip()
+        except ChatUnavailable as e:
+            return ({"error": {"message": str(e), "type": "service_unavailable"}}, 503)
+        except (FileNotFoundError, RuntimeError) as e:
+            return ({"error": {"message": user_error(e), "type": "service_unavailable"}}, 503)
+        except Exception as e:
+            return ({"error": {"message": user_error(e), "type": "server_error"}}, 500)
+        return _openai_completion(answer, conv, system, model)
 
     @app.route("/hybrid/chat", methods=["POST"])
     def hybrid_chat():
