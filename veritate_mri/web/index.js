@@ -1612,6 +1612,11 @@ function render(frame) {
 }
 
 function setMeta(m) {
+  // Fresh /meta caps are disk-fresh for the LOADED models; stamp them into the
+  // per-model cache so a stale page-load entry cannot mask them (chat trained
+  // after page load stayed greyed until a full reload).
+  if (m.pytorch_model && m.pytorch_capabilities) _pytorchModelCaps[m.pytorch_model] = m.pytorch_capabilities;
+  if (m.c_model_dir && m.c_model_capabilities) _pytorchModelCaps[m.c_model_dir] = m.c_model_capabilities;
   // Model-select and generate-stream frames rebuild meta without the capability
   // and device fields; carry them over from the prior meta so the mode picker
   // does not re-grey chat mid-session. A fresh load passes real values (or an
@@ -1814,6 +1819,18 @@ function _applyModeAvailability() {
     if (pick) pick.checked = true;
   }
 }
+
+// Caps change on disk while a run trains (chat SFT flips in_progress -> trained);
+// poll caps only — never rebuild the picker — so chat enables without a reload.
+function pollModeCaps() {
+  if (document.hidden) return;
+  fetch("/pytorch-models").then(r => r.ok ? r.json() : null).then(d => {
+    if (!d || !d.models) return;
+    for (const m of d.models) if (m.capabilities) _pytorchModelCaps[m.name] = m.capabilities;
+    _applyModeAvailability();
+  }).catch(() => {});
+}
+setInterval(pollModeCaps, 15000);
 
 function resetRagPanel() {
   const wrap = $("ragPanel"); if (!wrap) return;
@@ -2770,6 +2787,7 @@ function postCConfig(body) {
             c_exe: m.c_exe, c_exe_path: m.c_exe_path,
             c_engine_version: m.c_engine_version, c_engine_label: m.c_engine_label,
             c_model_capabilities: m.c_model_capabilities,
+            pytorch_model: m.pytorch_model,
             pytorch_capabilities: m.pytorch_capabilities,
             pytorch_device: m.pytorch_device,
           });
@@ -2973,6 +2991,7 @@ fetch("/meta").then(r => r.json()).then(m => {
       c_exe: m.c_exe, c_exe_path: m.c_exe_path,
       c_engine_version: m.c_engine_version, c_engine_label: m.c_engine_label,
       c_model_capabilities: m.c_model_capabilities,
+      pytorch_model: m.pytorch_model,
       pytorch_capabilities: m.pytorch_capabilities,
       pytorch_device: m.pytorch_device,
     });

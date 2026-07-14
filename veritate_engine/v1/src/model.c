@@ -12,6 +12,7 @@
 #include "portability.h"
 #include "addons.h"
 #include "hybrid.h"
+#include "state_cache.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -731,14 +732,26 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
     const veritate_shape_t* sh = &m->shape;
     const int32_t S = sh->seq, H = sh->hidden, F = sh->ffn, V = sh->vocab, NH = sh->heads;
 
-    // v13 hybrid: turn start. reset stream state, walk the prompt byte-by-byte.
+    // v13 hybrid: turn start. restore the longest cached prefix (env-gated), then
+    // walk the remaining prompt bytes. unset cache is byte-identical to a full reset.
     if (m->hybrid) {
         hybrid_t* hb = (hybrid_t*)m->hybrid;
-        hybrid_reset(hb);
-        for (int32_t i = 0; i < real_len; i++) hybrid_step(hb, tokens[i], trace);
+        int32_t restored = state_cache_enabled()
+            ? state_cache_try_restore(hb, hb->bin_id, tokens, real_len, trace != NULL) : 0;
+        if (restored == 0) hybrid_reset(hb);
+        int32_t bp = hybrid_prefill_batch();
+        int32_t i = restored;
+        // batch only untraced prefill: every traced position needs a per-byte
+        // frame, so trace runs stay fully sequential (byte-identical to today).
+        if (!trace && bp > 1 && real_len - restored >= bp) {
+            hybrid_prefill(hb, tokens, real_len, bp);
+            i = real_len;
+        }
+        for (; i < real_len; i++) hybrid_step(hb, tokens[i], trace);
         cache->len = real_len;
         hybrid_final_act_i8(hb, out_act);
         if (trace) memcpy(trace->final_act, out_act, (size_t)H);
+        if (state_cache_enabled()) state_cache_store(hb, hb->bin_id, tokens, real_len);
         (void)prof;
         return;
     }
@@ -1813,6 +1826,7 @@ int model_load(model_t* m, const char* path) {
                                 m->shape.ffn, m->shape.heads, m->shape.seq);
         fclose(f);
         if (!m->hybrid) return -1;
+        ((hybrid_t*)m->hybrid)->bin_id = state_cache_model_id(path);
         m->byte_direction       = (int16_t**)calloc((size_t)m->shape.layers, sizeof(int16_t*));
         m->byte_direction_scale = (float*)calloc((size_t)m->shape.layers, sizeof(float));
         if (!m->byte_direction || !m->byte_direction_scale) { model_free(m); return -1; }

@@ -42,6 +42,8 @@ echo build: %CLANG%
     "%ROOT%\src\hybrid.c" ^
     "%ROOT%\src\alloc.c" ^
     "%ROOT%\src\threadpool.c" ^
+    "%ROOT%\src\fsutil.c" ^
+    "%ROOT%\src\state_cache.c" ^
     "%ROOT%\src\addons.c" ^
     "%ROOT%\src\addons\slot_table.c" ^
     "%ROOT%\kernels\scalar\matmul_scalar.c" ^

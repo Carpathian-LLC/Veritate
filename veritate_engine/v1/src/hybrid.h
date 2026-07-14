@@ -81,6 +81,16 @@ typedef struct {
     float*  logits;         // [vocab] fp32, valid after each step
     float*  lens_u;         // [H] scratch: logit-lens norm output (trace only)
     float*  lens_f;         // [vocab] scratch: logit-lens fp logits (trace only)
+    uint64_t bin_id;        // state-cache model fingerprint; 0 when unset
+    // batched-prefill scratch, [V_PREFILL_BMAX][...]. allocated once at load,
+    // used only when VERITATE_PREFILL_BATCH engages. pf_qx is int8-only.
+    float*  pf_x;           // [Bmax x H] residual stream per batched position
+    float*  pf_u;           // [Bmax x H] rmsnorm output
+    float*  pf_qkv;         // [Bmax x 3H]
+    float*  pf_attn;        // [Bmax x H]
+    float*  pf_ff;          // [Bmax x F]
+    float*  pf_tmp;         // [Bmax x H] proj/down output
+    int8_t* pf_qx;          // [Bmax x F] int8 activation quant scratch
 } hybrid_t;
 
 // matvec kernel contract: out[j] = dot(w_row_j, x). w is fp32 or fp16 by
@@ -120,6 +130,42 @@ float hybrid_quant_act(const float* x, int32_t k, int8_t* qx);
 float hybrid_f16_to_f32(uint16_t hb);
 void hybrid_dispatch_init(int32_t dtype);
 
+// batched matmul contract: X = [B x k] row-major, out = [B x n] row-major,
+// out[b][j] = dot(w_row_j, X[b]) computed with the exact matvec fold, so each
+// row is bitwise-equal to hybrid_matvec_wt(w, X[b])[j]. weight row j stays
+// L1-hot across the b sweep. The kernel writes output rows [j0, j1) only (full
+// range single-thread, a disjoint slice per worker under hybrid_mm's j-split),
+// with n the output-row stride of out. int8 activations are pre-quantized by the
+// caller into qx ([B x k]) with per-row a_scale ([B]); the kernel does not
+// quantize, so workers never race the shared scratch. f32/f16 ignore qx and
+// a_scale. NEON is out of scope: arm64 uses the scalar reference.
+typedef void (*hybrid_matmul_fn)(const void* w, const float* X, float* out,
+                                 int32_t n, int32_t k, int32_t B,
+                                 const int8_t* qx, const float* a_scale,
+                                 int32_t j0, int32_t j1);
+extern hybrid_matmul_fn hybrid_matmul_wt;
+void hybrid_matmul_f32_scalar(const void* w, const float* X, float* out,
+                              int32_t n, int32_t k, int32_t B, const int8_t* qx,
+                              const float* a_scale, int32_t j0, int32_t j1);
+void hybrid_matmul_f16_scalar(const void* w, const float* X, float* out,
+                              int32_t n, int32_t k, int32_t B, const int8_t* qx,
+                              const float* a_scale, int32_t j0, int32_t j1);
+void hybrid_matmul_i8_scalar(const void* w, const float* X, float* out,
+                             int32_t n, int32_t k, int32_t B, const int8_t* qx,
+                             const float* a_scale, int32_t j0, int32_t j1);
+void hybrid_matmul_f32_avx2(const void* w, const float* X, float* out,
+                            int32_t n, int32_t k, int32_t B, const int8_t* qx,
+                            const float* a_scale, int32_t j0, int32_t j1);
+void hybrid_matmul_f16_avx2(const void* w, const float* X, float* out,
+                            int32_t n, int32_t k, int32_t B, const int8_t* qx,
+                            const float* a_scale, int32_t j0, int32_t j1);
+void hybrid_matmul_i8_avx2(const void* w, const float* X, float* out,
+                           int32_t n, int32_t k, int32_t B, const int8_t* qx,
+                           const float* a_scale, int32_t j0, int32_t j1);
+
+// clamped batch width from VERITATE_PREFILL_BATCH (unset or <=1 -> 1 = off).
+int32_t hybrid_prefill_batch(void);
+
 // load: f positioned after the 32-byte model header. returns NULL on failure.
 hybrid_t* hybrid_load(FILE* f, int32_t vocab, int32_t hidden, int32_t layers,
                       int32_t ffn, int32_t heads, int32_t seq);
@@ -133,6 +179,13 @@ void hybrid_reset(hybrid_t* h);
 // trace optional: local-block residuals / ffn acts / attention rows are filled
 // at the step position, global-block sections and lens stay zeroed.
 void hybrid_step(hybrid_t* h, int32_t byte, trace_record_t* trace);
+
+// batched prefill of tokens[h->pos .. n-1] in chunks of B (<= V_PREFILL_BMAX).
+// local blocks batch the matmuls over the chunk; recurrent blocks run per
+// position in stream order. end state (KV, rec_state, conv_ring, slot_count,
+// pos) and h->u/h->logits at the last position are bitwise-equal to the same
+// span of hybrid_step calls. no trace: callers batch only untraced prefill.
+void hybrid_prefill(hybrid_t* h, const int32_t* tokens, int32_t n, int32_t B);
 
 // int32 view of h->logits at VERITATE_HYBRID_LOGIT_SCALE for the shared
 // sampler / telemetry surface.

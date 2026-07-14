@@ -45,6 +45,7 @@ except Exception:
 VERITATE_MODEL_MAGIC = b"VRTE"
 HEADER_BYTES         = 32
 HEADER_FMT           = "<4sIIIIIII"
+STATE_CACHE_DIRNAME  = "state_cache"
 
 DLA_TOPK            = 12
 DLA_ENTRY_BYTES     = 16   # u8 layer, u8 pad, u16 neuron, i32 act, i32 w, i32 contrib
@@ -134,11 +135,12 @@ def _read_bin_shape(path):
 
 
 class CTracedSubprocess:
-    def __init__(self, exe, model_path):
+    def __init__(self, exe, model_path, state_cache=True):
         if not exe or not os.path.isfile(exe):
             raise RuntimeError(f"c engine not found: {exe}")
         self.exe = exe
         self.model_path = model_path
+        self.state_cache = state_cache
         self.lock = threading.Lock()
         # Bumped whenever the backend is reclaimed from a wedged stream. A
         # generator captures the epoch at start; its cleanup no-ops if the epoch
@@ -203,6 +205,11 @@ class CTracedSubprocess:
         # in config.json training_args.qat_enabled; the dashboard checks it. Force
         # the bypass here (not setdefault) so a parent-shell "0" cannot override.
         env["VERITATE_ALLOW_HIGH_ACT_BOOST"] = "1"
+        # Persistent prompt/state cache next to the model. setdefault so a parent
+        # env value still wins; disabled by constructing with state_cache=False.
+        if self.state_cache and self.model_path:
+            env.setdefault("VERITATE_STATE_CACHE",
+                           os.path.join(os.path.dirname(self.model_path), STATE_CACHE_DIRNAME))
         # VERITATE_ADDONS=<csv> is inherited from the parent env automatically
         # via os.environ.copy(). set it before starting the MRI server to
         # enable engine-side addons. per-request addon selection from the

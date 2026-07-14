@@ -54,6 +54,8 @@ SHARED_SRC="
   $ROOT/src/model.c
   $ROOT/src/alloc.c
   $ROOT/src/threadpool.c
+  $ROOT/src/fsutil.c
+  $ROOT/src/state_cache.c
   $ROOT/src/addons.c
   $ROOT/src/addons/slot_table.c
   $ROOT/kernels/scalar/matmul_scalar.c
@@ -109,6 +111,7 @@ compile_kernel "$ROOT/src/hybrid.c" "-ffp-contract=off"
 case "$ARCH_DIR" in
   x86_64)
     compile_kernel "$ROOT/kernels/x86_64/matvec_f32_avx2.c"      "-mavx2 -mf16c -ffp-contract=off"
+    compile_kernel "$ROOT/kernels/x86_64/matmul_prefill_avx2.c"  "-mavx2 -mf16c -ffp-contract=off"
     compile_kernel "$ROOT/kernels/x86_64/matmul_avx2.c"          "-mavx2"
     compile_kernel "$ROOT/kernels/x86_64/matmul_vnni.c"          "-mavx2 -mavx512f -mavx512bw -mavx512vl -mavx512vnni"
     compile_kernel "$ROOT/kernels/x86_64/matmul_int4.c"          "-mavx2 -mavx512f -mavx512bw -mavx512vl -mavx512vnni"

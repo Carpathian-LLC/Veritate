@@ -708,6 +708,7 @@ def register(app):
             "c_model_act_boost":   c_act_boost,
             "c_model_qat_enabled": c_qat_enabled,
             "c_model_capabilities": c_capabilities,
+            "pytorch_model": brain_name,
             "pytorch_capabilities": pytorch_capabilities,
         }
 

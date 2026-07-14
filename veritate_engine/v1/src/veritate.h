@@ -238,6 +238,11 @@ double now_ms(void);
 // shape.ffn > V_MAX_FFN are rejected at load time.
 #define V_MAX_FFN   8192
 
+// max positions batched per hybrid prefill chunk. caps the [Bmax][...] prefill
+// scratch on hybrid_t and the per-row activation-scale arrays in the batched
+// matmul kernels. VERITATE_PREFILL_BATCH clamps to this.
+#define V_PREFILL_BMAX 64
+
 // runtime shape. populated by model_load from the bin header.
 typedef struct {
     int32_t vocab;
