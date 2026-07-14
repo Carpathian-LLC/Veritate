@@ -249,6 +249,15 @@ def is_local_model(name):
         and checkpoints.latest_step(name) is not None
 
 
+def _default_local_backend(name):
+    """Backend a local model serves on when the caller sends none: the compiled C
+    engine when the model has a usable .bin and the engine binary is built (fast,
+    CPU subprocess, matches the dashboard and /generate), else the pytorch brain
+    for non-exportable trunks (recurrent/RoPE/MTP)."""
+    from readers import bin as binr
+    return "c" if binr.exists(name) and os.path.isfile(paths.engine_binary_path()) else "pytorch"
+
+
 def _ensure_pytorch(cfg, name):
     from . import _brain
     if cfg.get("BRAIN") is not None and cfg.get("BRAIN_MODEL") == name:
@@ -967,7 +976,7 @@ def register(app):
             return ({"error": {"message": str(e), "type": "invalid_request_error"}}, 400)
         model = (body.get("model") or CLOUD_ID).strip()
         mri = bool(body.get(MRI_KEY))
-        complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, "pytorch")
+        complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, _default_local_backend(model))
         if bool(body.get("stream")):
             if kind == "local":
                 return _openai_stream_local(cfg, model, resp_backend, conv, system, mri=mri)
@@ -1005,7 +1014,7 @@ def register(app):
         except ValueError as e:
             return ({"error": {"message": str(e), "type": "invalid_request_error"}}, 400)
         model = (body.get("model") or CLOUD_ID).strip()
-        _complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, "pytorch")
+        _complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, _default_local_backend(model))
         if kind != "local":
             return ({"error": {"message": "mri is available only for local Veritate models",
                                "type": "invalid_request_error"}}, 400)

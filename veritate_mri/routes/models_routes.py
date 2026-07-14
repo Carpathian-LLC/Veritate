@@ -33,6 +33,7 @@ OWNER = "veritate"
 def _model_rows():
     """Models with at least one checkpoint, newest first. Shared source for
     /pytorch-models and /v1/models so discovery + shape live in one place."""
+    from .hybrid_routes import _default_local_backend
     out = []
     cfg = current_app.config
     cur_model = cfg.get("BRAIN_MODEL") or cfg.get("DEFAULT_MODEL")
@@ -58,6 +59,7 @@ def _model_rows():
             "description": cfg_reader.description(name) or "",
             "mtime":       mtime,
             "capabilities": caps_reader.read(name),
+            "engine":      _default_local_backend(name),
         })
     out.sort(key=lambda r: -r["mtime"])
     return out
@@ -120,5 +122,6 @@ def register(app):
             "layers":       r["layers"],
             "capabilities": r["capabilities"],
             "is_current":   r["is_current"],
+            "engine":       r["engine"],
         } for r in _model_rows()]
         return {"object": "list", "data": data}
