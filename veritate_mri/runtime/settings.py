@@ -56,6 +56,12 @@ DEFAULTS = {
     "hud_enabled": False,
     "hud_position": "top",
     "hud_detailed": False,
+    # Advanced: stream reduced (compact) MRI telemetry frames. The engine summarizes
+    # each byte's telemetry itself (~33x smaller per-byte frame) instead of shipping
+    # full-resolution arrays for the browser to reduce. The dashboard renders the
+    # same; only the wire payload shrinks. Off by default so nothing changes on deploy
+    # until the user opts in from Settings -> Advanced.
+    "mri_compact_frames": False,
     "temperature_unit": "C",
     "heartbeat_enabled": True,
     "heartbeat_send_errors": True,

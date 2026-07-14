@@ -1577,6 +1577,14 @@
           </div>
 
         </div>
+
+        <details id="engineAdvancedWrap" style="margin-top:10px;border:1px solid var(--line);border-radius:4px;padding:6px 10px">
+          <summary style="cursor:pointer;font-size:11.5px;color:var(--text);font-weight:600;letter-spacing:.03em">Advanced <span style="color:var(--dim);font-weight:400;font-size:10.5px;letter-spacing:0">MRI telemetry</span></summary>
+          <label class="opt" style="max-width:none;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 10px;margin-top:6px">
+            <span style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="mriCompactFrames"><span class="opt-title" style="margin:0;font-size:11.5px">Compact MRI frames</span></span>
+            <span class="opt-sub" style="font-size:10px;color:var(--dim);line-height:1.4">Have the engine summarize each byte's MRI telemetry instead of the browser, shrinking the per-byte data stream ~30x for a faster, lighter dashboard. The panels look the same. Off keeps the full-resolution stream.</span>
+          </label>
+        </details>
       </div>
 
       <div class="settings-row">

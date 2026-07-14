@@ -718,24 +718,33 @@ def _local_stream_items(events, emit_frames=False):
     text, sent = "", 0
     for ev in events:
         kind = ev.get("kind")
-        if emit_frames:
-            yield ("frame", ev)
+        # Text-before-frame: emit the decoded reply chunk first, THEN the byte's MRI
+        # telemetry. The reply char is a few bytes; the MRI frame is tens of KB, so
+        # yielding text first lets the answer render instantly while the heavy frame
+        # trails. Text (delta.content) and MRI (top-level `mri`) are independent fields
+        # on separate chunks, so the client renders each as it arrives; only the
+        # interleave order changes, never the data.
         if kind in ("token", "fast_byte"):
             b = ev.get("byte")
-            if b is None:
-                continue
-            text += dec.decode(bytes((int(b) & 0xff,)))
-            safe = _sanitize_text(text)
-            emit_to = len(safe) - STOP_HOLD
-            if emit_to > sent:
-                chunk = safe[sent:emit_to]
-                if sent == 0:
-                    chunk = chunk.lstrip()
-                if chunk:
-                    yield ("text", chunk)
-                sent = emit_to
+            if b is not None:
+                text += dec.decode(bytes((int(b) & 0xff,)))
+                safe = _sanitize_text(text)
+                emit_to = len(safe) - STOP_HOLD
+                if emit_to > sent:
+                    chunk = safe[sent:emit_to]
+                    if sent == 0:
+                        chunk = chunk.lstrip()
+                    if chunk:
+                        yield ("text", chunk)
+                    sent = emit_to
+            if emit_frames:
+                yield ("frame", ev)
         elif kind in ("stop", "error"):
+            if emit_frames:
+                yield ("frame", ev)
             break
+        elif emit_frames:
+            yield ("frame", ev)
     final = _sanitize_text(text)
     for stop in STOP_MARKERS:
         final = final.split(stop)[0]

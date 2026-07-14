@@ -508,6 +508,18 @@ void veritate_get_ablation(int32_t* layer, int32_t* neuron);
 #define VERITATE_TRACE_VERSION_CONFIDENCE 7
 #define VERITATE_TRACE_VERSION_CAND_DLA   8
 
+// Compact trace frame (magic 'TFRC', version 9): the engine performs the four heavy
+// per-layer reductions itself (ffn max-pool buckets, residual L2 norms, attention ->
+// info_flow, logit-lens top-k) instead of streaming full-resolution arrays, shrinking
+// the per-byte frame ~30x. Opt-in (see chat_traced_loop compact flag); the default
+// path still emits the raw 'TFRM' v8 frame. These counts are wire constants and MUST
+// match c_engine.py (FFN_BUCKET_TARGET / FFN_TOPK / INFO_FLOW_TOPK / LENS_TOPK).
+#define VERITATE_TRACE_VERSION_COMPACT    9
+#define VERITATE_FFN_BUCKET_TARGET        256
+#define VERITATE_FFN_TOPK                 8
+#define VERITATE_INFO_FLOW_TOPK           8
+#define VERITATE_LENS_TOPK                3
+
 typedef struct {
     char     magic[4];        // "VRMR"
     uint32_t version;

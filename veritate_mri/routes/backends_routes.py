@@ -12,6 +12,7 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import base64
 import json
 import math
 import os
@@ -35,6 +36,7 @@ from readers import (
     config as cfg_reader, engine, models, paths,
 )
 from runtime import logs as logmod
+from runtime import settings as settings_mod
 from training import build_runner
 
 from . import _brain
@@ -134,7 +136,10 @@ _RAG_CACHE_LOCK = threading.Lock()
 # ------------------------------------------------------------------------------------
 # Functions
 
-def _build_c_mri_frame(raw, fwd_ms, shape):
+def _reduce_full(raw, shape):
+    """Compute the four heavy-array reductions from a raw TFRM v8 frame (the Python
+    path). Produces the same reduced fields the engine emits directly in a TFRC v9
+    frame, so _assemble_frame is backend-agnostic."""
     n_layers = shape["layers"]
     n_heads  = shape["heads"]
     n_ffn    = shape["ffn"]
@@ -150,29 +155,24 @@ def _build_c_mri_frame(raw, fwd_ms, shape):
         bucket_vals = grouped.max(axis=1)
         bucket_argmax = grouped.argmax(axis=1)
         mx = max(1e-9, float(bucket_vals.max()))
-        u8 = ((bucket_vals / mx) * 255.0).clip(0, 255).astype(np.uint8).tolist()
-        ffn_full.append(u8)
-        ffn_argmax.append(bucket_argmax.astype(np.uint8).tolist())
+        u8 = ((bucket_vals / mx) * 255.0).clip(0, 255).astype(np.uint8)
+        # base64-pack the per-layer uint8 grids (~2.6x smaller than JSON int arrays,
+        # lossless). Frontend decodeFfnField() unpacks; old clients read number[][].
+        ffn_full.append(base64.b64encode(u8.tobytes()).decode("ascii"))
+        ffn_argmax.append(base64.b64encode(bucket_argmax.astype(np.uint8).tobytes()).decode("ascii"))
         idx = np.argsort(-act)[:NEURON_TOP_K]
         ffn_top.append([{"id": int(i), "v": round(float(act[i]), 3)} for i in idx])
 
-    attn_out = []
+    # info_flow is the only attention product the dashboard renders; the per-head
+    # top-k `attn` array is not read by any panel (engine.ts renders the attention
+    # view from info_flow), so we accumulate the flow mass but never build/emit attn.
     info_flow_pos = np.zeros(R, dtype=np.float32)
     for layer in range(n_layers):
-        heads_data = []
         for h in range(n_heads):
             w = raw["attention"][layer, h, :R].astype(np.float32)
             s = float(w.sum())
             if s > 1e-9: w = w / s
-            ent = -float((w * np.log(w + 1e-12)).sum())
-            topn = min(ATTN_TOP_K, R)
-            idx = np.argsort(-w)[:topn]
-            heads_data.append({
-                "ent": round(ent, 3),
-                "top": [{"p": int(p), "w": round(float(w[p]), 3)} for p in idx],
-            })
             info_flow_pos += w
-        attn_out.append(heads_data)
 
     flow_max = max(1e-9, float(info_flow_pos.max()))
     flow_idx = np.argsort(-info_flow_pos)[:min(INFO_FLOW_TOP_K, R)]
@@ -195,6 +195,38 @@ def _build_c_mri_frame(raw, fwd_ms, shape):
         probs = e / e.sum()
         top_idx = np.argsort(-probs)[:DLA_TOP_K_LENS]
         lens.append([{"b": int(b), "p": round(float(probs[b]), 3)} for b in top_idx])
+
+    return {"ffn_full": ffn_full, "ffn_argmax": ffn_argmax, "ffn_top": ffn_top,
+            "ffn_downsample": DS, "info_flow": info_flow,
+            "res": res, "contrib": contrib, "lens": lens}
+
+
+def _reduce_compact(raw, shape):
+    """Assemble the reduced fields from a TFRC v9 frame, where the engine already did
+    the heavy reductions. Only light formatting/rounding + base64-packing remains, so
+    per-byte numpy work on the box drops to near zero."""
+    n_ffn = shape["ffn"]
+    DS    = max(1, n_ffn // C_FFN_BUCKET_TARGET)
+    ffn_full   = [base64.b64encode(a.tobytes()).decode("ascii") for a in raw["ffn_full"]]
+    ffn_argmax = [base64.b64encode(a.tobytes()).decode("ascii") for a in raw["ffn_argmax"]]
+    ffn_top = [[{"id": int(e["id"]), "v": round(float(e["v"]), 3)} for e in layer]
+               for layer in raw["ffn_top"]]
+    info_flow = [{"p": int(e["p"]), "w": round(float(e["w"]), 3)} for e in raw["info_flow"]]
+    res     = [round(float(x), 3) for x in raw["res"]]
+    contrib = [round(float(x), 3) for x in raw["contrib"]]
+    lens = [[{"b": int(e["b"]), "p": round(float(e["p"]), 3)} for e in layer]
+            for layer in raw["lens"]]
+    return {"ffn_full": ffn_full, "ffn_argmax": ffn_argmax, "ffn_top": ffn_top,
+            "ffn_downsample": DS, "info_flow": info_flow,
+            "res": res, "contrib": contrib, "lens": lens}
+
+
+def _assemble_frame(raw, reduced, fwd_ms, shape):
+    """Combine the (backend-agnostic) reduced heavy-array fields with the decision-trace
+    trailer (cand/entropy from logits, DLA formatting, confidence, ablation) into the
+    single frame schema the dashboard consumes. Shared by the full and compact paths."""
+    n_layers = shape["layers"]
+    R = raw["real_len"]
 
     logits = raw["logits"].astype(np.float64)
     mx = max(1.0, float(np.abs(logits).max()))
@@ -250,8 +282,8 @@ def _build_c_mri_frame(raw, fwd_ms, shape):
         "fwd_ms": round(fwd_ms, 2),
         "entropy_bits": round(entropy_bits, 3),
         "surprise_bits": round(surprise_bits, 3),
-        "ffn_full": ffn_full, "ffn_top": ffn_top,
-        "ffn_argmax": ffn_argmax, "ffn_downsample": DS,
+        "ffn_full": reduced["ffn_full"], "ffn_top": reduced["ffn_top"],
+        "ffn_argmax": reduced["ffn_argmax"], "ffn_downsample": reduced["ffn_downsample"],
         "decisiveness": decisiveness,
         "dla_picked": _dla_to_json(raw.get("dla_picked", [])),
         "dla_argmax": _dla_to_json(raw.get("dla_argmax", [])),
@@ -263,13 +295,24 @@ def _build_c_mri_frame(raw, fwd_ms, shape):
         "lens_consistency": round(float(raw.get("lens_consistency", 0.0)), 4),
         "residual_stab":    round(float(raw.get("residual_stab", 0.0)),    4),
         "confidence":       round(float(raw.get("confidence", 0.0)),       4),
-        "attn": attn_out, "info_flow": info_flow,
-        "res": res, "contrib": contrib,
-        "lens": lens,
+        "info_flow": reduced["info_flow"],
+        "res": reduced["res"], "contrib": reduced["contrib"],
+        "lens": reduced["lens"],
         "cand": cand,
         "memory": [],
         "backend": "c",
     }
+
+
+def _build_c_mri_frame(raw, fwd_ms, shape):
+    """Raw TFRM v8 path: reduce the heavy arrays in Python, then assemble."""
+    return _assemble_frame(raw, _reduce_full(raw, shape), fwd_ms, shape)
+
+
+def _build_c_mri_frame_compact(raw, fwd_ms, shape):
+    """Compact TFRC v9 path: the engine already reduced the heavy arrays; just format
+    and assemble. Same output schema as the full path, ~30x smaller wire frame."""
+    return _assemble_frame(raw, _reduce_compact(raw, shape), fwd_ms, shape)
 
 
 def _c_engine_stream(cfg, prompt, max_new, temperature=0.7, top_k=40,
@@ -301,13 +344,17 @@ def _c_engine_stream(cfg, prompt, max_new, temperature=0.7, top_k=40,
         "c_model_dir": model_name,
         "c_model_path": model_path,
     }
+    # Compact TFRC v9 frames are opt-in from Settings -> Advanced (persisted in
+    # mri_settings.json, survives deploys). Read per stream so a GUI toggle takes
+    # effect on the next chat with no restart.
+    want_compact = bool(trace and settings_mod.get().get("mri_compact_frames", False))
     try:
         last = time.perf_counter()
         for raw in sub.stream(prompt, temperature, top_k, max_new,
                               ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
                               addons_csv=addons_csv, rep_window=rep_window,
                               rep_penalty=rep_penalty, no_repeat_ngram=no_repeat_ngram,
-                              do_trace=trace):
+                              do_trace=trace, compact=want_compact):
             now = time.perf_counter()
             fwd_ms = (now - last) * 1000.0
             last = now
@@ -315,6 +362,8 @@ def _c_engine_stream(cfg, prompt, max_new, temperature=0.7, top_k=40,
                 yield {"kind": "fast_byte", "byte": int(raw["byte"]),
                        "argmax_byte": int(raw["argmax_byte"]), "T": int(raw["real_len"]),
                        "ms_per_byte": round(fwd_ms, 2), "backend": "c"}
+            elif raw.get("compact"):
+                yield _build_c_mri_frame_compact(raw, fwd_ms, shape)
             else:
                 yield _build_c_mri_frame(raw, fwd_ms, shape)
     except Exception as e:

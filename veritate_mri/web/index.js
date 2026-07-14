@@ -10186,6 +10186,8 @@ function _applySettingsToUI(s) {
   if (shareTrain) shareTrain.checked = !!s.share_current_training;
   const diag = $("diagnosticsLogsEnable");
   if (diag) diag.checked = !!s.diagnostics_logs_enabled;
+  const mriCompact = $("mriCompactFrames");
+  if (mriCompact) mriCompact.checked = !!s.mri_compact_frames;
   const dev = $("devicePreferenceSelect");
   if (dev) {
     dev.value = (s.device_preference || "auto");
@@ -12703,6 +12705,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const diag = $("diagnosticsLogsEnable");
   if (diag) diag.addEventListener("change", () => {
     _saveSettings({ diagnostics_logs_enabled: diag.checked });
+  });
+  const mriCompact = $("mriCompactFrames");
+  if (mriCompact) mriCompact.addEventListener("change", () => {
+    _saveSettings({ mri_compact_frames: mriCompact.checked });
   });
   const diagPrev = $("diagPreviewBtn");
   if (diagPrev) diagPrev.addEventListener("click", () => { _showDiagnosticsPreview(); });

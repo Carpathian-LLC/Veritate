@@ -92,6 +92,19 @@ DLA_DTYPE = np.dtype([
 ], align=False)
 assert DLA_DTYPE.itemsize == DLA_ENTRY_BYTES
 
+# Compact trace frame (magic 'TFRC', version 9). The engine performs the four heavy
+# per-layer reductions itself; these counts + packed dtypes MUST match veritate.h
+# (VERITATE_FFN_BUCKET_TARGET / FFN_TOPK / INFO_FLOW_TOPK / LENS_TOPK) and the on-wire
+# field order emitted by chat_traced_loop.
+FFN_BUCKET_TARGET = 256
+FFN_TOPK          = 8
+INFO_FLOW_TOPK    = 8
+LENS_TOPK         = 3
+FFN_TOP_DTYPE  = np.dtype([("id", np.uint16), ("v", np.float32)], align=False)   # 6 B
+LENS_DTYPE     = np.dtype([("b", np.uint8),   ("p", np.float32)], align=False)   # 5 B
+FLOW_DTYPE     = np.dtype([("p", np.uint16),  ("w", np.float32)], align=False)   # 6 B
+assert FFN_TOP_DTYPE.itemsize == 6 and LENS_DTYPE.itemsize == 5 and FLOW_DTYPE.itemsize == 6
+
 # ------------------------------------------------------------------------------------
 # Functions
 
@@ -195,6 +208,24 @@ class CTracedSubprocess:
                                      + CONFIDENCE_BYTES
                                      + V8_TAIL_BYTES)
 
+        # Compact (TFRC v9) geometry. DS/BUCKETS mirror _build_c_mri_frame exactly.
+        self._ds      = max(1, s["ffn"] // FFN_BUCKET_TARGET)
+        self._buckets = s["ffn"] // self._ds
+        # per layer: ffn_full + ffn_argmax (uint8 each) + ffn_top + res/contrib f32 + lens
+        self._compact_layer_bytes = (2 * self._buckets
+                                     + FFN_TOPK * FFN_TOP_DTYPE.itemsize
+                                     + 4 + 4
+                                     + LENS_TOPK * LENS_DTYPE.itemsize)
+        # once per frame: u8 flow_count + INFO_FLOW_TOPK packed (pos,w) slots
+        self._compact_flow_bytes = 1 + INFO_FLOW_TOPK * FLOW_DTYPE.itemsize
+        # trailer is identical to TFRM minus final_act (dashboard never reads it).
+        self._compact_payload_bytes = (self._compact_layer_bytes * s["layers"]
+                                       + self._compact_flow_bytes
+                                       + s["vocab"] * 4
+                                       + self._decision_trace_bytes
+                                       + CONFIDENCE_BYTES
+                                       + V8_TAIL_BYTES)
+
     def _spawn(self):
         env = os.environ.copy()
         if self.model_path:
@@ -268,7 +299,8 @@ class CTracedSubprocess:
 
     def stream(self, prompt, temperature, top_k, max_new,
                ablate_layer=-1, ablate_neuron=-1, addons_csv="",
-               rep_window=0, rep_penalty=0.0, no_repeat_ngram=0, do_trace=True):
+               rep_window=0, rep_penalty=0.0, no_repeat_ngram=0, do_trace=True,
+               compact=False):
         # Acquire the per-generation lock. A live generation refreshes
         # _last_frame_time on every frame; reclaim only when the holder has gone
         # silent for STREAM_LOCK_TIMEOUT_S (truly wedged, e.g. an abandoned SSE
@@ -331,10 +363,13 @@ class CTracedSubprocess:
                 csv_token = "-"  # explicit clear when caller passed nothing
             # rep_* tail is optional in the protocol; 0/0 leaves the engine
             # sampler bitwise-identical to pre-repetition-control behavior.
+            # compact is only meaningful with tracing on; the engine emits TFRC v9
+            # (reduced) frames when both are set, else the raw TFRM v8 frames.
+            use_compact = bool(compact and do_trace)
             header = (f"{float(temperature):.4f} {int(top_k)} {int(max_new)} "
                       f"{int(ablate_layer)} {int(ablate_neuron)} {csv_token} "
                       f"{int(rep_window)} {float(rep_penalty):.4f} {int(no_repeat_ngram)} "
-                      f"{1 if do_trace else 0}\n").encode("ascii")
+                      f"{1 if do_trace else 0} {1 if use_compact else 0}\n").encode("ascii")
             try:
                 self.proc.stdin.write(header)
                 self.proc.stdin.write(prompt_bytes + b"\n")
@@ -399,12 +434,14 @@ class CTracedSubprocess:
                                "byte": int(rest[8]), "argmax_byte": int(rest[9]),
                                "fast": True}
                         continue
-                    if marker != b"TFRM":
+                    # TFRM = raw v8 frame; TFRC = compact v9 frame (engine-reduced).
+                    is_compact = (marker == b"TFRC")
+                    if marker != b"TFRM" and not is_compact:
                         # Pipe is desynced reading garbage instead of frame magic.
                         # Cannot recover by draining; the next read offset is unknown.
                         # Kill the subprocess and respawn so the next request starts clean.
                         logmod.error("c_engine",
-                                     f"bad frame marker {marker!r} (expected TFRM/TEND); "
+                                     f"bad frame marker {marker!r} (expected TFRM/TFRC/TEND); "
                                      f"killing+respawning subprocess to clear pipe desync")
                         self._kill_and_respawn(); respawned = True
                         raise RuntimeError(
@@ -423,7 +460,8 @@ class CTracedSubprocess:
                     byte = rest[8]
                     argmax_byte = rest[9]
 
-                    payload = _read_exact(my_proc.stdout, self._frame_payload_bytes)
+                    payload_bytes = self._compact_payload_bytes if is_compact else self._frame_payload_bytes
+                    payload = _read_exact(my_proc.stdout, payload_bytes)
                     if payload is None:
                         if my_epoch != self._epoch:
                             return
@@ -432,11 +470,15 @@ class CTracedSubprocess:
                         raise RuntimeError("chat_traced stdout closed mid-payload; subprocess respawned")
                     t_read1 = time.perf_counter_ns()
 
-                    parsed = self._parse_frame(payload, pos=pos, real_len=real_len,
-                                               byte=byte, argmax_byte=argmax_byte)
+                    if is_compact:
+                        parsed = self._parse_compact_frame(payload, pos=pos, real_len=real_len,
+                                                           byte=byte, argmax_byte=argmax_byte)
+                    else:
+                        parsed = self._parse_frame(payload, pos=pos, real_len=real_len,
+                                                   byte=byte, argmax_byte=argmax_byte)
                     t_parse1 = time.perf_counter_ns()
 
-                    frame_bytes = 4 + 12 + self._frame_payload_bytes
+                    frame_bytes = 4 + 12 + payload_bytes
                     trace.append({
                         "t_read_pipe_ms":    (t_read1 - t_read0) / 1e6,
                         "t_parse_ms":        (t_parse1 - t_read1) / 1e6,
@@ -497,9 +539,10 @@ class CTracedSubprocess:
                     _read_exact(self.proc.stdout, 4)
                     self._last_clean = True
                     return
-                if marker == b"TFRM":
+                if marker == b"TFRM" or marker == b"TFRC":
+                    pbytes = self._compact_payload_bytes if marker == b"TFRC" else self._frame_payload_bytes
                     if _read_exact(self.proc.stdout, 12) is None: return
-                    if _read_exact(self.proc.stdout, self._frame_payload_bytes) is None: return
+                    if _read_exact(self.proc.stdout, pbytes) is None: return
                 else:
                     return
             self._kill_and_respawn()
@@ -547,6 +590,65 @@ class CTracedSubprocess:
             "final_act": final_act, "logits": logits,
             "decisiveness": decisiveness,
             "bd_scale": bd_scale,
+            "dla_picked": dla_picked, "dla_argmax": dla_argmax,
+            "margin":           float(conf[0]),
+            "entropy":          float(conf[1]),
+            "lens_consistency": float(conf[2]),
+            "residual_stab":    float(conf[3]),
+            "confidence":       float(conf[4]),
+            "cand_count":       cand_count,
+            "cand_bytes":       cand_bytes,
+            "dla_cand":         dla_cand,
+            "ablation_layer":   ablation_layer,
+            "ablation_neuron":  ablation_neuron,
+        }
+
+    def _parse_compact_frame(self, buf, pos, real_len, byte, argmax_byte):
+        """Parse a TFRC v9 frame: the engine already reduced the four heavy arrays,
+        so this reads the compact per-layer summaries + an unchanged decision-trace
+        trailer (minus final_act). Field order MUST match chat_traced_loop's TFRC
+        writer in main.c. Returns a dict tagged compact for _build_c_mri_frame_compact."""
+        s = self.shape
+        layers, vocab = s["layers"], s["vocab"]
+        B = self._buckets
+        off = 0
+        ffn_full, ffn_argmax, ffn_top = [], [], []
+        res, contrib, lens = [], [], []
+        for _L in range(layers):
+            ffn_full.append(np.frombuffer(buf, dtype=np.uint8, count=B, offset=off).copy());   off += B
+            ffn_argmax.append(np.frombuffer(buf, dtype=np.uint8, count=B, offset=off).copy()); off += B
+            ffn_top.append(np.frombuffer(buf, dtype=FFN_TOP_DTYPE, count=FFN_TOPK, offset=off).copy())
+            off += FFN_TOPK * FFN_TOP_DTYPE.itemsize
+            rc = np.frombuffer(buf, dtype=np.float32, count=2, offset=off); off += 8
+            res.append(float(rc[0])); contrib.append(float(rc[1]))
+            lens.append(np.frombuffer(buf, dtype=LENS_DTYPE, count=LENS_TOPK, offset=off).copy())
+            off += LENS_TOPK * LENS_DTYPE.itemsize
+        flow_count = int(np.frombuffer(buf, dtype=np.uint8, count=1, offset=off)[0]); off += 1
+        info_flow  = np.frombuffer(buf, dtype=FLOW_DTYPE, count=INFO_FLOW_TOPK, offset=off).copy()
+        off += INFO_FLOW_TOPK * FLOW_DTYPE.itemsize
+        # trailer — identical layout to _parse_frame's tail, minus final_act.
+        logits       = np.frombuffer(buf, dtype=np.int32,   count=vocab,  offset=off).copy(); off += vocab * 4
+        decisiveness = np.frombuffer(buf, dtype=np.float32, count=layers, offset=off).copy(); off += layers * 4
+        bd_scale     = np.frombuffer(buf, dtype=np.float32, count=layers, offset=off).copy(); off += layers * 4
+        dla_picked = np.frombuffer(buf, dtype=DLA_DTYPE, count=DLA_TOPK, offset=off).copy(); off += DLA_TOPK * DLA_ENTRY_BYTES
+        dla_argmax = np.frombuffer(buf, dtype=DLA_DTYPE, count=DLA_TOPK, offset=off).copy(); off += DLA_TOPK * DLA_ENTRY_BYTES
+        conf = np.frombuffer(buf, dtype=np.float32, count=5, offset=off); off += CONFIDENCE_BYTES
+        cand_count = int(np.frombuffer(buf, dtype=np.uint16, count=1, offset=off)[0]); off += 2
+        cand_bytes = np.frombuffer(buf, dtype=np.uint8, count=CAND_TOPK, offset=off).copy(); off += CAND_TOPK
+        dla_cand = np.frombuffer(buf, dtype=DLA_DTYPE, count=CAND_TOPK * DLA_TOPK,
+                                 offset=off).reshape(CAND_TOPK, DLA_TOPK).copy()
+        off += CAND_TOPK * DLA_TOPK * DLA_ENTRY_BYTES
+        ablation_layer  = int(np.frombuffer(buf, dtype=np.int16, count=1, offset=off)[0]); off += 2
+        ablation_neuron = int(np.frombuffer(buf, dtype=np.int16, count=1, offset=off)[0]); off += 2
+        return {
+            "compact": True,
+            "pos": int(pos), "real_len": int(real_len), "byte": int(byte),
+            "argmax_byte": int(argmax_byte),
+            "ffn_full": ffn_full, "ffn_argmax": ffn_argmax, "ffn_top": ffn_top,
+            "res": res, "contrib": contrib, "lens": lens,
+            "info_flow": info_flow[:flow_count],
+            "logits": logits,
+            "decisiveness": decisiveness, "bd_scale": bd_scale,
             "dla_picked": dla_picked, "dla_argmax": dla_argmax,
             "margin":           float(conf[0]),
             "entropy":          float(conf[1]),
