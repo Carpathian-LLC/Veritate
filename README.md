@@ -12,7 +12,7 @@ Ternary (BitNet b1.58) weights ship 5×&nbsp;smaller `.bin` files at full INT8 t
 
 <br/>
 
-[**Get started**](#get-started) &nbsp;·&nbsp; [**Dashboard**](#the-dashboard) &nbsp;·&nbsp; [**Components**](#components--whats-what) &nbsp;·&nbsp; [**Hardware**](#supported-hardware) &nbsp;·&nbsp; [**Index**](#index)
+[**Get started**](#get-started) &nbsp;·&nbsp; [**Dashboard**](#the-dashboard) &nbsp;·&nbsp; [**Live demo**](#live-demo-on-carpathian) &nbsp;·&nbsp; [**Components**](#components--whats-what) &nbsp;·&nbsp; [**Hardware**](#supported-hardware) &nbsp;·&nbsp; [**Index**](#index)
 
 <br/>
 
@@ -365,6 +365,21 @@ You can run any combination concurrently. The web server does not start training
 - **CSV training log.** Every training run writes per-step rows to `models/<name>/train.csv`. Always. There is no flag to disable it. The [**Training**](#tabs) tab polls this file.
 - **MRI activation capture.** The web server's PyTorch hooks fire on every forward pass during chat generation. Always. The capture cost is hooked at the framework level, so production has the visibility built in.
 - **Run-level logging.** Every run tees its stdout + stderr to a per-run log while still printing live. The first line of every run prints the log path so you can find it later.
+
+<br/>
+
+---
+
+<br/>
+
+## Live demo on Carpathian
+
+Any box can be published to Carpathian's public **glass-box chat**, where anyone can talk to a model running on your hardware and watch its full MRI stream live: confidence, next-byte odds, attention, feed-forward neurons, the residual stream, and a hallucination check, resolving token by token.
+
+- **[carpathian.ai/veritate/chat](https://carpathian.ai/veritate/chat)** is the live chat + MRI dashboard, where you talk to a model running on your hardware.
+- **[carpathian.ai/veritate](https://carpathian.ai/veritate)** is the research-program overview.
+
+The box is never exposed to the internet. Carpathian reaches it over your LAN through its regional gateway and relays chat + MRI, so the box stays LAN-only and unauthenticated. Publishing a box is an operator opt-in on the Carpathian side; nothing here is shared until you connect it there.
 
 <br/>
 

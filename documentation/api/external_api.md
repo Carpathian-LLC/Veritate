@@ -37,8 +37,11 @@ List the models this box can serve.
 ```json
 {"object": "list",
  "data": [{"id": "<name>", "object": "model", "created": 0, "owned_by": "veritate",
-           "n_params": 0, "hidden": 0, "layers": 0, "capabilities": {}, "is_current": true}]}
+           "n_params": 0, "hidden": 0, "layers": 0, "capabilities": {}, "is_current": true,
+           "engine": "c"}]}
 ```
+
+`engine` is the backend the box will run that model on for chat/generation: `"c"` (the compiled Veritate C engine, used whenever the model has a `.bin` export and the engine binary is built) or `"pytorch"` (the fallback for non-exportable trunks). The box sets this; a client does not choose it. The C engine is faster and runs off the GPU, so a `"pytorch"` model may respond more slowly, especially while the box is also training.
 
 ### POST /v1/chat/completions
 

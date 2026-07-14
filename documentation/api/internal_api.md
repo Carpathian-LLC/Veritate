@@ -35,8 +35,8 @@ Read-only endpoints (`GET` on `/pytorch-models`, `/meta`, `/runs`, `/run/*`, `/s
 
 | method + path | def | params | response | purpose |
 |---|---|---|---|---|
-| `GET /pytorch-models` | `models_routes.py:105` | none | `{models: [{name, step:int, is_current:bool, plugin:str, n_params:int\|null, hidden, layers, description:str, mtime:float, capabilities:dict}]}`, sorted newest first | model picker list with shape + capability metadata |
-| `GET /v1/models` | `models_routes.py:109` | none | `{object:"list", data:[{id:str, object:"model", created:int, owned_by:"veritate", n_params:int\|null, hidden, layers, capabilities:dict, is_current:bool}]}`, sorted newest first | OpenAI-compatible model list; same source as `/pytorch-models` |
+| `GET /pytorch-models` | `models_routes.py:105` | none | `{models: [{name, step:int, is_current:bool, plugin:str, n_params:int\|null, hidden, layers, description:str, mtime:float, capabilities:dict, engine:"c"\|"pytorch"}]}`, sorted newest first | model picker list with shape + capability metadata; `engine` is the backend the box will serve it on |
+| `GET /v1/models` | `models_routes.py:109` | none | `{object:"list", data:[{id:str, object:"model", created:int, owned_by:"veritate", n_params:int\|null, hidden, layers, capabilities:dict, is_current:bool, engine:"c"\|"pytorch"}]}`, sorted newest first | OpenAI-compatible model list; same source as `/pytorch-models`; `engine` is the resolved serving backend |
 | `POST /models/fork` | `models_routes.py:57` | body `source:str`, `new_name:str` | `{ok, ...}`; `400 {ok:false,error}` on `ForkError` | copy latest checkpoint of `source` into a new model dir |
 | `POST /models/open_folder` | `models_routes.py:66` | none | `{ok, path}` | open the models root in the OS file browser |
 | `GET /models/git/status` | `models_routes.py:32` | none | sync-status dict | git status of the models repo |

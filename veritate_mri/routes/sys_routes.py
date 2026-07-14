@@ -65,7 +65,11 @@ def register(app):
 
     @app.route("/sys/detect", methods=["POST"])
     def sys_specs_detect():
-        return sys_metrics.detect_and_save()
+        result = sys_metrics.detect_and_save()
+        # A manual re-detect re-arms the one-time hardware dump so the refreshed
+        # specs are re-sent on the next heartbeat (analytics tier permitting).
+        heartbeat_mod.arm_hw_redump()
+        return result
 
     @app.route("/heartbeat/status")
     def heartbeat_status_route():
