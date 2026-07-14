@@ -131,6 +131,14 @@ def _update_state(patch):
         return dict(cur)
 
 
+def arm_hw_redump():
+    """Re-arm the one-time hardware dump so the next heartbeat re-sends the `hw`
+    block. The block is normally sent once per install (specs don't change); a
+    manual re-detect calls this so refreshed specs reach the server one more time.
+    Still gated by the analytics tier, so nothing ships unless the user opted in."""
+    _update_state({"hw_dump_sent": False})
+
+
 def _hw_fingerprint():
     """Cached per-process hash of this machine's stable hardware key. The device
     id is bound to it so a copied install (state carrying another box's id)
