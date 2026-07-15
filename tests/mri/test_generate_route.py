@@ -4,9 +4,10 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - route tests for /generate input validation + the loopback path-param gate.
-#   a minimal Flask app registers backends_routes; no model loads (rule 33) since
-#   the assertions hit the param-parse and security gates before any backend runs.
+# - route tests for /generate input validation, the loopback path-param gate, and
+#   the /meta model-name + capability fields. a minimal Flask app registers
+#   backends_routes; no model loads (rule 33) since the assertions hit the
+#   param-parse and security gates before any backend runs.
 # tests/mri/test_generate_route.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -31,10 +32,11 @@ LOCAL = {"REMOTE_ADDR": "127.0.0.1"}
 # ------------------------------------------------------------------------------------
 # Functions
 
-def _client(brain=None, c_subprocess=None):
+def _client(brain=None, c_subprocess=None, brain_model=None):
     app = Flask(__name__)
     app.config["BRAIN"] = brain
     app.config["C_SUBPROCESS"] = c_subprocess
+    app.config["BRAIN_MODEL"] = brain_model
     backends_routes.register(app)
     return app.test_client()
 
@@ -72,3 +74,13 @@ def test_no_path_param_from_lan_is_not_gated():
     """A plain generate with no path param is not blocked for a LAN client."""
     r = _client(brain=None).get("/generate?backend=pytorch&prompt=hi", environ_base=LAN)
     assert r.status_code != 403
+
+
+def test_meta_reports_pytorch_model_with_fresh_caps(monkeypatch):
+    """GET /meta carries the loaded model's name alongside its capability block."""
+    caps = {"autocomplete": {"status": "trained"}, "chat": {"status": "trained"},
+            "agent": {"status": "untrained"}}
+    monkeypatch.setattr(backends_routes.caps_reader, "read", lambda name: caps)
+    r = _client(brain_model="chat_model").get("/meta").get_json()
+    assert r["pytorch_model"] == "chat_model"
+    assert r["pytorch_capabilities"] == caps

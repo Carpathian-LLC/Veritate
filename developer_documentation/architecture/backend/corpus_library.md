@@ -14,14 +14,17 @@ The catalog merges three layers by stem, later wins (`catalog()`, [corpus_sync.p
 2. optional remote catalog fetched from `corpus_catalog_url` in settings;
 3. `corpus_user_sources` from settings (per-machine custom entries).
 
-Four install formats (`install()`, [corpus_sync.py:736](../../../veritate_mri/training/sync/corpus_sync.py#L736)):
+Five install formats (`install()`, [corpus_sync.py:736](../../../veritate_mri/training/sync/corpus_sync.py#L736)):
 
 - `raw_bytes` — HTTP download of a uint8 byte stream, optional sha256 verify, atomic `.part` → rename.
 - `raw_bytes_zip` — same, then the largest zip member replaces the download (enwik8).
+- `zip_bundle` — `train_url` is one hosted zip holding `<stem>_train.bin` + `<stem>_val.bin` (any folder prefix). Install downloads to `trainers/corpus/<stem>.zip`, extracts both members (`_extract_zip_bundle()`), and always deletes the zip. `sha256_train`/`sha256_val` verify the extracted bins, so re-zipping never invalidates catalog hashes. Used by every Veritate-hosted tier above the GitHub raw 100 MB limit (chat_500mb+, agent_150mb+, mcp_*).
 - `hf_dataset` — stream rows from a HuggingFace dataset, UTF-8 encode the text column ([corpus_sync.py:530](../../../veritate_mri/training/sync/corpus_sync.py#L530)). Requires the `datasets` package; `hf_probe()` and `/corpus/library/install_deps` handle the missing-dep flow.
 - `native` — the bins ship inside the repo at `veritate_mri/data/corpus/<stem>_{train,val}.bin`; install copies them into `trainers/corpus/` (`_install_native()`, [corpus_sync.py:675](../../../veritate_mri/training/sync/corpus_sync.py#L675)). No network, no sha. `catalog()` reads `size_train`/`size_val` from the bundled files and sets `native_available`. Shipped native corpora: `mcp_docs` (modelcontextprotocol.io documentation, autocomplete framing per [framing.md](../../corpus/framing.md)).
 
 `val_split_ratio` carves the tail of a downloaded train file into val when no val source exists. Installs over 10 GB need `confirm_large=true`; a disk-space precheck refuses installs that would fill the disk.
+
+`coming_soon: true` on a catalog entry marks a staged-but-unpublished corpus: the dashboard renders a disabled "coming soon" button and `install()` refuses the entry. Release = replace the `PLACEHOLDER` train_url with the real COS link and drop the flag. Size tiers and their rationale: [library_ladder.md](../../corpus/library_ladder.md); builders live in [veritate_mri/tools/](../../../veritate_mri/tools/) (`build_chat_corpus.py`, `build_agent_corpus.py`, `build_mcp_corpus.py`, all deterministic).
 
 `uninstall()` deletes the two `.bin` files from `trainers/corpus/` only — for native corpora the repo copy stays, so reinstall always works.
 

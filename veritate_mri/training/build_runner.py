@@ -13,6 +13,7 @@
 # Imports:
 
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -75,6 +76,15 @@ def _binary_is_stale():
         bin_mtime = os.path.getmtime(bin_path)
     except OSError:
         return False
+    # The build script itself is part of the build inputs: editing build.bat/
+    # build.sh (e.g. adding a kernel TU to the compile+link list) changes the
+    # produced binary even when no .c/.h did. Without this, a stale binary from
+    # before a script edit would be silently reused.
+    try:
+        if os.path.getmtime(paths.build_script_path()) > bin_mtime:
+            return True
+    except OSError:
+        pass
     for src_dir in roots:
         for root, _dirs, files in os.walk(src_dir):
             for fn in files:
@@ -86,6 +96,56 @@ def _binary_is_stale():
                 except OSError:
                     continue
     return False
+
+
+# Matches a src/ or kernels/ .c path token in either build script, with `\` or
+# `/` separators (build.bat uses backslashes, build.sh forward slashes).
+_TU_REF_RE = re.compile(r"(?:src|kernels)[\\/][\w./\\-]*\.c")
+
+
+def _referenced_shared_tus(script_path):
+    """Parse a build script for the src/ and kernels/x86_64/ .c files it
+    compiles, returned as a set of forward-slash relative paths. Returns None if
+    the script can't be read. arm64/metal/scalar-only kernels are intentionally
+    excluded so build.bat (x86_64-only) and build.sh (multi-arch) compare on the
+    exact TU set they are both required to compile."""
+    try:
+        with open(script_path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return None
+    out = set()
+    for tok in _TU_REF_RE.findall(text):
+        rel = tok.replace("\\", "/")
+        if rel.startswith("src/") or rel.startswith("kernels/x86_64/"):
+            out.add(rel)
+    return out
+
+
+def check_build_parity():
+    """Warn when build.bat and build.sh disagree on the src/ + x86_64 kernel set
+    they must both compile. This drift is exactly what produces an undefined-
+    symbol link failure on one platform but not the other (a kernel TU added to
+    one script but forgotten in the other). Non-fatal: the goal is to surface
+    the cause in the build log *before* the linker's cryptic dump. Returns the
+    (only_in_bat, only_in_sh) path lists for testability."""
+    build_dir = os.path.join(paths.ENGINE_PRIMARY, "build")
+    bat = _referenced_shared_tus(os.path.join(build_dir, "build.bat"))
+    sh  = _referenced_shared_tus(os.path.join(build_dir, "build.sh"))
+    if bat is None or sh is None:
+        return [], []
+    only_bat = sorted(bat - sh)
+    only_sh  = sorted(sh - bat)
+    if only_sh:
+        logmod.warn("build",
+                    "build.bat is missing x86_64 TUs that build.sh compiles: "
+                    + ", ".join(only_sh)
+                    + " — Windows link will fail with undefined symbols until added")
+    if only_bat:
+        logmod.warn("build",
+                    "build.sh is missing x86_64 TUs that build.bat compiles: "
+                    + ", ".join(only_bat))
+    return only_bat, only_sh
 
 
 def state():
@@ -122,6 +182,12 @@ def _run_build():
         except Exception as e:
             logmod.warn("build", f"pre-build hook failed: {e}")
     logmod.info("build", f"starting build for {_STATE['os']}/{_STATE['arch']}: {os.path.basename(script)}")
+    # Surface build.bat/build.sh drift up front, so a missing kernel TU reads as
+    # a clear warning here instead of an undefined-symbol dump from the linker.
+    try:
+        check_build_parity()
+    except Exception as e:
+        logmod.warn("build", f"parity check skipped: {e}")
     # start() already set STATUS_BUILDING synchronously; this is the worker
     # confirming the running state. left intentionally so the worker can be
     # invoked directly in tests without going through start().

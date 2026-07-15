@@ -126,8 +126,77 @@ void hybrid_matvec_i8_scalar(const void* w, const float* x, float* out,
     }
 }
 
+// batched matmul scalar references. same 16-partial fold as the matvecs, run
+// per (row j, activation b) with the weight row hot across the b sweep, so each
+// out[b][j] is bitwise-equal to hybrid_matvec_*_scalar(w, X[b])[j]. compute the
+// output rows [j0, j1) only (full range single-thread, a disjoint slice per
+// worker under hybrid_mm's j-split); n is the output-row stride of out. int8
+// activations are pre-quantized by the caller into qx + a_scale.
+void hybrid_matmul_f32_scalar(const void* w, const float* X, float* out,
+                              int32_t n, int32_t k, int32_t B, const int8_t* qx,
+                              const float* a_scale, int32_t j0, int32_t j1) {
+    (void)qx; (void)a_scale;
+    const float* wf = (const float*)w;
+    for (int32_t j = j0; j < j1; j++) {
+        const float* row = wf + (size_t)j * k;
+        for (int32_t b = 0; b < B; b++) {
+            const float* x = X + (size_t)b * k;
+            float s[16] = {0};
+            int32_t i = 0;
+            for (; i + 16 <= k; i += 16) {
+                for (int32_t l = 0; l < 16; l++) s[l] += row[i + l] * x[i + l];
+            }
+            float t[4];
+            for (int32_t l = 0; l < 4; l++) t[l] = (s[l] + s[l + 8]) + (s[l + 4] + s[l + 12]);
+            for (; i < k; i++) t[0] += row[i] * x[i];
+            out[(size_t)b * n + j] = (t[0] + t[1]) + (t[2] + t[3]);
+        }
+    }
+}
+
+void hybrid_matmul_f16_scalar(const void* w, const float* X, float* out,
+                              int32_t n, int32_t k, int32_t B, const int8_t* qx,
+                              const float* a_scale, int32_t j0, int32_t j1) {
+    (void)qx; (void)a_scale;
+    const uint16_t* wh = (const uint16_t*)w;
+    for (int32_t j = j0; j < j1; j++) {
+        const uint16_t* row = wh + (size_t)j * k;
+        for (int32_t b = 0; b < B; b++) {
+            const float* x = X + (size_t)b * k;
+            float s[16] = {0};
+            int32_t i = 0;
+            for (; i + 16 <= k; i += 16) {
+                for (int32_t l = 0; l < 16; l++) s[l] += hybrid_f16_to_f32(row[i + l]) * x[i + l];
+            }
+            float t[4];
+            for (int32_t l = 0; l < 4; l++) t[l] = (s[l] + s[l + 8]) + (s[l + 4] + s[l + 12]);
+            for (; i < k; i++) t[0] += hybrid_f16_to_f32(row[i]) * x[i];
+            out[(size_t)b * n + j] = (t[0] + t[1]) + (t[2] + t[3]);
+        }
+    }
+}
+
+void hybrid_matmul_i8_scalar(const void* w, const float* X, float* out,
+                             int32_t n, int32_t k, int32_t B, const int8_t* qx,
+                             const float* a_scale, int32_t j0, int32_t j1) {
+    (void)X;
+    const hybrid_w_i8_t* wi = (const hybrid_w_i8_t*)w;
+    for (int32_t j = j0; j < j1; j++) {
+        const int8_t* row = wi->q + (size_t)j * k;
+        const float wscale = wi->scale[j];
+        for (int32_t b = 0; b < B; b++) {
+            if (a_scale[b] == 0.0f) { out[(size_t)b * n + j] = 0.0f; continue; }
+            const int8_t* qb = qx + (size_t)b * k;
+            int32_t acc = 0;
+            for (int32_t i = 0; i < k; i++) acc += (int32_t)row[i] * (int32_t)qb[i];
+            out[(size_t)b * n + j] = (float)acc * (wscale * a_scale[b]);
+        }
+    }
+}
+
 hybrid_matvec_fn hybrid_matvec_wt = hybrid_matvec_f32_scalar;
 hybrid_matvec_fn hybrid_matvec_fp = hybrid_matvec_f32_scalar;
+hybrid_matmul_fn hybrid_matmul_wt = hybrid_matmul_f32_scalar;
 
 // SIMD upgrades the scalar defaults per detected arch features.
 // VERITATE_HYBRID_SCALAR=1 forces the scalar references for kernel-identity
@@ -139,6 +208,9 @@ void hybrid_dispatch_init(int32_t dtype) {
     hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_scalar
                      : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_scalar
                      : hybrid_matvec_f32_scalar;
+    hybrid_matmul_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matmul_f16_scalar
+                     : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matmul_i8_scalar
+                     : hybrid_matmul_f32_scalar;
     const char* s = getenv("VERITATE_HYBRID_SCALAR");
     if (s && *s && *s != '0') return;
 #if defined(__aarch64__) || defined(_M_ARM64)
@@ -154,6 +226,9 @@ void hybrid_dispatch_init(int32_t dtype) {
         hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_avx2
                          : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_avx2
                          : hybrid_matvec_f32_avx2;
+        hybrid_matmul_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matmul_f16_avx2
+                         : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matmul_i8_avx2
+                         : hybrid_matmul_f32_avx2;
     }
 #endif
 }
@@ -262,6 +337,77 @@ static void hybrid_mv(const hybrid_t* h, const void* w, const float* x,
         return;
     }
     hybrid_mv_split(h, w, x, out, n, k, nt);
+}
+
+// ------------------------------------------------------------------------------------
+// threaded batched matmul — j-split across the same pool as hybrid_mv. int8
+// activation quant is hoisted onto the calling thread (workers must not race the
+// shared pf_qx scratch), then each output row j is computed once by one worker
+// with the identical per-(j,b) fold, so the result is bitwise-identical to
+// single-thread at every worker count (rule 24).
+// ------------------------------------------------------------------------------------
+
+typedef struct {
+    hybrid_matmul_fn fn;
+    const void* w;
+    const float* X;
+    float* out;
+    const int8_t* qx;
+    const float* a_scale;
+    int32_t n, k, B, j0, j1;
+} hybrid_mm_span_t;
+
+static void hybrid_mm_worker(void* arg, int32_t idx) {
+    (void)idx;
+    const hybrid_mm_span_t* s = (const hybrid_mm_span_t*)arg;
+    s->fn(s->w, s->X, s->out, s->n, s->k, s->B, s->qx, s->a_scale, s->j0, s->j1);
+}
+
+static void hybrid_mm_split(const void* w, const float* X, float* out, int32_t n,
+                            int32_t k, int32_t B, const int8_t* qx,
+                            const float* a_scale, int32_t nt) {
+    hybrid_mm_span_t spans[HYBRID_MT_MAX];
+    void* args[HYBRID_MT_MAX];
+    int32_t per = (n + nt - 1) / nt;
+    int32_t used = 0;
+    for (int32_t t = 0; t < nt; t++) {
+        int32_t j0 = t * per;
+        if (j0 >= n) break;
+        int32_t j1 = j0 + per > n ? n : j0 + per;
+        spans[used].fn      = hybrid_matmul_wt;
+        spans[used].w       = w;
+        spans[used].X       = X;
+        spans[used].out     = out;
+        spans[used].qx      = qx;
+        spans[used].a_scale = a_scale;
+        spans[used].n       = n;
+        spans[used].k       = k;
+        spans[used].B       = B;
+        spans[used].j0      = j0;
+        spans[used].j1      = j1;
+        args[used] = &spans[used];
+        used++;
+    }
+    veritate_pool_run(hybrid_mm_worker, args, used);
+}
+
+// batched-matmul entry: hoist int8 activation quant, then j-split at the
+// calibrated worker count above the dtype work floor (a matmul's work is B times
+// a matvec's, so the gate clears far more readily), else single-thread.
+static void hybrid_mm(const hybrid_t* h, const void* w, const float* X,
+                      float* out, int32_t n, int32_t k, int32_t B) {
+    const int i8 = h->dtype == VERITATE_HYBRID_DTYPE_INT8;
+    float a_scale[V_PREFILL_BMAX];
+    if (i8)
+        for (int32_t b = 0; b < B; b++)
+            a_scale[b] = hybrid_quant_act(X + (size_t)b * k, k, h->pf_qx + (size_t)b * k);
+    const int64_t min_work = i8 ? HYBRID_MT_MIN_WORK_I8 : HYBRID_MT_MIN_WORK;
+    int32_t nt = hybrid_threads();
+    if (nt <= 1 || (int64_t)n * k * B < min_work) {
+        hybrid_matmul_wt(w, X, out, n, k, B, h->pf_qx, a_scale, 0, n);
+        return;
+    }
+    hybrid_mm_split(w, X, out, n, k, B, h->pf_qx, a_scale, nt);
 }
 
 // ------------------------------------------------------------------------------------
@@ -671,6 +817,140 @@ void hybrid_reset(hybrid_t* h) {
 }
 
 // ------------------------------------------------------------------------------------
+// batched prefill: amortize weight streaming over a chunk of positions. local
+// blocks batch the five matmuls over the chunk (weight rows hot across the b
+// sweep) via hybrid_mm, which j-splits each across the pool; the recurrent
+// stack, conv ring, and slot scan stay sequential per position so their float
+// reductions match hybrid_step exactly. spec:
+// developer_documentation/engine/engine_v13_hybrid.md.
+// ------------------------------------------------------------------------------------
+
+int32_t hybrid_prefill_batch(void) {
+    static int32_t cached = -1;
+    if (cached < 0) {
+        const char* s = getenv("VERITATE_PREFILL_BATCH");
+        int32_t b = s && *s ? atoi(s) : 1;
+        if (b < 1) b = 1;
+        if (b > V_PREFILL_BMAX) b = V_PREFILL_BMAX;
+        cached = b;
+    }
+    return cached;
+}
+
+// one local (enc/dec) block over the Bc-row chunk at base position pos0. li is
+// the local-block KV index (enc: 0..n_enc-1, dec: n_enc..n_enc+n_dec-1).
+static void prefill_local_block(hybrid_t* h, const hybrid_block_t* b, int32_t li,
+                                int32_t pos0, int32_t Bc) {
+    const int32_t H = h->hidden, NH = h->heads, D = h->head_dim, F = h->ffn, S = h->seq;
+    const float scale = 1.0f / sqrtf((float)D);
+
+    for (int32_t r = 0; r < Bc; r++)
+        rmsnorm_f32(h->pf_x + (size_t)r * H, b->n1_w, h->pf_u + (size_t)r * H, H);
+    hybrid_mm(h, b->qkv_w, h->pf_u, h->pf_qkv, 3 * H, H, Bc);
+
+    float* k_base = h->kv_k + (size_t)li * S * H;
+    float* v_base = h->kv_v + (size_t)li * S * H;
+    for (int32_t r = 0; r < Bc; r++) {
+        const float* qkv = h->pf_qkv + (size_t)r * 3 * H;
+        memcpy(k_base + (size_t)(pos0 + r) * H, qkv + H,     (size_t)H * sizeof(float));
+        memcpy(v_base + (size_t)(pos0 + r) * H, qkv + 2 * H, (size_t)H * sizeof(float));
+    }
+
+    for (int32_t r = 0; r < Bc; r++) {
+        const int32_t pos = pos0 + r;
+        const float* qkv = h->pf_qkv + (size_t)r * 3 * H;
+        float* aout = h->pf_attn + (size_t)r * H;
+        for (int32_t hd = 0; hd < NH; hd++) {
+            const float* q = qkv + hd * D;
+            for (int32_t j = 0; j <= pos; j++)
+                h->scores[j] = dot_f32(q, k_base + (size_t)j * H + hd * D, D) * scale;
+            softmax_f32(h->scores, pos + 1);
+            float* o = aout + hd * D;
+            memset(o, 0, (size_t)D * sizeof(float));
+            for (int32_t j = 0; j <= pos; j++) {
+                const float p = h->scores[j];
+                const float* vr = v_base + (size_t)j * H + hd * D;
+                for (int32_t d = 0; d < D; d++) o[d] += p * vr[d];
+            }
+        }
+    }
+
+    hybrid_mm(h, b->proj_w, h->pf_attn, h->pf_tmp, H, H, Bc);
+    for (int32_t r = 0; r < Bc; r++) {
+        float* xr = h->pf_x + (size_t)r * H;
+        const float* pr = h->pf_tmp + (size_t)r * H;
+        for (int32_t i = 0; i < H; i++) xr[i] += pr[i];
+    }
+
+    for (int32_t r = 0; r < Bc; r++)
+        rmsnorm_f32(h->pf_x + (size_t)r * H, b->n2_w, h->pf_u + (size_t)r * H, H);
+    hybrid_mm(h, b->up_w, h->pf_u, h->pf_ff, F, H, Bc);
+    for (int32_t r = 0; r < Bc; r++) gelu_f32(h->pf_ff + (size_t)r * F, F);
+    hybrid_mm(h, b->down_w, h->pf_ff, h->pf_tmp, H, F, Bc);
+    for (int32_t r = 0; r < Bc; r++) {
+        float* xr = h->pf_x + (size_t)r * H;
+        const float* dr = h->pf_tmp + (size_t)r * H;
+        for (int32_t i = 0; i < H; i++) xr[i] += dr[i];
+    }
+}
+
+// recurrent stack for one position: mirrors hybrid_step's middle section on
+// h->x/h->g/h->pos, reusing recurrent_block_step so state advances identically.
+static void prefill_recurrent_pos(hybrid_t* h, int32_t tok) {
+    const int32_t H = h->hidden;
+    const int is_boundary = h->boundary[tok] || h->pos == 0;
+    const int slot_live = is_boundary && h->slot_count < h->slots;
+    if (slot_live) {
+        const float* se = h->slot_pos_emb + (size_t)h->slot_count * H;
+        for (int32_t i = 0; i < H; i++) h->g[i] = h->x[i] + se[i];
+        for (int32_t gidx = 0; gidx < h->n_global; gidx++)
+            recurrent_block_step(h, &h->blocks[h->n_enc + gidx], gidx);
+        for (int32_t i = 0; i < H; i++) h->x[i] += h->g[i];
+    }
+    if (is_boundary) h->slot_count++;
+}
+
+void hybrid_prefill(hybrid_t* h, const int32_t* tokens, int32_t n, int32_t B) {
+    const int32_t H = h->hidden, V = h->vocab;
+    while (h->pos < n) {
+        const int32_t pos0 = h->pos;
+        const int32_t rem = n - pos0;
+        const int32_t Bc = rem < B ? rem : B;
+
+        for (int32_t r = 0; r < Bc; r++) {
+            int32_t tok = tokens[pos0 + r];
+            if (V > 0) tok = ((tok % V) + V) % V;
+            const float* te = h->tok_emb + (size_t)tok * H;
+            const float* pe = h->pos_emb + (size_t)(pos0 + r) * H;
+            float* xr = h->pf_x + (size_t)r * H;
+            for (int32_t i = 0; i < H; i++) xr[i] = te[i] + pe[i];
+        }
+
+        for (int32_t e = 0; e < h->n_enc; e++)
+            prefill_local_block(h, &h->blocks[e], e, pos0, Bc);
+
+        for (int32_t r = 0; r < Bc; r++) {
+            int32_t tok = tokens[pos0 + r];
+            if (V > 0) tok = ((tok % V) + V) % V;
+            memcpy(h->x, h->pf_x + (size_t)r * H, (size_t)H * sizeof(float));
+            h->pos = pos0 + r;
+            prefill_recurrent_pos(h, tok);
+            memcpy(h->pf_x + (size_t)r * H, h->x, (size_t)H * sizeof(float));
+        }
+
+        for (int32_t d = 0; d < h->n_dec; d++)
+            prefill_local_block(h, &h->blocks[h->n_enc + h->n_global + d], h->n_enc + d, pos0, Bc);
+
+        if (pos0 + Bc == n) {
+            const float* xl = h->pf_x + (size_t)(Bc - 1) * H;
+            rmsnorm_f32(xl, h->n_out_w, h->u, H);
+            hybrid_matvec_fp(h->tok_emb, h->u, h->logits, V, H);
+        }
+        h->pos = pos0 + Bc;
+    }
+}
+
+// ------------------------------------------------------------------------------------
 // load
 // ------------------------------------------------------------------------------------
 
@@ -818,10 +1098,21 @@ hybrid_t* hybrid_load(FILE* f, int32_t vocab, int32_t hidden, int32_t layers,
     h->logits   = (float*)veritate_aligned_alloc((size_t)vocab * sizeof(float), 64);
     h->lens_u   = (float*)veritate_aligned_alloc((size_t)H * sizeof(float), 64);
     h->lens_f   = (float*)veritate_aligned_alloc((size_t)vocab * sizeof(float), 64);
+    const size_t bm = V_PREFILL_BMAX;
+    h->pf_x     = (float*)veritate_aligned_alloc(bm * (size_t)H * sizeof(float), 64);
+    h->pf_u     = (float*)veritate_aligned_alloc(bm * (size_t)H * sizeof(float), 64);
+    h->pf_qkv   = (float*)veritate_aligned_alloc(bm * (size_t)3 * H * sizeof(float), 64);
+    h->pf_attn  = (float*)veritate_aligned_alloc(bm * (size_t)H * sizeof(float), 64);
+    h->pf_ff    = (float*)veritate_aligned_alloc(bm * (size_t)ffn * sizeof(float), 64);
+    h->pf_tmp   = (float*)veritate_aligned_alloc(bm * (size_t)H * sizeof(float), 64);
+    h->pf_qx    = dtype == VERITATE_HYBRID_DTYPE_INT8
+                ? (int8_t*)veritate_aligned_alloc(bm * (size_t)ffn, 64) : NULL;
     if (!h->kv_k || !h->kv_v || !h->rec_state || !h->conv_ring || !h->x || !h->g ||
         !h->u || !h->qkv || !h->conv_out || !h->attn_out || !h->scores ||
         !h->ffn_buf || !h->gate_buf || !h->tmp || !h->logits ||
-        !h->lens_u || !h->lens_f) {
+        !h->lens_u || !h->lens_f || !h->pf_x || !h->pf_u || !h->pf_qkv ||
+        !h->pf_attn || !h->pf_ff || !h->pf_tmp ||
+        (dtype == VERITATE_HYBRID_DTYPE_INT8 && !h->pf_qx)) {
         hybrid_free(h); return NULL;
     }
     hybrid_reset(h);
@@ -856,5 +1147,9 @@ void hybrid_free(hybrid_t* h) {
     veritate_aligned_free(h->gate_buf); veritate_aligned_free(h->tmp);
     veritate_aligned_free(h->logits);
     veritate_aligned_free(h->lens_u);   veritate_aligned_free(h->lens_f);
+    veritate_aligned_free(h->pf_x);     veritate_aligned_free(h->pf_u);
+    veritate_aligned_free(h->pf_qkv);   veritate_aligned_free(h->pf_attn);
+    veritate_aligned_free(h->pf_ff);    veritate_aligned_free(h->pf_tmp);
+    veritate_aligned_free(h->pf_qx);
     free(h);
 }

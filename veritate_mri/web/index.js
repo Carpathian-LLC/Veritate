@@ -1612,6 +1612,11 @@ function render(frame) {
 }
 
 function setMeta(m) {
+  // Fresh /meta caps are disk-fresh for the LOADED models; stamp them into the
+  // per-model cache so a stale page-load entry cannot mask them (chat trained
+  // after page load stayed greyed until a full reload).
+  if (m.pytorch_model && m.pytorch_capabilities) _pytorchModelCaps[m.pytorch_model] = m.pytorch_capabilities;
+  if (m.c_model_dir && m.c_model_capabilities) _pytorchModelCaps[m.c_model_dir] = m.c_model_capabilities;
   // Model-select and generate-stream frames rebuild meta without the capability
   // and device fields; carry them over from the prior meta so the mode picker
   // does not re-grey chat mid-session. A fresh load passes real values (or an
@@ -1814,6 +1819,18 @@ function _applyModeAvailability() {
     if (pick) pick.checked = true;
   }
 }
+
+// Caps change on disk while a run trains (chat SFT flips in_progress -> trained);
+// poll caps only — never rebuild the picker — so chat enables without a reload.
+function pollModeCaps() {
+  if (document.hidden) return;
+  fetch("/pytorch-models").then(r => r.ok ? r.json() : null).then(d => {
+    if (!d || !d.models) return;
+    for (const m of d.models) if (m.capabilities) _pytorchModelCaps[m.name] = m.capabilities;
+    _applyModeAvailability();
+  }).catch(() => {});
+}
+setInterval(pollModeCaps, 15000);
 
 function resetRagPanel() {
   const wrap = $("ragPanel"); if (!wrap) return;
@@ -2770,6 +2787,7 @@ function postCConfig(body) {
             c_exe: m.c_exe, c_exe_path: m.c_exe_path,
             c_engine_version: m.c_engine_version, c_engine_label: m.c_engine_label,
             c_model_capabilities: m.c_model_capabilities,
+            pytorch_model: m.pytorch_model,
             pytorch_capabilities: m.pytorch_capabilities,
             pytorch_device: m.pytorch_device,
           });
@@ -2973,6 +2991,7 @@ fetch("/meta").then(r => r.json()).then(m => {
       c_exe: m.c_exe, c_exe_path: m.c_exe_path,
       c_engine_version: m.c_engine_version, c_engine_label: m.c_engine_label,
       c_model_capabilities: m.c_model_capabilities,
+      pytorch_model: m.pytorch_model,
       pytorch_capabilities: m.pytorch_capabilities,
       pytorch_device: m.pytorch_device,
     });
@@ -7480,8 +7499,12 @@ function _trBuildInput(a) {
     return `<textarea data-arg="${_trEsc(name)}" rows="2" style="${inputBase};padding:4px 6px;resize:vertical">${_trEsc(def)}</textarea>`;
   }
   if (t === "str" && Array.isArray(a.choices)) {
+    const ch = a.choice_help || null;
     const opts = ['<option value="">- pick -</option>']
-      .concat(a.choices.map(c => `<option value="${_trEsc(c)}" ${c === def ? "selected" : ""}>${_trEsc(c)}</option>`))
+      .concat(a.choices.map(c => {
+        const tip = ch && ch[c] ? ` title="${_trEsc(ch[c])}"` : "";
+        return `<option value="${_trEsc(c)}"${tip} ${c === def ? "selected" : ""}>${_trEsc(c)}</option>`;
+      }))
       .join("");
     return `<select data-arg="${_trEsc(name)}" style="${inputBase}">${opts}</select>`;
   }
@@ -7650,7 +7673,13 @@ const TRAINER_SCHEMA = {
     { name: "description",  type: "text",                    label: "what this model is for",   help: "saved into the model config. If left blank, auto-filled from corpus/size/precision/version/variant." },
     { name: "model_type",   type: "str",                     label: "model type",               help: "what this model is for. Controls which checkpoint evaluations run: 'language' runs the full language probe suite (fluency, reading, grammar, reasoning, concepts, writing); 'code', 'statistical', and 'other' skip the language tests because they are meaningless for non-text models.", choices: ["language","code","statistical","other"] },
     // ---- recipe + research-validated knobs ----
-    { name: "recipe",       type: "str",    uiOnly: true,    label: "training recipe",          help: "one pick fills the training knobs with a lab-validated combination. 'custom' leaves everything as you set it.", choices: ["balanced","efficient byte-native","long-conversation","classic","custom"] },
+    { name: "recipe",       type: "str",    uiOnly: true,    label: "training recipe",          help: "one pick fills the training knobs with a lab-validated combination. 'custom' leaves everything as you set it.", choices: ["balanced","efficient byte-native","long-conversation","classic","custom"], choice_help: {
+      "balanced":              "Muon optimizer + dense trunk + WSD schedule. Solid all-round default when you don't have a specific goal in mind.",
+      "efficient byte-native": "Muon + patched (byte-level) trunk + WSD. Reaches target quality with fewer training bytes; best when corpus size is the bottleneck.",
+      "long-conversation":     "Muon + recurrent trunk + WSD. Tuned for models that need to remember far back in a conversation or long document.",
+      "classic":               "AdamW + dense trunk + cosine LR decay. The conventional textbook setup; use as a known baseline or when reproducing older results.",
+      "custom":                "No preset applied. Every knob stays exactly as you set it. Pick this when you want to hand-tune individual settings.",
+    } },
     { name: "optimizer",    type: "str",                     label: "optimizer",                help: "muon = measured 1.60x fewer training bytes to the same quality vs adamw on this platform (research ledger 2026-07-03). adamw = the classic default.", choices: ["adamw","muon"] },
     { name: "trunk",        type: "str",                     label: "architecture",             help: "dense = canonical transformer. patched = global compute per ~4-byte patch: measured 1.82x faster to the same quality, more parameters at the same speed. recurrent = constant-state: quality parity with attention and stays fast/light no matter how long the conversation gets. hybrid = patched + recurrent global path: best measured quality of all variants (1.70x vs dense). looped = weight-tied depth: beats dense at equal parameters but loses to patched/hybrid, and thinking longer at test time did not help (research ledger 2026-07-05). memory = long-context device, not a knowledge store (ledger 2026-07-05).", choices: ["dense","patched","recurrent","hybrid","looped","memory"] },
     // ---- standard training loop ----
@@ -7798,7 +7827,7 @@ function _trEnsureContinueCfg(name) {
   return null;
 }
 
-// Cached system specs for the estimator and auto-optimize. Populated lazily
+// Cached system specs for the estimator and auto tune. Populated lazily
 // on first call; refreshed by /sys/detect handler.
 let _sysSpecsCache = null;
 function _trMemoryBudget() {
@@ -7942,7 +7971,7 @@ function _trUpdateVramEstimate() {
       ` <span style="color:var(--dim)">${budget.label}</span>${rawNote}` +
       ` &middot; <span style="color:${badgeColor}">${pct}% used &mdash; ${verdict}</span></div>`;
     if (ratio >= 0.92 && trainState.selected && trainState.selected.manifest && trainState.selected.manifest.bench) {
-      budgetLine += `<div style="margin-top:2px;color:var(--warm)">Tight on this machine. Run <b>Auto-optimize</b> (step 3) to benchmark and fit the settings automatically.</div>`;
+      budgetLine += `<div style="margin-top:2px;color:var(--warm)">Tight on this machine. Run <b>Auto tune</b> (step 3) to benchmark and fit the settings automatically.</div>`;
     }
   } else {
     budgetLine = `<div style="margin-top:3px;color:var(--warm)">no system specs detected &mdash; click <b>detect my system</b> in settings to compare against your hardware.</div>`;
@@ -7991,8 +8020,44 @@ function _trSetArgVal(name, val) {
   return true;
 }
 
-const _autoTuneState = { es: null, poll: null, plugin: null, result: null, recs: null };
+const _autoTuneState = { es: null, poll: null, plugin: null, result: null, recs: null,
+                         sysprobe: null, missing_pkg: null, installing: false };
+
+// Missing-import detection: bench subprocess prints
+// `ModuleNotFoundError: No module named 'X'` when a dep isn't present. Match
+// the quoted package and hand it to the auto-install popup so the user doesn't
+// bounce to a terminal.
+const AUTO_TUNE_MISSING_RE = /No module named ['"]([\w.\-]+)['"]/;
 // Modal uses the Training tab's selected trainer; no separate picker.
+
+function _autoTuneRenderSysprobe(s) {
+  if (!s) { $("autoTuneSysprobe").style.display = "none"; return; }
+  const gpu = (s.gpus || []).map(g => `${g.name} ${g.matmul_tflops} TFLOP/s`
+                                    + (g.vram_total_gb ? ` (${g.vram_total_gb} GB)` : "")).join("<br>");
+  // When sysprobe finds no torch device we distinguish between "GPU is here
+  // but torch is CPU-only" (fixable via Restart) and "no GPU on this box at
+  // all". The sysprobe payload doesn't know about the hardware inventory —
+  // that lives in _sysSpecsCache — so we combine the two here.
+  let gpuLine;
+  if (gpu) {
+    gpuLine = gpu;
+  } else {
+    const nvidiaPresent = ((_sysSpecsCache && _sysSpecsCache.gpus) || [])
+      .some(g => (g.vendor || "").toUpperCase() === "NVIDIA");
+    if (nvidiaPresent) {
+      gpuLine = `<span style="color:var(--hot)">NVIDIA GPU detected but PyTorch is CPU-only. Restart the dashboard to install the CUDA build.</span>`;
+    } else {
+      gpuLine = `<span style="color:var(--warm)">no supported GPU on this box (CPU-only training).</span>`;
+    }
+  }
+  $("autoTuneSysprobeBody").innerHTML =
+    `<b>disk</b> seq ${s.disk.seq_write_mb_s} MB/s &middot; rand ${s.disk.rand_write_mb_s} MB/s &middot; ${s.disk.free_gb} GB free<br>` +
+    `<b>cpu</b> ${s.cpu.physical_cores} cores &middot; ${s.cpu.matmul_gflops} GFLOP/s &middot; ${s.cpu.copy_gb_s} GB/s copy<br>` +
+    `<b>gpu</b> ${gpuLine}<br>` +
+    `<b>ram</b> ${s.ram.total_gb} GB total &middot; ${s.ram.available_gb} GB available` +
+    (s.ram.swap_used_gb > 0 ? ` &middot; <span style="color:var(--warm)">swap in use ${s.ram.swap_used_gb}/${s.ram.swap_total_gb} GB</span>` : "");
+  $("autoTuneSysprobe").style.display = "";
+}
 
 function _autoTuneOpen() {
   const p = trainState.selected;
@@ -8028,21 +8093,95 @@ function _autoTuneCleanup() {
   $("autoTuneStop").style.display = "none";
 }
 
+// Dual-device auto-tune. When the box exposes both CPU and CUDA (post-restart
+// with the CUDA torch build), the modal runs the bench once per device
+// SEQUENTIALLY and caches each result under system_specs.measured.per_device
+// so a re-open shows both without re-running. Rule 34c: never assume a
+// CPU-only box — check `_sysSpecsCache.deps.torch.cuda_available` before
+// deciding which devices are actually usable.
+function _autoTuneAvailableDevices() {
+  const caps = (_sysSpecsCache && _sysSpecsCache.capabilities) || {};
+  const deps = (_sysSpecsCache && _sysSpecsCache.deps) || {};
+  const torchCudaOk = !!(deps.torch && deps.torch.cuda_available);
+  const list = ["cpu"];
+  if (caps.can_use_cuda && torchCudaOk) list.push("cuda");
+  if (caps.can_use_mps) list.push("mps");
+  return list;
+}
+
+function _autoTuneCachedFor(device) {
+  const m = (_sysSpecsCache && _sysSpecsCache.measured) || null;
+  if (!m || !m.per_device) return null;
+  return m.per_device[device] || null;
+}
+
 function _autoTuneStart() {
   const plugin = trainState.selected;
   if (!plugin || !plugin.manifest || !plugin.manifest.bench) { _autoTuneLine("pick a trainer on the Training tab first.", "var(--hot)"); return; }
   const id = plugin.id;
   _autoTuneState.plugin = plugin;
   _autoTuneState.result = null;
-  const defs = plugin.manifest.defaults || {};
-  // Form values win when the form is rendered; manifest defaults otherwise.
-  const val = (k) => _trArgVal(k) || defs[k];
-  const args = { bench: true, size: val("size"), seq: val("seq"), precision: val("precision") };
+  _autoTuneState.missing_pkg = null;
+  _autoTuneState.deviceQueue = _autoTuneAvailableDevices();
+  _autoTuneState.deviceIdx = 0;
+  _autoTuneState.perDevice = {};
   $("autoTuneResults").style.display = "none";
   $("autoTuneInfeasible").style.display = "none";
+  $("autoTuneInstall").style.display = "none";
   $("autoTuneLog").innerHTML = "";
-  _autoTuneLine("starting benchmark (throwaway weights, nothing is saved)...", "var(--dim)");
-  _autoTuneLine("your computer may slow down while memory is pushed to its limit — this is expected.", "var(--warm)");
+  _autoTuneLine("probing hardware (disk, CPU, GPU, RAM)...", "var(--dim)");
+  fetch("/trainers/sysprobe", { method: "POST", headers: { "Content-Type": "application/json" },
+                                 body: JSON.stringify({}) })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok && d.sysprobe) {
+        _autoTuneState.sysprobe = d.sysprobe;
+        _autoTuneRenderSysprobe(d.sysprobe);
+      } else {
+        _autoTuneLine("sysprobe failed (" + (d.error || "unknown") + ") — proceeding to bench.", "var(--warm)");
+      }
+      _autoTuneLine("device queue: " + _autoTuneState.deviceQueue.join(", "), "var(--dim)");
+      _autoTuneRunNextDevice(id, plugin);
+    })
+    .catch(e => { _autoTuneLine("sysprobe failed: " + e + " — proceeding to bench.", "var(--warm)"); _autoTuneRunNextDevice(id, plugin); });
+}
+
+// Sequentially bench each device in _autoTuneState.deviceQueue. For each
+// device, first check the specs cache — if we already have a saved result
+// (per_device[<device>]) for the same shape, skip the run and reuse it. When
+// the queue is exhausted, hand off to _autoTuneFinishAll to pick the
+// recommendation (the fastest usable device wins).
+function _autoTuneRunNextDevice(id, plugin) {
+  const q = _autoTuneState.deviceQueue || ["cpu"];
+  const idx = _autoTuneState.deviceIdx || 0;
+  if (idx >= q.length) {
+    _autoTuneFinishAll(plugin);
+    return;
+  }
+  const device = q[idx];
+  const cached = _autoTuneCachedFor(device);
+  const defs = plugin.manifest.defaults || {};
+  const val = (k) => _trArgVal(k) || defs[k];
+  const shapeKey = String(val("size")) + ":" + String(val("seq")) + ":" + String(val("precision"));
+  if (cached && cached._shape_key === shapeKey) {
+    _autoTuneLine(`reusing cached ${device} result (batch ${cached.max_batch}, ${Math.round(cached.tok_per_s).toLocaleString()} tok/s)`, "var(--dim)");
+    _autoTuneState.perDevice[device] = cached;
+    _autoTuneState.deviceIdx = idx + 1;
+    _autoTuneRunNextDevice(id, plugin);
+    return;
+  }
+  _autoTuneLaunchBench(id, plugin, device);
+}
+
+function _autoTuneLaunchBench(id, plugin, device) {
+  const defs = plugin.manifest.defaults || {};
+  const val = (k) => _trArgVal(k) || defs[k];
+  const args = { bench: true, size: val("size"), seq: val("seq"), precision: val("precision"),
+                 _device_override: device };
+  _autoTuneLine(`starting benchmark on ${device} (throwaway weights, nothing is saved)...`, "var(--warm)");
+  if (device === "cpu") {
+    _autoTuneLine("(cpu bench measures physical RAM ceiling; gpu bench, if next, measures VRAM)", "var(--dim)");
+  }
   fetch("/trainers/run", { method: "POST", headers: { "Content-Type": "application/json" },
                            body: JSON.stringify({ id, args }) })
     .then(r => r.json())
@@ -8050,9 +8189,33 @@ function _autoTuneStart() {
       if (!d.ok) { _autoTuneLine(d.error || "could not start (is a training run active?)", "var(--hot)"); return; }
       $("autoTuneStart").style.display = "none";
       $("autoTuneStop").style.display = "";
+      _autoTuneState.currentDevice = device;
       _autoTuneSubscribe(id);
     })
     .catch(e => _autoTuneLine("start failed: " + e, "var(--hot)"));
+}
+
+function _autoTuneShowInstall(pkg) {
+  if (_autoTuneState.installing) return;
+  _autoTuneState.installing = true;
+  $("autoTuneInstallPkg").textContent = " (" + pkg + ")";
+  $("autoTuneInstallStatus").textContent = "pip install --user " + pkg + " ...";
+  $("autoTuneInstall").style.display = "";
+  fetch("/system/install_dep", { method: "POST", headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ pkg }) })
+    .then(r => r.json())
+    .then(d => {
+      _autoTuneState.installing = false;
+      if (d.ok) {
+        $("autoTuneInstallStatus").textContent = "installed via " + (d.method || "pip") + " — restarting benchmark...";
+        setTimeout(() => { $("autoTuneInstall").style.display = "none"; _autoTuneState.missing_pkg = null; _autoTuneStart(); }, 900);
+      } else if (d.needs_elevation) {
+        $("autoTuneInstallStatus").innerHTML = `<span style="color:var(--hot)">install needs admin rights. Open a terminal as admin and run: <code>pip install ${pkg}</code></span>`;
+      } else {
+        $("autoTuneInstallStatus").innerHTML = `<span style="color:var(--hot)">install failed: ${d.stderr || d.error || "see logs"}</span>`;
+      }
+    })
+    .catch(e => { _autoTuneState.installing = false; $("autoTuneInstallStatus").textContent = "install request failed: " + e; });
 }
 
 function _autoTuneSubscribe(id) {
@@ -8067,6 +8230,11 @@ function _autoTuneSubscribe(id) {
       catch (err) { _autoTuneLine("could not parse benchmark result", "var(--hot)"); _autoTuneCleanup(); }
       return;
     }
+    const miss = AUTO_TUNE_MISSING_RE.exec(e.msg);
+    if (miss && !_autoTuneState.missing_pkg) {
+      _autoTuneState.missing_pkg = miss[1];
+      _autoTuneLine(`missing dep detected: ${miss[1]} — auto-installing.`, "var(--warm)");
+    }
     const benchLine = e.msg.startsWith("bench: ");
     _autoTuneLine(benchLine ? e.msg.slice(7) : e.msg, benchLine ? undefined : "var(--dim)");
   };
@@ -8075,8 +8243,13 @@ function _autoTuneSubscribe(id) {
     fetch("/trainers").then(r => r.json()).then(d => {
       const running = d.running && d.running.status === "running";
       if (!running && !_autoTuneState.result) {
-        _autoTuneLine("benchmark ended without a result — check the Logs tab.", "var(--hot)");
         _autoTuneCleanup();
+        if (_autoTuneState.missing_pkg) {
+          _autoTuneLine("missing dependency: " + _autoTuneState.missing_pkg + ". Try restarting the server to fix missing software.", "var(--hot)");
+          _autoTuneShowInstall(_autoTuneState.missing_pkg);
+        } else {
+          _autoTuneLine("benchmark ended without a result — check the Logs tab. Try restarting the server to fix missing software.", "var(--hot)");
+        }
       }
     }).catch(() => {});
   }, 4000);
@@ -8140,31 +8313,100 @@ function _autoTuneRecommend(result, plugin) {
 }
 
 function _autoTuneFinish(result) {
-  _autoTuneState.result = result;
-  _autoTuneCleanup();
-  if (result.fits === false) { _autoTuneShowInfeasible(result); return; }
-  $("autoTuneInfeasible").style.display = "none";
   const plugin = _autoTuneState.plugin;
-  const recs = _autoTuneRecommend(result, plugin);
+  // Tag the result with the device we asked for and the shape key so the
+  // per-device cache can later verify a stored entry still matches.
+  const defs = (plugin && plugin.manifest && plugin.manifest.defaults) || {};
+  const val = (k) => _trArgVal(k) || defs[k];
+  result._shape_key = String(val("size")) + ":" + String(val("seq")) + ":" + String(val("precision"));
+  const device = _autoTuneState.currentDevice || result.device || "cpu";
+  _autoTuneState.perDevice = _autoTuneState.perDevice || {};
+  _autoTuneState.perDevice[device] = result;
+  _autoTuneCleanup();
+  if (result.fits === false && (_autoTuneState.deviceQueue || []).length <= 1) {
+    _autoTuneState.result = result;
+    _autoTuneShowInfeasible(result);
+    return;
+  }
+  _autoTuneLine(`bench on ${device}: batch ${result.max_batch} at ${result.mem_ceiling_gb.toFixed(1)} GB, ${Math.round(result.tok_per_s).toLocaleString()} tok/s`, "var(--data-pos)");
+  _autoTuneState.deviceIdx = (_autoTuneState.deviceIdx || 0) + 1;
+  // Persist THIS device's result immediately so it survives a page reload
+  // even if the user closes the modal before the queue finishes.
+  _autoTunePersistDevice(plugin && plugin.id, result);
+  _autoTuneRunNextDevice(plugin ? plugin.id : null, plugin);
+}
+
+// Save this device's result to system_specs.measured.per_device via the same
+// endpoint the "apply to trainer" path uses. Args are empty (we don't apply
+// yet); measured is the trainer's bench result. sysprobe piggybacks on the
+// same call so the analytics upload still fires once.
+function _autoTunePersistDevice(pluginId, result) {
+  if (!pluginId || !result) return;
+  const body = {
+    id: pluginId,
+    args: {},
+    measured: { device: result.device, seq: result.seq, max_batch: result.max_batch,
+                mem_ceiling_gb: result.mem_ceiling_gb, best_batch: result.max_batch,
+                tok_per_s: result.tok_per_s, _shape_key: result._shape_key },
+  };
+  if (_autoTuneState.sysprobe) body.sysprobe = _autoTuneState.sysprobe;
+  fetch("/trainers/tune_defaults", { method: "POST", headers: { "Content-Type": "application/json" },
+                                     body: JSON.stringify(body) })
+    .then(() => fetch("/sys/specs").then(r => r.json()))
+    .then(s => { if (s && s.platform) { _sysSpecsCache = s; } })
+    .catch(() => {});
+}
+
+// After the device queue drains, pick the fastest fitting device as the
+// recommendation. Falls back to CPU when only CPU ran (or nothing fit).
+function _autoTuneFinishAll(plugin) {
+  const per = _autoTuneState.perDevice || {};
+  const devices = Object.keys(per);
+  if (devices.length === 0) return;
+  let best = null;
+  for (const d of devices) {
+    const r = per[d];
+    if (r && r.fits !== false && (best === null || (r.tok_per_s || 0) > (best.tok_per_s || 0))) {
+      best = r;
+    }
+  }
+  if (best === null) {
+    // Every device came back "does not fit". Show the first infeasible result.
+    const first = per[devices[0]];
+    _autoTuneState.result = first;
+    _autoTuneShowInfeasible(first);
+    return;
+  }
+  _autoTuneState.result = best;
+  $("autoTuneInfeasible").style.display = "none";
+  const recs = _autoTuneRecommend(best, plugin);
   _autoTuneState.recs = recs;
-  $("autoTuneRam").textContent      = result.mem_ceiling_gb.toFixed(1) + " GB used at batch " + result.max_batch;
-  $("autoTuneMaxBatch").textContent = String(result.max_batch);
+  $("autoTuneRam").textContent      = best.mem_ceiling_gb.toFixed(1) + " GB used at batch " + best.max_batch + " (" + best.device + ")";
+  $("autoTuneMaxBatch").textContent = String(best.max_batch);
   $("autoTuneBestBatch").textContent = recs ? String(recs.best.batch) : "—";
   $("autoTuneTokS").textContent     = recs ? Math.round(recs.best.tok_per_s).toLocaleString() + " tok/s" : "—";
-  $("autoTuneTier").textContent     = TIER_LABELS[result.tier] || result.tier || "—";
+  $("autoTuneTier").textContent     = TIER_LABELS[best.tier] || best.tier || "—";
   if (recs) {
     const timeNote = recs.hours != null
       ? ` At this speed, ${recs.totalSteps.toLocaleString()} steps would take ~${recs.hours.toFixed(1)} h.` : "";
-    const pagedNote = PAGED_TIERS.has(result.tier)
+    const pagedNote = PAGED_TIERS.has(best.tier)
       ? `<br><span style="color:var(--warm)">This size only fits by paging the optimizer to NVMe, so each step is disk-bound — the tok/s above already reflects that. Bigger batches amortize the disk cost.</span>`
       : "";
+    // Comparison line when multiple devices were measured.
+    const others = devices.filter(d => d !== best.device).map(d => {
+      const r = per[d];
+      return `${d}: batch ${r.max_batch}, ${Math.round(r.tok_per_s).toLocaleString()} tok/s`;
+    });
+    const compareNote = others.length
+      ? `<br><span style="color:var(--dim)">also measured: ${others.join(" · ")} — winner picked for throughput.</span>`
+      : "";
     $("autoTuneRecs").innerHTML =
-      `Recommended: <b>batch ${recs.batch}</b> at <b>lr ${recs.lr}</b>` +
+      `Recommended (${best.device}): <b>batch ${recs.batch}</b> at <b>lr ${recs.lr}</b>` +
       (recs.args.warmup_steps ? `, warmup/log/eval/ckpt cadence scaled to ${recs.totalSteps.toLocaleString()} steps` : "") +
       (recs.args.use_act_ckpt ? `, activation checkpointing on` : "") +
       (recs.args.precision ? `, precision ${recs.args.precision}` : "") +
       (recs.args.qat_enabled === false ? `, QAT off` : "") +
-      `.${timeNote}<br><span style="color:var(--dim)">Bigger batches fit (up to ${result.max_batch}) but measured slower — the recommendation is the throughput sweet spot.</span>${pagedNote}`;
+      `.${timeNote}<br><span style="color:var(--dim)">Bigger batches fit (up to ${best.max_batch}) but measured slower — the recommendation is the throughput sweet spot.</span>${pagedNote}${compareNote}`;
   } else {
     $("autoTuneRecs").textContent = "no usable measurements — see the log above.";
   }
@@ -8189,24 +8431,51 @@ function _autoTuneShowInfeasible(result) {
 function _autoTuneApply() {
   const plugin = _autoTuneState.plugin, recs = _autoTuneState.recs, result = _autoTuneState.result;
   const status = $("autoTuneApplyStatus");
-  if (!plugin || !recs) return;
+  // Never silent-return here. On Windows the user reported the button doing
+  // nothing on click; the original guard was silent, which reads as "broken".
+  // Any missing precondition now surfaces as an inline message so the state
+  // is visible instead of the button eating the click.
+  if (!plugin) {
+    if (status) { status.textContent = "no trainer selected — pick one on the Training tab first."; status.style.color = "var(--hot)"; }
+    return;
+  }
+  if (!recs || !result) {
+    if (status) { status.textContent = "no benchmark result to apply — run the benchmark first."; status.style.color = "var(--hot)"; }
+    return;
+  }
+  if (status) { status.textContent = "saving..."; status.style.color = "var(--warm)"; }
   const measured = { device: result.device, seq: result.seq, max_batch: result.max_batch,
                      mem_ceiling_gb: result.mem_ceiling_gb, best_batch: recs.best.batch,
                      tok_per_s: recs.best.tok_per_s };
+  const body = { id: plugin.id, args: recs.args, measured };
+  if (_autoTuneState.sysprobe) body.sysprobe = _autoTuneState.sysprobe;
   fetch("/trainers/tune_defaults", { method: "POST", headers: { "Content-Type": "application/json" },
-                                     body: JSON.stringify({ id: plugin.id, args: recs.args, measured }) })
+                                     body: JSON.stringify(body) })
     .then(r => r.json())
     .then(d => {
-      if (!d.ok) { status.textContent = d.error || "apply failed"; status.style.color = "var(--hot)"; return; }
-      if (trainState.selected && trainState.selected.id === plugin.id) {
-        Object.entries(recs.args).forEach(([k, v]) => _trSetArgVal(k, v));
-        _trUpdateVramEstimate();
+      if (!d.ok) {
+        if (status) { status.textContent = d.error || "apply failed"; status.style.color = "var(--hot)"; }
+        return;
+      }
+      // Push the recommended values into the trainer's form. Wrapped in
+      // try/catch so a single field-write failure doesn't kill the success
+      // message — the tune was saved server-side regardless.
+      try {
+        if (trainState.selected && trainState.selected.id === plugin.id) {
+          Object.entries(recs.args).forEach(([k, v]) => _trSetArgVal(k, v));
+          _trUpdateVramEstimate();
+        }
+      } catch (formErr) {
+        console.warn("auto-tune: form update failed:", formErr);
       }
       fetch("/sys/specs").then(r => r.json()).then(s => { if (s && s.platform) { _sysSpecsCache = s; _renderSysSpecs(s); } }).catch(() => {});
-      status.textContent = "saved for this machine. Future runs start from these values.";
-      status.style.color = "var(--data-pos)";
+      if (status) {
+        const suffix = d.saved === false ? " (server accepted no changes — values may already match)" : "";
+        status.textContent = "saved for this machine. Future runs start from these values." + suffix;
+        status.style.color = "var(--data-pos)";
+      }
     })
-    .catch(e => { status.textContent = "apply failed: " + e; status.style.color = "var(--hot)"; });
+    .catch(e => { if (status) { status.textContent = "apply failed: " + e; status.style.color = "var(--hot)"; } });
 }
 
 function _autoTuneStop() {
@@ -9190,6 +9459,7 @@ function _trPoll() {
     _trRenderPicker();
     if (selectedGone) _trRenderForm();
     _trRenderStatus();
+    _trToggleMetrics(trainState.flow);
     _exRender();
   }).catch(() => { _trRenderStatus(); });
 }
@@ -9317,7 +9587,8 @@ const TRAIN_METRICS_FLOWS = ["scratch", "continue", "rag"];
 function _trToggleMetrics(flow) {
   const sec = $("trainMetricsSection");
   if (!sec) return;
-  sec.style.display = TRAIN_METRICS_FLOWS.includes(flow) ? "" : "none";
+  const running = trainState.running && trainState.running.status === "running";
+  sec.style.display = (running || TRAIN_METRICS_FLOWS.includes(flow)) ? "" : "none";
 }
 
 const SYNTH_SCROLL_STICK_PX = 48;
@@ -10082,6 +10353,61 @@ function _renderSysmetrics(snap) {
   host.innerHTML = html;
 }
 
+// No HUD-time auto-install: missing sensor helpers surface as a plain notice.
+// Installation happens exclusively during the Restart flow, where it's queued
+// alongside torch-cuda and any other missing deps.
+
+// Restart-time dep repair. The full flow lives on the Reload Python button:
+// click Restart → we FIRST detect missing deps, install them sequentially
+// (with a live pip log tailing into the overlay via /logs/stream), THEN
+// trigger the actual server restart. No install ever fires on Detect Hardware
+// — Detect only inspects. Kills the check→restart→check loop that came from
+// firing installs during the wait-for-server phase.
+//
+// Log tail: pip lines emitted by deps.py via logmod.info("deps", ...) come
+// through /logs/stream. _lifecycleDepsAttachLogStream subscribes for the
+// duration of the install so the user sees pip's own output in real time.
+
+function _lifecycleDepsAttachLogStream() {
+  const panel = $("lifecycleLogTail");
+  if (!panel) return null;
+  panel.textContent = "";
+  panel.style.display = "";
+  let es;
+  try { es = new EventSource("/logs/stream"); }
+  catch (_) { return null; }
+  es.onmessage = (ev) => {
+    let e; try { e = JSON.parse(ev.data); } catch (_) { return; }
+    if (!e || e.source !== "deps" || !e.msg) return;
+    const line = document.createElement("div");
+    line.textContent = e.msg;
+    panel.appendChild(line);
+    panel.scrollTop = panel.scrollHeight;
+  };
+  return es;
+}
+
+// Build the missing-deps queue from a /sys/detect response. Ordered so the
+// heavy install (torch) runs first — a failure there aborts the queue rather
+// than wasting time on smaller pieces. Priority: CUDA > ROCm > CPU-only helpers.
+// The two torch flavors are mutually exclusive (the box either has NVIDIA or
+// AMD, and the backend flags only one at a time), but the queue treats them as
+// separate items so a future dual-vendor server wouldn't need code changes.
+function _lifecycleBuildDepsQueue(deps) {
+  const q = [];
+  if (deps && deps.needs_torch_cuda) {
+    q.push({ kind: "pip", pkg: "torch", index_url: deps.torch_cuda_index, label: "PyTorch with CUDA (NVIDIA GPU)" });
+  }
+  if (deps && deps.needs_torch_rocm) {
+    q.push({ kind: "pip", pkg: "torch", index_url: deps.torch_rocm_index, label: "PyTorch with ROCm (AMD GPU)" });
+  }
+  if (deps && deps.needs_temp_sensor && deps.temp_sensor_helper) {
+    q.push({ kind: "helper", helper: deps.temp_sensor_helper,
+             label: "CPU/GPU temperature sensor helper (" + deps.temp_sensor_helper + ")" });
+  }
+  return q;
+}
+
 function _settingsTabActive() {
   const t = document.querySelector('.tab-body[data-tab="settings"]');
   return !!(t && t.classList.contains("active"));
@@ -10091,15 +10417,12 @@ function _renderHudPreview(snap) {
   if (!cpuEl) return;
   const statusEl = $("cpuTempStatus");
   if (statusEl) {
+    // Show the notice only when the CPU package temperature is unreadable.
+    // GPU temps come from nvidia-smi independently and are typically fine
+    // even when the CPU sensor helper isn't installed — no reason to warn
+    // about them.
     if (snap && snap.available && snap.cpu_temp_c == null) {
-      const ua = navigator.userAgent;
-      if (ua.includes("Windows")) {
-        statusEl.textContent = "CPU/GPU temp sensors unavailable. Install + run LibreHardwareMonitor (Options > Enable WMI Provider) and the HUD will pick them up automatically.";
-      } else if (ua.includes("Mac")) {
-        statusEl.textContent = "CPU/GPU temp sensors unavailable. macOS does not expose them without a helper. Apple Silicon: brew install macmon (sudoless, covers CPU + GPU). Intel: brew install osx-cpu-temp (CPU only). Restart the dashboard after install.";
-      } else {
-        statusEl.textContent = "CPU/GPU temp sensors unavailable. On Linux ensure lm-sensors is installed (sudo apt install lm-sensors && sudo sensors-detect) and rerun the dashboard.";
-      }
+      statusEl.innerHTML = '<span style="color:var(--dim)">CPU temperature sensor unavailable on this host. Restart the dashboard to install the sensor helper — the Restart button queues the install and picks it up on the next boot.</span>';
       statusEl.style.display = "";
     } else {
       statusEl.style.display = "none";
@@ -10111,7 +10434,9 @@ function _renderHudPreview(snap) {
     $("hudPreviewGpu").textContent = "n/a";
     return;
   }
-  cpuEl.textContent = (snap.cpu_pct || 0).toFixed(0) + "%";
+  const cpuTemp = _fmtTemp(snap.cpu_temp_c);
+  cpuEl.textContent = (snap.cpu_pct || 0).toFixed(0) + "%"
+                       + (cpuTemp ? " · " + cpuTemp.val + cpuTemp.suffix : "");
   const memPct = snap.sys_mem_total ? (snap.sys_mem_used / snap.sys_mem_total * 100) : 0;
   $("hudPreviewRam").textContent = memPct.toFixed(0) + "% (" + _fmtBytes(snap.sys_mem_used) + " / " + _fmtBytes(snap.sys_mem_total) + ")";
   const gpus = snap.gpus || [];
@@ -10121,7 +10446,11 @@ function _renderHudPreview(snap) {
     const vram = (g.vram_used != null && g.vram_total != null)
       ? _fmtBytes(g.vram_used) + "/" + _fmtBytes(g.vram_total)
       : (g.vram_total != null ? _fmtBytes(g.vram_total) : "");
-    return load + (vram ? " · " + vram : "");
+    const t = _fmtTemp(g.temp_c);
+    const bits = [load];
+    if (vram) bits.push(vram);
+    if (t) bits.push(t.val + t.suffix);
+    return bits.join(" · ");
   });
   $("hudPreviewGpu").textContent = parts.join(", ");
 }
@@ -10167,6 +10496,8 @@ function _applySettingsToUI(s) {
   if (shareTrain) shareTrain.checked = !!s.share_current_training;
   const diag = $("diagnosticsLogsEnable");
   if (diag) diag.checked = !!s.diagnostics_logs_enabled;
+  const mriCompact = $("mriCompactFrames");
+  if (mriCompact) mriCompact.checked = !!s.mri_compact_frames;
   const dev = $("devicePreferenceSelect");
   if (dev) {
     dev.value = (s.device_preference || "auto");
@@ -10880,23 +11211,40 @@ function _lifecycleMinimalToggle() {
     });
 }
 
-function _lifecycleWaitForServer(label) {
+function _lifecycleWaitForServer(_label) {
   let attempts = 0;
-  const maxAttempts = 60;
+  const maxAttempts = 300;
+  const started = Date.now();
   const tick = () => {
     attempts++;
     fetch("/sys_metrics", { cache: "no-store" })
       .then(r => r.ok ? r.json() : Promise.reject("not ok"))
       .then(() => {
-        if (label) { label.textContent = "server back up — reloading…"; label.style.color = "var(--data-pos)"; }
+        _lifecycleSetOverlayStatus("restarting", "server is back — reloading page…", "var(--data-pos)");
         setTimeout(() => location.reload(), 600);
       })
       .catch(() => {
         if (attempts >= maxAttempts) {
-          if (label) { label.textContent = "server did not come back. relaunch manually."; label.style.color = "var(--hot)"; }
+          _lifecycleShowOverlayError("Server did not come back. Relaunch manually from the terminal.");
           _lifecycleOverlayHide();
-          _lifecycleSetButtonsDisabled(false);
           return;
+        }
+        const elapsed = (Date.now() - started) / 1000;
+        // After 6s down, the launcher is almost certainly re-running pip on
+        // boot (post-update, cleared hash sentinel). Swap the phase so the
+        // user knows the restart is taking longer for a valid reason.
+        if (elapsed > 6) {
+          _lifecycleSetOverlayStatus(
+            "installing dependencies",
+            "the launcher is running pip during boot — first-time CUDA installs can take a few minutes. (" + elapsed.toFixed(0) + "s)",
+            "var(--warm)"
+          );
+        } else {
+          _lifecycleSetOverlayStatus(
+            "restarting",
+            "waiting for server to come back… (" + elapsed.toFixed(0) + "s)",
+            "var(--warm)"
+          );
         }
         setTimeout(tick, 1000);
       });
@@ -10933,27 +11281,128 @@ function _lifecycleSoftReload() {
     });
 }
 
+// Set the overlay's two-line status: `phase` is the big title shown next to
+// the pinwheel (e.g. "installing dependencies"), `detail` is a fine-print
+// line beneath (e.g. "PyTorch with CUDA (1 of 1)... a few minutes").
+function _lifecycleSetOverlayStatus(phase, detail, color) {
+  const m = $("lifecycleOverlayMsg");
+  if (m) m.textContent = phase || "";
+  const s = $("lifecycleOverlayStatus");
+  if (s) {
+    s.textContent = detail || "";
+    s.style.color = color || "var(--dim)";
+  }
+}
+
+function _lifecycleShowOverlayError(msg) {
+  const s = $("lifecycleOverlayStatus");
+  if (s) {
+    s.innerHTML = '<span style="color:var(--hot);white-space:pre-line">' +
+      String(msg).replace(/</g, "&lt;") + '</span>';
+  }
+  // Log tail stays visible so the user can copy the pip output.
+  _lifecycleSetButtonsDisabled(false);
+}
+
 function _lifecycleRestart() {
-  const label = $("lifecycleStatus");
   _lifecycleSetButtonsDisabled(true);
-  _lifecycleOverlayShow("restarting");
-  if (label) { label.textContent = "reloading python..."; label.style.color = "var(--warm)"; }
+  _lifecycleOverlayShow("checking dependencies");
+  _lifecycleSetOverlayStatus("checking dependencies", "inspecting installed packages...", "var(--warm)");
+  // Phase 1: detect what's missing. Cheap POST; carries the deps snapshot so
+  // we know whether the install phase is needed.
+  fetch("/sys/detect", { method: "POST" })
+    .then(r => r.json())
+    .then(s => {
+      const queue = _lifecycleBuildDepsQueue(s && s.deps);
+      if (queue.length === 0) {
+        _lifecyclePhaseRestartServer();
+        return;
+      }
+      _lifecyclePhaseInstallDeps(queue, 0);
+    })
+    .catch(() => {
+      // Detect failed; still attempt the restart — most likely a transient
+      // network hiccup, not a real dep problem.
+      _lifecyclePhaseRestartServer();
+    });
+}
+
+// Phase 2: install the queued deps sequentially, tailing pip output live.
+// On success moves to phase 3 (server restart). On failure surfaces a clear
+// "Try restarting the server to fix missing software" hint — the launcher's
+// boot pip is the fallback when the runtime install can't get permissions.
+function _lifecyclePhaseInstallDeps(queue, idx) {
+  if (idx >= queue.length) {
+    _lifecyclePhaseRestartServer();
+    return;
+  }
+  const item = queue[idx];
+  const n = queue.length;
+  _lifecycleSetOverlayStatus(
+    "installing dependencies",
+    `${item.label} (${idx + 1} of ${n})... this can take several minutes.`,
+    "var(--warm)"
+  );
+  const es = _lifecycleDepsAttachLogStream();
+  // pip-style deps go to /system/install_dep; native helpers (brew/apt/winget)
+  // go to /system/install_helper. Both endpoints return the same {ok,
+  // needs_elevation, error, stderr, stdout} shape so downstream handling is
+  // identical.
+  let url, body;
+  if (item.kind === "helper") {
+    url  = "/system/install_helper";
+    body = { helper: item.helper };
+  } else {
+    url  = "/system/install_dep";
+    body = { pkg: item.pkg };
+    if (item.index_url) body.index_url = item.index_url;
+  }
+  const name = item.pkg || item.helper || "dependency";
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (es) es.close();
+      if (d.ok) {
+        _lifecyclePhaseInstallDeps(queue, idx + 1);
+      } else if (d.needs_elevation) {
+        _lifecycleShowOverlayError(
+          `Install of ${name} needs elevated permissions.\nTry restarting the server to fix missing software — the launcher runs the install at boot with the correct scope.`);
+      } else if (d.unsupported) {
+        // Sensor helper on an OS we can't auto-install on (rare — the queue
+        // shouldn't include one). Skip and continue instead of aborting.
+        _lifecyclePhaseInstallDeps(queue, idx + 1);
+      } else {
+        const err = (d.error || d.stderr || d.stdout || "see logs").slice(-300);
+        _lifecycleShowOverlayError(
+          `Install of ${name} failed: ${err}\nTry restarting the server to fix missing software.`);
+      }
+    })
+    .catch(e => {
+      if (es) es.close();
+      _lifecycleShowOverlayError(
+        `Install request failed: ${e}.\nTry restarting the server to fix missing software.`);
+    });
+}
+
+// Phase 3: actual server restart.
+function _lifecyclePhaseRestartServer() {
+  _lifecycleSetOverlayStatus("restarting", "reloading python...", "var(--warm)");
   fetch("/lifecycle/restart", { method: "POST" })
     .then(r => r.json())
     .then(res => {
       if (!res.ok) {
-        if (label) { label.textContent = `failed: ${res.error || "unknown"}`; label.style.color = "var(--hot)"; }
-        _lifecycleOverlayHide();
-        _lifecycleSetButtonsDisabled(false);
+        _lifecycleShowOverlayError(`Restart failed: ${res.error || "unknown"}.\nTry restarting the server to fix missing software.`);
         return;
       }
-      if (label) { label.textContent = "waiting for server to come back..."; label.style.color = "var(--warm)"; }
-      _lifecycleWaitForServer(label);
+      _lifecycleSetOverlayStatus("restarting", "waiting for server to come back...", "var(--warm)");
+      _lifecycleWaitForServer(null);
     })
     .catch(e => {
-      if (label) { label.textContent = _backendErrMsg(e); label.style.color = "var(--hot)"; }
-      _lifecycleOverlayHide();
-      _lifecycleSetButtonsDisabled(false);
+      _lifecycleShowOverlayError(`${_backendErrMsg(e)}.\nTry restarting the server to fix missing software.`);
     });
 }
 
@@ -11648,13 +12097,9 @@ const corpusLibState = {
   installing: new Set(), // stems currently being installed (UI lock)
 };
 
-// Veritate-native corpora that haven't been published yet; gated behind a
-// "coming soon" disabled button. Third-party HF datasets (fineweb_edu,
-// tinystories, etc.) install normally.
-const CORPUS_COMING_SOON = new Set([
-  "chat_500mb", "chat_5gb",
-  "agent_150mb", "agent_1500mb",
-]);
+// Unpublished Veritate-native corpora carry coming_soon=true in the catalog
+// entry (corpus_catalog.json) and render as a disabled "coming soon" button.
+// Third-party HF datasets (fineweb_edu, tinystories, etc.) install normally.
 
 // Corpus categories by purpose. Order is render order. A catalog entry maps to
 // a category by stem (CORPUS_STEM_CATEGORY), falling back to its trained_modes,
@@ -11662,6 +12107,7 @@ const CORPUS_COMING_SOON = new Set([
 const CORPUS_CATEGORIES = [
   { id: "chatting",     label: "Chatting",     blurb: "teach a model to converse" },
   { id: "autocomplete", label: "Autocomplete", blurb: "tool-use and code/doc completion" },
+  { id: "coding",       label: "Coding",       blurb: "python/js/html/css code, coding Q&A, and mix ablations" },
   { id: "facts",        label: "Facts",        blurb: "raw text for base knowledge" },
   { id: "statistics",   label: "Statistics",   blurb: "market time-series for the Market LLM" },
 ];
@@ -11673,6 +12119,12 @@ const CORPUS_STEM_CATEGORY = {
   fineweb_edu: "facts", openwebtext10g: "facts", enwik8: "facts",
   grounded_v1: "facts", grounded_v2: "facts", grounded_chunk: "facts", grounded_ui: "facts",
   crypto: "statistics", stocks: "statistics",
+  py_code_100mb: "coding", py_code_1gb: "coding",
+  js_code_100mb: "coding", js_code_1gb: "coding",
+  html_code_50mb: "coding", css_code_3mb: "coding", code_qa_100mb: "coding",
+  mixed_code_raw_200mb: "coding", mixed_code_files_200mb: "coding",
+  mixed_code_edu_200mb: "coding", mixed_code_qa_200mb: "coding",
+  code_textbook_v1: "coding",
 };
 const CORPUS_MODE_CATEGORY = { chat: "chatting", agent: "autocomplete", autocomplete: "autocomplete" };
 
@@ -11871,7 +12323,7 @@ function _corpusRowHtml(c) {
     // Primary install gets accent border so it stands out from the secondary
     // "remove" button.
     let actions = "";
-    const gated = c.coming_soon || (!isUser && CORPUS_COMING_SOON.has(c.stem));
+    const gated = c.coming_soon;
     if (gated) {
       actions = `<button class="action" type="button" disabled title="not yet available">coming soon</button>`;
     } else if (downloading) {
@@ -11975,7 +12427,7 @@ function _corpusInstallTrigger(stem) {
   // explicit user confirm before the request goes out, and the backend honors
   // the confirm_large flag as a second guard.
   let expected = entry.size_train || entry.max_bytes_train || 0;
-  if (entry.hf_split_val || entry.val_url) {
+  if (entry.hf_split_val || entry.val_url || entry.format === "zip_bundle") {
     expected += entry.size_val || entry.max_bytes_val || 0;
   }
   const TEN_GB = 10 * 1024 * 1024 * 1024;
@@ -12514,25 +12966,41 @@ function _applyDevicePrefCapabilities() {
   const hint = $("devicePreferenceHint");
   if (!sel) return;
   const caps = (_sysSpecsCache && _sysSpecsCache.capabilities) || null;
+  const deps = (_sysSpecsCache && _sysSpecsCache.deps) || null;
+  // "GPU is on the box but torch can't reach it" is a different failure from
+  // "no GPU at all". needs_torch_cuda is exactly that: NVIDIA adapter present
+  // AND torch is a CPU build. When true, we surface the fixable hint instead
+  // of the generic "unsupported on this host" line.
+  const gpuPresentButTorchBlind = !!(deps && deps.needs_torch_cuda);
   const disabled_labels = [];
   const enabled_labels = [];
   Array.from(sel.options).forEach(opt => {
     const need = opt.dataset && opt.dataset.cap;
     if (!need) return;
-    const ok = !!(caps && caps[need]);
-    opt.disabled = !ok;
-    const label = (opt.textContent || "").split(" — ")[0].split(" (")[0].trim();
-    if (!ok) {
-      disabled_labels.push(label);
-      if (!/—/.test(opt.textContent)) opt.textContent = opt.textContent + " — unsupported on this host";
+    const capOk = !!(caps && caps[need]);
+    // Preserve any prior suffix we tacked on: strip and re-add so re-detects
+    // don't accumulate "— unsupported — unsupported".
+    const baseText = (opt.textContent || "").split(" — ")[0];
+    opt.textContent = baseText;
+    opt.disabled = !capOk;
+    if (!capOk) {
+      disabled_labels.push(baseText.split(" (")[0].trim());
+      if (need === "can_use_cuda" && gpuPresentButTorchBlind) {
+        opt.textContent = baseText + " — PyTorch is CPU-only, restart to install CUDA build";
+      } else {
+        opt.textContent = baseText + " — unsupported on this host";
+      }
     } else {
-      enabled_labels.push(label);
+      enabled_labels.push(baseText.split(" (")[0].trim());
     }
   });
   if (hint) {
     if (!caps) {
       hint.textContent = "click “Detect now” above to populate option availability.";
       hint.style.color = "var(--dim)";
+    } else if (gpuPresentButTorchBlind) {
+      hint.innerHTML = "NVIDIA GPU detected but PyTorch is CPU-only. Restart the dashboard to install the CUDA build.";
+      hint.style.color = "var(--warm)";
     } else if (disabled_labels.length && enabled_labels.length) {
       hint.textContent = `${disabled_labels.join(" / ")} unavailable on this host; ${enabled_labels.join(" / ")} ready.`;
       hint.style.color = "var(--dim)";
@@ -12685,6 +13153,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if (diag) diag.addEventListener("change", () => {
     _saveSettings({ diagnostics_logs_enabled: diag.checked });
   });
+  const mriCompact = $("mriCompactFrames");
+  if (mriCompact) mriCompact.addEventListener("change", () => {
+    _saveSettings({ mri_compact_frames: mriCompact.checked });
+  });
   const diagPrev = $("diagPreviewBtn");
   if (diagPrev) diagPrev.addEventListener("click", () => { _showDiagnosticsPreview(); });
   const devSel = $("devicePreferenceSelect");
@@ -12704,7 +13176,16 @@ document.addEventListener("DOMContentLoaded", () => {
     detectBtn.textContent = "detecting…";
     fetch("/sys/detect", { method: "POST" })
       .then(r => r.json())
-      .then(s => { _sysSpecsCache = s && s.platform ? s : null; _renderSysSpecs(s); _trUpdateVramEstimate(); _trUpdateAutoTuneVisibility(); _applyDevicePrefCapabilities(); })
+      .then(s => {
+        _sysSpecsCache = s && s.platform ? s : null;
+        _renderSysSpecs(s);
+        _trUpdateVramEstimate();
+        _trUpdateAutoTuneVisibility();
+        _applyDevicePrefCapabilities();
+        // Detect is inspection-only. If the snapshot shows something needs
+        // installing (needs_torch_cuda etc.) the fix happens on the Restart
+        // button — that flow installs missing deps first, THEN restarts.
+      })
       .catch(() => {})
       .finally(() => { detectBtn.disabled = false; detectBtn.textContent = prev; });
   });

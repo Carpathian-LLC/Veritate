@@ -28,6 +28,10 @@ _SEQ = 0
 _SUBSCRIBERS = set()
 _ERROR_HOOK = None
 
+# Per-key throttle state for emit_throttled: key -> {"last_emit", "suppressed"}.
+_THROTTLE_LOCK = threading.Lock()
+_THROTTLE = {}
+
 # ------------------------------------------------------------------------------------
 # Functions
 
@@ -69,6 +73,35 @@ def info(source, msg):  return emit("info",  source, msg)
 def warn(source, msg):  return emit("warn",  source, msg)
 def error(source, msg): return emit("error", source, msg)
 def ok(source, msg):    return emit("ok",    source, msg)
+
+
+def emit_throttled(level, source, msg, key, interval_secs=1800):
+    """Coalesce repeated, expected-to-recur log lines (e.g. network failures on
+    an offline machine) under a stable `key`. The first call emits immediately;
+    further calls with the same key inside `interval_secs` are dropped and
+    counted. When one finally emits after suppressions, it appends
+    "(+N suppressed …)". Returns the emitted entry, or None if this call was
+    suppressed. Call clear_throttle(key) on the success/recovery edge so the
+    next failure logs at once again."""
+    now = time.time()
+    with _THROTTLE_LOCK:
+        st = _THROTTLE.get(key)
+        if st is not None and (now - st["last_emit"]) < interval_secs:
+            st["suppressed"] += 1
+            return None
+        suppressed = st["suppressed"] if st else 0
+        _THROTTLE[key] = {"last_emit": now, "suppressed": 0}
+    if suppressed:
+        msg = f"{msg} (+{suppressed} suppressed since last shown)"
+    return emit(level, source, msg)
+
+
+def clear_throttle(key):
+    """Reset a throttle key so the next emit_throttled(key) fires immediately.
+    Used on a recovery edge (a send that succeeds after failures) so the first
+    failure of the next outage is always shown."""
+    with _THROTTLE_LOCK:
+        return _THROTTLE.pop(key, None) is not None
 
 
 def snapshot(after_seq=0, limit=None):

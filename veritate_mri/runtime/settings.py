@@ -56,6 +56,12 @@ DEFAULTS = {
     "hud_enabled": False,
     "hud_position": "top",
     "hud_detailed": False,
+    # Advanced: stream reduced (compact) MRI telemetry frames. The engine summarizes
+    # each byte's telemetry itself (~33x smaller per-byte frame) instead of shipping
+    # full-resolution arrays for the browser to reduce. The dashboard renders the
+    # same; only the wire payload shrinks. Off by default so nothing changes on deploy
+    # until the user opts in from Settings -> Advanced.
+    "mri_compact_frames": False,
     "temperature_unit": "C",
     "heartbeat_enabled": True,
     "heartbeat_send_errors": True,
@@ -143,8 +149,6 @@ def _ensure_settings():
             cur = {}
     except (OSError, json.JSONDecodeError):
         cur = {}
-    if "extensions" not in cur and "experimental" in cur:
-        cur["extensions"] = cur["experimental"]
     missing = {k: v for k, v in DEFAULTS.items() if k not in cur}
     legacy = [k for k in PUBLIC_AI_DEFAULTS if k in cur]
     if missing or legacy:

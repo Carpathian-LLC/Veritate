@@ -9,6 +9,7 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import base64
 import json
 import math
 import os
@@ -573,9 +574,11 @@ class Brain:
                 grouped = act.view(-1, ds)
                 bucket_vals, bucket_argmax = grouped.max(dim=1)
                 mx = float(bucket_vals.max().clamp(min=1e-9))
-                u8 = (bucket_vals / mx * 255).clamp(0, 255).to(torch.uint8).tolist()
-                ffn_full.append(u8)
-                ffn_argmax.append(bucket_argmax.to(torch.uint8).tolist())
+                # base64-pack per-layer uint8 grids (lossless, ~2.6x smaller than JSON
+                # int arrays); frontend decodeFfnField() unpacks, old clients read arrays.
+                u8 = (bucket_vals / mx * 255).clamp(0, 255).to(torch.uint8)
+                ffn_full.append(base64.b64encode(bytes(u8.cpu().numpy())).decode("ascii"))
+                ffn_argmax.append(base64.b64encode(bytes(bucket_argmax.to(torch.uint8).cpu().numpy())).decode("ascii"))
                 v, idx = torch.topk(act, NEURON_TOP_K)
                 top_entries = []
                 for x, i in zip(v.tolist(), idx.tolist()):
@@ -586,32 +589,22 @@ class Brain:
                     top_entries.append(e)
                 ffn_top.append(top_entries)
 
-            attn = []
+            # Only info_flow (aggregate attention mass per position) is rendered by the
+            # dashboard; the per-head top-k `attn` array is dead on the frontend, so we
+            # accumulate attn_to_pos for info_flow but skip building/emitting attn.
             attn_to_pos = torch.zeros(T)
             for L in range(m.layers):
                 qkv = self.cap_qkv[L]
                 if qkv.size(1) != T:
                     # recurrent-mixer block: capture is chunk-padded slot-space;
                     # attention weights don't exist for it (model_patched.md).
-                    attn.append([])
                     continue
                 q, k, _ = qkv.chunk(3, dim=-1)
                 q = q.view(1, T, m.heads, head_dim).transpose(1, 2)
                 k = k.view(1, T, m.heads, head_dim).transpose(1, 2)
                 scores = torch.matmul(q[:, :, -1:, :], k.transpose(-2, -1)) / math.sqrt(head_dim)
                 w = F.softmax(scores, dim=-1)[0, :, 0, :]
-                ent = -(w * (w + 1e-12).log()).sum(dim=-1)
                 attn_to_pos += w.sum(dim=0)
-                heads_data = []
-                for h in range(m.heads):
-                    wh = w[h]
-                    vv, ii = torch.topk(wh, min(ATTN_TOP_POS, T))
-                    heads_data.append({
-                        "ent": round(float(ent[h]), 3),
-                        "top": [{"p": int(p), "w": round(float(x), 3)}
-                                for x, p in zip(vv.tolist(), ii.tolist())],
-                    })
-                attn.append(heads_data)
 
             flow_v, flow_i = torch.topk(attn_to_pos, min(INFO_FLOW_TOP, T))
             flow_max = float(attn_to_pos.max().clamp(min=1e-9))
@@ -725,7 +718,7 @@ class Brain:
                 "lens_consistency": conf["lens_consistency"],
                 "residual_stab":    conf["residual_stab"],
                 "confidence":       conf["confidence"],
-                "attn": attn, "info_flow": info_flow,
+                "info_flow": info_flow,
                 "res": res_norms, "contrib": contributions,
                 "lens": lens, "cand": candidates,
                 "memory": memory,

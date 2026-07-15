@@ -135,3 +135,43 @@ Early thought, unshaped. When the model reviews its context memories (the addres
 ### Sub-idea (OPEN, 2026-07-13): candidate re-ranker to convert recall@k into effective top-1
 
 The 2026-07-13 falsification (failures.md) showed multi-leaf (top-k) context injection HURTS a small generator: chat200m grounds worse with 3 or 5 leaves than with 1, because it cannot disambiguate among candidates. But retrieval recall@5 (~0.63) is far above recall@1 (~0.37) — the right leaf is usually IN the top-k, the generator just cannot pick it. A re-ranker that scores the top-k candidates with a richer (query, leaf) interaction than pooled-feature cosine (cross-attention scorer / small cross-encoder over the byte core) and injects only the single best leaf could lift effective top-1 toward recall@5 without the multi-leaf confusion. Ceiling ~0.63 vs current 0.37 = up to ~1.7x grounding. Kill line: re-ranked top-1 must beat raw top-1 recall by >5 pts on held-out natural queries. Retry-gated behind the 800M: a stronger generator may ALSO disambiguate multi-leaf directly (re-test eval_teacher_topk first), making the re-ranker redundant — build the re-ranker only if the 800M still needs single-leaf precision. Code seed: `experiments/v2/memory/eval_teacher_topk.py`.
+
+---
+
+## IDEA 3: throughput is the bottleneck — reduce FLOPs per token (Door 1)
+
+Status: OPEN, **HIGH PRIORITY — run the moment the 800M finishes**. Owner: execution model. Opened 2026-07-14.
+
+The framing, established honestly: training throughput = (peak FLOPs x MFU) / (FLOPs per token). There are exactly three doors. On this box (M3 Ultra, no tensor cores) door 3 (peak FLOPs) is capped by the Apple GPU and door 2 (MFU) is already largely tapped (framework is not the lever — MLX ~= torch-MPS; rule 24e speed levers tested every launch). So **the only door that moves here is door 1: fewer FLOPs per token** — which is also the only door that is an invention problem rather than a purchase, and every win transfers to CUDA silicon too. FLOPs/token ~= 6 x active-params, so the levers attack active params or sequence positions processed. Already won: patching (SpaceByte, 1.82x — cuts global-block positions), Muon (1.60x — fewer tokens to target). Already killed: looped/recursive depth (lost to hybrid). The untested door-1 levers below are the campaign.
+
+### T0 (prerequisite): profile before picking a lever
+
+Do NOT choose a lever before measuring the dominant cost. Two passes: (a) analytical FLOP breakdown from the trunk config at 800M (attention vs GLA-scan vs MLP vs optimizer share) — zero GPU, arithmetic only; (b) empirical per-component step-timing on an isolated 10M (not the live 800M). Specific suspicion to settle: is the GLA recurrence running as an efficient chunked-parallel scan on the target device, or a sequential loop leaving MFU on the floor (the scan was the CPU-side cost in the memory-store build, failures.md 2026-07-11)? Output: a chart that names the dominant cost, which SELECTS which of T1-T3 to fund. Kill line for the whole idea: if the profile shows the model is not FLOP-dominated where we think, the lever list is wrong — re-derive.
+
+### T1: hybrid_moe arm (the biggest untested lever — and it is already built)
+
+MoE is wired: `trunk=hybrid_moe`, `MoEFFN` in `veritate_core/model_patched.py` (`global_ffn=="moe"`, `moe_aux_sum`/`moe_expert_share` load-balancing), selectable through `vanilla_trainer.py`. It decouples capacity from throughput: many small experts, top-k active, so a large-CAPACITY model trains at small-ACTIVE-FLOP throughput. Never scaled or measured. Mechanism: run `trunk=hybrid_moe` matched-active-FLOPs against the winning `trunk=hybrid` at 10M, then 80M. Falsifier: at matched active-FLOPs and equal wall-clock, hybrid_moe must beat hybrid on val by >5 pts (agent_roe seed rule: needs a second seed before any external claim). If it holds, MoE is the path to a much larger effective model at fixed throughput — the direct answer to the throughput bottleneck and to "train the largest model we can."
+
+### T2: dynamic / adaptive patching (the sharpest byte-native lever)
+
+Byte-level pays the sequence tax hardest (~4-5x more positions than subword for the same text), which is exactly why fixed patching already won 1.82x. Extend it: entropy-based dynamic patching (Byte Latent Transformer style) — bigger patches over predictable spans, small patches only where bytes are surprising — so the expensive global blocks fire on far fewer, better-chosen positions. Mechanism: add an adaptive-patch trunk variant (or a patch-size schedule) vs fixed-patch hybrid. Falsifier: >5% tok/s at equal val, or equal tok/s at better val, on matched 10M runs. Highest-leverage because it hits the cost byte-native amplifies.
+
+### T3: mixture-of-depths (skip layers on easy tokens)
+
+Not every byte needs every layer (the space after a word is trivial). Learned per-token layer skipping (MoD / early-exit / CALM family) cuts FLOPs/token on the easy majority. Distinct from the killed looped-depth experiment (that ADDED compute per param; this REMOVES it on easy tokens). Mechanism: per-token learned router that skips global blocks below a confidence/importance threshold. Falsifier: matched val at measurably fewer FLOPs/token (>10%) vs hybrid, no quality tax outside the 5% band. Lower priority than T1/T2 (more build, less certain), fund only if the T0 profile shows depth is where the FLOPs sit.
+
+---
+
+## IDEA 4: corpus style is the capability-per-parameter lever (the mixed_code ablation)
+
+Status: OPEN. Owner: execution model. Opened 2026-07-15. Artifacts already built: `veritate_mri/tools/build_code_corpus.py` and the `mixed_code_*` bins in Mirach-Corpuses.
+
+What is already settled externally (do not re-prove): data quality dominates parameter count at small scale. phi-1 (1.3B, "Textbooks Are All You Need") beat models 10x larger on HumanEval using ~7B tokens of textbook-quality filtered plus synthetic code; FineWeb-Edu showed classifier-filtered educational web text outperforms the raw dump it came from; dedup alone measurably improves LMs (Lee et al.); TinyStories showed clean narrow distributions give coherent tiny models. StarCoder's ablations add a caution: near-dedup always helped, but aggressive popularity filtering (GitHub stars) HURT — filters that cut diversity can subtract capability.
+
+What is NOT settled anywhere public: which corpus STYLE (raw files vs cleaned files vs textbook-tier vs Q&A-interleaved) wins for a BYTE-LEVEL model at 200M, and whether the winner is stable enough to set the mix for the largest runs. Nobody publishes byte-level corpus-style ablations; this is cheap to own.
+
+Mechanism: four bins, identical size and seed, one axis changed each (built, see `developer_documentation/corpus/code_corpus.md`): mixed_raw (control: size caps + exact dedup only), mixed_files (full filters + near-dedup, edu score>=3), mixed_edu (same, score>=4 textbook tier), mixed_qa (filtered code 50% + StackOverflow Q&A 50%). Train the same 200M recipe, same steps, on each (GPU box, dashboard launch, `model_type=code`); rank on shared held-out clean val plus code evals.
+
+Falsifier / decision line: a style must beat mixed_raw by >5% val bpb or a clear code-eval margin, second seed per agent_roe before any claim. If no style separates from the control, corpus style is not a lever at this scale: record it in failures.md and spend on architecture (IDEA 3) instead.
+
+Scale-transfer caveat (pre-registered): a 200M winner picks the mix FAMILY, not the final ratios. Ultra-narrow textbook data can cap larger models (diversity starvation: the StarCoder lesson), so re-validate the winning style at 1-3B before committing a farm-scale run to it.

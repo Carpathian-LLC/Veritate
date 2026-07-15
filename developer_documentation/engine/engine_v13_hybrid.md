@@ -143,6 +143,76 @@ attention dot term growing linearly to the seq cap.
 - Header `layers` = 16 total blocks so every shape-derived consumer
   (c_engine.py parser, dashboard meta) sees the real section count.
 
+## batched prefill (VERITATE_PREFILL_BATCH)
+
+Prefill streams every weight from RAM once per prompt byte (measured 20.8 s for
+1 KB on an i7-9700T at ~12 GB/s), so it is bandwidth-bound. Batching a chunk of
+`B` positions streams each weight row once and reuses it across the chunk,
+amortizing the RAM traffic. With the traffic amortized the batched matmul is
+compute-bound on one core, so each is also j-split across the worker pool (see
+"threaded batched matmul" below). Off by default; `VERITATE_PREFILL_BATCH=<B>`
+turns it on (clamped to `V_PREFILL_BMAX=64`, [veritate.h:244](../../veritate_engine/v1/src/veritate.h)).
+
+- Hook: the `forward` hybrid branch composes AFTER the Feature A state-cache
+  restore ([model.c:742](../../veritate_engine/v1/src/model.c)). With
+  `remaining = real_len - restored`, when `trace == NULL && B > 1 &&
+  remaining >= B`, `hybrid_prefill` runs the remaining span; otherwise the
+  sequential per-byte loop runs. `trace != NULL` always stays sequential (every
+  traced position needs a per-byte frame), so `chat_traced` and `trace` are
+  untouched. Unset or `<= 1` is the exact pre-feature path, byte-for-byte.
+- `hybrid_prefill` ([hybrid.c:913](../../veritate_engine/v1/src/hybrid.c))
+  chunks `tokens[h->pos .. n-1]` into `ceil(rem/B)` blocks. Per chunk: batched
+  embed, then each local (enc/dec) block via `prefill_local_block`
+  ([hybrid.c:842](../../veritate_engine/v1/src/hybrid.c)) which batches the five
+  matmuls over the chunk and runs RMSNorm / causal attention / GELU per row;
+  then the recurrent stack via `prefill_recurrent_pos`
+  ([hybrid.c:899](../../veritate_engine/v1/src/hybrid.c)), a sequential per-
+  position reuse of `recurrent_block_step` so the conv ring, GLA state scan, and
+  slot ordinal advance exactly as the sequential path. The final chunk computes
+  the last position's `rmsnorm(x) + lm_head` (matvec) into `h->u` / `h->logits`,
+  matching what `hybrid_final_act_i8` and the sampler read; intermediate logits
+  are discarded, which sequential prefill also does.
+- Batched matmul ([hybrid.c:135](../../veritate_engine/v1/src/hybrid.c) scalar,
+  [kernels/x86_64/matmul_prefill_avx2.c](../../veritate_engine/v1/kernels/x86_64/matmul_prefill_avx2.c)):
+  `X = [B x k]`, `out = [B x n]`, looped `for j in [j0,j1) { for b }` so weight
+  row `j` stays L1-hot across the `b` sweep; `n` is the output-row stride, and a
+  call fills only the row band `[j0, j1)`. Dispatched by `hybrid_matmul_wt`
+  (`hybrid_dispatch_init`, scalar default, AVX2 on x86 with F16C, `_SCALAR=1`
+  forces scalar). NEON is out of scope: arm64 uses the scalar reference.
+
+### threaded batched matmul
+
+`prefill_local_block` calls each matmul through `hybrid_mm`
+([hybrid.c:397](../../veritate_engine/v1/src/hybrid.c)), the batched twin of
+`hybrid_mv`: it **j-splits** the output rows across the same worker pool at the
+calibrated `hybrid_threads()` count (`hybrid_mm_split`
+[hybrid.c:366](../../veritate_engine/v1/src/hybrid.c) hands worker `t` the band
+`[j0, j1)`), else runs single-thread. A matmul's work is `n*k*B`, `B` times a
+matvec's, so it clears the `HYBRID_MT_MIN_WORK` (2^18 fp / 2^23 int8) gate far
+more readily than decode does. Each `out[b][j]` is written by exactly one worker
+with the identical per-`(j,b)` fold, so the result is bitwise-identical at every
+worker count (rule 24).
+
+**int8 quant hoist.** The int8 kernel no longer quantizes activations: it would
+race the shared `pf_qx` scratch (and redundantly quantize) once workers run.
+`hybrid_mm` quantizes the `B` rows once on the calling thread into `pf_qx` plus a
+stack `a_scale[B]` before dispatch, and the kernel contract takes `const int8_t*
+qx` + `const float* a_scale` already filled ([hybrid.h](../../veritate_engine/v1/src/hybrid.h));
+f32/f16 kernels ignore both.
+
+**Bitwise argument.** Batching is over the position/output axis only, never the
+reduction axis. Each `out[b][j]` reproduces the matvec's exact 16-partial fold,
+so it is bitwise-equal to `hybrid_matvec_wt(w, X[b])[j]`; int8's hoisted
+`hybrid_quant_act` over the shared `X` gives the same `qx` / `a_scale` the
+sequential path derives per position, and disjoint j-bands never overlap a write.
+Attention, the GLA scan, and the conv ring stay sequential per position, so their
+float reductions are unchanged. Therefore the batched end state (KV, `rec_state`,
+`conv_ring`, `slot_count`, `logits`) is bitwise-identical to the sequential path
+at any thread count. Verified by `tests/engine/test_prefill_batch.py`: batched vs
+sequential, scalar-only fold, compose-with-state-cache, `threads=4` vs `threads=1`
+on a j-split-sized fp16 fixture, and int8 batched vs sequential (hoisted quant),
+all byte-identical.
+
 ## sampler: repetition control (chat_traced)
 
 `sample_token_ext` ([model.c](../../veritate_engine/v1/src/model.c)) takes an optional

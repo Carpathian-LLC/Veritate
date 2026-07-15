@@ -6,10 +6,11 @@ Background daemon that posts presence and diagnostics payloads to `https://api.c
 
 ## How it works
 
-Two payload kinds, one daemon thread:
+Three payload kinds, one daemon thread + one on-demand sender:
 
 - **Presence** (`kind="presence"`) — every 5 minutes idle, every 60 seconds while training. Minimal envelope: machine_id, device_id, ts, uptime, restarts, error count, optional `training` block.
 - **Diagnostics** (`kind="diagnostics"`) — every 5 minutes when `diagnostics_logs_enabled`. Heavier payload: hardware specs, log tails, plugin run tail.
+- **Bench report** (`kind="bench_report"`) — pushed once by [`send_bench_report(bench_result, sysprobe_result, trainer_id)`](../../../veritate_mri/runtime/heartbeat.py#L729) from the [`POST /trainers/tune_defaults`](../../../veritate_mri/routes/trainers_routes.py#L61) handler after the dashboard's Auto tune modal Applies. Envelope carries `v`, `machine_id`, `device_id`, `ts`, `trainer_id`, and the `bench` (`bench.run` measured summary) + `sysprobe` ([sysprobe](sysprobe.md) hardware bench) fields when present. `sysprobe` is run through `_scrub_paths` before send. Gated by `analytics_advanced_enabled`; returns `{ok, sent, reason}` and never raises, so a modal call site can ignore the return without try/except.
 
 Presence is always on: there is no off switch. `heartbeat_enabled` defaults `True` and the daemon starts unconditionally at launch; the first ping leaves ~5s in. The first-load consent modal is informational (`allowDecline: false`) and does not gate sending.
 

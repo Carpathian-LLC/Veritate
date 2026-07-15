@@ -41,6 +41,8 @@ The analysis runs automatically on every generation `done` (when any bytes were 
 
 `_applyModeAvailability` enables the autocomplete / chat / agent radios per the loaded model's trained tiers. `_activeCapabilities` merges both backends' capability blocks per tier (`_mergeCaps`, best status wins), since a model's trained tiers are a property of the weights, not the runtime: a chat-trained model enables chat whether the C engine or PyTorch reported `/meta`, and stays enabled if one backend idle-unloads (`setMeta` also carries caps forward). `_legacyCaps` (autocomplete only) is the final fallback for servers that expose no capabilities at all. The startup `/meta` guard populates caps from a C-loaded model (`m.checkpoint || m.c_model_dir`) so chat is not greyed when PyTorch is idle.
 
+The gate stays current without a page reload. `_activeCapabilities` prefers the selected model's entry in `_pytorchModelCaps` (filled from `/pytorch-models` at page load), so two paths keep that cache fresh: `setMeta` stamps each incoming `/meta` capability block into the cache under the loaded model's name (`pytorch_model` for the brain, `c_model_dir` for the C engine — disk-fresh reads, they overwrite a stale page-load entry), and `pollModeCaps` re-fetches `/pytorch-models` every 15s (skipped while the tab is hidden), updating caps only — never rebuilding the picker — then re-runs `_applyModeAvailability`. A chat SFT run finishing while the dashboard sits open enables the chat radio within one poll tick.
+
 ## Dependencies
 
 - `/generate` route at [backends_routes.py](../../../veritate_mri/routes/backends_routes.py).

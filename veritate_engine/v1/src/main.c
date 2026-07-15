@@ -424,6 +424,16 @@ static int chat_traced_loop(void) {
     int32_t* lens_pos_block = (int32_t*)malloc((size_t)Ln * V * sizeof(int32_t));
     int8_t*  ffn_pos_block  = (int8_t*) malloc((size_t)Ln * F);
 
+    // Compact-frame (TFRC) geometry + scratch. DS/buckets mirror c_engine.py exactly:
+    // DS = max(1, ffn / FFN_BUCKET_TARGET), BUCKETS = ffn / DS. flow_acc accumulates
+    // attention mass per position across all layers*heads for info_flow.
+    const int32_t DS_C      = (F / VERITATE_FFN_BUCKET_TARGET) < 1 ? 1 : (F / VERITATE_FFN_BUCKET_TARGET);
+    const int32_t BUCKETS_C = F / DS_C;
+    float*   bkt_val_f      = (float*)  malloc((size_t)BUCKETS_C * sizeof(float));
+    uint8_t* ffn_bkt        = (uint8_t*)malloc((size_t)BUCKETS_C);
+    uint8_t* ffn_arg        = (uint8_t*)malloc((size_t)BUCKETS_C);
+    float*   flow_acc       = (float*)  malloc((size_t)S * sizeof(float));
+
     fprintf(stderr, "ready\n");
     fflush(stderr);
 
@@ -443,14 +453,16 @@ static int chat_traced_loop(void) {
         float rep_penalty = 0.0f;
         int   no_repeat_ngram = 0;
         int   do_trace = 1;
-        // header format: "temp top_k max_new ablate_l ablate_n [addons_csv [rep_window rep_penalty no_repeat_ngram [trace]]]\n"
+        int   compact = 0;
+        // header format: "temp top_k max_new ablate_l ablate_n [addons_csv [rep_window rep_penalty no_repeat_ngram [trace [compact]]]]\n"
         // addons_csv is optional; missing means "use the env-var chain or none".
         // empty token "-" explicitly clears any previously-installed chain. the
         // trailing rep fields default to 0 (repetition control off) when absent;
-        // trace defaults to 1 (full frames) when absent.
-        sscanf(header, "%f %d %d %d %d %127s %d %f %d %d",
+        // trace defaults to 1 (full frames) when absent; compact defaults to 0
+        // (raw TFRM v8 frames). compact=1 with trace=1 emits reduced TFRC v9 frames.
+        sscanf(header, "%f %d %d %d %d %127s %d %f %d %d %d",
                &temp, &top_k, &max_new, &ablate_layer, &ablate_neuron, addons_csv,
-               &rep_window, &rep_penalty, &no_repeat_ngram, &do_trace);
+               &rep_window, &rep_penalty, &no_repeat_ngram, &do_trace, &compact);
         veritate_set_ablation(ablate_layer, ablate_neuron);
 
         // per-request addon chain swap. only rebuild when csv changes; common
@@ -528,52 +540,204 @@ static int chat_traced_loop(void) {
                 continue;
             }
 
-            // header
-            uint8_t hdr[16];
-            memcpy(hdr, "TFRM", 4);
-            uint32_t u_pos = (uint32_t)pos;
-            uint32_t u_rl  = (uint32_t)(cache.len);
-            memcpy(hdr + 4, &u_pos, 4);
-            memcpy(hdr + 8, &u_rl,  4);
-            hdr[12] = b; hdr[13] = ab; hdr[14] = 0; hdr[15] = 0;
-            fwrite(hdr, 1, 16, stdout);
+            if (!compact) {
+                // ---- TFRM (v8): full-resolution per-layer arrays ----
+                uint8_t hdr[16];
+                memcpy(hdr, "TFRM", 4);
+                uint32_t u_pos = (uint32_t)pos;
+                uint32_t u_rl  = (uint32_t)(cache.len);
+                memcpy(hdr + 4, &u_pos, 4);
+                memcpy(hdr + 8, &u_rl,  4);
+                hdr[12] = b; hdr[13] = ab; hdr[14] = 0; hdr[15] = 0;
+                fwrite(hdr, 1, 16, stdout);
 
-            // per-layer slices at position `pos`
-            for (int32_t L = 0; L < Ln; L++) {
-                int16_t* rpre  = trace->residual_pre  + ((size_t)L * S + pos) * H;
-                int16_t* rpost = trace->residual_post + ((size_t)L * S + pos) * H;
-                int8_t*  fn    = trace->ffn_neurons   + ((size_t)L * S + pos) * F;
-                float*   attn  = trace->attention_scores + (size_t)L * NH * S * S;
-                int32_t* lens  = trace->lens_logits   + ((size_t)L * S + pos) * V;
-                fwrite(rpre,  sizeof(int16_t), (size_t)H, stdout);
-                fwrite(rpost, sizeof(int16_t), (size_t)H, stdout);
-                fwrite(fn,    sizeof(int8_t),  (size_t)F, stdout);
-                for (int32_t h = 0; h < NH; h++) {
-                    float* row = attn + ((size_t)h * S + pos) * S;
-                    float max_abs = 0.0f;
-                    for (int32_t i = 0; i < S; i++) {
-                        float a = row[i] < 0 ? -row[i] : row[i];
-                        if (a > max_abs) max_abs = a;
+                // per-layer slices at position `pos`
+                for (int32_t L = 0; L < Ln; L++) {
+                    int16_t* rpre  = trace->residual_pre  + ((size_t)L * S + pos) * H;
+                    int16_t* rpost = trace->residual_post + ((size_t)L * S + pos) * H;
+                    int8_t*  fn    = trace->ffn_neurons   + ((size_t)L * S + pos) * F;
+                    float*   attn  = trace->attention_scores + (size_t)L * NH * S * S;
+                    int32_t* lens  = trace->lens_logits   + ((size_t)L * S + pos) * V;
+                    fwrite(rpre,  sizeof(int16_t), (size_t)H, stdout);
+                    fwrite(rpost, sizeof(int16_t), (size_t)H, stdout);
+                    fwrite(fn,    sizeof(int8_t),  (size_t)F, stdout);
+                    for (int32_t h = 0; h < NH; h++) {
+                        float* row = attn + ((size_t)h * S + pos) * S;
+                        float max_abs = 0.0f;
+                        for (int32_t i = 0; i < S; i++) {
+                            float a = row[i] < 0 ? -row[i] : row[i];
+                            if (a > max_abs) max_abs = a;
+                        }
+                        float scale = max_abs / 127.0f;
+                        float inv   = scale > 0.0f ? 1.0f / scale : 0.0f;
+                        attn_scale_buf[h] = scale;
+                        int8_t* row_q = attn_q + (size_t)h * S;
+                        for (int32_t i = 0; i < S; i++) {
+                            float q = row[i] * inv;
+                            int32_t r = (int32_t)(q < 0 ? q - 0.5f : q + 0.5f);
+                            if (r >  127) r =  127;
+                            if (r < -128) r = -128;
+                            row_q[i] = (int8_t)r;
+                        }
                     }
-                    float scale = max_abs / 127.0f;
-                    float inv   = scale > 0.0f ? 1.0f / scale : 0.0f;
-                    attn_scale_buf[h] = scale;
-                    int8_t* row_q = attn_q + (size_t)h * S;
-                    for (int32_t i = 0; i < S; i++) {
-                        float q = row[i] * inv;
-                        int32_t r = (int32_t)(q < 0 ? q - 0.5f : q + 0.5f);
-                        if (r >  127) r =  127;
-                        if (r < -128) r = -128;
-                        row_q[i] = (int8_t)r;
+                    fwrite(attn_q,        sizeof(int8_t), (size_t)NH * S, stdout);
+                    fwrite(attn_scale_buf, sizeof(float), (size_t)NH, stdout);
+                    fwrite(lens, sizeof(int32_t), (size_t)V, stdout);
+                }
+                // final_act (only the raw frame carries it; the dashboard ignores it)
+                fwrite(trace->final_act, sizeof(int8_t), (size_t)H, stdout);
+            } else {
+                // ---- TFRC (v9): engine-side reductions of the four heavy arrays ----
+                // Mirrors _build_c_mri_frame in backends_routes.py exactly so the
+                // dashboard renders identically off a ~30x smaller frame.
+                uint8_t hdr[16];
+                memcpy(hdr, "TFRC", 4);
+                uint32_t u_pos = (uint32_t)pos;
+                uint32_t u_rl  = (uint32_t)(cache.len);
+                memcpy(hdr + 4, &u_pos, 4);
+                memcpy(hdr + 8, &u_rl,  4);
+                hdr[12] = b; hdr[13] = ab;
+                hdr[14] = (uint8_t)VERITATE_TRACE_VERSION_COMPACT; hdr[15] = 0;
+                fwrite(hdr, 1, 16, stdout);
+
+                int32_t R = (int32_t)cache.len; if (R > S) R = S;
+                for (int32_t i = 0; i < R; i++) flow_acc[i] = 0.0f;
+
+                for (int32_t L = 0; L < Ln; L++) {
+                    int16_t* rpre  = trace->residual_pre  + ((size_t)L * S + pos) * H;
+                    int16_t* rpost = trace->residual_post + ((size_t)L * S + pos) * H;
+                    int8_t*  fn    = trace->ffn_neurons   + ((size_t)L * S + pos) * F;
+                    float*   attn  = trace->attention_scores + (size_t)L * NH * S * S;
+                    int32_t* lens  = trace->lens_logits   + ((size_t)L * S + pos) * V;
+
+                    // ffn: |act| max-pooled into BUCKETS_C buckets (reshape(B,DS).max /
+                    // argmax), normalized to 0..255 and truncated like np.astype(uint8).
+                    float bmax = 1e-9f;
+                    for (int32_t bkt = 0; bkt < BUCKETS_C; bkt++) {
+                        int32_t base = bkt * DS_C;
+                        float mv = -1.0f; int32_t marg = 0;
+                        for (int32_t d = 0; d < DS_C; d++) {
+                            int32_t q8 = fn[base + d];
+                            float a = (float)(q8 < 0 ? -q8 : q8);
+                            if (a > mv) { mv = a; marg = d; }
+                        }
+                        bkt_val_f[bkt] = mv;
+                        ffn_arg[bkt] = (uint8_t)marg;
+                        if (mv > bmax) bmax = mv;
+                    }
+                    for (int32_t bkt = 0; bkt < BUCKETS_C; bkt++) {
+                        float u = bkt_val_f[bkt] / bmax * 255.0f;
+                        if (u < 0.0f) u = 0.0f;
+                        if (u > 255.0f) u = 255.0f;
+                        ffn_bkt[bkt] = (uint8_t)u;  // truncate == np.astype(uint8)
+                    }
+                    fwrite(ffn_bkt, sizeof(uint8_t), (size_t)BUCKETS_C, stdout);
+                    fwrite(ffn_arg, sizeof(uint8_t), (size_t)BUCKETS_C, stdout);
+
+                    // ffn_top: top-K neurons by |act| over all F (ties keep lower index).
+                    uint16_t top_id[VERITATE_FFN_TOPK];
+                    float    top_v [VERITATE_FFN_TOPK];
+                    for (int32_t k = 0; k < VERITATE_FFN_TOPK; k++) { top_id[k] = 0; top_v[k] = -1.0f; }
+                    for (int32_t nidx = 0; nidx < F; nidx++) {
+                        int32_t q8 = fn[nidx];
+                        float a = (float)(q8 < 0 ? -q8 : q8);
+                        if (a > top_v[VERITATE_FFN_TOPK - 1]) {
+                            int32_t p = VERITATE_FFN_TOPK - 1;
+                            while (p > 0 && a > top_v[p - 1]) {
+                                top_v[p] = top_v[p - 1]; top_id[p] = top_id[p - 1]; p--;
+                            }
+                            top_v[p] = a; top_id[p] = (uint16_t)nidx;
+                        }
+                    }
+                    for (int32_t k = 0; k < VERITATE_FFN_TOPK; k++) {
+                        fwrite(&top_id[k], sizeof(uint16_t), 1, stdout);
+                        fwrite(&top_v[k],  sizeof(float),    1, stdout);
+                    }
+
+                    // residual: res = L2(rpost), contrib = L2(rpost - rpre).
+                    double s_res = 0.0, s_con = 0.0;
+                    for (int32_t i = 0; i < H; i++) {
+                        double a = (double)rpost[i];
+                        double c = (double)rpost[i] - (double)rpre[i];
+                        s_res += a * a; s_con += c * c;
+                    }
+                    float res_f = (float)sqrt(s_res);
+                    float con_f = (float)sqrt(s_con);
+                    fwrite(&res_f, sizeof(float), 1, stdout);
+                    fwrite(&con_f, sizeof(float), 1, stdout);
+
+                    // logit lens: scaled softmax (ll/max*8) over vocab, top-K (byte,prob).
+                    double amax = 1.0;
+                    for (int32_t i = 0; i < V; i++) {
+                        double av = lens[i] < 0 ? -(double)lens[i] : (double)lens[i];
+                        if (av > amax) amax = av;
+                    }
+                    double smax = -1e300;
+                    for (int32_t i = 0; i < V; i++) {
+                        double sc = (double)lens[i] / amax * 8.0;
+                        if (sc > smax) smax = sc;
+                    }
+                    double esum = 0.0;
+                    for (int32_t i = 0; i < V; i++)
+                        esum += exp((double)lens[i] / amax * 8.0 - smax);
+                    uint8_t lb[VERITATE_LENS_TOPK];
+                    float   lp[VERITATE_LENS_TOPK];
+                    for (int32_t k = 0; k < VERITATE_LENS_TOPK; k++) { lb[k] = 0; lp[k] = -1.0f; }
+                    for (int32_t i = 0; i < V; i++) {
+                        float p = (float)(exp((double)lens[i] / amax * 8.0 - smax) / esum);
+                        if (p > lp[VERITATE_LENS_TOPK - 1]) {
+                            int32_t q = VERITATE_LENS_TOPK - 1;
+                            while (q > 0 && p > lp[q - 1]) {
+                                lp[q] = lp[q - 1]; lb[q] = lb[q - 1]; q--;
+                            }
+                            lp[q] = p; lb[q] = (uint8_t)i;
+                        }
+                    }
+                    for (int32_t k = 0; k < VERITATE_LENS_TOPK; k++) {
+                        fwrite(&lb[k], sizeof(uint8_t), 1, stdout);
+                        fwrite(&lp[k], sizeof(float),   1, stdout);
+                    }
+
+                    // attention -> info_flow: per head, normalize over [0,R), accumulate.
+                    for (int32_t h = 0; h < NH; h++) {
+                        float* row = attn + ((size_t)h * S + pos) * S;
+                        double sum = 0.0;
+                        for (int32_t i = 0; i < R; i++) sum += row[i];
+                        if (sum > 1e-9) {
+                            double inv = 1.0 / sum;
+                            for (int32_t i = 0; i < R; i++) flow_acc[i] += (float)(row[i] * inv);
+                        } else {
+                            for (int32_t i = 0; i < R; i++) flow_acc[i] += row[i];
+                        }
                     }
                 }
-                fwrite(attn_q,        sizeof(int8_t), (size_t)NH * S, stdout);
-                fwrite(attn_scale_buf, sizeof(float), (size_t)NH, stdout);
-                fwrite(lens, sizeof(int32_t), (size_t)V, stdout);
+
+                // info_flow: top-K positions by accumulated mass, normalized by max.
+                float fmax = 1e-9f;
+                for (int32_t i = 0; i < R; i++) if (flow_acc[i] > fmax) fmax = flow_acc[i];
+                int32_t flow_k = R < VERITATE_INFO_FLOW_TOPK ? R : VERITATE_INFO_FLOW_TOPK;
+                uint16_t fp[VERITATE_INFO_FLOW_TOPK];
+                float    fw[VERITATE_INFO_FLOW_TOPK];
+                for (int32_t k = 0; k < VERITATE_INFO_FLOW_TOPK; k++) { fp[k] = 0; fw[k] = -1.0f; }
+                for (int32_t i = 0; i < R; i++) {
+                    float val = flow_acc[i];
+                    if (val > fw[VERITATE_INFO_FLOW_TOPK - 1]) {
+                        int32_t q = VERITATE_INFO_FLOW_TOPK - 1;
+                        while (q > 0 && val > fw[q - 1]) { fw[q] = fw[q-1]; fp[q] = fp[q-1]; q--; }
+                        fw[q] = val; fp[q] = (uint16_t)i;
+                    }
+                }
+                uint8_t flow_count = (uint8_t)flow_k;
+                fwrite(&flow_count, sizeof(uint8_t), 1, stdout);
+                for (int32_t k = 0; k < VERITATE_INFO_FLOW_TOPK; k++) {
+                    float wnorm = (k < flow_k) ? (fw[k] / fmax) : 0.0f;
+                    uint16_t pk = (k < flow_k) ? fp[k] : 0;
+                    fwrite(&pk,    sizeof(uint16_t), 1, stdout);
+                    fwrite(&wnorm, sizeof(float),    1, stdout);
+                }
             }
 
-            // final_act and full logits
-            fwrite(trace->final_act, sizeof(int8_t), (size_t)H, stdout);
+            // full logits (shared by both frame formats)
             fwrite(logits, sizeof(int32_t), (size_t)V, stdout);
 
             // decision-trace fields (v8): per-layer decisiveness + DLA top-K.
@@ -655,6 +819,7 @@ static int chat_traced_loop(void) {
     free(prompt_line); free(tokens); free(gen_bytes); free(hidden); free(logits);
     free(attn_q); free(attn_scale_buf); free(decisiveness);
     free(lens_pos_block); free(ffn_pos_block);
+    free(bkt_val_f); free(ffn_bkt); free(ffn_arg); free(flow_acc);
     trace_free(trace);
     kv_cache_free(&cache);
     model_free(&model);

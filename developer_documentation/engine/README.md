@@ -45,7 +45,7 @@ export VERITATE_MODEL_PATH=$(pwd)/models/<name>/veritate.bin
 veritate_engine/v1/bin/<os>/<arch>/veritate chat_greedy 200
 ```
 
-Subcommands: `chat`, `chat_greedy`, `trace`, `bench`. Optional environment overrides: `VERITATE_ACT_BOOST=N`, `VERITATE_MAX_LAYERS=N`. See `v1.md` for the full reference.
+Subcommands: `chat`, `chat_greedy`, `trace`, `bench`. Optional environment overrides: `VERITATE_ACT_BOOST=N`, `VERITATE_MAX_LAYERS=N`, `VERITATE_STATE_CACHE=<dir>` (persistent v13 prefill cache, see `state_cache.md`). See `v1.md` for the full reference.
 
 ## resolving the binary path
 

@@ -61,10 +61,13 @@ def register(app):
     @app.route("/trainers/tune_defaults", methods=["POST"])
     def trainers_tune_defaults():
         """Persist auto-tune results as machine-local trainer tuning + saved
-        specs, without launching a run. Body: {id, args:{...}, measured:{...}}.
-        The upstream-synced manifest is never touched."""
+        specs, without launching a run. Body: {id, args:{...}, measured:{...},
+        sysprobe:{...}}. When sysprobe is present it's uploaded to the
+        Carpathian heartbeat endpoint (bench_report kind) if the user has
+        opted into advanced analytics. The upstream-synced manifest is never
+        touched."""
         def _do():
-            from runtime import sys_metrics
+            from runtime import sys_metrics, heartbeat
             body = request.get_json(silent=True) or {}
             trainer_id = body.get("id")
             if not trainer_id:
@@ -72,7 +75,60 @@ def register(app):
             saved = trainers_reader.update_defaults(trainer_id, body.get("args") or {})
             if body.get("measured"):
                 sys_metrics.save_measured(body["measured"])
-            return {"ok": True, "saved": bool(saved)}
+            upload = heartbeat.send_bench_report(
+                bench_result=body.get("measured"),
+                sysprobe_result=body.get("sysprobe"),
+                trainer_id=trainer_id,
+            )
+            return {"ok": True, "saved": bool(saved), "upload": upload}
+        return _safe("trainers", _do)
+
+    @app.route("/trainers/sysprobe", methods=["POST"])
+    def trainers_sysprobe():
+        """Run the full hardware benchmark suite (disk write, CPU FLOPs +
+        bandwidth, GPU FLOPs on every accelerator, RAM headroom). Returns the
+        raw probe dict. Cheap (~1-3 s on modern boxes), safe to call before or
+        after the model-specific bench."""
+        def _do():
+            from veritate_core.plugin import sysprobe
+            body = request.get_json(silent=True) or {}
+            disk_dir = body.get("disk_dir")
+            result = sysprobe.run(disk_dir=disk_dir)
+            return {"ok": True, "sysprobe": result}
+        return _safe("trainers", _do)
+
+    @app.route("/system/install_helper", methods=["POST"])
+    def system_install_helper():
+        """Install a native OS helper (temperature sensors, etc). Body:
+        {helper: 'mac_temp_arm' | 'mac_temp_intel' | 'linux_lm_sensors'}.
+        Windows LibreHardwareMonitor isn't auto-installable (GUI installer);
+        the dashboard shows the manual link for that case."""
+        def _do():
+            from veritate_core.plugin import deps
+            body = request.get_json(silent=True) or {}
+            helper = (body.get("helper") or "").strip()
+            if not helper:
+                return ({"ok": False, "error": "missing 'helper'"}, 400)
+            result = deps.install_helper(helper)
+            return {"ok": bool(result.get("ok")), **result}
+        return _safe("trainers", _do)
+
+    @app.route("/system/install_dep", methods=["POST"])
+    def system_install_dep():
+        """Install a missing Python package with automatic escalation. Body:
+        {pkg: 'name', index_url?: '...'}. Blocks until pip returns (up to
+        PIP_TIMEOUT_SECS). Returns {ok, method, needs_elevation, stdout,
+        stderr}. Called by the Auto tune modal when bench aborts with an
+        ImportError."""
+        def _do():
+            from veritate_core.plugin import deps
+            body = request.get_json(silent=True) or {}
+            pkg = (body.get("pkg") or "").strip()
+            if not pkg:
+                return ({"ok": False, "error": "missing 'pkg'"}, 400)
+            index_url = body.get("index_url") or None
+            result = deps.ensure(pkg, index_url=index_url)
+            return {"ok": bool(result.get("ok")), **result}
         return _safe("trainers", _do)
 
     @app.route("/core_trainers")

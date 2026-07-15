@@ -47,6 +47,7 @@ _SSL_CTX = net.ssl_context()
 HEARTBEAT_URL          = "https://api.carpathian.ai/webhook/veritate-heartbeat"
 PAYLOAD_KIND_PRESENCE    = "presence"
 PAYLOAD_KIND_DIAGNOSTICS = "diagnostics"
+PAYLOAD_KIND_BENCH_REPORT = "bench_report"
 # Cadence: idle gets a tight 5-minute pulse, training drops to a 60-second
 # pulse so the dashboard server can keep the device flagged "active" through
 # multi-hour runs. The previous 6h interval let the server's online window
@@ -63,6 +64,12 @@ HEARTBEAT_FIRST_DELAY   = 5
 HEARTBEAT_TIMEOUT_SECS  = 8.0
 HEARTBEAT_USER_AGENT    = "veritate-heartbeat/3"
 HEARTBEAT_LOOP_TICK_SECS = 5
+
+# Throttle keys for the offline-device log coalescing (see logs.emit_throttled).
+# One per sender so a presence outage and a diagnostics outage don't mask each
+# other, but each collapses its own repeated transport failures.
+_SEND_THROTTLE_KEY = "heartbeat-send"
+_DIAG_THROTTLE_KEY = "heartbeat-diagnostics"
 
 STATE_PATH    = os.path.join(paths.REPO_ROOT, "data", "heartbeat_state.json")
 MACHINE_ID_LEN = 16
@@ -543,6 +550,7 @@ def _send_once():
     payload = _build_payload()
     sent_trainings = payload.get("trainings") or []
     sent_hw        = payload.get("hw") is not None
+    was_failing    = bool(_state().get("last_send_error"))
     try:
         status = _post(HEARTBEAT_URL, payload)
         patch = {
@@ -556,6 +564,10 @@ def _send_once():
             remaining = (_state().get("pending_training_events") or [])[len(sent_trainings):]
             patch["pending_training_events"] = remaining
         _update_state(patch)
+        # Recovery edge: reset the throttle so the next outage's first failure
+        # is shown immediately, and note that connectivity is back.
+        if logmod.clear_throttle(_SEND_THROTTLE_KEY) or was_failing:
+            logmod.ok("heartbeat", "send recovered")
         return True
     except urllib.error.HTTPError as e:
         body_excerpt = ""
@@ -564,6 +576,8 @@ def _send_once():
         except Exception:
             pass
         reason = f"http {e.code}: {body_excerpt or e.reason}"
+        # HTTP errors are a live-but-unhappy server (auth, 413, 5xx): keep these
+        # at full volume — they're not the offline-machine spam we throttle.
         logmod.warn("heartbeat", f"send failed: {reason}")
         _update_state({
             "last_send_ts":     int(time.time()),
@@ -573,7 +587,11 @@ def _send_once():
         return False
     except (urllib.error.URLError, socket.timeout, OSError) as e:
         reason = f"{type(e).__name__}: {e}"
-        logmod.warn("heartbeat", f"send failed: {reason}")
+        # Transport-level failures (no route to host, DNS, TLS timeout) are the
+        # expected state of an offline device. Throttle so a machine that spends
+        # hours offline logs at most one line per interval instead of dozens.
+        logmod.emit_throttled("warn", "heartbeat", f"send failed: {reason}",
+                              key=_SEND_THROTTLE_KEY)
         _update_state({
             "last_send_ts":     int(time.time()),
             "last_send_status": 0,
@@ -591,6 +609,7 @@ def _send_diagnostics_once():
         return False
     try:
         _post(HEARTBEAT_URL, payload)
+        logmod.clear_throttle(_DIAG_THROTTLE_KEY)
         return True
     except urllib.error.HTTPError as e:
         body_excerpt = ""
@@ -601,7 +620,9 @@ def _send_diagnostics_once():
         logmod.warn("diagnostics", f"send failed: http {e.code}: {body_excerpt or e.reason}")
         return False
     except (urllib.error.URLError, socket.timeout, OSError) as e:
-        logmod.warn("diagnostics", f"send failed: {type(e).__name__}: {e}")
+        # Same offline-device throttling as presence sends (see _send_once).
+        logmod.emit_throttled("warn", "diagnostics", f"send failed: {type(e).__name__}: {e}",
+                              key=_DIAG_THROTTLE_KEY)
         return False
 
 
@@ -703,3 +724,33 @@ def status():
 
 def send_now():
     return _send_once()
+
+
+def send_bench_report(bench_result=None, sysprobe_result=None, trainer_id=None):
+    """Post an Auto-tune bench_report envelope to HEARTBEAT_URL. Payload carries
+    the sysprobe hardware bench + the trainer-specific bench.run result so
+    Carpathian aggregates real-machine tuning data across the fleet. Gated by
+    analytics_advanced_enabled: no-op silently when the user hasn't opted in.
+    Returns {ok, sent, reason} — never raises, so a modal call site can ignore
+    the return without try/except."""
+    if not bool(settings_mod.get().get("analytics_advanced_enabled")):
+        return {"ok": True, "sent": False, "reason": "analytics opt-out"}
+    payload = {
+        "v":          PROTOCOL_VERSION,
+        "kind":       PAYLOAD_KIND_BENCH_REPORT,
+        "machine_id": _machine_id(),
+        "device_id":  _effective_device_id(),
+        "ts":         int(time.time()),
+        "trainer_id": (trainer_id or "")[:64],
+    }
+    if isinstance(bench_result, dict) and bench_result:
+        payload["bench"] = bench_result
+    if isinstance(sysprobe_result, dict) and sysprobe_result:
+        payload["sysprobe"] = _scrub_paths(sysprobe_result, _path_scrub_pairs())
+    try:
+        status = _post(HEARTBEAT_URL, payload)
+        return {"ok": True, "sent": True, "status": int(status)}
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "sent": False, "reason": f"http {e.code}"}
+    except (urllib.error.URLError, socket.timeout, OSError) as e:
+        return {"ok": False, "sent": False, "reason": f"{type(e).__name__}: {e}"}

@@ -14,13 +14,28 @@ Most of the settings on this form interact. A good learning rate for one archite
 
 ## When to change it
 
-- Start here. Pick the recipe that matches your goal and leave the rest alone.
-  - **balanced** : a solid all-round default.
-  - **efficient byte-native** : leans on the settings that reach quality with fewer training bytes.
-  - **long-conversation** : tuned for models that need to track long context.
-  - **classic** : the conventional, well-worn setup.
-  - **custom** : changes nothing. Use this once you want to hand-tune individual knobs.
+Start here. Pick the recipe that matches your goal and leave the rest alone.
 
-## Gotcha
+- **balanced** : Muon optimizer + dense trunk + WSD (warmup-stable-decay) LR schedule. Solid all-round default when you don't have a specific goal in mind — this is the one to pick if you're new.
+- **efficient byte-native** : Muon + patched (byte-level) trunk + WSD. Reaches target quality with fewer training bytes on this platform. Best when corpus size is the bottleneck, or you're training on messy multilingual / non-text-heavy data where subword tokenizers hurt.
+- **long-conversation** : Muon + recurrent trunk + WSD. Tuned for models that need to remember far back in a conversation or long document. Slower per step than dense, but scales cleanly with context.
+- **classic** : AdamW + dense trunk + cosine LR decay. The conventional textbook setup. Use it as a known baseline, or when reproducing results from older papers / other frameworks.
+- **custom** : Changes nothing. Every knob stays exactly as you set it. Pick this when you want to hand-tune individual settings.
 
-- Once you edit a knob by hand, you are effectively customizing. Switching back to a named recipe will overwrite your manual changes with the preset's values.
+## What "custom" really means
+
+The dropdown does not automatically switch to `custom` when you edit a knob. That's just the label — the field is a preset selector, not a mode indicator. It records "the last preset I clicked," not "the current state of the form."
+
+So if you pick **balanced** and then manually change the optimizer to `adamw`, the dropdown will still say `balanced` even though the form no longer matches the balanced preset. Your run is now a mix, and that's fine. The only thing that matters is the actual knob values below — the recipe name is not saved into the run.
+
+## What happens when you switch recipes
+
+Selecting a recipe only overwrites the specific knobs that recipe defines:
+
+- **optimizer**
+- **trunk** (architecture)
+- **lr_schedule**
+
+Every other knob (batch size, precision, warmup, weight decay, sequence length, etc.) is left alone. So if you tuned batch size and then switch recipes, your batch size is preserved — only the three fields above get replaced.
+
+**If you tuned one of those three by hand and don't want to lose your change, pick `custom` before touching anything else, or just don't re-select a recipe.** There is no undo for the overwrite once it happens; you'd have to remember and re-enter the value.

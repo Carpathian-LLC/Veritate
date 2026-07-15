@@ -69,6 +69,17 @@ def register(app):
         # A manual re-detect re-arms the one-time hardware dump so the refreshed
         # specs are re-sent on the next heartbeat (analytics tier permitting).
         heartbeat_mod.arm_hw_redump()
+        # Bundle the dep-state so a single Detect Hardware click can drive the
+        # "installing missing dependencies" popup without a second round-trip.
+        # The dep helpers live under veritate_core.plugin.deps and are installed
+        # via POST /system/install_dep / /system/install_helper. Everything the
+        # frontend needs to decide "should I auto-pop the installer?" is
+        # produced here.
+        try:
+            from veritate_core.plugin import deps as deps_mod
+            result["deps"] = deps_mod.status_snapshot()
+        except Exception:  # deps module is best-effort; never block /sys/detect
+            pass
         return result
 
     @app.route("/heartbeat/status")
