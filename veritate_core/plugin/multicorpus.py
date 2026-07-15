@@ -15,6 +15,9 @@
 #   so this module stays decoupled from the platform's corpus layout.
 # - Per-sample sampling (not per-batch) for maximum mix diversity inside each
 #   gradient step.
+# - resolve_and_weight output is sorted weight-descending (stable): entry [0] is
+#   the dominant stem, so consumers taking one representative (val selection)
+#   follow the user's heaviest pick.
 # veritate_core/plugin/multicorpus.py
 # ------------------------------------------------------------------------------------
 # Imports
@@ -58,7 +61,8 @@ def parse_spec(spec):
 
 
 def resolve_and_weight(spec, resolver_fn):
-    """Return list of (train_path, val_path, weight) summing to 1.
+    """Return list of (train_path, val_path, weight) summing to 1, sorted
+    weight-descending (stable on ties, preserving spec order).
 
     resolver_fn(stem) -> (train_path, val_path). Caller-provided so this module
     is platform-agnostic.
@@ -91,7 +95,9 @@ def resolve_and_weight(spec, resolver_fn):
     if total <= 0:
         raise ValueError("corpus weights sum to zero")
     weights /= total
-    return [(p, v, float(w)) for (p, v, _), w in zip(resolved, weights)]
+    out = [(p, v, float(w)) for (p, v, _), w in zip(resolved, weights)]
+    out.sort(key=lambda e: e[2], reverse=True)
+    return out
 
 
 def make_mixed_loader(paths_with_weights, batch_size, seq, seed):

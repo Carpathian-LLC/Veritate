@@ -76,7 +76,7 @@ The trainer is a standalone Python script. It must:
 | [model](../../veritate_core/model.py)                                                 | `Veritate(...)` canonical byte-level decoder, `VOCAB_BYTE_LEVEL` |
 | [qat](../../veritate_core/qat.py)                                                     | fake-quant helpers, `set_qat`, `set_quant_mode`, quant constants |
 | [hardware](../../veritate_core/plugin/hardware.py)                                    | `pick_device()`, `bf16_supported(device)`, `resolve_precision(requested, device)`, `physical_cores()`, device detection |
-| [multicorpus](../../veritate_core/plugin/multicorpus.py)                              | `make_mixed_loader(stems_or_spec, ...)` for `"a+b"` or `"a:0.5,b:0.5"` |
+| [multicorpus](../../veritate_core/plugin/multicorpus.py)                              | `make_mixed_loader(stems_or_spec, ...)` for `"a+b"` or `"a:0.5,b:0.5"`; `resolve_and_weight` returns weight-descending, entry [0] = heaviest stem (drives val selection) |
 | [oom_recovery](../../veritate_core/plugin/oom_recovery.py)                            | Wrap a training step to catch and recover from CUDA OOM        |
 | [bench](../../veritate_core/plugin/bench.py)                                          | `run(model, device, seq, vocab)` measured memory/throughput ramp for Auto tune ([doc](../platform/bench.md)) |
 | [mem_planner](../../veritate_core/plugin/mem_planner.py)                              | `plan_training_memory(...)` size-adaptive unified-memory plan ([doc](../platform/mem_planner.md)) |

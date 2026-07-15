@@ -159,3 +159,19 @@ Byte-level pays the sequence tax hardest (~4-5x more positions than subword for 
 ### T3: mixture-of-depths (skip layers on easy tokens)
 
 Not every byte needs every layer (the space after a word is trivial). Learned per-token layer skipping (MoD / early-exit / CALM family) cuts FLOPs/token on the easy majority. Distinct from the killed looped-depth experiment (that ADDED compute per param; this REMOVES it on easy tokens). Mechanism: per-token learned router that skips global blocks below a confidence/importance threshold. Falsifier: matched val at measurably fewer FLOPs/token (>10%) vs hybrid, no quality tax outside the 5% band. Lower priority than T1/T2 (more build, less certain), fund only if the T0 profile shows depth is where the FLOPs sit.
+
+---
+
+## IDEA 4: corpus style is the capability-per-parameter lever (the mixed_code ablation)
+
+Status: OPEN. Owner: execution model. Opened 2026-07-15. Artifacts already built: `veritate_mri/tools/build_code_corpus.py` and the `mixed_code_*` bins in Mirach-Corpuses.
+
+What is already settled externally (do not re-prove): data quality dominates parameter count at small scale. phi-1 (1.3B, "Textbooks Are All You Need") beat models 10x larger on HumanEval using ~7B tokens of textbook-quality filtered plus synthetic code; FineWeb-Edu showed classifier-filtered educational web text outperforms the raw dump it came from; dedup alone measurably improves LMs (Lee et al.); TinyStories showed clean narrow distributions give coherent tiny models. StarCoder's ablations add a caution: near-dedup always helped, but aggressive popularity filtering (GitHub stars) HURT — filters that cut diversity can subtract capability.
+
+What is NOT settled anywhere public: which corpus STYLE (raw files vs cleaned files vs textbook-tier vs Q&A-interleaved) wins for a BYTE-LEVEL model at 200M, and whether the winner is stable enough to set the mix for the largest runs. Nobody publishes byte-level corpus-style ablations; this is cheap to own.
+
+Mechanism: four bins, identical size and seed, one axis changed each (built, see `developer_documentation/corpus/code_corpus.md`): mixed_raw (control: size caps + exact dedup only), mixed_files (full filters + near-dedup, edu score>=3), mixed_edu (same, score>=4 textbook tier), mixed_qa (filtered code 50% + StackOverflow Q&A 50%). Train the same 200M recipe, same steps, on each (GPU box, dashboard launch, `model_type=code`); rank on shared held-out clean val plus code evals.
+
+Falsifier / decision line: a style must beat mixed_raw by >5% val bpb or a clear code-eval margin, second seed per agent_roe before any claim. If no style separates from the control, corpus style is not a lever at this scale: record it in failures.md and spend on architecture (IDEA 3) instead.
+
+Scale-transfer caveat (pre-registered): a 200M winner picks the mix FAMILY, not the final ratios. Ultra-narrow textbook data can cap larger models (diversity starvation: the StarCoder lesson), so re-validate the winning style at 1-3B before committing a farm-scale run to it.
