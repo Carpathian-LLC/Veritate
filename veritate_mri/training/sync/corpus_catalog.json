@@ -523,13 +523,16 @@
    "label": "Code textbook (Claude-authored)",
    "description": "Original textbook-style teaching corpus authored by Claude: concept explanations, runnable examples, worked exercises, and buggy-vs-fixed pairs across python, javascript, html, and css. Every document machine-validated (syntax-gated; python and javascript executed with passing asserts). Small and dense: distillation-grade data for the corpus-style ablation and SFT layering.",
    "format": "zip_bundle",
-   "train_url": "https://api.carpathian.ai/cos/PLACEHOLDER/code_textbook_v1.zip",
-   "coming_soon": true,
+   "train_url": "https://usc1.carpathian.ai/cos/edc0852c9d99b32f2a72a8d456b05688df589c3b6eb483cdf4bde2bffea2bbbd/0c44e05ff06c4724bc1e62fc815a6fd1a61e04017c39714d1a1284ce021f3f2c11ce2c4a48c193076ed29c3218674fd5a6a013f31d40ee205500cb52257087d0",
    "trained_modes": [
     "autocomplete"
    ],
    "recommended_min_params": 10000000,
-   "recommended_max_params": 800000000
+   "recommended_max_params": 800000000,
+   "size_train": 2487337,
+   "size_val": 32946,
+   "sha256_train": "0981473931f12a2d6d4e497c44596e2676b9c920c2edd83d2b0d7be7d1a6b785",
+   "sha256_val": "1c61ab6c4ca8e2b85386478c84ffba8fd458704a3089cc046d422c023139cfe7"
   }
  ]
 }
