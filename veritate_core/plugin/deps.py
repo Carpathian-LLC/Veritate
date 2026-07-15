@@ -28,6 +28,38 @@ import sys
 PIP_TIMEOUT_SECS = 300
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
+
+def _in_venv():
+    """True when the current interpreter is running inside a virtualenv or a
+    stdlib venv. `pip install --user` writes to the user site-packages, which
+    a venv does NOT import from by default — a silent "success" that leaves
+    the venv unchanged and every torch.cuda.is_available() call still False.
+    We skip the --user rung entirely in this case."""
+    return (getattr(sys, "base_prefix", sys.prefix) != sys.prefix
+            or hasattr(sys, "real_prefix"))
+
+
+def _verify_installed_in_this_python(pkg):
+    """Confirm `pkg` is importable by THIS interpreter — i.e. it actually
+    landed on the sys.path this dashboard uses. Guards against `--user`-style
+    scope mismatches where pip reports success but the running venv's site
+    hasn't changed. Uses a subprocess against sys.executable so a stale
+    already-imported copy in the current process doesn't mask a bad install."""
+    try:
+        # Try importing in a subprocess against the exact interpreter that
+        # will run trainers, so a scope mismatch here IS the truth. We check
+        # the import name (dash -> underscore) — cheap, no torch load.
+        out = subprocess.check_output(
+            [sys.executable, "-c",
+             f"import importlib.util as u; "
+             f"print(1 if u.find_spec({pkg.replace('-','_')!r}) is not None else 0)"],
+            text=True, stderr=subprocess.STDOUT, timeout=30,
+            creationflags=_NO_WINDOW,
+        ).strip()
+        return out.endswith("1")
+    except Exception:
+        return False
+
 # Wheel indices used by install_torch(). Kept in sync with veritate.py's
 # launcher (which uses the same values for the first-boot install). If the
 # launcher's constants drift, the auto-install popup can still repair a bad
@@ -146,13 +178,20 @@ def install(pkg, index_url=None):
         args_base += ["--index-url", index_url]
     args = args_base + [pkg]
 
-    ok, out, err = _run_pip(args + ["--user"])
-    if ok:
-        return {"ok": True, "method": "user", "stdout": out, "stderr": err,
-                "needs_elevation": False}
+    # Inside a venv, --user installs to a scope the venv doesn't import from.
+    # Skipping the --user rung entirely so the install actually lands in the
+    # venv's site-packages where the trainer will import from next boot.
+    if not _in_venv():
+        ok, out, err = _run_pip(args + ["--user"])
+        # Even outside a venv, verify the install landed where THIS python
+        # can import it. If not, the --user scope isn't on this python's
+        # sys.path (custom PYTHONPATH, embedded interpreter) and we escalate.
+        if ok and _verify_installed_in_this_python(pkg):
+            return {"ok": True, "method": "user", "stdout": out, "stderr": err,
+                    "needs_elevation": False}
 
     ok, out, err = _run_pip(args)
-    if ok:
+    if ok and _verify_installed_in_this_python(pkg):
         return {"ok": True, "method": "site", "stdout": out, "stderr": err,
                 "needs_elevation": False}
 
@@ -447,15 +486,36 @@ def install_torch(force_cuda=None, force_rocm=None):
         args_base += ["--index-url", index_url]
     args = args_base + ["torch"]
 
-    ok, out, err = _run_pip(args + ["--user"])
+    ok, out, err = (False, "", "")
+    # Skip --user entirely inside a venv: --user writes to the user site-
+    # packages, which the venv doesn't import from, so the install "succeeds"
+    # but torch.cuda.is_available() stays False forever.
+    if not _in_venv():
+        ok, out, err = _run_pip(args + ["--user"])
+        # Verify the wheel lives on THIS python's sys.path. If not, the user
+        # site-packages isn't reachable from here (embedded interpreter,
+        # PYTHONNOUSERSITE, custom paths) and we escalate.
+        if ok and not _verify_installed_in_this_python("torch"):
+            ok = False
     if not ok:
         ok, out, err = _run_pip(args)
+    if ok and not _verify_installed_in_this_python("torch"):
+        # Site scope succeeded but the running interpreter can't import it —
+        # rare (site-packages isn't on sys.path) but real on some tightly
+        # configured Linux distros. Force it to fail so the elevation branch
+        # runs and the user sees a real error instead of a silent no-op.
+        ok = False
     if not ok and (sys.platform.startswith("win") or os.name == "nt"):
         ok, out, err = _run_pip(args, use_shell_runas=True)
     if not ok and not (sys.platform.startswith("win") or os.name == "nt"):
         ok2, out2, err2 = _run_sudo(args)
         if ok2:
             ok, out, err = ok2, out2, err2
+    # Final import-scope guard: ok=True only when THIS python can actually see
+    # the new torch. Prevents "install reported success but nothing changed".
+    if ok and not _verify_installed_in_this_python("torch"):
+        ok = False
+        err = (err or "") + "\ntorch installed but not importable from " + sys.executable
     result = {
         "ok":              bool(ok),
         "method":          "install_torch",

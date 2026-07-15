@@ -406,11 +406,13 @@ def register(app):
         if not suites:
             return ({"error": f"no valid suites in {body.get('suite')!r}; expected one of {sorted(valid)} or 'all'"}, 400)
 
-        # MMLU/HellaSwag/IFEval are language benchmarks; refuse them for a model
-        # declared code/statistical/other so a non-text model never gets a bogus score.
+        # MMLU/HellaSwag/IFEval consume text; allow them for `language` AND `code`
+        # (both train on text corpora). Refuse only for `statistical` / `other`,
+        # which train on non-text data where these suites would score nonsense.
+        # Mirrors the save.py NON_LANGUAGE_TYPES gate.
         mtype = ((cfg_reader.load(name) or {}).get("training_args") or {}).get("model_type")
-        if mtype and str(mtype).lower() != "language":
-            return ({"error": f"deep eval is language-only; model {name!r} is type {mtype!r}."}, 400)
+        if mtype and str(mtype).lower() in ("statistical", "other"):
+            return ({"error": f"deep eval requires a text-consuming model; {name!r} is type {mtype!r}."}, 400)
 
         step = body.get("step")
         if step in (None, "", "latest"):

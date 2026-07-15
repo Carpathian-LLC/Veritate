@@ -3204,6 +3204,16 @@ async function ensureLearningLoaded() {
       learningTimelinePathPrefix = `/timeline/${encodeURIComponent(picked)}/`;
     }
   }
+  // No timeline is available yet (training hasn't landed its first hook dump).
+  // Bail before the timeline.json fetch — otherwise it hits /timeline.json
+  // with no name prefix and 404s on every Learning-tab poll.
+  if (!learningTimelinePathPrefix) {
+    const el = $("learningStatus");
+    if (el) {
+      el.innerHTML = `<div class="meta" style="color:var(--dim)">No timelines yet. The Learning tab populates from <code>models/&lt;name&gt;/hooks/</code> once a training run reaches its first <code>save_checkpoint</code>.</div>`;
+    }
+    return;
+  }
   showSkeleton("learningStatus", "lines", 2);
   // Sequenced skeletons for every panel the Models-tab loader fills. The
   // render_* / draw* paths below all replace innerHTML when they finish, which
@@ -6276,16 +6286,20 @@ function render_reading_comprehension(refs, run, compSteps, compByStep, haveChec
 // computing these probes for such models, so the panels would be empty anyway.
 function applyEvalGate(refs, config) {
   const mtype = ((config && config.training_args && config.training_args.model_type) || "language").toLowerCase();
-  const lang = mtype === "language";
+  // Language panels show for any model that trains on text: `language` and
+  // `code` both consume text corpora, so reading/grammar/reasoning/etc. are
+  // informative for both. Only `statistical` / `other` (non-text corpora)
+  // hide the panels. Mirrors the backend NON_LANGUAGE_TYPES gate in save.py.
+  const showLang = mtype === "language" || mtype === "code";
   const langPanelIds = [refs.readLevelId, refs.readingCompId, refs.mathLevelId,
                         refs.grammarLevelId, refs.reasoningLevelId, refs.writingHealthId, refs.conceptsId];
   for (const id of langPanelIds) {
     if (!id) continue;
     const el = $(id);
     const panel = el && el.closest(".panel");
-    if (panel) panel.style.display = lang ? "" : "none";
+    if (panel) panel.style.display = showLang ? "" : "none";
   }
-  document.querySelectorAll('[data-eval="language"]').forEach(el => { el.style.display = lang ? "" : "none"; });
+  document.querySelectorAll('[data-eval="language"]').forEach(el => { el.style.display = showLang ? "" : "none"; });
 }
 
 async function loadClassroomFor(state, refs, run) {
@@ -7671,7 +7685,7 @@ const TRAINER_SCHEMA = {
     { name: "precision",    type: "str",    required: true,  label: "number precision",         help: "bf16 = half memory; fp32 = double.", choices: ["bf16","fp32"] },
     { name: "version",      type: "str",                     label: "version tag (optional)",   help: "free-form revision label (v1, v2a, ...); shows up in the description, not the folder name." },
     { name: "description",  type: "text",                    label: "what this model is for",   help: "saved into the model config. If left blank, auto-filled from corpus/size/precision/version/variant." },
-    { name: "model_type",   type: "str",                     label: "model type",               help: "what this model is for. Controls which checkpoint evaluations run: 'language' runs the full language probe suite (fluency, reading, grammar, reasoning, concepts, writing); 'code', 'statistical', and 'other' skip the language tests because they are meaningless for non-text models.", choices: ["language","code","statistical","other"] },
+    { name: "model_type",   type: "str",                     label: "model type",               help: "what this model is for. Controls which checkpoint evaluations run: 'language' and 'code' both consume text so they get the full language probe suite (fluency, reading, grammar, reasoning, concepts, writing, generation); 'statistical' and 'other' skip the language tests because they train on non-text data (time series, tabular).", choices: ["language","code","statistical","other"] },
     // ---- recipe + research-validated knobs ----
     { name: "recipe",       type: "str",    uiOnly: true,    label: "training recipe",          help: "one pick fills the training knobs with a lab-validated combination. 'custom' leaves everything as you set it.", choices: ["balanced","efficient byte-native","long-conversation","classic","custom"], choice_help: {
       "balanced":              "Muon optimizer + dense trunk + WSD schedule. Solid all-round default when you don't have a specific goal in mind.",
@@ -9379,12 +9393,23 @@ function _trRenderStatus() {
   const colors = { idle: "var(--dim)", running: "var(--warm)", ok: "var(--data-pos)", failed: "var(--hot)", stopped: "var(--dim)" };
   const c  = colors[s.status] || "var(--dim)";
   const id = s.plugin_id ? ` <b>${_trEsc(s.plugin_id)}</b>` : "";
-  el.innerHTML = `<b style="color:${c}">${s.status}</b>${id}`;
+  // Distinguish bench mode from real training so the user isn't confused by
+  // "running" while a throwaway auto-tune probe is measuring memory. Bench
+  // and real training are the same runner state (only one can be active),
+  // but the UI label + colors differ.
+  const isBench = !!(s.args && s.args.bench);
+  const label = (s.status === "running" && isBench) ? "benchmarking (auto-tune)" : s.status;
+  el.innerHTML = `<b style="color:${c}">${label}</b>${id}`;
   if (stop) stop.disabled = s.status !== "running";
   if (run)  run.disabled  = s.status === "running" || !trainState.selected;
   if (runRow && s.status === "running") runRow.style.display = "flex";
   const isRunning = s.status === "running";
+  // training-active class disables destructive UI (form edits, corpus swaps);
+  // bench is short-lived and read-only, so it keeps the class to prevent
+  // starting a real training run mid-bench, but shouldn't imply "long-running
+  // training in flight" for other consumers.
   document.body.classList.toggle("training-active", isRunning);
+  document.body.classList.toggle("bench-active", isRunning && isBench);
   if (typeof _trUpdateTeacherGate === "function") _trUpdateTeacherGate();
 }
 

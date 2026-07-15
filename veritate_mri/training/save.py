@@ -50,14 +50,20 @@ PLUGIN_ID_ENV = "VERITATE_PLUGIN_ID"
 # dropped by trainers' parse_known_args, so it cannot arrive via parsed args).
 MODEL_TYPE_ENV = "VERITATE_MODEL_TYPE"
 
-# Dumps that only make sense for a text model. Skipped when training_args.model_type
-# is code/statistical/other, so a non-language model never accrues meaningless
-# language scores. The architecture probes (probe/lens, classroom, surprise,
-# quant_kl) and the checkpoint itself always run, model_type agnostic.
+# Dumps that only make sense for a model whose corpus is text. Skipped ONLY
+# for `statistical` / `other` model types — those train on non-text data (time
+# series, tabular, image bytes) where reading/grammar/math scores are truly
+# meaningless. Code models DO train on text and now get the full suite;
+# grammar and reasoning probes are informative for a code trainer, and the
+# `generation` dump is what populates the Models-tab outputs panel. Rule 24a
+# governs the launch-time model_type mapping; NON_LANGUAGE_TYPES is the
+# runtime side of it. The architecture probes (probe/lens, classroom,
+# surprise, quant_kl) and the checkpoint itself always run.
 LANGUAGE_DUMPS = frozenset({
     "grades", "reading_comprehension", "math", "grammar",
     "reasoning", "concepts", "writing_health", "generation",
 })
+NON_LANGUAGE_TYPES = frozenset({"statistical", "other"})
 
 # canonical dump filenames inside hooks/step_<N>/. dump_* in
 # training/checkpoint_probe.py emit prefixed names; we rename to these.
@@ -553,13 +559,14 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
 
     skip = set(dump_set or [])
     # Model-type gate: language probes (fluency, reading, math, grammar, reasoning,
-    # concepts, writing) are meaningless for a code/statistical/other model, so skip
-    # them. New runs carry model_type in the launch env; resumed runs read it from
-    # the saved config.
+    # concepts, writing) fire for text-consuming models (language, code). They are
+    # skipped only for `statistical` / `other`, which train on non-text corpora
+    # where those scores would be nonsense. New runs carry model_type in the launch
+    # env; resumed runs read it from the saved config.
     mtype = os.environ.get(MODEL_TYPE_ENV)
     if not mtype:
         mtype = ((cfg_reader.load(name) or {}).get("training_args") or {}).get("model_type")
-    if (mtype or "language").lower() != "language":
+    if (mtype or "").lower() in NON_LANGUAGE_TYPES:
         skip |= LANGUAGE_DUMPS
     if "generation" not in skip:
         if not corpus_stem:

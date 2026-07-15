@@ -167,21 +167,28 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
     budget = _memory_budget(device)
     kind, ceiling_label = _memory_kind(device)
     if budget:
-        emit(f"device: {device} · memory budget: {budget / GB:.0f} GB {kind} "
+        emit(f"device: {device} | memory budget: {budget / GB:.0f} GB {kind} "
              f"(ramp stops here to avoid an OS kill)")
-    # Warn plainly when the box has an NVIDIA GPU but torch is CPU-only: the
-    # user's bench is going to run on CPU with physical RAM as the ceiling,
-    # which is almost certainly NOT what they want. Restart wires the CUDA
-    # torch install so this line only fires once until they hit Restart.
+    # Warn only in the actual failure case: box has an NVIDIA GPU AND torch
+    # is CPU-only (cuda_available False). If the user intentionally picked
+    # CPU via _device_override for a dual-device auto-tune, that's expected
+    # and doesn't deserve a warning — torch CAN reach the GPU, we're just
+    # measuring CPU on purpose for comparison.
     if device == "cpu":
         try:
-            from veritate_core.plugin import deps as _deps
-            if _deps.has_nvidia_gpu():
-                emit("WARNING: NVIDIA GPU detected on this box but PyTorch is CPU-only, "
-                     "so this benchmark measures the CPU + physical RAM, not the GPU + VRAM. "
-                     "Restart the dashboard to install the CUDA torch build, then re-run.")
+            import torch as _torch
+            cuda_ok = bool(_torch.cuda.is_available())
         except Exception:
-            pass
+            cuda_ok = False
+        if not cuda_ok:
+            try:
+                from veritate_core.plugin import deps as _deps
+                if _deps.has_nvidia_gpu():
+                    emit("WARNING: NVIDIA GPU detected on this box but PyTorch is CPU-only, "
+                         "so this benchmark measures the CPU + physical RAM, not the GPU + VRAM. "
+                         "Restart the dashboard to install the CUDA torch build, then re-run.")
+            except Exception:
+                pass
     emit(f"detecting {ceiling_label}...")
     ramp = []
     last_mem = None
