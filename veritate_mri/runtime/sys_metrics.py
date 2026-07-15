@@ -70,6 +70,44 @@ def _run(cmd, timeout=2.0):
         return None
 
 
+# Substring patterns that identify non-hardware display adapters we want to hide
+# from the HUD: remote-session viewers (RDP), fallback software rasterizers, VM
+# guest drivers, USB "indirect display" adapters, and virtual-monitor tools.
+# Matched case-insensitively against the adapter name; the underlying discrete
+# and integrated GPUs are unaffected.
+_VIRTUAL_ADAPTER_TOKENS = (
+    "remote display",       # Microsoft Remote Display Adapter (RDP session)
+    "basic display",        # Microsoft Basic Display Adapter (fallback WDDM)
+    "basic render",         # Microsoft Basic Render Driver
+    "mirror",               # Legacy mirror drivers
+    "virtual display",      # Generic virtual-monitor drivers
+    "virtual monitor",
+    "virtualbox",           # Oracle VirtualBox guest
+    "vmware",               # VMware SVGA
+    "hyper-v",              # Microsoft Hyper-V Video
+    "parsec",               # Parsec virtual display
+    "citrix",               # Citrix Display Only Adapter
+    "displaylink",          # USB display adapters (indirect display)
+    "indirect display",
+    "idd driver",
+    "meta virtual",         # Meta Quest / Oculus virtual display
+    "moonlight",            # Moonlight streaming virtual display
+    "software adapter",
+    "llvmpipe",             # Mesa software rasterizer
+    "swrast",
+    "virtio",               # KVM/QEMU virtio-gpu
+    "qxl",                  # Spice/QEMU QXL
+    "cirrus logic",         # QEMU legacy VGA
+)
+
+
+def _is_virtual_adapter(name):
+    if not name:
+        return False
+    low = name.lower()
+    return any(tok in low for tok in _VIRTUAL_ADAPTER_TOKENS)
+
+
 def _nvidia_query():
     global _NV_CACHE
     now = time.time()
@@ -511,6 +549,7 @@ def _refresh_adapters():
         rows = _win_adapters()
     else:
         rows = _linux_adapters()
+    rows = [r for r in rows if not _is_virtual_adapter(r.get("name"))]
     _ADAPTERS = rows
     _ADAPTERS_TS = time.time()
     _ADAPTERS_REFRESHING = False
@@ -945,10 +984,32 @@ def detect_and_save():
 
 def save_measured(measured):
     """Merge an auto-tune probe result into the saved specs. `measured` is the
-    summary dict the probe emits (device, max_batch, mem_ceiling_gb, tok_per_s)."""
+    summary dict the probe emits (device, max_batch, mem_ceiling_gb, tok_per_s).
+
+    Per-device caching: each call is filed under `measured.per_device[device]`
+    so a later probe on a *different* device (e.g. CPU then CUDA after
+    installing the CUDA torch build) doesn't overwrite the previous one. The
+    top-level `measured` still holds the most recent probe for backwards
+    compatibility with older consumers that read specs["measured"] directly.
+    Rule 34c: distinguish device+memory kind at every layer — the per-device
+    map is the storage half of that."""
     if not isinstance(measured, dict):
         return None
     specs = load_specs() or {}
-    specs["measured"] = measured
+    device = str(measured.get("device") or "cpu")
+    prev = specs.get("measured")
+    per_device = {}
+    # Migrate an older single-blob `measured` into the per_device map so we
+    # don't lose the previous probe on the first per-device save.
+    if isinstance(prev, dict):
+        if isinstance(prev.get("per_device"), dict):
+            per_device.update(prev["per_device"])
+        pdev = prev.get("device")
+        if pdev and pdev not in per_device:
+            per_device[str(pdev)] = {k: v for k, v in prev.items() if k != "per_device"}
+    per_device[device] = dict(measured)
+    merged = dict(measured)
+    merged["per_device"] = per_device
+    specs["measured"] = merged
     save_specs(specs)
     return specs

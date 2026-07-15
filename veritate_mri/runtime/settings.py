@@ -149,8 +149,6 @@ def _ensure_settings():
             cur = {}
     except (OSError, json.JSONDecodeError):
         cur = {}
-    if "extensions" not in cur and "experimental" in cur:
-        cur["extensions"] = cur["experimental"]
     missing = {k: v for k, v in DEFAULTS.items() if k not in cur}
     legacy = [k for k in PUBLIC_AI_DEFAULTS if k in cur]
     if missing or legacy:

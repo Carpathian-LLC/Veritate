@@ -82,6 +82,19 @@ def _memory_budget(device):
     return int(hardware.unified_memory_bytes() * BUDGET_FRACTION)
 
 
+def _memory_kind(device):
+    """Human label for the memory pool the budget represents. Rule 34c: never
+    say a generic 'RAM' when it's actually VRAM or unified memory — the user
+    needs to know which arch is being measured. Returns (kind, ceiling_label)
+    used in the emit lines. cpu -> physical RAM, cuda -> VRAM (per-GPU),
+    mps/other unified backends -> unified memory."""
+    if device == "cuda":
+        return ("VRAM", "VRAM ceiling")
+    if device == "mps":
+        return ("unified memory", "unified-memory ceiling")
+    return ("physical RAM", "physical-RAM ceiling")
+
+
 def _free(device):
     import torch
     if device == "mps":
@@ -152,9 +165,24 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
         opt = torch.optim.AdamW(model.parameters(), lr=PROBE_LR)
 
     budget = _memory_budget(device)
+    kind, ceiling_label = _memory_kind(device)
     if budget:
-        emit(f"memory budget: {budget / GB:.0f} GB (ramp stops here to avoid an OS kill)")
-    emit("detecting RAM ceiling...")
+        emit(f"device: {device} · memory budget: {budget / GB:.0f} GB {kind} "
+             f"(ramp stops here to avoid an OS kill)")
+    # Warn plainly when the box has an NVIDIA GPU but torch is CPU-only: the
+    # user's bench is going to run on CPU with physical RAM as the ceiling,
+    # which is almost certainly NOT what they want. Restart wires the CUDA
+    # torch install so this line only fires once until they hit Restart.
+    if device == "cpu":
+        try:
+            from veritate_core.plugin import deps as _deps
+            if _deps.has_nvidia_gpu():
+                emit("WARNING: NVIDIA GPU detected on this box but PyTorch is CPU-only, "
+                     "so this benchmark measures the CPU + physical RAM, not the GPU + VRAM. "
+                     "Restart the dashboard to install the CUDA torch build, then re-run.")
+        except Exception:
+            pass
+    emit(f"detecting {ceiling_label}...")
     ramp = []
     last_mem = None
     for batch in batch_ramp:
@@ -168,9 +196,9 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
             prev_batch = ramp[-1]["batch"]
             projected = last_mem * batch / prev_batch
             if projected >= budget:
-                emit(f"batch {batch}: projected ~{projected / GB:.1f} GB exceeds the "
-                     f"{budget / GB:.0f} GB budget; stopping at batch {prev_batch} "
-                     f"(ceiling found)")
+                emit(f"batch {batch}: projected ~{projected / GB:.1f} GB {kind} exceeds the "
+                     f"{budget / GB:.0f} GB {kind} budget; stopping at batch {prev_batch} "
+                     f"({ceiling_label} found)")
                 break
         try:
             mem, tok_per_s = _measure_batch(model, opt, batch, seq, vocab, device)
@@ -210,6 +238,6 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
         **_bucket_gb(plan),
     }
     if top:
-        emit(f"ceiling: batch {top['batch']} at {top['mem_gb']:.1f} GB, "
-             f"{top['tok_per_s']:,.0f} tok/s")
+        emit(f"{ceiling_label}: batch {top['batch']} at {top['mem_gb']:.1f} GB {kind}, "
+             f"{top['tok_per_s']:,.0f} tok/s ({device})")
     return result

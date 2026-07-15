@@ -273,6 +273,11 @@ def _build_argv(plugin, args):
     for k, v in (args or {}).items():
         if v is None or v == "":
             continue
+        # Underscore-prefixed keys are dashboard-only run modifiers (e.g.
+        # `_device_override` for the auto-tune dual-device bench). They never
+        # cross the argv boundary into the trainer script.
+        if isinstance(k, str) and k.startswith("_"):
+            continue
         if isinstance(v, bool):
             if v:
                 out.append(f"--{k}")
@@ -295,8 +300,16 @@ def _run(plugin, args):
     _mt = (args or {}).get("model_type")
     if _mt:
         env[MODEL_TYPE_ENV] = str(_mt)
+    # Per-run device override (auto-tune's dual-device bench uses this) takes
+    # precedence over the persisted device_preference so a single bench run
+    # can target CPU explicitly, then CUDA explicitly, without touching the
+    # user's saved setting. The underscore-prefixed key is stripped from argv
+    # by _build_argv so the trainer never sees it as a flag.
+    override = (args or {}).get("_device_override")
     pref = (settings_mod.get().get("device_preference") or "auto").strip().lower()
-    if pref and pref != "auto":
+    if override:
+        env[DEVICE_ENV] = str(override).strip().lower()
+    elif pref and pref != "auto":
         env[DEVICE_ENV] = pref
     # macOS x86_64 (Intel Mac) reports torch.backends.mps.is_available() == True,
     # but MPS only works on Apple Silicon and crashes mid-step there. Force CPU on

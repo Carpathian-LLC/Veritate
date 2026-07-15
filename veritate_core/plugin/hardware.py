@@ -224,9 +224,16 @@ def unified_memory_bytes():
 
 def process_peak_rss_bytes():
     """Peak resident memory of this process in bytes: the high-water mark since
-    start. Monotonic, no OS reset exists. ru_maxrss units differ by platform:
-    bytes on darwin, KiB on linux. Used as the cpu memory-ceiling probe where no
-    device allocator counter exists."""
+    start. Monotonic, no OS reset exists. Windows exposes peak_wset via psutil;
+    POSIX uses resource.ru_maxrss (bytes on darwin, KiB on linux). Used as the
+    cpu memory-ceiling probe where no device allocator counter exists."""
+    if sys.platform == "win32":
+        import psutil
+        info = psutil.Process().memory_info()
+        peak = getattr(info, "peak_wset", None)
+        if peak is None:
+            peak = getattr(info, "rss", 0)
+        return int(peak)
     import resource
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(peak) if sys.platform == "darwin" else int(peak) * KIB

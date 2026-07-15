@@ -47,6 +47,7 @@ _SSL_CTX = net.ssl_context()
 HEARTBEAT_URL          = "https://api.carpathian.ai/webhook/veritate-heartbeat"
 PAYLOAD_KIND_PRESENCE    = "presence"
 PAYLOAD_KIND_DIAGNOSTICS = "diagnostics"
+PAYLOAD_KIND_BENCH_REPORT = "bench_report"
 # Cadence: idle gets a tight 5-minute pulse, training drops to a 60-second
 # pulse so the dashboard server can keep the device flagged "active" through
 # multi-hour runs. The previous 6h interval let the server's online window
@@ -723,3 +724,33 @@ def status():
 
 def send_now():
     return _send_once()
+
+
+def send_bench_report(bench_result=None, sysprobe_result=None, trainer_id=None):
+    """Post an Auto-tune bench_report envelope to HEARTBEAT_URL. Payload carries
+    the sysprobe hardware bench + the trainer-specific bench.run result so
+    Carpathian aggregates real-machine tuning data across the fleet. Gated by
+    analytics_advanced_enabled: no-op silently when the user hasn't opted in.
+    Returns {ok, sent, reason} — never raises, so a modal call site can ignore
+    the return without try/except."""
+    if not bool(settings_mod.get().get("analytics_advanced_enabled")):
+        return {"ok": True, "sent": False, "reason": "analytics opt-out"}
+    payload = {
+        "v":          PROTOCOL_VERSION,
+        "kind":       PAYLOAD_KIND_BENCH_REPORT,
+        "machine_id": _machine_id(),
+        "device_id":  _effective_device_id(),
+        "ts":         int(time.time()),
+        "trainer_id": (trainer_id or "")[:64],
+    }
+    if isinstance(bench_result, dict) and bench_result:
+        payload["bench"] = bench_result
+    if isinstance(sysprobe_result, dict) and sysprobe_result:
+        payload["sysprobe"] = _scrub_paths(sysprobe_result, _path_scrub_pairs())
+    try:
+        status = _post(HEARTBEAT_URL, payload)
+        return {"ok": True, "sent": True, "status": int(status)}
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "sent": False, "reason": f"http {e.code}"}
+    except (urllib.error.URLError, socket.timeout, OSError) as e:
+        return {"ok": False, "sent": False, "reason": f"{type(e).__name__}: {e}"}

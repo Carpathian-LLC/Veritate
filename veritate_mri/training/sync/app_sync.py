@@ -804,6 +804,37 @@ def pull_update(reload=False, force=False, ignore_training=False):
             "update_available":     False,
         })
 
+        # After a successful pull, invalidate the launcher's requirements-hash
+        # sentinel so the NEXT boot re-runs pip install. requirements.txt may
+        # have changed in the tarball; the launcher's fast-path skips pip if
+        # the hash still matches its stored copy, so we clear the sentinel to
+        # force a fresh check. Non-fatal on failure — the launcher will
+        # re-check on its own if the hash mismatches. This is what makes
+        # "run install helper after updating" cheap: the launcher already has
+        # all the platform-specific install logic; we just re-arm it.
+        try:
+            sentinel = os.path.join(REPO_DIR, "venv", ".req_hash")
+            if os.path.exists(sentinel):
+                os.remove(sentinel)
+                logmod.info("http-updater", "cleared venv/.req_hash; launcher will re-run pip on next boot")
+        except OSError as e:
+            logmod.warn("http-updater", f"could not clear .req_hash (non-fatal): {e}")
+
+        # Fire a dep snapshot log so the analytics/telemetry stream captures
+        # the post-pull state. Never blocks and never surfaces to the user —
+        # the frontend's Detect Hardware / auto-tune paths still handle the
+        # interactive case. This is just diagnostic bread-crumbs so we can
+        # tell after-the-fact whether a pull left a box with a broken torch.
+        try:
+            from veritate_core.plugin import deps as deps_mod
+            snap = deps_mod.status_snapshot()
+            logmod.info("http-updater",
+                        f"post-pull dep state: "
+                        f"torch_cuda_ok={snap['torch'].get('cuda_available')} "
+                        f"needs_torch_cuda={snap.get('needs_torch_cuda')}")
+        except Exception as e:
+            logmod.info("http-updater", f"post-pull dep probe skipped: {e}")
+
         if reload or settings_mod.get().get("auto_reload_on_update"):
             if _RELOAD_HOOK is not None:
                 logmod.warn("http-updater", "reload hook firing after update")

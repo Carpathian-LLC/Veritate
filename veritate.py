@@ -44,6 +44,7 @@ PY_MIN           = (3, 10)
 PY_MAX_TESTED    = (3, 13)
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 TORCH_CPU_INDEX  = "https://download.pytorch.org/whl/cpu"
+TORCH_ROCM_INDEX = "https://download.pytorch.org/whl/rocm6.2"
 LAUNCH_PHASE_ENV = "VERITATE_LAUNCH_PHASE"   # set on re-exec; tells phase-2 to skip bootstrap
 TIER_ENV         = "VERITATE_TIER"           # propagated to runtime so feature gates can read it
 MINIMAL_ENV      = "VERITATE_MINIMAL"        # "1" => power-save dashboard (no brain, no analytics)
@@ -343,25 +344,144 @@ def _self_heal_python(tier: str, py_min: tuple, py_max: tuple) -> "str | None":
 
 
 def _has_nvidia_gpu() -> bool:
-    """True when a usable NVIDIA GPU is present. `nvidia-smi -L` listing a device
-    is the ground truth; a bare driver stub with no GPU returns false."""
+    """True when a usable NVIDIA GPU is present. Cross-checks several signals so
+    a machine with a working GPU + driver but a missing `nvidia-smi` on PATH
+    (common on Windows installs that skip the CLI) still gets the CUDA build.
+
+    Order (short-circuits on first hit):
+      1. `nvidia-smi -L` listing a device (ground truth when reachable).
+      2. Windows: `nvcuda.dll` loadable via ctypes (driver is installed).
+      3. Windows: `Win32_VideoController` names any NVIDIA / GeForce / RTX / GTX
+         adapter (WMI works even when the CLI is not on PATH).
+      4. Linux: `/dev/nvidia0` present, or `libcuda.so.1` loadable, or
+         `/sys/class/drm/card*` contains an NVIDIA vendor id (0x10de)."""
+    # (1) nvidia-smi is the cheapest and clearest signal.
     if shutil.which("nvidia-smi"):
         try:
             out = subprocess.check_output(
                 ["nvidia-smi", "-L"], text=True, stderr=subprocess.DEVNULL, timeout=10,
             )
-            return "GPU" in out
+            if "GPU" in out:
+                return True
         except Exception:
-            return False
-    return os.path.exists("/dev/nvidia0")
+            pass
+    plat = sys.platform
+    # (2, 3) Windows: driver DLL + WMI.
+    if plat.startswith("win") or os.name == "nt":
+        try:
+            import ctypes
+            try:
+                ctypes.WinDLL("nvcuda")
+                return True
+            except OSError:
+                pass
+        except Exception:
+            pass
+        if shutil.which("powershell") or shutil.which("pwsh"):
+            ps = shutil.which("pwsh") or shutil.which("powershell")
+            try:
+                out = subprocess.check_output(
+                    [ps, "-NoProfile", "-Command",
+                     "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join '|'"],
+                    text=True, stderr=subprocess.DEVNULL, timeout=8,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                low = out.lower()
+                if any(tok in low for tok in ("nvidia", "geforce", "rtx", "gtx", "quadro", "tesla")):
+                    return True
+            except Exception:
+                pass
+        return False
+    # (4) Linux: several corroborating signals; any one is sufficient.
+    if plat.startswith("linux"):
+        if os.path.exists("/dev/nvidia0") or os.path.exists("/dev/nvidiactl"):
+            return True
+        try:
+            import ctypes
+            try:
+                ctypes.CDLL("libcuda.so.1")
+                return True
+            except OSError:
+                pass
+        except Exception:
+            pass
+        drm = "/sys/class/drm"
+        try:
+            for entry in os.listdir(drm):
+                vend = os.path.join(drm, entry, "device", "vendor")
+                if os.path.isfile(vend):
+                    try:
+                        with open(vend, "r") as f:
+                            if f.read().strip().lower() == "0x10de":
+                                return True
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return False
+
+
+def _has_amd_gpu() -> bool:
+    """True when a ROCm-capable AMD GPU is present on Linux. ROCm exists on
+    Linux only — macOS never had ROCm, Windows uses DirectML which is a
+    separate package installed on top of a CPU torch. Signals: `/dev/kfd`,
+    `rocm-smi`/`rocminfo` on PATH, or PCI vendor 0x1002 in
+    `/sys/class/drm/*/device/vendor`."""
+    if not sys.platform.startswith("linux"):
+        return False
+    if os.path.exists("/dev/kfd"):
+        return True
+    if shutil.which("rocm-smi") or shutil.which("rocminfo"):
+        return True
+    drm = "/sys/class/drm"
+    try:
+        for entry in os.listdir(drm):
+            vend = os.path.join(drm, entry, "device", "vendor")
+            if os.path.isfile(vend):
+                try:
+                    with open(vend, "r") as f:
+                        if f.read().strip().lower() == "0x1002":
+                            return True
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return False
 
 
 def _torch_index_url(tier: str) -> "str | None":
-    """Wheel index for torch. macOS rides PyPI (arm64 mps / x86 cpu); Linux and
-    Windows take the CUDA build when an NVIDIA GPU is present, else the CPU build."""
+    """Wheel index for torch. Priority per tier:
+      - macOS: PyPI (arm64 -> MPS, Intel -> CPU; PyTorch stops publishing x86
+        Mac wheels above 2.2 which requirements.txt already pins)
+      - Linux x86: NVIDIA CUDA > AMD ROCm > CPU
+      - Linux ARM: PyPI (no accelerator wheels published)
+      - Windows x86: NVIDIA CUDA > CPU (no ROCm on Windows)
+    Rule 34c: every arch picks a wheel that matches its real hardware."""
     if tier in (TIER_MAC_ARM, TIER_MAC_INTEL):
         return None
-    return TORCH_CUDA_INDEX if _has_nvidia_gpu() else TORCH_CPU_INDEX
+    if tier == TIER_LINUX_ARM:
+        return None
+    if _has_nvidia_gpu():
+        return TORCH_CUDA_INDEX
+    if tier == TIER_LINUX_X86 and _has_amd_gpu():
+        return TORCH_ROCM_INDEX
+    return TORCH_CPU_INDEX
+
+
+def _verify_torch_cuda(py: str) -> bool:
+    """Run a subprocess to check the freshly-installed torch actually links
+    against CUDA. Subprocess because our own interpreter may not have torch on
+    sys.path yet (or may be caching an old copy)."""
+    try:
+        out = subprocess.check_output(
+            [py, "-c",
+             "import torch,sys; "
+             "print(int(bool(torch.cuda.is_available()) and (torch.version.cuda or '') != ''))"],
+            text=True, stderr=subprocess.DEVNULL, timeout=60,
+        ).strip()
+        return out.endswith("1")
+    except Exception:
+        return False
 
 
 def _ensure_venv_and_deps() -> None:
@@ -439,16 +559,77 @@ def _ensure_venv_and_deps() -> None:
 
     py = str(_venv_python())
     index = _torch_index_url(tier)
-    build = "CUDA" if index == TORCH_CUDA_INDEX else "CPU"
+    if index == TORCH_CUDA_INDEX:
+        build = "CUDA"
+    elif index == TORCH_ROCM_INDEX:
+        build = "ROCm"
+    elif index == TORCH_CPU_INDEX:
+        build = "CPU"
+    else:
+        build = "PyPI (macOS/Linux-ARM native)"
     print(f"[veritate] installing python dependencies ({build} torch build; "
           f"first run can take several minutes) ...")
-    pip_install = [py, "-m", "pip", "install"]
-    if index is not None:
-        pip_install += ["--extra-index-url", index]
     subprocess.check_call([py, "-m", "pip", "install", "--upgrade", "pip", "--quiet"])
-    subprocess.check_call(pip_install + ["-r", str(REQUIREMENTS)])
+    _install_torch_then_rest(py, index)
     HASH_SENTINEL.write_text(_requirements_hash(), encoding="utf-8")
     print("[veritate] dependencies ready.")
+
+
+def _install_torch_then_rest(py: str, index: "str | None") -> None:
+    """Two-phase install to defeat the classic PyPI/pytorch-index resolver mixup.
+
+    Phase 1: install `torch` alone from the pytorch wheel index using
+    `--index-url` (NOT `--extra-index-url`). This locks pip to that index only
+    for torch so the resolver can't pick the same-versioned CPU wheel from PyPI.
+    Skipped for macOS (rides PyPI cleanly).
+
+    Phase 2: install the rest of requirements.txt normally from PyPI. Torch is
+    already satisfied, so pip won't try to re-resolve it — the wheel we just
+    installed stays put.
+
+    Phase 3 (CUDA path only): verify `torch.cuda.is_available()` in a subprocess.
+    If it comes back False we hit an edge (mirror mismatch, host without a
+    working driver despite an adapter) — we log clearly instead of silently
+    handing the user a CPU-only stack. This is what the auto-repair path in
+    veritate_mri/runtime/deps.py can act on later."""
+    # macOS: no wheel-index games; PyPI serves the right build per arch.
+    if index is None:
+        subprocess.check_call([py, "-m", "pip", "install", "-r", str(REQUIREMENTS)])
+        return
+
+    # Phase 1: torch from the correct index, ALONE. --index-url (not --extra-)
+    # is the key: with --extra-index-url pip is free to pick same-version wheels
+    # from either source, and on Windows/Linux the PyPI torch wheel is CPU-only.
+    if index == TORCH_CUDA_INDEX:
+        build = "CUDA"
+    elif index == TORCH_ROCM_INDEX:
+        build = "ROCm"
+    else:
+        build = "CPU"
+    print(f"[veritate] phase 1/2: installing torch ({build}) from {index} ...")
+    subprocess.check_call(
+        [py, "-m", "pip", "install", "--index-url", index, "torch"],
+    )
+
+    # Phase 2: everything else from PyPI. Torch is already satisfied.
+    print("[veritate] phase 2/2: installing remaining dependencies from PyPI ...")
+    subprocess.check_call([py, "-m", "pip", "install", "-r", str(REQUIREMENTS)])
+
+    # Phase 3: verify the accelerator path actually works. Both CUDA and ROCm
+    # wheels expose `torch.cuda.is_available()` (ROCm's PyTorch presents its
+    # HIP runtime through the CUDA API), so the same check applies.
+    if index in (TORCH_CUDA_INDEX, TORCH_ROCM_INDEX):
+        label = "CUDA" if index == TORCH_CUDA_INDEX else "ROCm"
+        if _verify_torch_cuda(py):
+            print(f"[veritate] verified: torch.cuda.is_available() == True ({label})")
+        else:
+            hint = ("NVIDIA driver too old for this CUDA runtime" if label == "CUDA"
+                    else "AMD ROCm kfd device or driver missing (`/dev/kfd`, `rocminfo`)")
+            print(f"[veritate] WARNING: {label} torch was installed but "
+                  f"torch.cuda.is_available() returned False. "
+                  f"Common causes: {hint}, or a stale CPU torch shadowing the venv wheel. "
+                  "The dashboard's Restart button can retry this install; manual repair: "
+                  f"'{py}' -m pip install --force-reinstall --index-url {index} torch")
 
 
 def _reexec_under_venv() -> "int":
