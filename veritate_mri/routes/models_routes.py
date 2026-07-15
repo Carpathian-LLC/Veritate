@@ -111,17 +111,29 @@ def register(app):
     @app.route("/v1/models")
     def openai_models_index():
         """OpenAI-compatible model list. Same source as /pytorch-models;
-        rich metadata kept as extra fields for callers that want it."""
-        data = [{
-            "id":           r["name"],
-            "object":       "model",
-            "created":      int(r["mtime"]),
-            "owned_by":     OWNER,
-            "n_params":     r["n_params"],
-            "hidden":       r["hidden"],
-            "layers":       r["layers"],
-            "capabilities": r["capabilities"],
-            "is_current":   r["is_current"],
-            "engine":       r["engine"],
-        } for r in _model_rows()]
+        rich metadata kept as extra fields for callers that want it. Only
+        id/created are required from a row; every extra is read defensively so a
+        row missing an optional field (e.g. a source that predates `engine`)
+        degrades to a null field instead of 500-ing the whole list."""
+        data = []
+        for r in _model_rows():
+            name = r.get("name")
+            if not name:
+                continue
+            try:
+                created = int(r.get("mtime") or 0)
+            except (TypeError, ValueError):
+                created = 0
+            data.append({
+                "id":           name,
+                "object":       "model",
+                "created":      created,
+                "owned_by":     OWNER,
+                "n_params":     r.get("n_params"),
+                "hidden":       r.get("hidden"),
+                "layers":       r.get("layers"),
+                "capabilities": r.get("capabilities"),
+                "is_current":   r.get("is_current"),
+                "engine":       r.get("engine"),
+            })
         return {"object": "list", "data": data}

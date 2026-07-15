@@ -28,11 +28,16 @@ from routes import models_routes
 ROWS = [
     {"name": "old_model", "step": 5, "is_current": False, "plugin": "",
      "n_params": 800000000, "hidden": 1536, "layers": 24, "description": "",
-     "mtime": 100, "capabilities": {"chat": True}},
+     "mtime": 100, "capabilities": {"chat": True}, "engine": "c_engine"},
     {"name": "new_model", "step": 9, "is_current": True, "plugin": "",
      "n_params": None, "hidden": 512, "layers": 8, "description": "",
-     "mtime": 200, "capabilities": {}},
+     "mtime": 200, "capabilities": {}, "engine": "pytorch"},
 ]
+
+# A row missing every optional field except name/mtime: the endpoint must
+# degrade each extra to null rather than 500 (regression guard for the hard
+# r["engine"] subscript that KeyError'd on rows predating the `engine` field).
+SPARSE_ROW = {"name": "sparse_model", "mtime": 300}
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -57,8 +62,20 @@ def test_v1_models_entry_shape(monkeypatch):
     entry = _client(monkeypatch, ROWS).get("/v1/models").get_json()["data"][0]
     assert entry["object"] == "model"
     assert entry["owned_by"] == models_routes.OWNER
-    for k in ("id", "created", "n_params", "hidden", "layers", "capabilities", "is_current"):
+    for k in ("id", "created", "n_params", "hidden", "layers", "capabilities", "is_current", "engine"):
         assert k in entry
+
+
+def test_v1_models_tolerates_row_missing_optional_fields(monkeypatch):
+    """A row with only name/mtime must yield a 200 with the extras nulled out,
+    never a 500 from a hard subscript on a missing key."""
+    resp = _client(monkeypatch, [SPARSE_ROW]).get("/v1/models")
+    assert resp.status_code == 200
+    entry = resp.get_json()["data"][0]
+    assert entry["id"] == "sparse_model"
+    assert entry["created"] == 300
+    for k in ("n_params", "hidden", "layers", "capabilities", "is_current", "engine"):
+        assert entry[k] is None
 
 
 def test_v1_models_id_and_created_from_row(monkeypatch):
