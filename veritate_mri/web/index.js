@@ -11681,6 +11681,7 @@ const corpusLibState = {
 const CORPUS_CATEGORIES = [
   { id: "chatting",     label: "Chatting",     blurb: "teach a model to converse" },
   { id: "autocomplete", label: "Autocomplete", blurb: "tool-use and code/doc completion" },
+  { id: "coding",       label: "Coding",       blurb: "python/js/html/css code, coding Q&A, and mix ablations" },
   { id: "facts",        label: "Facts",        blurb: "raw text for base knowledge" },
   { id: "statistics",   label: "Statistics",   blurb: "market time-series for the Market LLM" },
 ];
@@ -11692,6 +11693,12 @@ const CORPUS_STEM_CATEGORY = {
   fineweb_edu: "facts", openwebtext10g: "facts", enwik8: "facts",
   grounded_v1: "facts", grounded_v2: "facts", grounded_chunk: "facts", grounded_ui: "facts",
   crypto: "statistics", stocks: "statistics",
+  py_code_100mb: "coding", py_code_1gb: "coding",
+  js_code_100mb: "coding", js_code_1gb: "coding",
+  html_code_50mb: "coding", css_code_3mb: "coding", code_qa_100mb: "coding",
+  mixed_code_raw_200mb: "coding", mixed_code_files_200mb: "coding",
+  mixed_code_edu_200mb: "coding", mixed_code_qa_200mb: "coding",
+  code_textbook_v1: "coding",
 };
 const CORPUS_MODE_CATEGORY = { chat: "chatting", agent: "autocomplete", autocomplete: "autocomplete" };
 
