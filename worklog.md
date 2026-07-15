@@ -14,6 +14,8 @@ papers (`research/`), and the per-component docs (`developer_documentation/`).
 
 ## timeline (headlines)
 
+- **2026-07-14 (corpus library expansion: 7 corpora built + staged for COS, zip_bundle install format shipped, MCP corpus family created, size-ladder decision documented):** All four missing library tiers built deterministically (chat_500mb, chat_5gb via the existing builder + restored 30-book PG cache; agent_150mb, agent_1500mb via NEW `build_agent_corpus.py` — Hermes tool-calling over the real runtime toolbox with computed-not-invented results and error-recovery turns), plus a NEW 3-tier MCP family (`build_mcp_corpus.py`: JSON-RPC session transcripts + protocol Q&A + doc passages + Hermes-over-MCP-tools; mcp_15mb/150mb/1500mb). SIZE DECISION documented in `developer_documentation/corpus/library_ladder.md`: behavior corpora (chat/agent/mcp) cap at 5 GB / 1.5 GB / 1.5 GB — a 1T+ model needs diversity, not bytes; format-learning saturates and knowledge scale belongs to the facts corpora, so the top tier of each family serves 1.5B through 10T. PLATFORM: new `zip_bundle` install format in corpus_sync (one COS-hosted zip holds train+val; download → extract → zip always deleted; sha256 verifies the EXTRACTED bins), `coming_soon` flag moved from a hardcoded index.js stem set into the catalog entries themselves (backend passthrough + install refusal; release = swap PLACEHOLDER URL for the real COS link + drop the flag, one JSON edit). All 7 corpora zipped into `~/Library/.../Mirach-Corpuses/{chat,agent,mcp}/` with an upload manifest; bins also installed locally in `trainers/corpus/` (trainable now). Trading extension: `crypto` (34 GB CSVs) zipped to `trading_datasets/crypto.zip` (6.8 GB, sha in manifest) — its download flow already unzips + deletes archives, zero code needed; honest residual: `crypto_extra` (41 GB) has NO local data on this box (empty source dir), cannot be staged from here, stays `url: null`. Tests: 7 new (zip_bundle extractor, coming-soon refusal, builder determinism + frame validity), tests/mri 149 passing (the 4 test_models_route failures pre-date this work, verified against a stashed tree). Held for operator: COS uploads + placeholder swaps, server restart to activate zip_bundle, git.
+
 - **2026-07-13 evening (cardinal becomes the old-hardware inference testbed: 800 MHz clamp root-caused, persistent prompt/state cache SHIPPED — repeated prompts 31x, batched+threaded prefill 1.78x cold, all bitwise-gated):** The "why does cardinal train slow" question answered with hardware forensics, then converted into two shipped engine features. ROOT CAUSE: the OptiPlex 7070 is firmware-clamped to 800 MHz on all 8 cores (HWP `base_frequency=800000`, `no_turbo=1` BIOS-locked, package 41°C = not thermal) — the classic Dell power-adapter/BIOS clamp; training was compute-bound at 1/4 clock. Decode is NOT: thread sweep 1→7 gave only 1.33x (24.6→18.5 ms/byte) and a bandwidth probe (~4 GB/s single-core numpy read; engine at ~12 GB/s effective with 7T) shows chat decode on this box is RAM-bandwidth-bound, likely single-channel — so the decode levers are bytes (int8) and reuse (cache, batching, drafts), not clocks. SHIPPED, every stage env-gated + byte-identical when off: **(A) persistent prompt/state cache** (`state_cache.c` + `fsutil.c` shim; snapshots the six resumable `hybrid_t` fields post-prefill keyed by twin rolling hashes over model_id+tokens, longest-prefix restore, LRU eviction, atomic rename) — measured on cardinal: 1 KB prompt 15.2 s cold → **0.49 s warm (31x)**, output cmp-identical, warm-extend restores 1024 and continues; **(B) batched prefill** (`hybrid_prefill` + 3-dtype scalar/AVX2 batched matmuls, weights streamed once per B positions instead of per byte, GLA scan/conv/attention kept sequential so the result is BITWISE-equal to per-byte prefill — proven at B=2/8/32/64, scalar and AVX2, on the i7) then **(B2) j-split threading** of the batched matmul (`hybrid_mm` mirroring `hybrid_mv`, int8 quant hoisted to kill the scratch race): bench prefill 1024 = 20.8 s → **11.7 s** (1.78x), decode untouched. Honest residual: threaded-batched wall is only 1.27x over the old 7-thread sequential path because a ~11 ms/position SERIAL floor remains (scaling probe is linear in prompt length ⇒ per-position work — rmsnorm/attention dots/recurrent path — not O(n²) attention); profiling that floor is the named next lever, alongside the int8 200m export (~2x decode, exporter path exists) and draft-model lookahead. tests/engine 15/15 (4 new state-cache + 5 new prefill tests), component docs updated (`state_cache.md`, `engine_v13_hybrid.md`). Held for operator: git commit of the engine changes (all local-only), chat200m int8 export, production engine rebuilds, and the physical checks (power brick/BIOS `no_turbo`, second RAM stick = ~2x decode ceiling). Detail in the 2026-07-13 evening section.
 
 - **2026-07-13 (inference optimization run: CPU decode 2.5-4x faster end-to-end, threads now hardware-calibrated, one live protocol bug root-caused + fixed):** Executed `inference_optimization_handoff.md` overseer-style (all building by Opus 4.8 agents, independent review + verification on every piece; the 800M pretrain untouched throughout). Shipped, all bitwise-gated: **int8-AVX2 matvec** (x86 int8 no longer scalar; parity vs scalar on 17 shapes, verified on cardinal — activates on the chat80m int8 re-export + rebuild, stacks on the 7x AVX2 win); **trace-off serving** (10th optional header field + 16-byte FFRM frames replace ~300KB/byte TFRM when the MRI view isn't open: 3.00 -> 2.38 ms/byte on the Mac, output byte-identical; `/generate` keeps full tracing); **prompt/n-gram lookahead decode** on the PyTorch chat path (no draft model; greedy output PROVEN byte-identical to `stream()` by a fail-if-broken parity test; 1.21-4.94x depending on prompt reuse; drafting gated to CPU until MPS parity is measurable — retry condition documented); **spin-then-park thread pool** (the ~61µs condvar dispatch was why extra cores gave nothing; now 0.68 ms/byte @8T on M3 = 2.56-2.97x over 1T, bitwise at every count); and on top of it the **hardcoded 8-thread default is DEAD** — `hybrid_load` now runs a <500ms one-time calibration on the real loaded weights (1,2,4,.. ladder, median-of-passes, diminishing-returns knee): M3 auto-pick lands within 4.5% of best manual, cardinal picks 4-7 and structurally never the 8-thread collapse it used to ship (forced 8T there = ~50-60 ms/byte; auto = 2.2-2.6). Also: **API MRI opt-in** as a strict OpenAI-superset (`"mri": true` on `/v1/chat/completions` + `/hybrid/chat`, plus a dedicated `/v1/chat/mri` sibling; MRI rides an additive top-level `mri` key so plain OpenAI clients are unaffected; documented in `documentation/api/external_api.md`). Mid-run production incident root-caused and fixed same-day: the persistent `chat_traced` subprocess desyncs permanently when a prompt line exceeds its ~1KB fgets buffer (chat-tab histories do) — it then reads every header line as the prompt and the model autocompletes the settings digits ("16 16 16..."); fixed both sides (python tail-clamp sized to fgets capacity AND per-request reply reserve, engine drains over-long lines), regression-tested; the clamp works against the existing binaries, no rebuild needed. Independent reruns: tests/engine 6/6, tests/mri 145/145. Held for operator: engine rebuild on both boxes (activates int8-AVX2 + auto-threads + drain), server restart (activates clamp), chat80m int8 re-export, cardinal C-backend reload (its subprocess is still poisoned), Medusa MTP heads (#4, canonical-trainer change). Detail in the 2026-07-13 inference section.
@@ -429,3 +431,57 @@ belong:
 Headline of that line of work: no long-only, fee-paying, public-signal crypto strategy
 showed a net-of-cost edge; the one measured signal (LLM-scored news sentiment predicting
 next-day BTC, and later 1-week cross-sectional momentum) moved to forward paper validation.
+
+## 2026-07-14 — corpus library expansion (technical)
+
+**Built (all deterministic, seeds fixed, sha256 recorded in corpus_catalog.json):**
+
+| stem | train | val | zip (staged) |
+|---|---|---|---|
+| chat_500mb | 513,802,730 | 10,486,351 | chat/chat_500mb.zip 178 MB |
+| chat_5gb | 5,138,023,139 | 104,858,273 | chat/chat_5gb.zip 1.74 GB |
+| agent_150mb | 154,141,038 | 3,146,243 | agent/agent_150mb.zip 17 MB |
+| agent_1500mb | 1,541,407,297 | 31,457,972 | agent/agent_1500mb.zip 169 MB |
+| mcp_15mb | 15,415,068 | 315,681 | mcp/mcp_15mb.zip 2 MB |
+| mcp_150mb | 154,141,336 | 3,146,487 | mcp/mcp_150mb.zip 18 MB |
+| mcp_1500mb | 1,541,407,629 | 31,457,682 | mcp/mcp_1500mb.zip 184 MB |
+
+Staging root: `~/Library/Mobile Documents/com~apple~CloudDocs/Mirach-Corpuses/`
+(+ `trading_datasets/crypto.zip` 6.8 GB, sha256 2dc354aa…; `manifest.md` maps
+zip → placeholder URL → release steps). Bins also copied into `trainers/corpus/`.
+
+**Chat rebuild caveat:** the original chat_500mb/chat_5gb catalog hashes were
+minted against a PG cache that no longer existed; the cache was restored as 30
+Gutenberg texts (`trainers/corpus/_pg_cache/`, fetch list in the staging
+manifest) and the catalog now carries the new hashes. `chat_50mb`/`agent_15mb`
+stay untouched on GitHub (published, hash-stable, under the 100 MB raw limit).
+
+**New builders** (`veritate_mri/tools/`): `build_agent_corpus.py` (Hermes
+frames per framing.md over the runtime toolbox — calculator/fs_read/fetch/
+retrieve; both system-turn styles: framing "You may call:" and runtime
+`prompt_block()` "Available tools:"; calculator results evaluated from the same
+expression, fs/fetch answers derived from generated content, 10% error-recovery
+turns, 15% no-tool turns reusing the chat Q/A pools). `build_mcp_corpus.py`
+(45% JSON-RPC transcripts with initialize/tools/list/tools/call/resources/
+errors/ping over 8 fictional servers and 4 protocol versions; 20% protocol Q&A
+from a 28-pair hand-written pool + passages lifted from the native mcp_docs
+bin; 35% Hermes conversations over MCP server tools).
+
+**Platform:** corpus_sync `zip_bundle` format (`_extract_zip_bundle`: member
+match by basename, any folder prefix, `.part` atomic writes, zip removed in
+`finally`; val member optional and composable with `val_split_ratio`);
+`coming_soon` in `_entry_skeleton` + install refusal; disk precheck counts
+size_val for bundles; index.js `CORPUS_COMING_SOON` set deleted in favor of the
+catalog flag; UI expected-size adds val for zip_bundle. Trading side untouched
+by design — `extensions/data.py` already extracts zip/tar.gz and deletes the
+archive in `finally`, and `url: null` is its native coming-soon.
+
+**Tests:** `tests/mri/test_corpus_library_zip.py` — extractor both-members +
+zip-deleted, missing-train-member error, coming-soon install refusal, builder
+determinism (agent, mcp), frame validity (tool_call JSON contract, JSON-RPC 2.0
+lines). 7/7 green; tests/mri 149 passed / 4 pre-existing test_models_route
+failures (reproduce on stashed tree).
+
+**Docs:** `developer_documentation/corpus/library_ladder.md` (ladder + cap
+rationale), `architecture/backend/corpus_library.md` (5 formats + release
+flow), `architecture/frontend/settings_tab.md` (catalog-driven gate).

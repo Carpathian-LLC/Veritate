@@ -9209,6 +9209,7 @@ function _trPoll() {
     _trRenderPicker();
     if (selectedGone) _trRenderForm();
     _trRenderStatus();
+    _trToggleMetrics(trainState.flow);
     _exRender();
   }).catch(() => { _trRenderStatus(); });
 }
@@ -9336,7 +9337,8 @@ const TRAIN_METRICS_FLOWS = ["scratch", "continue", "rag"];
 function _trToggleMetrics(flow) {
   const sec = $("trainMetricsSection");
   if (!sec) return;
-  sec.style.display = TRAIN_METRICS_FLOWS.includes(flow) ? "" : "none";
+  const running = trainState.running && trainState.running.status === "running";
+  sec.style.display = (running || TRAIN_METRICS_FLOWS.includes(flow)) ? "" : "none";
 }
 
 const SYNTH_SCROLL_STICK_PX = 48;
@@ -11669,13 +11671,9 @@ const corpusLibState = {
   installing: new Set(), // stems currently being installed (UI lock)
 };
 
-// Veritate-native corpora that haven't been published yet; gated behind a
-// "coming soon" disabled button. Third-party HF datasets (fineweb_edu,
-// tinystories, etc.) install normally.
-const CORPUS_COMING_SOON = new Set([
-  "chat_500mb", "chat_5gb",
-  "agent_150mb", "agent_1500mb",
-]);
+// Unpublished Veritate-native corpora carry coming_soon=true in the catalog
+// entry (corpus_catalog.json) and render as a disabled "coming soon" button.
+// Third-party HF datasets (fineweb_edu, tinystories, etc.) install normally.
 
 // Corpus categories by purpose. Order is render order. A catalog entry maps to
 // a category by stem (CORPUS_STEM_CATEGORY), falling back to its trained_modes,
@@ -11892,7 +11890,7 @@ function _corpusRowHtml(c) {
     // Primary install gets accent border so it stands out from the secondary
     // "remove" button.
     let actions = "";
-    const gated = c.coming_soon || (!isUser && CORPUS_COMING_SOON.has(c.stem));
+    const gated = c.coming_soon;
     if (gated) {
       actions = `<button class="action" type="button" disabled title="not yet available">coming soon</button>`;
     } else if (downloading) {
@@ -11996,7 +11994,7 @@ function _corpusInstallTrigger(stem) {
   // explicit user confirm before the request goes out, and the backend honors
   // the confirm_large flag as a second guard.
   let expected = entry.size_train || entry.max_bytes_train || 0;
-  if (entry.hf_split_val || entry.val_url) {
+  if (entry.hf_split_val || entry.val_url || entry.format === "zip_bundle") {
     expected += entry.size_val || entry.max_bytes_val || 0;
   }
   const TEN_GB = 10 * 1024 * 1024 * 1024;

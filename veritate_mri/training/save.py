@@ -472,7 +472,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         dump_math, dump_grammar, dump_reasoning,
         dump_surprise, dump_quant_kl, dump_generation,
         dump_writing_health, dump_reading_comprehension,
-        sample_probe_prompts, PROBE_PROMPT,
+        sample_probe_prompts, PROBE_PROMPT, generation_prompt,
     )
 
     _validate_name(name)
@@ -494,10 +494,13 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
 
     # dump_probe aggregates over a deterministically sampled seed collection;
     # an explicit prompt (CLI / caller override) pins it to that single seed.
-    # Single-prompt dumps (surprise, quant_kl, generation) use `prompt`.
-    probe_prompts = [prompt] if prompt is not None else sample_probe_prompts()
-    if prompt is None:
+    # surprise/quant_kl use the fixed `prompt` (comparable across steps); the
+    # generation sample rotates through the seed pool by step unless overridden.
+    explicit_prompt = prompt is not None
+    probe_prompts = [prompt] if explicit_prompt else sample_probe_prompts()
+    if not explicit_prompt:
         prompt = PROBE_PROMPT
+    gen_prompt = prompt if explicit_prompt else generation_prompt(step)
 
     t0 = time.time()
     logmod.info("save", f"start: {name} step {step}")
@@ -585,7 +588,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         ("surprise",   lambda: dump_surprise  (view, prompt, step_dir, step)),
         ("quant_kl",   lambda: dump_quant_kl  (view, prompt, step_dir, step)),
         ("writing_health", lambda: dump_writing_health(view,    step_dir, step, corpus_path=corpus_path)),
-        ("generation", lambda: dump_generation(view, prompt, step_dir, step, corpus_path=corpus_path)),
+        ("generation", lambda: dump_generation(view, gen_prompt, step_dir, step, corpus_path=corpus_path)),
     ]
     cuda_avail = torch.cuda.is_available()
     for label, fn in dumps:

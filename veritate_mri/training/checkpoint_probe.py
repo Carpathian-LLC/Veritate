@@ -69,6 +69,16 @@ PROBE_SAMPLE_N    = 8       # seeds fed to dump_probe per checkpoint
 PROBE_PROMPT      = PROBE_SEEDS[0]
 PROBE_TOP_K       = 8
 
+
+def generation_prompt(step):
+    """Rotate the generation-dump seed across PROBE_SEEDS so the OUTPUT EVOLUTION
+    view shows varied prompts across checkpoints instead of one fixed sentence.
+    Deterministic in the step (reproducible) and independent of the save interval.
+    surprise/quant_kl keep the fixed PROBE_PROMPT so their cross-step metric stays
+    comparable; only the free-text generation sample rotates."""
+    idx = int(np.random.default_rng(int(step)).integers(len(PROBE_SEEDS)))
+    return PROBE_SEEDS[idx]
+
 # per-token generation probe constants. match mri/probes/timeline_probe.py
 # legacy frame shape so the Learning tab consumes the output without changes.
 GEN_MAX_NEW          = 80

@@ -21,10 +21,18 @@
 #   as a uint8 byte stream. since Veritate trains byte-level (np.uint8 memmap),
 #   plaintext bytes ARE tokens — no tokenizer step. val_split_ratio carves off
 #   the tail of the downloaded train file as val.bin when no val_url is given.
+# - format='zip_bundle' means train_url points at one hosted zip holding
+#   <stem>_train.bin and <stem>_val.bin (any folder prefix inside the archive).
+#   install downloads the zip, extracts both members, then deletes the zip.
+#   sha256_train / sha256_val verify the EXTRACTED bins, so re-zipping the same
+#   bins never invalidates the catalog hashes.
 # - format='native' means the corpus ships inside the repo at
 #   veritate_mri/data/corpus/<stem>_{train,val}.bin. install copies the files
 #   into trainers/corpus/ — no network, no sha. uninstall only removes the
 #   user copy; the repo copy stays, so reinstall is always possible.
+# - coming_soon=true on an entry disables install in the dashboard: the corpus
+#   is staged but not published yet. Flipping it off (plus a real train_url)
+#   is the whole release step.
 # - install() does the HTTP download, optionally verifies sha256, and writes
 #   atomically (.part -> rename). uninstall() deletes the two .bin files.
 # - this module never touches git. it lives next to plugins_sync / models_sync
@@ -66,7 +74,7 @@ DOWNLOAD_MAX_ATTEMPTS       = 4
 DOWNLOAD_RETRY_BASE_S       = 2.0
 DOWNLOAD_RETRY_MAX_S        = 30.0
 
-SUPPORTED_FORMATS = {"raw_bytes", "hf_dataset", "raw_bytes_zip", "native"}
+SUPPORTED_FORMATS = {"raw_bytes", "hf_dataset", "raw_bytes_zip", "zip_bundle", "native"}
 
 # Inserted between rows when streaming HF text columns into bytes. Keeps
 # document boundaries visible to the byte-level model without inflating output
@@ -178,6 +186,7 @@ def _entry_skeleton(src):
         "size_val":        src.get("size_val"),
         "recommended_min_params": src.get("recommended_min_params"),
         "recommended_max_params": src.get("recommended_max_params"),
+        "coming_soon":     bool(src.get("coming_soon")),
         "notes":           src.get("notes") or None,
     }
 
@@ -498,6 +507,48 @@ def _extract_zip_largest_member(zip_path):
         return f"{type(e).__name__}: {e}"
 
 
+def _extract_zip_bundle(zip_path, train_dest, val_dest):
+    """Extract <stem>_train.bin and <stem>_val.bin members (any folder prefix)
+    from a zip_bundle archive to the given destinations, then delete the zip.
+    The train member is required; val is optional. Streams via .part siblings
+    and atomically replaces. Returns error message on failure, None on
+    success."""
+    if not os.path.isfile(zip_path):
+        return f"zip file missing: {zip_path}"
+    wanted = {os.path.basename(train_dest): train_dest,
+              os.path.basename(val_dest):   val_dest}
+    extracted = set()
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for m in zf.infolist():
+                if m.is_dir():
+                    continue
+                dest = wanted.get(os.path.basename(m.filename))
+                if dest is None or dest in extracted:
+                    continue
+                tmp = dest + ".part"
+                with zf.open(m) as src, open(tmp, "wb") as out:
+                    shutil.copyfileobj(src, out, length=DOWNLOAD_CHUNK_BYTES)
+                os.replace(tmp, dest)
+                extracted.add(dest)
+    except (zipfile.BadZipFile, OSError) as e:
+        return f"{type(e).__name__}: {e}"
+    finally:
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+        for dest in wanted.values():
+            try:
+                if os.path.isfile(dest + ".part"):
+                    os.remove(dest + ".part")
+            except OSError:
+                pass
+    if train_dest not in extracted:
+        return f"zip has no {os.path.basename(train_dest)} member"
+    return None
+
+
 def _free_disk_bytes(path):
     try:
         return shutil.disk_usage(os.path.dirname(path) or ".").free
@@ -754,6 +805,8 @@ def install(entry):
         return {"ok": False, "error": f"invalid stem: {stem!r}"}
     if fmt not in SUPPORTED_FORMATS:
         return {"ok": False, "error": f"format '{fmt}' is not supported by this build (supported: {sorted(SUPPORTED_FORMATS)})"}
+    if entry.get("coming_soon"):
+        return {"ok": False, "error": f"corpus '{stem}' is not published yet (coming soon)"}
     if val_split is not None and not (0.0 < val_split < 0.5):
         return {"ok": False, "error": f"val_split_ratio must be between 0 and 0.5 (got {val_split})"}
 
@@ -762,7 +815,7 @@ def install(entry):
     # dialog for large downloads; the backend additionally requires
     # confirm_large=true when expected size exceeds LARGE_DOWNLOAD_BYTES.
     expected = entry.get("size_train") or 0
-    if entry.get("hf_split_val") or entry.get("val_url"):
+    if entry.get("hf_split_val") or entry.get("val_url") or fmt == "zip_bundle":
         expected += entry.get("size_val") or 0
     if expected and expected > LARGE_DOWNLOAD_BYTES and not entry.get("confirm_large"):
         return {"ok": False, "error": f"this corpus is ~{expected/1e9:.1f} GB. confirm in the dashboard before installing.",
@@ -772,7 +825,7 @@ def install(entry):
         return {"ok": False, "error": derr}
 
     # Format-specific arg requirements
-    if fmt == "raw_bytes":
+    if fmt in ("raw_bytes", "raw_bytes_zip", "zip_bundle"):
         if not train_url:
             return {"ok": False, "error": f"corpus '{stem}' has no train_url. set one in the catalog, or add the corpus as a custom source."}
     elif fmt == "hf_dataset":
@@ -793,11 +846,21 @@ def install(entry):
         if fmt == "hf_dataset":
             return _install_hf_dataset(entry)
         logmod.info("corpus-sync", f"installing {stem}: train={train_url}")
-        ok, wrote, err = _download(train_url, _train_path(stem), stem, "train")
+        dest = os.path.join(CORPUS_DIR, f"{stem}.zip") if fmt == "zip_bundle" else _train_path(stem)
+        ok, wrote, err = _download(train_url, dest, stem, "train")
         if not ok:
             logmod.error("corpus-sync", f"{stem} train download failed: {err}")
             _record("install", False, err, stem=stem)
             return {"ok": False, "error": err}
+
+        # zip_bundle: one archive holds both bins; extract and delete the zip.
+        if fmt == "zip_bundle":
+            extract_err = _extract_zip_bundle(dest, _train_path(stem), _val_path(stem))
+            if extract_err:
+                logmod.error("corpus-sync", f"{stem} zip extract failed: {extract_err}")
+                _record("install", False, extract_err, stem=stem)
+                return {"ok": False, "error": extract_err}
+            wrote = _file_size(_train_path(stem)) or wrote
 
         # raw_bytes_zip: the URL is a .zip; replace the downloaded bytes with
         # the largest member's contents. enwik8 ships this way (one big xml
@@ -820,6 +883,16 @@ def install(entry):
                 logmod.error("corpus-sync", f"{stem}: {msg}")
                 _record("install", False, msg, stem=stem)
                 return {"ok": False, "error": msg}
+
+        if fmt == "zip_bundle" and sha_val and os.path.isfile(_val_path(stem)):
+            got = sc.sha256_file(_val_path(stem))
+            if got != sha_val:
+                try: os.remove(_val_path(stem))
+                except OSError: pass
+                msg = f"sha256 mismatch on val: expected {sha_val[:12]}, got {got[:12]}"
+                logmod.warn("corpus-sync", f"{stem}: {msg}")
+                _record("install", True, f"train ok; {msg}", stem=stem)
+                return {"ok": True, "warning": msg, "stem": stem}
 
         if val_url:
             logmod.info("corpus-sync", f"installing {stem}: val={val_url}")
