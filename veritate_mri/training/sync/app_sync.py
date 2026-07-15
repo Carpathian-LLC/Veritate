@@ -86,6 +86,10 @@ _STATE_CACHE  = None
 _THREAD       = None
 _RELOAD_HOOK  = None
 
+# Throttle key for coalescing repeated offline check failures (see
+# logs.emit_throttled). Cleared on the first successful check.
+_CHECK_THROTTLE_KEY = "http-updater-check"
+
 # ------------------------------------------------------------------------------------
 # State helpers
 
@@ -628,13 +632,22 @@ def check_update():
     url = _tarball_url(branch)
     etag, last_modified, err = _etag_cached(url)
     if err:
-        logmod.error("http-updater", f"check failed: {err}")
+        # A transient transport failure (no route to host, DNS, TLS timeout) on
+        # an offline box is not an application error: don't fire the error hook
+        # (which inflates the heartbeat error count) and don't relog it on every
+        # 30-min poll. Genuine HTTP errors (repo gone, rate-limited) stay loud.
+        if err.startswith("network error"):
+            logmod.emit_throttled("warn", "http-updater", f"check failed: {err}",
+                                  key=_CHECK_THROTTLE_KEY)
+        else:
+            logmod.error("http-updater", f"check failed: {err}")
         _update_state({
             "last_check_ts":  time.time(),
             "last_check_ok":  False,
             "last_check_msg": err,
         })
         return {"ok": False, "error": err, "status": status()}
+    logmod.clear_throttle(_CHECK_THROTTLE_KEY)
 
     cur = _state()
     pulled_etag = cur.get("pulled_etag")

@@ -64,6 +64,12 @@ HEARTBEAT_TIMEOUT_SECS  = 8.0
 HEARTBEAT_USER_AGENT    = "veritate-heartbeat/3"
 HEARTBEAT_LOOP_TICK_SECS = 5
 
+# Throttle keys for the offline-device log coalescing (see logs.emit_throttled).
+# One per sender so a presence outage and a diagnostics outage don't mask each
+# other, but each collapses its own repeated transport failures.
+_SEND_THROTTLE_KEY = "heartbeat-send"
+_DIAG_THROTTLE_KEY = "heartbeat-diagnostics"
+
 STATE_PATH    = os.path.join(paths.REPO_ROOT, "data", "heartbeat_state.json")
 MACHINE_ID_LEN = 16
 MODELS_HASH_LEN = 12
@@ -543,6 +549,7 @@ def _send_once():
     payload = _build_payload()
     sent_trainings = payload.get("trainings") or []
     sent_hw        = payload.get("hw") is not None
+    was_failing    = bool(_state().get("last_send_error"))
     try:
         status = _post(HEARTBEAT_URL, payload)
         patch = {
@@ -556,6 +563,10 @@ def _send_once():
             remaining = (_state().get("pending_training_events") or [])[len(sent_trainings):]
             patch["pending_training_events"] = remaining
         _update_state(patch)
+        # Recovery edge: reset the throttle so the next outage's first failure
+        # is shown immediately, and note that connectivity is back.
+        if logmod.clear_throttle(_SEND_THROTTLE_KEY) or was_failing:
+            logmod.ok("heartbeat", "send recovered")
         return True
     except urllib.error.HTTPError as e:
         body_excerpt = ""
@@ -564,6 +575,8 @@ def _send_once():
         except Exception:
             pass
         reason = f"http {e.code}: {body_excerpt or e.reason}"
+        # HTTP errors are a live-but-unhappy server (auth, 413, 5xx): keep these
+        # at full volume — they're not the offline-machine spam we throttle.
         logmod.warn("heartbeat", f"send failed: {reason}")
         _update_state({
             "last_send_ts":     int(time.time()),
@@ -573,7 +586,11 @@ def _send_once():
         return False
     except (urllib.error.URLError, socket.timeout, OSError) as e:
         reason = f"{type(e).__name__}: {e}"
-        logmod.warn("heartbeat", f"send failed: {reason}")
+        # Transport-level failures (no route to host, DNS, TLS timeout) are the
+        # expected state of an offline device. Throttle so a machine that spends
+        # hours offline logs at most one line per interval instead of dozens.
+        logmod.emit_throttled("warn", "heartbeat", f"send failed: {reason}",
+                              key=_SEND_THROTTLE_KEY)
         _update_state({
             "last_send_ts":     int(time.time()),
             "last_send_status": 0,
@@ -591,6 +608,7 @@ def _send_diagnostics_once():
         return False
     try:
         _post(HEARTBEAT_URL, payload)
+        logmod.clear_throttle(_DIAG_THROTTLE_KEY)
         return True
     except urllib.error.HTTPError as e:
         body_excerpt = ""
@@ -601,7 +619,9 @@ def _send_diagnostics_once():
         logmod.warn("diagnostics", f"send failed: http {e.code}: {body_excerpt or e.reason}")
         return False
     except (urllib.error.URLError, socket.timeout, OSError) as e:
-        logmod.warn("diagnostics", f"send failed: {type(e).__name__}: {e}")
+        # Same offline-device throttling as presence sends (see _send_once).
+        logmod.emit_throttled("warn", "diagnostics", f"send failed: {type(e).__name__}: {e}",
+                              key=_DIAG_THROTTLE_KEY)
         return False
 
 
