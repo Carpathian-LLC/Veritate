@@ -156,6 +156,12 @@ MoE is wired: `trunk=hybrid_moe`, `MoEFFN` in `veritate_core/model_patched.py` (
 
 Byte-level pays the sequence tax hardest (~4-5x more positions than subword for the same text), which is exactly why fixed patching already won 1.82x. Extend it: entropy-based dynamic patching (Byte Latent Transformer style) — bigger patches over predictable spans, small patches only where bytes are surprising — so the expensive global blocks fire on far fewer, better-chosen positions. Mechanism: add an adaptive-patch trunk variant (or a patch-size schedule) vs fixed-patch hybrid. Falsifier: >5% tok/s at equal val, or equal tok/s at better val, on matched 10M runs. Highest-leverage because it hits the cost byte-native amplifies.
 
+**Concrete design (2026-07-16, ready to execute).** The MPS fixed-shape kernel-cache rule (preflight 24c: dynamic shapes = 23x slowdown) forbids variable slot counts per batch, so "dynamic" cannot mean "variable S". Instead: keep `slots = seq // PATCH_STRIDE` FIXED and change the SELECTION rule inside `VeritatePatched._boundary_slots()` (`veritate_core/model_patched.py:164`) from "first S boundaries in order" to "TOP-S boundaries by entropy". Bytes still fold into the last slot whose anchor precedes them (unchanged mask/scatter path). Anchor positions are re-sorted ascending after top-k so patch coverage remains contiguous. Fixed shape preserved end-to-end; only the RANKING of which boundary bytes become slot anchors changes. Concretely three source-of-entropy variants to A/B (each is one boolean flag on the trunk config):
+- E-static: parameter-free precomputed bigram surprisal from a small in-repo byte-bigram table (fast, no learned params, arch-agnostic — the low-risk baseline).
+- E-probe: 1-layer byte-level probe LM (~50k params) whose loss is added to the trainer, entropy = -log p(next_byte | prev). Full BLT approximation.
+- E-schedule: purely position/decay-based schedule (no learned entropy at all) as a null-hypothesis control — proves whether the win is from entropy specifically or just from spacing.
+Wall-clock: only the boundary-ranking op changes (a top-k over ~seq/2 candidates), so per-step FLOPs are UNCHANGED at same S. The win must come from val, not throughput; the falsifier's "at equal val" clause is the honest check. Rule 34d test surface: `tests/model/test_patched_dynamic_slots.py` — (a) fixed-shape invariance across all three entropy modes; (b) E-static is deterministic byte-for-byte across arches (macOS arm64 / Linux x86 / Windows x86); (c) fallback to first-S ordering when entropy-mode is off is BYTE-IDENTICAL to current `VeritatePatched`. Kill line: no entropy variant beats fixed-patch by >5 pts val on matched 10M, second seed per agent_roe. Retry condition if killed: try at 80M (small-scale ranking noise may swamp signal; BLT's own gains were at ≥400M).
+
 ### T3: mixture-of-depths (skip layers on easy tokens)
 
 Not every byte needs every layer (the space after a word is trivial). Learned per-token layer skipping (MoD / early-exit / CALM family) cuts FLOPs/token on the easy majority. Distinct from the killed looped-depth experiment (that ADDED compute per param; this REMOVES it on easy tokens). Mechanism: per-token learned router that skips global blocks below a confidence/importance threshold. Falsifier: matched val at measurably fewer FLOPs/token (>10%) vs hybrid, no quality tax outside the 5% band. Lower priority than T1/T2 (more build, less certain), fund only if the T0 profile shows depth is where the FLOPs sit.
@@ -175,3 +181,38 @@ Mechanism: four bins, identical size and seed, one axis changed each (built, see
 Falsifier / decision line: a style must beat mixed_raw by >5% val bpb or a clear code-eval margin, second seed per agent_roe before any claim. If no style separates from the control, corpus style is not a lever at this scale: record it in failures.md and spend on architecture (IDEA 3) instead.
 
 Scale-transfer caveat (pre-registered): a 200M winner picks the mix FAMILY, not the final ratios. Ultra-narrow textbook data can cap larger models (diversity starvation: the StarCoder lesson), so re-validate the winning style at 1-3B before committing a farm-scale run to it.
+
+---
+
+## IDEA 6: chat200m Chinchilla-optimal — the full-length training bet before we commit to 1B
+
+Status: OPEN, TRAINING (launched 2026-07-16, RTX 5070, dashboard). Owner: execution model. The proving-ground for whether prior 200-270M runs were under-trained.
+
+### The premise (from the user, 2026-07-16)
+
+Every prior chat200m-class run was well under Chinchilla-optimal: the Mac's chat200m did 2.0B tokens on 270M params (~7 tokens/param), the chat80idk_80m ship did ~1.1B on 121M (~9 tokens/param). Chinchilla-optimal is ~20 tokens/param. The suspicion: the reason a 270M model has never been *fully fluent* on this box is not the architecture — it is under-training. Before committing a 12+ day 1B run, prove or disprove that hypothesis on a 200M-class run we CAN afford (~40 hours wall-clock).
+
+### The run (RUNNING)
+
+- Model: `veritate_200m` trainer, 270,510,336 params (16L h1024 ffn4096, heads 16, seq 1024)
+- Stack: hybrid trunk + Muon + bf16 + WSD sqrt decay + `--use_act_ckpt --use_8bit_adam` (the CUDA speed levers the Mac cannot use)
+- Corpus mix (clean-data bet, in-pretrain dosing from day 1): fineweb_edu 45%, chat_500mb 20%, wikitext103 12%, code_qa_100mb 6%, sft_idk 6%, mixed_code_edu_200mb 5%, py_code_100mb 3%, agent_150mb 3%
+- Bench-picked config on 5070: batch 24, seq 1024, n_chunks 4, 6.1 GB VRAM (11.94 GB total; comfortable) — 15,435 tok/s in bench, 38k tok/s measured actual
+- Token budget: 55,000 steps × (24 × 1024 × 4) = **5.4B tokens** (20 tokens/param, Chinchilla-optimal)
+- Wall-clock: **~40 hours at measured throughput** (bench was conservative)
+- LR: 3e-4 base with 1000-step warmup, WSD sqrt decay to 3e-5 over the last 15% of steps
+- Model dir: `models/chin200m/`, checkpoint every 1500 steps, eval every 500
+
+### GATES (the standard, as pass/fail)
+
+- Under-training gate (the whole point): val loss at step 55,000 must be materially lower than chat200m's 0.812 @step 20,400 (successes.md 2026-07-09) at matched EFFECTIVE dataset. If Chinchilla-optimal doesn't produce a meaningfully lower loss floor than the Mac run's 7-tokens/param cutoff, the "prior runs were under-trained" hypothesis is FALSIFIED and the 1B run must budget architecture time, not just token time.
+- Fluency gate (the user's real ask): the post-SFT model must clear all four 2026-07-10 gates that chat200m cleared — needle copy 1.00/0.83, bare identity 3/3, grounded read-off-page 3/3, empathy intact — AND additionally not fail obvious open-ended dialogue in the way chat80idk_80m still occasionally does at 121M.
+- Abstention gate (IDEA 5 dose confirmed): 6% sft_idk in the pretrain should preserve the 90/80 abstention precision the 80M ship model hit, without a late-phase SFT that would overwrite copy skill (failures.md 2026-07-06/08 lesson).
+
+### Chat SFT phase (queued, launches at pretrain completion)
+
+Recipe cloned from the 2026-07-10 success (successes.md): resume from final pretrain checkpoint, ~4k-8k SFT steps, mix chat_500mb 55% / chat_50mb 15% / sft_idk 8% / grounded (fineweb + wikitext) 22% at base_lr 2e-5 WSD → 2e-6. HARD gate: needle conversation-copy must NOT erode (the failures.md 2026-07-08 lesson).
+
+### The bet + the retry condition
+
+If IDEA 6 clears its gates: this is the recipe we scale up to 1B on the phi-1-clean-data path (successes.md 2026-07-16 estimate: 4-15 days at 5-8B tokens on clean data, 12-30 days at 16B Chinchilla). If IDEA 6 FAILS (under-training was not the bottleneck), it forces IDEA 3's architecture campaign (throughput / MoE / dynamic patching) before we spend GPU-weeks on 1B.

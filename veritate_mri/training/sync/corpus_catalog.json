@@ -1,10 +1,12 @@
 {
- "_comment": "Default corpus catalog shipped with Veritate. Each entry's stem is the on-disk basename (foo -> foo_train.bin / foo_val.bin in trainers/corpus/). format='raw_bytes' = direct URL written as a uint8 byte stream (Veritate trains byte-level, so plaintext bytes ARE tokens). format='hf_dataset' = stream rows from a HuggingFace dataset, encode each text column as UTF-8, separate rows with two newlines. format='native' = the bins ship inside the repo at veritate_mri/data/corpus/; install copies them into trainers/corpus/ with no network, and sizes are read from the bundled files. format='zip_bundle' = train_url is one hosted zip holding <stem>_train.bin + <stem>_val.bin; install extracts both and deletes the zip; sha256 fields verify the extracted bins. coming_soon=true disables install until the corpus is published: replace the PLACEHOLDER train_url with the real COS link and drop the flag to release. max_bytes_train caps how much of streaming HF data is written before stopping. val_split_ratio carves off the tail of the downloaded train file as val.bin when no separate val source is supplied. recommended_min_params / _max_params drive the training-tab size-mismatch warning. Size ladder rationale: developer_documentation/corpus/library_ladder.md. The dashboard prompts the user for confirmation before installing any corpus larger than 10 GB; the backend additionally requires confirm_large=true in the install body for those.",
+ "_comment": "Default corpus catalog shipped with Veritate. Each entry's stem is the on-disk basename (foo -> foo_train.bin / foo_val.bin in trainers/corpus/). format='raw_bytes' = direct URL written as a uint8 byte stream (Veritate trains byte-level, so plaintext bytes ARE tokens). format='hf_dataset' = stream rows from a HuggingFace dataset, encode each text column as UTF-8, separate rows with two newlines. format='native' = the bins ship inside the repo at veritate_mri/data/corpus/; install copies them into trainers/corpus/ with no network, and sizes are read from the bundled files. format='zip_bundle' = train_url is one hosted zip holding <stem>_train.bin + <stem>_val.bin; install extracts both and deletes the zip; sha256 fields verify the extracted bins. coming_soon=true disables install until the corpus is published: replace the PLACEHOLDER train_url with the real COS link and drop the flag to release. max_bytes_train caps how much of streaming HF data is written before stopping. val_split_ratio carves off the tail of the downloaded train file as val.bin when no separate val source is supplied. recommended_min_params / _max_params drive the training-tab size-mismatch warning. Size ladder rationale: developer_documentation/corpus/library_ladder.md. The dashboard prompts the user for confirmation before installing any corpus larger than 10 GB; the backend additionally requires confirm_large=true in the install body for those. Dashboard grouping: family = 'carpathian' (Carpathian-published families: chat/agent/mcp/code/sft) or 'public' (external published datasets: fineweb_edu, wikitext103, etc.). topic groups within a family (chat, agent, mcp, code, knowledge, market, special_sft). Both are advisory; if omitted the dashboard falls back to per-stem defaults.",
  "corpora": [
   {
    "stem": "chat_50mb",
    "label": "Chat (small, 50 MB)",
-   "description": "Conversations that teach a model how to chat. 50 MB. Recommended for tiny models (10M-80M parameters). Covers facts, definitions, simple math, classic prose. Hosted at carpathian-llc/Veritate-Corpus.",
+   "family": "carpathian",
+   "topic": "chat",
+   "description": "ChatML conversations. Best for 10M-80M chat models.",
    "format": "raw_bytes",
    "train_url": "https://raw.githubusercontent.com/Carpathian-LLC/Veritate-Corpus/main/chat_50mb_train.bin",
    "val_url": "https://raw.githubusercontent.com/Carpathian-LLC/Veritate-Corpus/main/chat_50mb_val.bin",
@@ -21,7 +23,9 @@
   {
    "stem": "chat_500mb",
    "label": "Chat (medium, 500 MB)",
-   "description": "Same chat content as the small corpus at 10x scale. 500 MB. Recommended for mid-size models (200M-1B parameters). Ships as a zip bundle on Carpathian COS.",
+   "family": "carpathian",
+   "topic": "chat",
+   "description": "ChatML conversations. Best for 200M-1B chat models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/0ced9436be5c2478db55a5b20b50afea41245c773893ea0204009aa0bd3a19ee/1713baa762b2b87a7cc64dba4f27a080388a83bd95589f2b95ee32438399ef2aa98fa82c51a191e32c0cabb693a905893c868041aa063febfd4a18e52954a114",
    "size_train": 513802730,
@@ -37,7 +41,9 @@
   {
    "stem": "chat_5gb",
    "label": "Chat (large, 5 GB)",
-   "description": "Same chat content as the small corpus at 100x scale. 5 GB. Recommended for every model from 1.5B up; behavior corpora cap here (see library_ladder.md). Ships as a zip bundle on Carpathian COS.",
+   "family": "carpathian",
+   "topic": "chat",
+   "description": "ChatML conversations. Best for 1.5B+ chat models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/dc48d78844427171983e7b10b5f967bd69822fd9718604ba2dbeeda0d5182cb0/126effad98a196382116985502c27b9a697316c016e01fb12770bc3c70afc0a1fb40d7dd2b9bb25eaf8b9c6e75193fd14f2ac814f6f317e67e8ada4285455a0b",
    "size_train": 5138023139,
@@ -53,7 +59,9 @@
   {
    "stem": "agent_15mb",
    "label": "Agent tools (small, 15 MB)",
-   "description": "Teaches the model to call tools (calculator, etc.) inside a conversation. 15 MB. Train this AFTER a chat corpus, not from scratch. Recommended for tiny models (10M-80M parameters). Hosted at carpathian-llc/Veritate-Corpus.",
+   "family": "carpathian",
+   "topic": "agent",
+   "description": "Tool-calling conversations (calculator, fetch, etc.). Layer on top of a chat model. Best for 10M-80M models.",
    "format": "raw_bytes",
    "train_url": "https://raw.githubusercontent.com/Carpathian-LLC/Veritate-Corpus/main/agent_15mb_train.bin",
    "val_url": "https://raw.githubusercontent.com/Carpathian-LLC/Veritate-Corpus/main/agent_15mb_val.bin",
@@ -70,7 +78,9 @@
   {
    "stem": "agent_150mb",
    "label": "Agent tools (medium, 150 MB)",
-   "description": "Hermes tool-calling over the runtime toolbox (calculator, fs_read, fetch, retrieve) with computed results and error-recovery turns. 150 MB. Train after a chat corpus. Recommended for mid-size models (200M-1B parameters). Ships as a zip bundle on Carpathian COS.",
+   "family": "carpathian",
+   "topic": "agent",
+   "description": "Tool-calling conversations (calculator, fs_read, fetch, retrieve). Layer on top of a chat model. Best for 200M-1B models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/38fa3c38001cd226e57c4b502b33ce671f200c11b07c4d4fe02cdab059dc5fcc/043eae263e9df2bd4ecf8a27717ed42528d3572c38d9682a08cefcfba0c6e81cde5e8fc71aa54ffdf4839255c09231fcd7d03494ce46ce05e242641497f3c9df",
    "size_train": 154141038,
@@ -86,7 +96,9 @@
   {
    "stem": "agent_1500mb",
    "label": "Agent tools (large, 1.5 GB)",
-   "description": "Same tool-use content as the medium corpus at 10x scale. 1.5 GB. Train after a chat corpus. Recommended for every model from 1.5B up; behavior corpora cap here (see library_ladder.md). Ships as a zip bundle on Carpathian COS.",
+   "family": "carpathian",
+   "topic": "agent",
+   "description": "Tool-calling conversations at scale. Layer on top of a chat model. Best for 1.5B+ models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/082cb5cee8c3ff56a2941c994f6e18b396a267c45aaf11916149714b7a5d5b99/935384631028d7c7c5d6556c90a892150800bea096ba1a16687909ea7d9d4c4099fa52be247800e1f7eabdc501bebc1d05b75bb69a7baae886c623620b5dc023",
    "size_train": 1541407297,
@@ -102,7 +114,9 @@
   {
    "stem": "mcp_docs",
    "label": "Model Context Protocol docs",
-   "description": "The complete modelcontextprotocol.io documentation: the 2025-11-25 specification, build guides, SDK and registry docs, governance. ~2 MB. Ships inside Veritate \u2014 installing copies it from the repo, no download. Domain corpus: fine-tune a chat model on it rather than training from scratch.",
+   "family": "carpathian",
+   "topic": "mcp",
+   "description": "The full modelcontextprotocol.io documentation, ~2 MB. Ships inside Veritate (no download). Layer on top of a chat model.",
    "format": "native",
    "trained_modes": [
     "autocomplete"
@@ -113,7 +127,9 @@
   {
    "stem": "mcp_15mb",
    "label": "MCP protocol (small, 15 MB)",
-   "description": "Teaches the Model Context Protocol: JSON-RPC session transcripts (initialize, tools/list, tools/call, errors), protocol Q&A with doc passages, and Hermes tool-calling over MCP server tools. 15 MB. Train after a chat corpus. Recommended for tiny models (10M-80M parameters). Ships as a zip bundle on Carpathian COS.",
+   "family": "carpathian",
+   "topic": "mcp",
+   "description": "MCP JSON-RPC transcripts, protocol Q&A, and MCP tool-calling. Layer on top of a chat model. Best for 10M-80M models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/ffa97f470cf9abb003367593750987c1c213bc2044bc61ff0f4395f28f40ea34/7a53c8f0a013e590f6a6f06f8ff395c469eef6262f5cbcbd99e0e80a553faff1e0a7bd75575a22827c0a037e6b22017136ebf97f21ab576096022bb2ac9f31ee",
    "size_train": 15415068,
@@ -129,7 +145,9 @@
   {
    "stem": "mcp_150mb",
    "label": "MCP protocol (medium, 150 MB)",
-   "description": "Same MCP content as the small corpus at 10x scale. 150 MB. Train after a chat corpus. Recommended for mid-size models (200M-1B parameters). Ships as a zip bundle on Carpathian COS.",
+   "family": "carpathian",
+   "topic": "mcp",
+   "description": "MCP transcripts and tool-calling at scale. Layer on top of a chat model. Best for 200M-1B models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/b28753d19f34ea3cd0431c30819e57379debbcbe4456526d17692d684aecdac3/199649f3ed2a978a6009e75bf68fe12e673fed99bc8dd012f2f031a5d77b750ea1979b0af8b549fc5055d5e6d804dcf0ed6eeaa7592d318d804f76e36a9f2122",
    "size_train": 154141336,
@@ -145,7 +163,9 @@
   {
    "stem": "mcp_1500mb",
    "label": "MCP protocol (large, 1.5 GB)",
-   "description": "Same MCP content as the small corpus at 100x scale. 1.5 GB. Train after a chat corpus. Recommended for every model from 1.5B up; behavior corpora cap here (see library_ladder.md). Ships as a zip bundle on Carpathian COS.",
+   "family": "carpathian",
+   "topic": "mcp",
+   "description": "MCP transcripts and tool-calling at scale. Layer on top of a chat model. Best for 1.5B+ models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/4bb89b372bac76800016e2b760e4a478b1adc83144128d016dab163370034b97/a2bbfa7def3439d0f3d2a656762a919bb5881dcad1e846e537423aa2cab740325da1bad95164d02d7d61b17f228a90d7182d0ea3f80d415ae7e6a61ffb49015d",
    "size_train": 1541407629,
@@ -161,7 +181,9 @@
   {
    "stem": "shakespeare",
    "label": "Tiny Shakespeare",
-   "description": "All Shakespeare's works concatenated. ~1 MB. Classic warmup corpus.",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "All Shakespeare's works, ~1 MB. Classic warmup for tiny models.",
    "format": "raw_bytes",
    "train_url": "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt",
    "val_url": null,
@@ -176,7 +198,9 @@
   {
    "stem": "tinystories",
    "label": "TinyStories",
-   "description": "Synthetic short children's stories (Eldan & Li, 2023). ~1 GB streamed. Designed for 1M-50M parameter models.",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "Synthetic children's stories (Eldan & Li, 2023), ~1 GB. Best for 1M-50M models.",
    "format": "hf_dataset",
    "hf_dataset": "roneneldan/TinyStories",
    "hf_split_train": "train",
@@ -192,7 +216,9 @@
   {
    "stem": "fineweb_edu",
    "label": "FineWeb-Edu (sample-10BT)",
-   "description": "Educational subset of FineWeb (HuggingFaceFW). The 10B-token sample shard, ~5 GB streamed. Sized for Chinchilla-optimal training of 50M-500M parameter byte-level models.",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "Educational web text (HuggingFaceFW), 10B-token sample, ~5 GB. Best for 50M-500M models (Chinchilla-optimal).",
    "format": "hf_dataset",
    "hf_dataset": "HuggingFaceFW/fineweb-edu",
    "hf_config": "sample-10BT",
@@ -208,7 +234,9 @@
   {
    "stem": "wikitext103",
    "label": "WikiText-103",
-   "description": "Curated Wikipedia article subset (Salesforce, raw). ~500 MB streamed. Good fit for 30M-200M parameter models.",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "Wikipedia article subset (Salesforce, raw), ~500 MB. Best for 30M-200M models.",
    "format": "hf_dataset",
    "hf_dataset": "Salesforce/wikitext",
    "hf_config": "wikitext-103-raw-v1",
@@ -225,7 +253,9 @@
   {
    "stem": "enwik8",
    "label": "enwik8",
-   "description": "First 100 MB of English Wikipedia (Hutter Prize). Classic char-level benchmark. 5M-50M params.",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "First 100 MB of English Wikipedia (Hutter Prize). Classic byte-level benchmark. Best for 5M-50M models.",
    "format": "raw_bytes_zip",
    "train_url": "https://mattmahoney.net/dc/enwik8.zip",
    "val_split_ratio": 0.05,
@@ -237,7 +267,9 @@
   {
    "stem": "pg19",
    "label": "PG-19 (Project Gutenberg pre-1919)",
-   "description": "Long-form English books published before 1919 (DeepMind PG-19). Public domain. Capped at 10 GB stream. 50M+ parameter models.",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "Public-domain English books before 1919 (DeepMind PG-19), capped at 10 GB. Best for 50M+ models.",
    "format": "hf_dataset",
    "hf_dataset": "deepmind/pg19",
    "hf_split_train": "train",
@@ -253,7 +285,9 @@
   {
    "stem": "openwebtext10g",
    "label": "OpenWebText (10 GB subset)",
-   "description": "GPT-2-style web crawl (Skylion007). Streamed and capped at 10 GB. 100M-500M parameter models.",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "GPT-2-style web crawl (Skylion007), capped at 10 GB. Best for 100M-500M models.",
    "format": "hf_dataset",
    "hf_dataset": "Skylion007/openwebtext",
    "hf_split_train": "train",
@@ -268,7 +302,9 @@
   {
    "stem": "the_pile",
    "label": "The Pile (uncopyrighted, 50 GB subset)",
-   "description": "Curated multi-source mix (academic, code, web, books, dialogue). Streamed and capped at 50 GB. Chinchilla-fits 500M-3B parameter models.",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "Multi-source mix: academic, code, web, books, dialogue. Capped at 50 GB. Best for 500M-3B models (Chinchilla-fit).",
    "format": "hf_dataset",
    "hf_dataset": "monology/pile-uncopyrighted",
    "hf_split_train": "train",
@@ -284,7 +320,9 @@
   {
    "stem": "slimpajama627b",
    "label": "SlimPajama (6B-token public subset)",
-   "description": "Cleaned and deduplicated RedPajama sample (DKYoon public mirror). No auth required. ~22 GB of text, streamed in full. Chinchilla-fits 100M-500M parameter models.",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "Cleaned, deduplicated RedPajama sample (DKYoon mirror), ~22 GB. Best for 100M-500M models (Chinchilla-fit).",
    "format": "hf_dataset",
    "hf_dataset": "DKYoon/SlimPajama-6B",
    "hf_split_train": "train",
@@ -300,7 +338,9 @@
   {
    "stem": "redpajama_v2",
    "label": "RedPajama-V2 (200 GB subset)",
-   "description": "Common Crawl filtered corpus (Together). Streamed and capped at 200 GB. Sized for Chinchilla-optimal training of 10B+ parameter models at default cap; raise for full 30T tokens.",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "Filtered Common Crawl (Together), capped at 200 GB. Best for 10B+ models; raise the cap for full 30T tokens.",
    "format": "hf_dataset",
    "hf_dataset": "togethercomputer/RedPajama-Data-V2",
    "hf_config": "default",
@@ -316,7 +356,9 @@
   {
    "stem": "crypto",
    "label": "Crypto byte corpus (1m OHLCV, 200 pairs)",
-   "description": "1-minute OHLCV across 200 major Binance USDT pairs, encoded as a byte stream for the Market LLM (statistics corpus, not language).",
+   "family": "carpathian",
+   "topic": "market",
+   "description": "1-minute OHLCV for 200 Binance USDT pairs as a byte stream. For the Market LLM (numbers, not language).",
    "format": "raw_bytes",
    "train_url": "https://api.carpathian.ai/cos/2f0093fe9c91a5d05987e6785a160e2a1f8cdc1f9126905e0a47845c110863c6/7a111e7584b70bfcb1e3ddb8cbb3f7cc60bf702479f64c6321cb231550340152aec8061ac122232c355107e68b5538c2a05cb887c8adf575698ba3840e9d85ec",
    "val_url": "https://api.carpathian.ai/cos/26fdc8c0a6e9636db957f73baa0c07c23d6d1752a5be0b8dc90a1aa688c66ef3/55067bfbbd1134cdee91b6b6e251bc7c5a89fed4209eec03bedb9150f7bbfa4c3dfe1197b689a2988aea2a0b6cc4c8920e1db9c9e81c9c5efc076c264a1ca7eb",
@@ -330,7 +372,9 @@
   {
    "stem": "stocks",
    "label": "Stocks byte corpus (daily OHLCV, S&P 500)",
-   "description": "Daily adjusted OHLCV for ~503 S&P 500 tickers, encoded as a byte stream for the Market LLM (statistics corpus, not language).",
+   "family": "carpathian",
+   "topic": "market",
+   "description": "Daily adjusted OHLCV for ~503 S&P 500 tickers as a byte stream. For the Market LLM (numbers, not language).",
    "format": "raw_bytes",
    "train_url": "https://api.carpathian.ai/cos/6a75873f37fddebaed2caa5a8ed75c8b4b2cb2c45c376e18dfd9270283d06184/7fbed05ec821d36bb137eee735a2a977b93860a31d1015b1b7da4c2acc6ee28bd61e08c0df9f5b7adacb226af6ca3ee584f6a1e2a5cd10707a72419534a17aa6",
    "val_url": "https://api.carpathian.ai/cos/6f9c07e6a5ec21409c14f143ddf1f2d898d65e780e107d3586e1a7ade3586913/138d9b457ef7267e1d4f19afde955ef6dbfd7de35e4e587676b6b0df05f1e52edfdd3b6249f70117944d09d0b401a74ce4b25f340f4b971ddd84d259b3644c05",
@@ -344,7 +388,9 @@
   {
    "stem": "py_code_100mb",
    "label": "Python code (ultra-clean, 100 MB)",
-   "description": "Education-classifier top-tier (score 4+) Python from Stack-Edu, syntax-validated and near-deduplicated. Recommended for tiny to small models (10M-200M parameters).",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "Top-tier (edu score 4+) Python from Stack-Edu, syntax-validated and near-deduplicated. Best for 10M-200M models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/16e8c2ecbd5f9403d0d5c2f4b6ed183f7c31430813261840ffdba965890da530/def4931c71fb327a712e71e5956b5941320e36e8bff12b0e88f55bfb92606dcd40b497b95ac3f08b740782a15939cdace21497a84d89dbe720d5cafcc5a27b7b",
    "size_train": 102761925,
@@ -360,7 +406,9 @@
   {
    "stem": "py_code_1gb",
    "label": "Python code (clean, 1 GB)",
-   "description": "Education-classifier filtered (score 3+) Python from Stack-Edu, syntax-validated and near-deduplicated. Recommended for 200M-3B parameter models.",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "Filtered (edu score 3+) Python from Stack-Edu, syntax-validated and near-deduplicated. Best for 200M-3B models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/41840d5cbb31eeb2eb4179123e4be78c0b3de03a9d318a23b8292164dbbf41d7/853c04131b36e37b1922c6df1edf99103d6d86246ad139d1b59d57fe0be9f27e5e6ff4b767f3532cc88d677335dd51eb9eb698aa1b9178571c24693bcb640abc",
    "size_train": 1027611829,
@@ -376,7 +424,9 @@
   {
    "stem": "js_code_100mb",
    "label": "JavaScript code (ultra-clean, 100 MB)",
-   "description": "Education-classifier top-tier (score 4+) JavaScript from Stack-Edu, minified/bundle files rejected, near-deduplicated. Recommended for tiny to small models (10M-200M parameters).",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "Top-tier (edu score 4+) JavaScript from Stack-Edu, minified files rejected, near-deduplicated. Best for 10M-200M models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/4ee756a1be4709962c27899a2876de32bfffd2bb11eab9bcceac01d4c1a03530/91c9894c03d0c6de3119fb1585e78a71ea353e3ff83504d70f3e2cd98299a70f9ca16cd0f110d1b88fc1a3f29c6a42fc113ce08b7e618971f4c1fd539290e448",
    "size_train": 102760696,
@@ -392,7 +442,9 @@
   {
    "stem": "js_code_1gb",
    "label": "JavaScript code (clean, 1 GB)",
-   "description": "Education-classifier filtered (score 3+) JavaScript from Stack-Edu, minified/bundle files rejected, near-deduplicated. Recommended for 200M-3B parameter models.",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "Filtered (edu score 3+) JavaScript from Stack-Edu, minified files rejected, near-deduplicated. Best for 200M-3B models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/79a77192124d5b06d53a1066fe0f4b0a97a542a16df674f6ba83fb2b94da0e9e/45c4ff9e6662f9b3d4e9a819f4f21d917fdbeb3e3ef588002061655a1a8e8243698e77c3b08d9b720e769fae782a283bff9f20cc9851ad52ea1730ed00b8a03c",
    "size_train": 1027606022,
@@ -408,7 +460,9 @@
   {
    "stem": "html_code_50mb",
    "label": "HTML (curated, 50 MB)",
-   "description": "HTML pages from curated permissive-license repos (MDN teaching material, web-platform-tests, real templates), filtered and near-deduplicated. Mix-in stem for code models.",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "HTML from permissive-license repos (MDN, web-platform-tests, templates), filtered and near-deduplicated. Mix-in for code models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/ca3886f5c4ba5c3f204519e4ef671b5c12cf15fb82902a1d98ea2a80574ded0c/ca4898ffbc0b894f2c0f53a4525aad86e02ba44720498fac3dcef19fa56667e00ee4a5dcdda218bdfc86d55fd0f5ffd31c430e7372bd644b2bbb0faf7ba64a56",
    "size_train": 51380530,
@@ -424,7 +478,9 @@
   {
    "stem": "css_code_3mb",
    "label": "CSS (curated, 3 MB)",
-   "description": "Distinct handwritten-scale CSS from curated permissive-license repos; compiled and near-duplicate framework builds removed. Small by design: mix-in stem for code models.",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "Handwritten-scale CSS from permissive-license repos; compiled framework builds removed. Small by design: mix-in for code models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/a404088fc37a3da27dc0943afe447d30f4154f49b67adb2f635c345e03a445f9/d801768778362ac63565902a860c39bcd248529cfc24198a4bd87cf94e31e32bcfcfda60a2fea60982240b8b0b3d7be0710be8a84554d35a8d791aa33ea706ca",
    "size_train": 2995922,
@@ -440,7 +496,9 @@
   {
    "stem": "code_qa_100mb",
    "label": "Coding Q&A (StackOverflow, 100 MB)",
-   "description": "StackOverflow question/answer pairs on python, javascript, html, css and their ecosystems; answer score 5+, ChatML framed. Teaches intent-to-code mapping.",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "StackOverflow Q&A on py/js/html/css (answer score 5+), ChatML framed. Teaches intent-to-code mapping.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/b70113911e5e0e411cac52e6d3e666eb16dbcf5164ecdc7325b55fc69b25b49a/48969498c3f8e06e6413c6c60c62dbdc4a9f1b545634cee26b743b2af00a5e2b261b34397e5000d33621646fec3554c43f94c741b6a2dc8fc920cefaf28101c0",
    "size_train": 102760868,
@@ -456,7 +514,9 @@
   {
    "stem": "mixed_code_raw_200mb",
    "label": "Mixed code ablation: raw (200 MB)",
-   "description": "Corpus-style ablation control: py/js/html/css at 40/40/10/10 with size caps and exact dedup only, no quality filters. Train against the other mixed_code variants on the same recipe.",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "Ablation control: py/js/html/css at 40/40/10/10, exact dedup only, no quality filter. Best for 80M-800M models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/56a6e16f3663757a5fbd3a639d30c8a4cd9b6a5dada3cb5b72a60fd3ead3b45b/f83786d6d994f1edd1b275b07ca69c5b1dff3834e2750784431c5760be303e44463dbc80ca1fd3b501053a3e8fd5cd581ad14fb6d6d910fc57ad2a05ea83580f",
    "size_train": 205521561,
@@ -472,7 +532,9 @@
   {
    "stem": "mixed_code_files_200mb",
    "label": "Mixed code ablation: filtered (200 MB)",
-   "description": "Corpus-style ablation arm: same mix as raw but with full structural filters and near-dedup, edu score 3+.",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "Ablation arm: same 40/40/10/10 mix, full structural filters, near-dedup, edu score 3+. Best for 80M-800M models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/3505a045dacc9a00c09e44f4f65b09a683182d66c4bed7448ad0715f8a17df78/69ffeaee6882748d8b24afc67565e68bfd6e5474f1dcd00a15fb0589a31c4219ed1f13b9cdc15561004c2449404651237520244d6b5bb694a3cd3dab83adb98e",
    "size_train": 205522342,
@@ -488,7 +550,9 @@
   {
    "stem": "mixed_code_edu_200mb",
    "label": "Mixed code ablation: textbook tier (200 MB)",
-   "description": "Corpus-style ablation arm: same mix, full filters, edu score 4+ only (phi-style textbook tier).",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "Ablation arm: same mix, full filters, edu score 4+ only (phi-style textbook tier). Best for 80M-800M models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/4fd14bfe66f210105f023e9779348e9e6a8eadf8824f8a9057e2e76a519a8e00/c61b846c30fa2ced7e5122679d8faac0c85f6230bfa0e6f94bd84e0106424ef9ac792b980f442a19f6752588dd88918c80f6111d5c95885bbe72d639295c3858",
    "size_train": 205520936,
@@ -504,7 +568,9 @@
   {
    "stem": "mixed_code_qa_200mb",
    "label": "Mixed code ablation: Q&A interleaved (200 MB)",
-   "description": "Corpus-style ablation arm: filtered code mix 50% interleaved with StackOverflow Q&A 50% (ChatML framed).",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "Ablation arm: filtered code 50% + StackOverflow Q&A 50% (ChatML framed). Best for 80M-800M models.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/74a31164ab5ce4336ca6c3db80657af27a7e713ea34b087e85d2cd028956f23f/7b11a99e7624926120fa1a2ab463277dedf9e137f1eda99e9d95449e4d8fe5932ddf27233dff23c598556e06d046b87bc3794ebe55372f3234679572b7916c6d",
    "size_train": 205588220,
@@ -520,8 +586,10 @@
   },
   {
    "stem": "code_textbook_v1",
-   "label": "Code textbook (Claude-authored)",
-   "description": "Original textbook-style teaching corpus authored by Claude: concept explanations, runnable examples, worked exercises, and buggy-vs-fixed pairs across python, javascript, html, and css. Every document machine-validated (syntax-gated; python and javascript executed with passing asserts). Small and dense: distillation-grade data for the corpus-style ablation and SFT layering.",
+   "label": "Code textbook (synthetic, distilled)",
+   "family": "carpathian",
+   "topic": "code",
+   "description": "Textbook-style teaching corpus: concept explanations, runnable examples, worked exercises, and buggy-vs-fixed pairs across py/js/html/css. Every document syntax-validated (py/js executed with passing asserts). Small and dense: distillation-grade data for ablations and SFT layering.",
    "format": "zip_bundle",
    "train_url": "https://usc1.carpathian.ai/cos/edc0852c9d99b32f2a72a8d456b05688df589c3b6eb483cdf4bde2bffea2bbbd/0c44e05ff06c4724bc1e62fc815a6fd1a61e04017c39714d1a1284ce021f3f2c11ce2c4a48c193076ed29c3218674fd5a6a013f31d40ee205500cb52257087d0",
    "trained_modes": [
@@ -533,6 +601,24 @@
    "size_val": 32946,
    "sha256_train": "0981473931f12a2d6d4e497c44596e2676b9c920c2edd83d2b0d7be7d1a6b785",
    "sha256_val": "1c61ab6c4ca8e2b85386478c84ffba8fd458704a3089cc046d422c023139cfe7"
+  },
+  {
+   "stem": "sft_idk",
+   "label": "SFT: IDK + chit-chat + jokes + in-domain QA",
+   "family": "carpathian",
+   "topic": "special_sft",
+   "description": "SFT layer that teaches abstention (\"I don't know\"), greetings, jokes, and in-domain QA. Layer on top of a chat model. Best for 80M-1B models.",
+   "format": "zip_bundle",
+   "train_url": "https://usc1.carpathian.ai/cos/106e462f6cc87be8668cc6ecc5f82f4b7ed3ffdac4d3e1a7986f6897b8d0d53d/60c0d616400c302522f65b07383a9d29b2280420b2abc91911a7b69b2e2073fc719283b959181522f0158480541a5dd45079744db481699cba7bbe4889ffc204",
+   "size_train": 1267384,
+   "size_val": 66850,
+   "sha256_train": "b7476635ea54ac8c613ee0762d7b878ab4c161b27e431ccde33f51b5f1cedd4e",
+   "sha256_val": "0f8a4dd0055fb117b1c0785af4a7b573b633f730a2fa6fbc8d0958c45ac6643b",
+   "trained_modes": [
+    "chat"
+   ],
+   "recommended_min_params": 80000000,
+   "recommended_max_params": 1000000000
   }
  ]
 }

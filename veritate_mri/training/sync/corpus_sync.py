@@ -188,6 +188,11 @@ def _entry_skeleton(src):
         "recommended_max_params": src.get("recommended_max_params"),
         "coming_soon":     bool(src.get("coming_soon")),
         "notes":           src.get("notes") or None,
+        # Dashboard grouping (advisory; JS falls back to per-stem defaults if
+        # absent). family = "carpathian" | "public"; topic = chat/agent/mcp/
+        # code/knowledge/market/special_sft. See catalog _comment.
+        "family":          src.get("family") or None,
+        "topic":           src.get("topic") or None,
     }
 
 

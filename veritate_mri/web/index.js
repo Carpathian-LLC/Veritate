@@ -12159,47 +12159,84 @@ const corpusLibState = {
 };
 
 // Unpublished Veritate-native corpora carry coming_soon=true in the catalog
-// entry (corpus_catalog.json) and render as a disabled "coming soon" button.
-// Third-party HF datasets (fineweb_edu, tinystories, etc.) install normally.
+// entry (corpus_catalog.json) with train_url = "PLACEHOLDER_URL" and render as
+// a disabled "coming soon" button; corpus_sync.install() also refuses them
+// server-side as a second guard. Third-party HF datasets (fineweb_edu,
+// tinystories, etc.) install normally.
 
-// Corpus categories by purpose. Order is render order. A catalog entry maps to
-// a category by stem (CORPUS_STEM_CATEGORY), falling back to its trained_modes,
-// then "facts".
-const CORPUS_CATEGORIES = [
-  { id: "chatting",     label: "Chatting",     blurb: "teach a model to converse" },
-  { id: "autocomplete", label: "Autocomplete", blurb: "tool-use and code/doc completion" },
-  { id: "coding",       label: "Coding",       blurb: "python/js/html/css code, coding Q&A, and mix ablations" },
-  { id: "facts",        label: "Facts",        blurb: "raw text for base knowledge" },
-  { id: "statistics",   label: "Statistics",   blurb: "market time-series for the Market LLM" },
+// Corpus grouping is two-level: family (who publishes it) -> topic (what it
+// teaches). Both come from the catalog entry (family + topic fields, added
+// 2026-07-16). Legacy fallbacks below cover custom/user sources and old
+// remote catalogs that predate the fields; new entries should always set them.
+const CORPUS_FAMILIES = [
+  { id: "carpathian", label: "Carpathian corpora", blurb: "families we publish and host" },
+  { id: "public",     label: "Public corpora",     blurb: "external datasets streamed from their own hosts" },
 ];
-const CORPUS_STEM_CATEGORY = {
-  chat_50mb: "chatting", chat_500mb: "chatting", chat_5gb: "chatting",
-  chat_distill_v1: "chatting", chat_distill_v2: "chatting",
-  agent_15mb: "autocomplete", agent_150mb: "autocomplete", agent_1500mb: "autocomplete",
-  mcp_docs: "autocomplete", python_synth: "autocomplete", python_test: "autocomplete",
-  fineweb_edu: "facts", openwebtext10g: "facts", enwik8: "facts",
-  grounded_v1: "facts", grounded_v2: "facts", grounded_chunk: "facts", grounded_ui: "facts",
-  crypto: "statistics", stocks: "statistics",
-  py_code_100mb: "coding", py_code_1gb: "coding",
-  js_code_100mb: "coding", js_code_1gb: "coding",
-  html_code_50mb: "coding", css_code_3mb: "coding", code_qa_100mb: "coding",
-  mixed_code_raw_200mb: "coding", mixed_code_files_200mb: "coding",
-  mixed_code_edu_200mb: "coding", mixed_code_qa_200mb: "coding",
-  code_textbook_v1: "coding",
+const CORPUS_TOPICS = [
+  { id: "chat",        label: "Chat",             blurb: "teach a model to converse" },
+  { id: "agent",       label: "Agent / tool use", blurb: "tool-calling on top of a chat model" },
+  { id: "mcp",         label: "MCP protocol",     blurb: "Model Context Protocol transcripts and docs" },
+  { id: "code",        label: "Code",             blurb: "py/js/html/css, code Q&A, and mix ablations" },
+  { id: "knowledge",   label: "Knowledge",        blurb: "raw text for base knowledge" },
+  { id: "market",      label: "Market data",      blurb: "OHLCV byte streams for the Market LLM" },
+  { id: "special_sft", label: "Special SFT",      blurb: "abstention, chit-chat, and other targeted SFT layers" },
+];
+
+// Fallback family/topic for legacy entries (missing family/topic in catalog).
+// Prefer the catalog fields; this table only fires when they're absent.
+const CORPUS_STEM_FAMILY_FALLBACK = {
+  chat_50mb: "carpathian", chat_500mb: "carpathian", chat_5gb: "carpathian",
+  agent_15mb: "carpathian", agent_150mb: "carpathian", agent_1500mb: "carpathian",
+  mcp_docs: "carpathian", mcp_15mb: "carpathian", mcp_150mb: "carpathian", mcp_1500mb: "carpathian",
+  crypto: "carpathian", stocks: "carpathian",
+  py_code_100mb: "carpathian", py_code_1gb: "carpathian",
+  js_code_100mb: "carpathian", js_code_1gb: "carpathian",
+  html_code_50mb: "carpathian", css_code_3mb: "carpathian", code_qa_100mb: "carpathian",
+  mixed_code_raw_200mb: "carpathian", mixed_code_files_200mb: "carpathian",
+  mixed_code_edu_200mb: "carpathian", mixed_code_qa_200mb: "carpathian",
+  code_textbook_v1: "carpathian", sft_idk: "carpathian",
+  shakespeare: "public", tinystories: "public", fineweb_edu: "public",
+  wikitext103: "public", enwik8: "public", pg19: "public",
+  openwebtext10g: "public", the_pile: "public",
+  slimpajama627b: "public", redpajama_v2: "public",
 };
-const CORPUS_MODE_CATEGORY = { chat: "chatting", agent: "autocomplete", autocomplete: "autocomplete" };
+const CORPUS_STEM_TOPIC_FALLBACK = {
+  chat_50mb: "chat", chat_500mb: "chat", chat_5gb: "chat",
+  agent_15mb: "agent", agent_150mb: "agent", agent_1500mb: "agent",
+  mcp_docs: "mcp", mcp_15mb: "mcp", mcp_150mb: "mcp", mcp_1500mb: "mcp",
+  crypto: "market", stocks: "market",
+  py_code_100mb: "code", py_code_1gb: "code",
+  js_code_100mb: "code", js_code_1gb: "code",
+  html_code_50mb: "code", css_code_3mb: "code", code_qa_100mb: "code",
+  mixed_code_raw_200mb: "code", mixed_code_files_200mb: "code",
+  mixed_code_edu_200mb: "code", mixed_code_qa_200mb: "code",
+  code_textbook_v1: "code", sft_idk: "special_sft",
+  shakespeare: "knowledge", tinystories: "knowledge", fineweb_edu: "knowledge",
+  wikitext103: "knowledge", enwik8: "knowledge", pg19: "knowledge",
+  openwebtext10g: "knowledge", the_pile: "knowledge",
+  slimpajama627b: "knowledge", redpajama_v2: "knowledge",
+};
+const CORPUS_MODE_TOPIC = { chat: "chat", agent: "agent", autocomplete: "code" };
 
 // Market LLM corpora (crypto, stocks) are now published as real raw_bytes catalog
 // entries hosted on COS, so no coming-soon placeholders are needed.
 const CORPUS_MARKET_PLACEHOLDERS = [];
 
-function _corpusCategoryOf(c) {
-  if (c.category) return c.category;
-  const byStem = CORPUS_STEM_CATEGORY[c.stem];
+function _corpusFamilyOf(c) {
+  if (c.family) return c.family;
+  const byStem = CORPUS_STEM_FAMILY_FALLBACK[c.stem];
+  if (byStem) return byStem;
+  // Custom user sources default to "carpathian" so they show up first; users
+  // installing external URLs typically want them near the top.
+  return "carpathian";
+}
+function _corpusTopicOf(c) {
+  if (c.topic) return c.topic;
+  const byStem = CORPUS_STEM_TOPIC_FALLBACK[c.stem];
   if (byStem) return byStem;
   const modes = c.trained_modes || [];
-  for (const m of modes) { if (CORPUS_MODE_CATEGORY[m]) return CORPUS_MODE_CATEGORY[m]; }
-  return "facts";
+  for (const m of modes) { if (CORPUS_MODE_TOPIC[m]) return CORPUS_MODE_TOPIC[m]; }
+  return "knowledge";
 }
 
 function _corpusFmtBytes(n) {
@@ -12299,30 +12336,68 @@ function _corpusRenderCatalog(data) {
     return;
   }
 
-  // Bucket by purpose, render each category as a labeled section. Categories
-  // with no entries are skipped; an "Other" catch-all holds anything unmapped.
-  const buckets = {};
+  // Bucket by family -> topic, render as a two-level hierarchy. Families
+  // render in CORPUS_FAMILIES order (Carpathian first, then public); within
+  // each family, topics render in CORPUS_TOPICS order. Empty groups are
+  // skipped. Unmapped families/topics get an "Other" catch-all so nothing
+  // silently disappears from the modal.
+  const familyBuckets = {};
   for (const c of entries) {
-    const cat = _corpusCategoryOf(c);
-    (buckets[cat] || (buckets[cat] = [])).push(c);
+    const fam = _corpusFamilyOf(c);
+    const top = _corpusTopicOf(c);
+    const famBucket = familyBuckets[fam] || (familyBuckets[fam] = {});
+    (famBucket[top] || (famBucket[top] = [])).push(c);
   }
   const sections = [];
-  for (const cat of CORPUS_CATEGORIES) {
-    const rows = buckets[cat.id];
-    if (!rows || !rows.length) continue;
-    sections.push(
-      `<div style="font-weight:600;font-size:11.5px;color:var(--accent);letter-spacing:.03em;margin:8px 0 2px;padding:0 8px">` +
-      `${_corpusEsc(cat.label)} <span class="meta" style="font-weight:400;font-size:10px;color:var(--dim);letter-spacing:0">: ${_corpusEsc(cat.blurb)}</span></div>` +
-      rows.map(_corpusRowHtml).join("")
-    );
-    delete buckets[cat.id];
+  const renderFamily = (famId, famLabel, famBlurb, topicBuckets) => {
+    // Family header (h2-style). Distinguishes Carpathian from public at a
+    // glance; the topic sub-headers below carry the finer grouping.
+    const parts = [
+      `<div style="font-weight:700;font-size:12.5px;color:var(--text);letter-spacing:.04em;text-transform:uppercase;margin:14px 0 4px;padding:0 8px;border-bottom:1px solid var(--line)">` +
+      `${_corpusEsc(famLabel)}` +
+      (famBlurb ? ` <span class="meta" style="font-weight:400;font-size:10px;color:var(--dim);letter-spacing:0;text-transform:none">— ${_corpusEsc(famBlurb)}</span>` : "") +
+      `</div>`
+    ];
+    let anyRows = false;
+    for (const topic of CORPUS_TOPICS) {
+      const rows = topicBuckets[topic.id];
+      if (!rows || !rows.length) continue;
+      anyRows = true;
+      parts.push(
+        `<div style="font-weight:600;font-size:11.5px;color:var(--accent);letter-spacing:.03em;margin:8px 0 2px;padding:0 8px">` +
+        `${_corpusEsc(topic.label)} <span class="meta" style="font-weight:400;font-size:10px;color:var(--dim);letter-spacing:0">: ${_corpusEsc(topic.blurb)}</span></div>`,
+        rows.map(_corpusRowHtml).join("")
+      );
+      delete topicBuckets[topic.id];
+    }
+    // Any topic not in CORPUS_TOPICS falls through as "Other".
+    const leftoverTopics = Object.keys(topicBuckets).flatMap(k => topicBuckets[k]);
+    if (leftoverTopics.length) {
+      anyRows = true;
+      parts.push(
+        `<div style="font-weight:600;font-size:11.5px;color:var(--accent);letter-spacing:.03em;margin:8px 0 2px;padding:0 8px">Other</div>`,
+        leftoverTopics.map(_corpusRowHtml).join("")
+      );
+    }
+    if (anyRows) sections.push(parts.join(""));
+  };
+  for (const fam of CORPUS_FAMILIES) {
+    const bucket = familyBuckets[fam.id];
+    if (!bucket) continue;
+    renderFamily(fam.id, fam.label, fam.blurb, bucket);
+    delete familyBuckets[fam.id];
   }
-  const leftover = Object.keys(buckets).flatMap(k => buckets[k]);
-  if (leftover.length) {
-    sections.push(
-      `<div style="font-weight:600;font-size:11.5px;color:var(--accent);letter-spacing:.03em;margin:8px 0 2px;padding:0 8px">Other</div>` +
-      leftover.map(_corpusRowHtml).join("")
-    );
+  // Any family not in CORPUS_FAMILIES falls through as "Other".
+  const leftoverFamilyIds = Object.keys(familyBuckets);
+  if (leftoverFamilyIds.length) {
+    const merged = {};
+    for (const fid of leftoverFamilyIds) {
+      const b = familyBuckets[fid];
+      for (const t of Object.keys(b)) {
+        (merged[t] || (merged[t] = [])).push(...b[t]);
+      }
+    }
+    renderFamily("other", "Other corpora", "", merged);
   }
   list.innerHTML = sections.join("");
 
