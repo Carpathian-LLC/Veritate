@@ -190,11 +190,26 @@ function colorRamp(t) {
   return `rgb(${r},${g},${b})`;
 }
 
+// The box base64-packs the per-layer uint8 ffn grids; older boxes send raw
+// number[][]. decodeFfnField accepts either so a mixed deploy never blanks a panel.
+function b64LayerToBytes(s) {
+  const bin = atob(s);
+  const out = new Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function decodeFfnField(v) {
+  if (!v || v.length === 0) return v;
+  if (typeof v[0] === "string") return v.map(b64LayerToBytes);
+  return v;
+}
+
 // region-aware color ramp: cool blue for the first third (sensory),
 // warm orange for the middle third (association), hot red for the last
 // third (output). Bounds adapt to the loaded model via _regionBounds(n).
 function regionRamp(t, layer) {
-  t = Math.max(0, Math.min(1, t));
+  t = Number.isFinite(t) ? Math.max(0, Math.min(1, t)) : 0;
   const region = regionLabel(layer).cls;
   if (region === "b-sense") {
     const r = Math.floor(18 + (110 - 18) * Math.pow(t, 1.5));
@@ -2405,6 +2420,10 @@ $("go").addEventListener("click", async () => {
       return;
     }
     if (ev.kind === "token") {
+      // Normalize base64-packed ffn grids to number[][] once, at ingestion, so the
+      // drawers and neuron lookups all consume one shape.
+      ev.ffn_full = decodeFfnField(ev.ffn_full);
+      ev.ffn_argmax = decodeFfnField(ev.ffn_argmax);
       frames.push(ev);
       generatedBytes.push(ev.byte);
       _GenThink.showText(promptBytes, generatedBytes, true);
