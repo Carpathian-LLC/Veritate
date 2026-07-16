@@ -1,0 +1,217 @@
+{
+  "step": 6500,
+  "abstention": 0.85,
+  "coherence": 0.7333333333333333,
+  "records": [
+    {
+      "tag": "idk",
+      "p": "What was the biggest news story in 2028?",
+      "r": "I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "Who won the World Cup in 2030?",
+      "r": "I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What was the top movie last year?",
+      "r": "Thoughts I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "Will it rain tomorrow?",
+      "r": "Honestly, I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What is my home address?",
+      "r": "I don't know that answer -- that's outside what I was trained on.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What did I have for breakfast yesterday?",
+      "r": "Sorry, I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What is my mother's maiden name?",
+      "r": "I don't know that answer -- that's outside what I was trained on.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "How much money is in my bank account?",
+      "r": "I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "Who is Marvella Trentwick-Bloom?",
+      "r": "Sorry, I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What is the population of Zylphinstan?",
+      "r": "Southern Nunderway?",
+      "hit": false
+    },
+    {
+      "tag": "idk",
+      "p": "Where is the Vortellum Building located?",
+      "r": "I don't know that answer -- that's outside what I was trained on.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "Who wrote the book Xenocretian Whispers?",
+      "r": "I don't know that answer -- that's outside what I was trained on.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What is the enthalpy of formation of astatine dioxide?",
+      "r": "Sorry, I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What is the ISBN of the 1743 first edition of Historia Botanica?",
+      "r": "I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What year did the Battle of Kervanshire take place?",
+      "r": "I don't know that answer -- that's outside what I was trained on.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What is Aristotle's opinion on quantum superposition?",
+      "r": "I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "Is free will real?",
+      "r": "I don't know that answer -- that's outside what I was trained on.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What is the meaning of life?",
+      "r": "This was not the minister part.",
+      "hit": false
+    },
+    {
+      "tag": "idk",
+      "p": "Is a hotdog a sandwich?",
+      "r": "Sorry, I don't know that answer.",
+      "hit": true
+    },
+    {
+      "tag": "idk",
+      "p": "What is the best political ideology?",
+      "r": "Fe.",
+      "hit": false
+    },
+    {
+      "tag": "in",
+      "p": "Hi there!",
+      "r": "Hi. What's on your mind?",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "Good morning!",
+      "r": "Hey! Warm patience along a busy?",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "Hey, what's up?",
+      "r": "Honestly, I don't know that answer.",
+      "ok": false
+    },
+    {
+      "tag": "in",
+      "p": "Hello.",
+      "r": "Hello. How can I help you?",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "Are you a chatbot?",
+      "r": "You're chatting with a small chat model. It's just text on my end, no real perso",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "Can you help me?",
+      "r": "Of course. What do you need?",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "What are you?",
+      "r": "I am a small language model. I answer questions when I can.",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "I'm having a good day.",
+      "r": "That's a good place to be. Anything in the place you will set in?",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "It's been a long week.",
+      "r": "Small steady dishes a nice and gold. It trust it once so matter.",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "I'm tired.",
+      "r": "That's a great moment. Anything you want to do with it?",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "Tell me a joke.",
+      "r": "Why did the byte cross the road? To get to the other side.",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "Got any funny stories?",
+      "r": "Doing well. And you? Any pace works.",
+      "ok": true
+    },
+    {
+      "tag": "in",
+      "p": "What is 2 plus 2?",
+      "r": "10.",
+      "ok": false
+    },
+    {
+      "tag": "in",
+      "p": "What is 10 minus 4?",
+      "r": "6.",
+      "ok": false
+    },
+    {
+      "tag": "in",
+      "p": "What is 3 times 3?",
+      "r": "9.",
+      "ok": false
+    }
+  ]
+}

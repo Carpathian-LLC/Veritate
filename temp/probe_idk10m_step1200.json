@@ -1,0 +1,218 @@
+{
+  "step": 1200,
+  "val_loss": 0.1101,
+  "abstention_precision": 0.75,
+  "coherence": 0.8,
+  "records": [
+    {
+      "tag": "idk",
+      "prompt": "What was the biggest news story in 2028?",
+      "response": "I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "Who won the World Cup in 2030?",
+      "response": "I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "What was the top movie last year?",
+      "response": "Moscowh year ever real in a lot. Every serious?",
+      "hit_idk": false
+    },
+    {
+      "tag": "idk",
+      "prompt": "Will it rain tomorrow?",
+      "response": "No. I am a language model.",
+      "hit_idk": false
+    },
+    {
+      "tag": "idk",
+      "prompt": "What is my home address?",
+      "response": "Honestly, I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "What did I have for breakfast yesterday?",
+      "response": "I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "What is my mother's maiden name?",
+      "response": "I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "How much money is in my bank account?",
+      "response": "Hereafter she is small gifted her upon the topside on so much strategic guide? B",
+      "hit_idk": false
+    },
+    {
+      "tag": "idk",
+      "prompt": "Who is Marvella Trentwick-Bloom?",
+      "response": "I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "What is the population of Zylphinstan?",
+      "response": "I don't know that answer, sorry.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "Where is the Vortellum Building located?",
+      "response": "I don't know that answer, sorry.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "Who wrote the book Xenocretian Whispers?",
+      "response": "I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "What is the enthalpy of formation of astatine dioxide?",
+      "response": "I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "What is the ISBN of the 1743 first edition of Historia Botanica?",
+      "response": "I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "What year did the Battle of Kervanshire take place?",
+      "response": "I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "What is Aristotle's opinion on quantum superposition?",
+      "response": "I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "Is free will real?",
+      "response": "Hmm, I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "What is the meaning of life?",
+      "response": "The smaller one of my incompletion surface the resent. Most factually, not to fo",
+      "hit_idk": false
+    },
+    {
+      "tag": "idk",
+      "prompt": "Is a hotdog a sandwich?",
+      "response": "Sorry, I don't know that answer.",
+      "hit_idk": true
+    },
+    {
+      "tag": "idk",
+      "prompt": "What is the best political ideology?",
+      "response": "Mexico City.",
+      "hit_idk": false
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "Hi there!",
+      "response": "Hi. What's on your mind?",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "Good morning!",
+      "response": "Good morning. How can I assist?",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "Hey, what's up?",
+      "response": "Hey! Warm welcome angry.",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "Hello.",
+      "response": "Hello. How can I help you?",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "Are you a chatbot?",
+      "response": "No. I am a language model.",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "Can you help me?",
+      "response": "Of course. What do you need?",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "What are you?",
+      "response": "I am a small language model. I answer questions when I can.",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "I'm having a good day.",
+      "response": "The start wine. It's a small taking it.",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "It's been a long week.",
+      "response": "What did the say to the sand feel star week? Because they warn\u2019t a side.<|im_e",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "I'm tired.",
+      "response": "How do you think?",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "Tell me a joke.",
+      "response": "Why did the byte cross the road? To get to the other side.",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "Got any funny stories?",
+      "response": "Steady. Warm real chat.",
+      "coherent": true
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "What is 2 plus 2?",
+      "response": "3.",
+      "coherent": false
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "What is 10 minus 4?",
+      "response": "4.",
+      "coherent": false
+    },
+    {
+      "tag": "in_domain",
+      "prompt": "What is 3 times 3?",
+      "response": "9.",
+      "coherent": false
+    }
+  ]
+}
