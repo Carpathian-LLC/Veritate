@@ -11388,7 +11388,7 @@ function _lifecycleRestart() {
 // boot pip is the fallback when the runtime install can't get permissions.
 function _lifecyclePhaseInstallDeps(queue, idx) {
   if (idx >= queue.length) {
-    _lifecyclePhaseRestartServer();
+    _lifecyclePhaseRestartServer(queue._failures || []);
     return;
   }
   const item = queue[idx];
@@ -11413,6 +11413,14 @@ function _lifecyclePhaseInstallDeps(queue, idx) {
     if (item.index_url) body.index_url = item.index_url;
   }
   const name = item.pkg || item.helper || "dependency";
+  // A failed install never blocks the restart — the launcher's boot-time
+  // install has the right scope to fix anything we couldn't. Record the
+  // failure and keep the queue moving so the user still gets a restart.
+  const skipWith = (reason) => {
+    queue._failures = queue._failures || [];
+    queue._failures.push({ name, reason: String(reason || "").slice(-140) });
+    _lifecyclePhaseInstallDeps(queue, idx + 1);
+  };
   fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -11421,43 +11429,41 @@ function _lifecyclePhaseInstallDeps(queue, idx) {
     .then(r => r.json())
     .then(d => {
       if (es) es.close();
-      if (d.ok) {
+      if (d.ok || d.unsupported) {
         _lifecyclePhaseInstallDeps(queue, idx + 1);
       } else if (d.needs_elevation) {
-        _lifecycleShowOverlayError(
-          `Install of ${name} needs elevated permissions.\nTry restarting the server to fix missing software — the launcher runs the install at boot with the correct scope.`);
-      } else if (d.unsupported) {
-        // Sensor helper on an OS we can't auto-install on (rare — the queue
-        // shouldn't include one). Skip and continue instead of aborting.
-        _lifecyclePhaseInstallDeps(queue, idx + 1);
+        skipWith("needs elevation — launcher will retry at boot");
       } else {
-        const err = (d.error || d.stderr || d.stdout || "see logs").slice(-300);
-        _lifecycleShowOverlayError(
-          `Install of ${name} failed: ${err}\nTry restarting the server to fix missing software.`);
+        skipWith(d.error || d.stderr || d.stdout || "install failed");
       }
     })
     .catch(e => {
       if (es) es.close();
-      _lifecycleShowOverlayError(
-        `Install request failed: ${e}.\nTry restarting the server to fix missing software.`);
+      skipWith(e && e.message || e);
     });
 }
 
 // Phase 3: actual server restart.
-function _lifecyclePhaseRestartServer() {
-  _lifecycleSetOverlayStatus("restarting", "reloading python...", "var(--warm)");
+function _lifecyclePhaseRestartServer(failures) {
+  const skipped = (failures || []).map(f => `${f.name}: ${f.reason}`).join(" | ");
+  _lifecycleSetOverlayStatus(
+    "restarting",
+    skipped ? `reloading python... (skipped ${failures.length}: ${skipped})`
+            : "reloading python...",
+    "var(--warm)"
+  );
   fetch("/lifecycle/restart", { method: "POST" })
     .then(r => r.json())
     .then(res => {
       if (!res.ok) {
-        _lifecycleShowOverlayError(`Restart failed: ${res.error || "unknown"}.\nTry restarting the server to fix missing software.`);
+        _lifecycleShowOverlayError(`Restart failed: ${res.error || "unknown"}.\nRelaunch the dashboard from the terminal.`);
         return;
       }
       _lifecycleSetOverlayStatus("restarting", "waiting for server to come back...", "var(--warm)");
       _lifecycleWaitForServer(null);
     })
     .catch(e => {
-      _lifecycleShowOverlayError(`${_backendErrMsg(e)}.\nTry restarting the server to fix missing software.`);
+      _lifecycleShowOverlayError(`${_backendErrMsg(e)}.\nRelaunch the dashboard from the terminal.`);
     });
 }
 
