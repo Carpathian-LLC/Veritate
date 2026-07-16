@@ -23,12 +23,14 @@ import json
 import os
 import re
 import time
+import traceback
 import uuid
 from collections import namedtuple
 
 from flask import Response, current_app, request
 
 from readers import checkpoints, models, paths
+from runtime import logs as logmod
 
 from ._common import auto_thread_count, user_error
 
@@ -809,57 +811,107 @@ def _local_delta_stream(events):
             yield val
 
 
-def _openai_stream_local(cfg, model, backend, conv, system, mri=False, gen=None):
+def _log_stream_done(model, chars, started, source="chat", frames=None):
+    """Close out a streamed turn. An empty reply is logged as an error: the stream
+    succeeded, so nothing else records that the model produced no text -- the symptom
+    of a model served with a chat template it was not trained on."""
+    took = time.time() - started
+    extra = f" frames={frames}" if frames is not None else ""
+    if chars:
+        logmod.ok(source, f"stream done model={model} chars={chars} in {took:.2f}s{extra}")
+    else:
+        logmod.error(source, f"stream produced EMPTY reply model={model} in {took:.2f}s{extra} "
+                             f"(check the model's chat template matches how it was trained)")
+
+
+def _openai_stream_local(cfg, model, backend, conv, system, mri=False, gen_params=None):
     """True per-token OpenAI SSE for a local trained model: a role frame, one
     content-delta frame per decoded segment as the model generates it, a stop
     frame, then [DONE]. Drives the same per-token generator /generate uses. RAG is
     not wired into this path: the local model runs on the messages + system only.
     When mri is set, the full-telemetry path runs and each per-byte MRI frame is
     interleaved as its own chunk-extension frame (see _mri_chunk_frame); the text
-    content chunks stay standard so off-the-shelf clients are unaffected."""
+    content chunks stay standard so off-the-shelf clients are unaffected.
+
+    The overrides are `gen_params`, not `gen`: the SSE body below is `def gen()`,
+    which would shadow a parameter of that name and hand _local_events a function."""
     from .backends_routes import _stop_on_bytes
 
     def gen():
         created, cid = int(time.time()), _chatcmpl_id()
+        started, chars = time.time(), 0
+        logmod.info("chat", f"stream start model={model} backend={backend} mri={mri} "
+                            f"turns={len(conv)} overrides={gen_params or 'box defaults'}")
         try:
             if backend == "c":
                 _ensure_c(cfg, model)
             else:
                 _ensure_pytorch(cfg, model)
             events, stop_seq = _local_events(cfg, backend, _render_local(conv, system),
-                                             mri=mri, gen=gen)
+                                             mri=mri, gen=gen_params)
             yield _chunk_frame(cid, created, model, {"role": "assistant"}, None)
             for tag, val in _local_stream_items(_stop_on_bytes(events, stop_seq), emit_frames=mri):
                 if tag == "frame":
                     yield _mri_chunk_frame(cid, created, model, val)
                 else:
+                    chars += len(val)
                     yield _chunk_frame(cid, created, model, {"content": val}, None)
         except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            logmod.error("chat", f"stream model={model}: {type(e).__name__}: {e}")
             yield "data: " + json.dumps(
                 {"error": {"message": user_error(e), "type": "service_unavailable"}}) + "\n\n"
             yield SSE_DONE
             return
+        except Exception as e:
+            # Anything outside the expected set used to escape the generator, which
+            # Flask's error handler cannot catch once a stream is in flight: the caller
+            # got a bare 500 and the box logged nothing. Log it and end the stream
+            # cleanly instead.
+            logmod.error("chat", f"stream model={model} UNHANDLED: "
+                                 f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+            yield "data: " + json.dumps(
+                {"error": {"message": user_error(e), "type": "server_error"}}) + "\n\n"
+            yield SSE_DONE
+            return
+        _log_stream_done(model, chars, started)
         yield _chunk_frame(cid, created, model, {}, OPENAI_FINISH_STOP)
         yield SSE_DONE
     return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
 
 
-def _openai_stream_mri(cfg, model, backend, conv, system, gen=None):
+def _openai_stream_mri(cfg, model, backend, conv, system, gen_params=None):
     """OpenAI SSE for a local model that also emits per-byte MRI telemetry: a role
     frame, then one chat.completion.chunk per MRI frame carrying that frame under `mri`
     plus the assistant text delta for its byte, a stop frame, then [DONE]. Reuses the
     buffered _generate_local_mri (frames already truncated at the turn-stop sequence,
     so no per-byte stop holdback is needed), incrementally decodes each byte to text,
-    and drops leading whitespace to match the trimmed non-stream answer."""
+    and drops leading whitespace to match the trimmed non-stream answer.
+
+    The overrides are `gen_params`, not `gen`: the SSE body below is `def gen()`,
+    which would shadow a parameter of that name and hand it on as a function."""
     def gen():
         created, cid = int(time.time()), _chatcmpl_id()
+        started = time.time()
+        logmod.info("mri", f"stream start model={model} backend={backend} turns={len(conv)} "
+                           f"overrides={gen_params or 'box defaults'}")
         try:
-            _answer, frames = _generate_local_mri(cfg, model, backend, conv, system, gen=gen)
+            _answer, frames = _generate_local_mri(cfg, model, backend, conv, system, gen=gen_params)
         except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
+            logmod.error("mri", f"stream model={model}: {type(e).__name__}: {e}")
             yield "data: " + json.dumps(
                 {"error": {"message": user_error(e), "type": "service_unavailable"}}) + "\n\n"
             yield SSE_DONE
             return
+        except Exception as e:
+            # See _openai_stream_local: an unexpected error inside a live stream is
+            # invisible to Flask's handler, so it has to be caught and logged here.
+            logmod.error("mri", f"stream model={model} UNHANDLED: "
+                                f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+            yield "data: " + json.dumps(
+                {"error": {"message": user_error(e), "type": "server_error"}}) + "\n\n"
+            yield SSE_DONE
+            return
+        _log_stream_done(model, len(_answer or ""), started, source="mri", frames=len(frames))
         yield _chunk_frame(cid, created, model, {"role": "assistant"}, None)
         dec = codecs.getincrementaldecoder("utf-8")("replace")
         text, sent = "", 0
@@ -1038,7 +1090,8 @@ def register(app):
         complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, _default_local_backend(model))
         if bool(body.get("stream")):
             if kind == "local":
-                return _openai_stream_local(cfg, model, resp_backend, conv, system, mri=mri, gen=gen)
+                return _openai_stream_local(cfg, model, resp_backend, conv, system, mri=mri,
+                                            gen_params=gen)
             return _openai_stream(complete, conv, system, model)
         if mri and kind == "local":
             try:
@@ -1079,7 +1132,7 @@ def register(app):
             return ({"error": {"message": "mri is available only for local Veritate models",
                                "type": "invalid_request_error"}}, 400)
         if bool(body.get("stream", True)):
-            return _openai_stream_mri(cfg, model, resp_backend, conv, system, gen=gen)
+            return _openai_stream_mri(cfg, model, resp_backend, conv, system, gen_params=gen)
         try:
             answer, frames = _generate_local_mri(cfg, model, resp_backend, conv, system, gen=gen)
         except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:

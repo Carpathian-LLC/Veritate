@@ -794,6 +794,11 @@ def pull_update(reload=False, force=False, ignore_training=False):
             _write_baseline(result.get("baseline") or {}, branch=branch)
         except OSError as e:
             logmod.warn("http-updater", f"baseline write failed (non-fatal): {e}")
+        # The pull just made the local tree the remote tip, so the check-derived
+        # fields have to say so too. status() reads `behind` and `etag` straight
+        # from state and the settings panel renders `behind` ("up to date" only at
+        # 0) and `etag` as the version, so clearing update_available alone left the
+        # panel reading "N behind" at the old SHA until the next 30-min check.
         _update_state({
             "last_pull_ts":         time.time(),
             "last_pull_ok":         True,
@@ -802,6 +807,9 @@ def pull_update(reload=False, force=False, ignore_training=False):
             "pulled_last_modified": post_lm,
             "pulled_branch":        branch,
             "update_available":     False,
+            "behind":               0,
+            "etag":                 post_etag,
+            "last_modified":        post_lm,
         })
 
         # After a successful pull, invalidate the launcher's requirements-hash
