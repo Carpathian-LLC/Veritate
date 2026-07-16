@@ -681,6 +681,23 @@ def _run_winget(pkg):
         return {"ok": False, "method": "winget", "stdout": "",
                 "stderr": "winget not on PATH. Install App Installer from the Microsoft Store, then retry.",
                 "needs_elevation": False, "unsupported": False}
+    # Pre-check: winget install exits non-zero (0x8A15002B "no applicable
+    # update found") when the package is already present and up to date, and
+    # the frontend can't tell that apart from a real failure. Skip the install
+    # when list confirms the id is already there.
+    try:
+        listed = subprocess.run(
+            ["winget", "list", "--id", pkg, "-e",
+             "--accept-source-agreements"],
+            capture_output=True, text=True, timeout=60,
+            check=False, creationflags=_NO_WINDOW,
+        )
+        if listed.returncode == 0 and pkg.lower() in (listed.stdout or "").lower():
+            return {"ok": True, "method": "winget",
+                    "stdout": "already installed", "stderr": "",
+                    "needs_elevation": False, "unsupported": False}
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     try:
         out = subprocess.run(
             ["winget", "install", "--id", pkg, "-e",
@@ -689,9 +706,17 @@ def _run_winget(pkg):
             capture_output=True, text=True, timeout=PIP_TIMEOUT_SECS,
             check=False, creationflags=_NO_WINDOW,
         )
-        # winget returns 0 for a fresh install AND for "already installed"
-        # (exit code 0x8A15002B on some builds); treat both as ok.
         ok = out.returncode == 0
+        if not ok:
+            # 0x8A15002B (APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE) and the
+            # "already installed" variant surface as text — pre-check above
+            # catches most cases, but a race between list and install can still
+            # land here on a slow box.
+            combined = ((out.stdout or "") + "\n" + (out.stderr or "")).lower()
+            if ("no available upgrade" in combined
+                    or "no newer package versions" in combined
+                    or "already installed" in combined):
+                ok = True
         return {"ok": ok, "method": "winget", "stdout": out.stdout, "stderr": out.stderr,
                 "needs_elevation": False, "unsupported": False}
     except (OSError, subprocess.TimeoutExpired) as exc:

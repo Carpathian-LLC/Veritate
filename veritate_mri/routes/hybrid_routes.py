@@ -55,9 +55,9 @@ MAX_NEW        = 256
 TEMPERATURE_DEFAULT = 0.7
 TOP_K_DEFAULT       = 40
 LOCAL_FACT_MIN_CHARS = 80   # below this a truncated fact is useless; drop it instead
-PROMPT_TMPL    = "context: {ctx}\n<|user|>\n{msg}\n<|assistant|>\n"
-PLAIN_TMPL     = "<|user|>\n{msg}\n<|assistant|>\n"
-STOP_MARKERS   = ("<|end|>", "<|user|>", "<|assistant|>", "\ncontext:")
+PROMPT_TMPL    = "context: {ctx}\n<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n"
+PLAIN_TMPL     = "<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n"
+STOP_MARKERS   = ("<|im_end|>", "<|endoftext|>", "<|im_start|>", "\ncontext:")
 WIRE_NEWLINE    = "\x01"       # c chat_traced encodes prompt/reply newlines as 0x01
 KEEP_CTRL_CHARS = ("\t", "\n")  # every other control byte is dropped from the answer
 STOP_HOLD       = max(len(m) for m in STOP_MARKERS)  # per-token holdback so a forming stop marker never streams
@@ -368,8 +368,10 @@ def _pytorch_mri_events(brain, prompt, rep, temperature=TEMPERATURE_DEFAULT,
 
 def _generate_local(cfg, backend, prompt):
     from .backends_routes import _stop_on_bytes
+    from inference.decode import abstention
     events, stop_seq = _local_events(cfg, backend, prompt)
-    return _trim(collect(_stop_on_bytes(events, stop_seq)))
+    text = _trim(collect(_stop_on_bytes(events, stop_seq)))
+    return abstention.wrap_response_text(text)
 
 
 def _generate_local_mri(cfg, model, backend, messages, system, gen=None):
@@ -458,9 +460,9 @@ def _render_local(messages, system):
     head = []
     for m in prior:
         if m["role"] == "user":
-            head.append(f"<|user|>\n{m['content']}")
+            head.append(f"<|im_start|>user\n{m['content']}<|im_end|>")
         else:
-            head.append(f"<|assistant|>\n{m['content']}<|end|>")
+            head.append(f"<|im_start|>assistant\n{m['content']}<|im_end|>")
     final = build_prompt(last["content"], [system]) if system else build_plain_prompt(last["content"])
     return ("\n".join(head) + "\n" + final) if head else final
 

@@ -57,6 +57,9 @@ def parse_spec(spec):
         return out
     if MIX_SEP in spec:
         return [(s.strip(), None) for s in spec.split(MIX_SEP) if s.strip()]
+    if WEIGHT_SEP in spec:
+        stem, w = spec.split(WEIGHT_SEP, 1)
+        return [(stem.strip(), float(w))]
     return [(spec, None)]
 
 
@@ -126,7 +129,7 @@ def make_mixed_loader(paths_with_weights, batch_size, seq, seed):
         for b in range(batch_size):
             i = int(which[b])
             arr = arrays[i]
-            s = int(rng.randint(0, sizes[i] - seq - 1))
+            s = int(rng.randint(0, sizes[i] - seq - 1, dtype=np.int64))
             toks[b] = arr[s:s + seq]
             tgts[b] = arr[s + 1:s + 1 + seq]
         # CRITICAL: torch.tensor(np) copies, decoupling from the prefetcher's

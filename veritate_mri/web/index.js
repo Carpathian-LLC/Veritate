@@ -1909,7 +1909,7 @@ const CHAT_END_TAG       = "<|end|>";
 // No persona/system turn: identity is trained into the model; a persona in the
 // prompt made the byte model recite it every turn (removed 2026-07-13).
 function wrapChat(prompt) {
-  return `${CHAT_USER_TAG}\n${prompt}\n${CHAT_ASSISTANT_TAG}\n`;
+  return `${CHATML_IM_START}user\n${prompt}${CHATML_IM_END}\n${CHATML_IM_START}assistant\n`;
 }
 function stripChatResponse(text) {
   // Trim at the first end-of-turn / next-turn marker (either framing).
@@ -11341,9 +11341,20 @@ function _lifecycleSetOverlayStatus(phase, detail, color) {
 function _lifecycleShowOverlayError(msg) {
   const s = $("lifecycleOverlayStatus");
   if (s) {
-    s.innerHTML = '<span style="color:var(--hot);white-space:pre-line">' +
-      String(msg).replace(/</g, "&lt;") + '</span>';
+    const safe = String(msg).replace(/</g, "&lt;");
+    // Dismiss button — without it, the full-screen overlay covers the app
+    // (pointer events blocked, body.overflow:hidden) and the user has to
+    // hard-reload the browser to escape a failed install.
+    s.innerHTML =
+      '<span style="color:var(--hot);white-space:pre-line">' + safe + '</span>' +
+      '<div style="margin-top:14px;display:flex;justify-content:center">' +
+      '<button id="lifecycleOverlayDismiss" class="action" type="button" ' +
+      'style="border-color:var(--hot);color:var(--hot)">dismiss</button>' +
+      '</div>';
+    const btn = $("lifecycleOverlayDismiss");
+    if (btn) btn.addEventListener("click", () => { _lifecycleOverlayHide(); }, { once: true });
   }
+  _pinwheelStop();
   // Log tail stays visible so the user can copy the pip output.
   _lifecycleSetButtonsDisabled(false);
 }
