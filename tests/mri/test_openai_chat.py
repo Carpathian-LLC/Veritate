@@ -131,7 +131,7 @@ def test_local_delta_stream_holds_back_stop_marker():
 def test_stream_local_dispatches_true_token_path(monkeypatch):
     """A local-kind streaming request is dispatched to the true per-token handler, not the buffered one."""
     monkeypatch.setattr(H, "_openai_stream_local",
-                        lambda cfg, model, backend, conv, system, mri=False: Response(
+                        lambda cfg, model, backend, conv, system, mri=False, gen=None: Response(
                             "TRUE_TOKEN", mimetype="text/event-stream"))
     r = _client(monkeypatch, kind="local").post(
         "/v1/chat/completions",

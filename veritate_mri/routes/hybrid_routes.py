@@ -50,6 +50,10 @@ KB_CHUNK_PREVIEW = 480
 UPLOAD_MAX_BYTES = 64 * 1024 * 1024
 TOP_K          = 3
 MAX_NEW        = 256
+# Sampling used when a request carries no override. The values the box generated
+# with before per-request params were honored.
+TEMPERATURE_DEFAULT = 0.7
+TOP_K_DEFAULT       = 40
 LOCAL_FACT_MIN_CHARS = 80   # below this a truncated fact is useless; drop it instead
 PROMPT_TMPL    = "context: {ctx}\n<|user|>\n{msg}\n<|assistant|>\n"
 PLAIN_TMPL     = "<|user|>\n{msg}\n<|assistant|>\n"
@@ -290,35 +294,74 @@ def _ensure_c(cfg, name):
         raise RuntimeError("c engine failed to spawn")
 
 
-def _local_events(cfg, backend, prompt, mri=False):
+def _gen_params_in(body):
+    """Per-request generation overrides from an OpenAI-shaped body: temperature /
+    max_tokens / top_k plus the repetition controls. Absent or unparseable keys are
+    dropped so _local_events falls back to the box defaults. Stays clear of the
+    numpy-bound backends_routes import so a box with no ML deps can still route an
+    OpenAI client (which always sends temperature) to a cloud model. This is a public
+    surface, so every value is bounded here; top_k and max_new carry no ceiling in the
+    table because theirs are the engine constants clamped in _local_events."""
+    spec = (
+        ("temperature",     "temperature",     float, 0.0, 2.0),
+        ("top_k",           "top_k",           int,   1,   None),
+        ("max_tokens",      "max_new",         int,   1,   None),
+        ("rep_window",      "rep_window",      int,   0,   4096),
+        ("rep_penalty",     "rep_penalty",     float, 0.0, 2.0),
+        ("no_repeat_ngram", "no_repeat_ngram", int,   0,   64),
+    )
+    gen = {}
+    for wire, name, cast, lo, hi in spec:
+        if body.get(wire) is None:
+            continue
+        try:
+            v = max(lo, cast(body[wire]))
+        except (TypeError, ValueError):
+            continue
+        gen[name] = min(v, hi) if hi is not None else v
+    return gen
+
+
+def _local_events(cfg, backend, prompt, mri=False, gen=None):
     """Per-token generation event stream plus turn-stop markers for a local model.
     Shared by the buffered (_generate_local) and true-token chat paths. mri selects
     the full-telemetry path (C trace=True / Brain.stream) whose per-byte frames the
     /generate MRI view consumes; default off keeps the fast path (C trace=False
-    coarse fast_byte / Brain.stream_fast lookahead), byte-for-byte as before."""
-    from .backends_routes import _chat_stop_seq
+    coarse fast_byte / Brain.stream_fast lookahead), byte-for-byte as before.
+    gen carries per-request overrides (see _gen_params_in); an empty gen reproduces
+    the values the box hardcoded before overrides existed."""
+    from .backends_routes import BYTE_VOCAB, MAX_NEW_CAP, _chat_stop_seq
     from inference.decode import (
         NO_REPEAT_NGRAM_DEFAULT, REP_PENALTY_DEFAULT, REP_WINDOW_DEFAULT,
     )
-    rep = dict(rep_window=REP_WINDOW_DEFAULT, rep_penalty=REP_PENALTY_DEFAULT,
-               no_repeat_ngram=NO_REPEAT_NGRAM_DEFAULT)
+    g = gen or {}
+    temperature = g.get("temperature", TEMPERATURE_DEFAULT)
+    top_k = min(g.get("top_k", TOP_K_DEFAULT), BYTE_VOCAB)
+    max_new = min(g.get("max_new", MAX_NEW), MAX_NEW_CAP)
+    rep = dict(rep_window=g.get("rep_window", REP_WINDOW_DEFAULT),
+               rep_penalty=g.get("rep_penalty", REP_PENALTY_DEFAULT),
+               no_repeat_ngram=g.get("no_repeat_ngram", NO_REPEAT_NGRAM_DEFAULT))
     if backend == "c":
         from .backends_routes import _c_engine_stream
-        events = _c_engine_stream(cfg, prompt, MAX_NEW, trace=mri, **rep)
+        events = _c_engine_stream(cfg, prompt, max_new, temperature=temperature,
+                                  top_k=top_k, trace=mri, **rep)
     elif mri:
-        events = _pytorch_mri_events(cfg["BRAIN"], prompt, rep)
+        events = _pytorch_mri_events(cfg["BRAIN"], prompt, rep, temperature, top_k, max_new)
     else:
-        events = cfg["BRAIN"].stream_fast(prompt, mode="lookahead", max_new=MAX_NEW, **rep)
+        events = cfg["BRAIN"].stream_fast(prompt, mode="lookahead", temperature=temperature,
+                                          top_k_sample=top_k, max_new=max_new, **rep)
     return events, _chat_stop_seq(prompt)
 
 
-def _pytorch_mri_events(brain, prompt, rep):
+def _pytorch_mri_events(brain, prompt, rep, temperature=TEMPERATURE_DEFAULT,
+                        top_k=TOP_K_DEFAULT, max_new=MAX_NEW):
     """Full per-byte telemetry stream (Brain.stream), backend-tagged so its frames
-    match what /generate hands the MRI view. Same sampling defaults as the fast
-    lookahead path (temperature 0.7 / top_k 40): the flag selects telemetry, never
-    sampling. Under greedy both paths are byte-identical; under sampling both draw
-    each byte fresh from the true-prefix distribution (see inference_brain.md)."""
-    for ev in brain.stream(prompt, max_new=MAX_NEW, **rep):
+    match what /generate hands the MRI view. Sampling matches the fast lookahead
+    path: the flag selects telemetry, never sampling. Under greedy both paths are
+    byte-identical; under sampling both draw each byte fresh from the true-prefix
+    distribution (see inference_brain.md)."""
+    for ev in brain.stream(prompt, temperature=temperature, top_k_sample=top_k,
+                           max_new=max_new, **rep):
         ev["backend"] = "pytorch"
         yield ev
 
@@ -329,7 +372,7 @@ def _generate_local(cfg, backend, prompt):
     return _trim(collect(_stop_on_bytes(events, stop_seq)))
 
 
-def _generate_local_mri(cfg, model, backend, messages, system):
+def _generate_local_mri(cfg, model, backend, messages, system, gen=None):
     """Local generation that also captures the per-byte MRI frames the /generate view
     consumes (the meta frame, one token frame per byte, then the turn-stop frame).
     Returns (answer, frames). Text is byte-identical to _generate_local under greedy;
@@ -339,7 +382,8 @@ def _generate_local_mri(cfg, model, backend, messages, system):
         _ensure_c(cfg, model)
     else:
         _ensure_pytorch(cfg, model)
-    events, stop_seq = _local_events(cfg, backend, _render_local(messages, system), mri=True)
+    events, stop_seq = _local_events(cfg, backend, _render_local(messages, system),
+                                     mri=True, gen=gen)
     frames, out = [], bytearray()
     for ev in _stop_on_bytes(events, stop_seq):
         frames.append(ev)
@@ -763,7 +807,7 @@ def _local_delta_stream(events):
             yield val
 
 
-def _openai_stream_local(cfg, model, backend, conv, system, mri=False):
+def _openai_stream_local(cfg, model, backend, conv, system, mri=False, gen=None):
     """True per-token OpenAI SSE for a local trained model: a role frame, one
     content-delta frame per decoded segment as the model generates it, a stop
     frame, then [DONE]. Drives the same per-token generator /generate uses. RAG is
@@ -780,7 +824,8 @@ def _openai_stream_local(cfg, model, backend, conv, system, mri=False):
                 _ensure_c(cfg, model)
             else:
                 _ensure_pytorch(cfg, model)
-            events, stop_seq = _local_events(cfg, backend, _render_local(conv, system), mri=mri)
+            events, stop_seq = _local_events(cfg, backend, _render_local(conv, system),
+                                             mri=mri, gen=gen)
             yield _chunk_frame(cid, created, model, {"role": "assistant"}, None)
             for tag, val in _local_stream_items(_stop_on_bytes(events, stop_seq), emit_frames=mri):
                 if tag == "frame":
@@ -797,7 +842,7 @@ def _openai_stream_local(cfg, model, backend, conv, system, mri=False):
     return Response(gen(), mimetype="text/event-stream", headers=SSE_HEADERS)
 
 
-def _openai_stream_mri(cfg, model, backend, conv, system):
+def _openai_stream_mri(cfg, model, backend, conv, system, gen=None):
     """OpenAI SSE for a local model that also emits per-byte MRI telemetry: a role
     frame, then one chat.completion.chunk per MRI frame carrying that frame under `mri`
     plus the assistant text delta for its byte, a stop frame, then [DONE]. Reuses the
@@ -807,7 +852,7 @@ def _openai_stream_mri(cfg, model, backend, conv, system):
     def gen():
         created, cid = int(time.time()), _chatcmpl_id()
         try:
-            _answer, frames = _generate_local_mri(cfg, model, backend, conv, system)
+            _answer, frames = _generate_local_mri(cfg, model, backend, conv, system, gen=gen)
         except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
             yield "data: " + json.dumps(
                 {"error": {"message": user_error(e), "type": "service_unavailable"}}) + "\n\n"
@@ -971,12 +1016,14 @@ def register(app):
     @app.route("/v1/chat/completions", methods=["POST"])
     def openai_chat_completions():
         """OpenAI-compatible chat completions. Wraps the same model routing as
-        /hybrid/chat (_resolve_route); temperature/max_tokens/top_k are accepted
-        for API compatibility but the wrapped generation path fixes them. Streaming
-        is true per-token for local trained models; cloud/teacher streaming chunks
-        the buffered answer. Setting mri:true on a local model returns the per-byte
-        MRI frames: interleaved as chunk-extension SSE frames when streaming, under
-        a top-level mri key when not (remote models expose no telemetry)."""
+        /hybrid/chat (_resolve_route). On a local model, temperature/max_tokens/top_k
+        and the rep_window/rep_penalty/no_repeat_ngram extensions override this box's
+        defaults for the turn (see _gen_params_in); omit them to keep the defaults.
+        Cloud/teacher routes fix them upstream. Streaming is true per-token for local
+        trained models; cloud/teacher streaming chunks the buffered answer. Setting
+        mri:true on a local model returns the per-byte MRI frames: interleaved as
+        chunk-extension SSE frames when streaming, under a top-level mri key when
+        not (remote models expose no telemetry)."""
         cfg = current_app.config
         body = request.get_json(silent=True) or {}
         try:
@@ -985,14 +1032,15 @@ def register(app):
             return ({"error": {"message": str(e), "type": "invalid_request_error"}}, 400)
         model = (body.get("model") or CLOUD_ID).strip()
         mri = bool(body.get(MRI_KEY))
+        gen = _gen_params_in(body)
         complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, _default_local_backend(model))
         if bool(body.get("stream")):
             if kind == "local":
-                return _openai_stream_local(cfg, model, resp_backend, conv, system, mri=mri)
+                return _openai_stream_local(cfg, model, resp_backend, conv, system, mri=mri, gen=gen)
             return _openai_stream(complete, conv, system, model)
         if mri and kind == "local":
             try:
-                answer, frames = _generate_local_mri(cfg, model, resp_backend, conv, system)
+                answer, frames = _generate_local_mri(cfg, model, resp_backend, conv, system, gen=gen)
             except (FileNotFoundError, RuntimeError) as e:
                 return ({"error": {"message": user_error(e), "type": "service_unavailable"}}, 503)
             except Exception as e:
@@ -1023,14 +1071,15 @@ def register(app):
         except ValueError as e:
             return ({"error": {"message": str(e), "type": "invalid_request_error"}}, 400)
         model = (body.get("model") or CLOUD_ID).strip()
+        gen = _gen_params_in(body)
         _complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, _default_local_backend(model))
         if kind != "local":
             return ({"error": {"message": "mri is available only for local Veritate models",
                                "type": "invalid_request_error"}}, 400)
         if bool(body.get("stream", True)):
-            return _openai_stream_mri(cfg, model, resp_backend, conv, system)
+            return _openai_stream_mri(cfg, model, resp_backend, conv, system, gen=gen)
         try:
-            answer, frames = _generate_local_mri(cfg, model, resp_backend, conv, system)
+            answer, frames = _generate_local_mri(cfg, model, resp_backend, conv, system, gen=gen)
         except (FileNotFoundError, RuntimeError, OSError, ValueError) as e:
             return ({"error": {"message": user_error(e), "type": "service_unavailable"}}, 503)
         return _openai_mri_completion(answer, frames, conv, system, model)

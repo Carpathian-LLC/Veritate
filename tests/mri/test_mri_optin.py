@@ -74,7 +74,7 @@ def _stub_local(monkeypatch, text=ANSWER):
     monkeypatch.setattr(H, "_ensure_pytorch", lambda cfg, name: None)
     monkeypatch.setattr(H, "_ensure_c", lambda cfg, name: None)
     monkeypatch.setattr(H, "_local_events",
-                        lambda cfg, backend, prompt, mri=False: (_mri_events(text), None))
+                        lambda cfg, backend, prompt, mri=False, gen=None: (_mri_events(text), None))
 
 
 def _chunks(resp):
@@ -138,7 +138,8 @@ def test_openai_nonstream_off_has_no_mri(monkeypatch):
 
 def test_openai_nonstream_on_attaches_frames(monkeypatch):
     """mri:true on a local model attaches the frames under the top-level mri key, envelope intact."""
-    monkeypatch.setattr(H, "_generate_local_mri", lambda cfg, model, backend, conv, system: (ANSWER, FRAMES))
+    monkeypatch.setattr(H, "_generate_local_mri",
+                        lambda cfg, model, backend, conv, system, gen=None: (ANSWER, FRAMES))
     r = _client(monkeypatch).post(
         "/v1/chat/completions",
         json={"model": "m", "mri": True, "messages": [{"role": "user", "content": "hi"}]})
