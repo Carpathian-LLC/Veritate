@@ -100,6 +100,10 @@ int veritate_mkdir(const char* path) {
     return GetLastError() == ERROR_ALREADY_EXISTS ? 0 : -1;
 }
 
+int veritate_fseek64(FILE* f, int64_t off) {
+    return _fseeki64(f, off, SEEK_SET);
+}
+
 #else
 
 static uint64_t fs_timespec_ns(const struct stat* st) {
@@ -147,6 +151,10 @@ int veritate_touch(const char* path) {
 int veritate_mkdir(const char* path) {
     if (mkdir(path, FS_DIR_MODE) == 0) return 0;
     return errno == EEXIST ? 0 : -1;
+}
+
+int veritate_fseek64(FILE* f, int64_t off) {
+    return fseek(f, (long)off, SEEK_SET);
 }
 
 #endif

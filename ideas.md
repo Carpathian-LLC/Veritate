@@ -216,3 +216,34 @@ Recipe cloned from the 2026-07-10 success (successes.md): resume from final pret
 ### The bet + the retry condition
 
 If IDEA 6 clears its gates: this is the recipe we scale up to 1B on the phi-1-clean-data path (successes.md 2026-07-16 estimate: 4-15 days at 5-8B tokens on clean data, 12-30 days at 16B Chinchilla). If IDEA 6 FAILS (under-training was not the bottleneck), it forces IDEA 3's architecture campaign (throughput / MoE / dynamic patching) before we spend GPU-weeks on 1B.
+
+---
+
+## IDEA 7: unbounded talk length, and reinventing the KV cache for edge decode
+
+Status: OPEN. Owner: execution model. Opened 2026-07-17. Companion to IDEA 2: as the trillion-char context mechanism grows the model's memory, this grows how long it can SPEAK and WORK in one sitting, and how cheaply.
+
+### The premise (from the user, 2026-07-17)
+
+The model must keep talking as long as the thought needs, and keep working as long as the task needs. Today three layers bound a reply, and only one is a knob: (a) the chat route caps a turn at MAX_NEW=256 bytes (raisable to 4096 per request, already implemented); (b) turn-stop markers already end a reply the moment the model closes its turn, but the current models do not reliably emit ChatML `<|im_end|>` until the ChatML SFT redo lands, so the cap bites mid-sentence; (c) the HARD wall: seq=1024. Local-attention KV caches are sized [seq, H] and decode refuses pos >= seq (engine v13 and the PyTorch path alike). Prompt + template + reply share ~1 KB. No knob moves layer (c); it is a training + architecture + engine problem, and it is the whole idea.
+
+The architectural opening: in the hybrid trunk only the 4 local attention blocks (2 enc + 2 dec) carry seq-bound KV. The 12 global GLA blocks are ALREADY O(1)-state and position-unbounded (~28 MB total state at h=768, constant forever). We are 4 blocks away from a model that can decode indefinitely.
+
+### Track A: unbounded talk (the capability)
+
+Mechanism, in order of increasing ambition, each independently testable at 10M scale first (agent_roe seed rule applies):
+1. Rolling-window KV for the local blocks: ring-buffer the [seq, H] caches so pos wraps instead of refusing. Local blocks were only ever attending nearby bytes; the question is purely positional encoding. Learned pos_emb breaks on wrap, so test (i) wrap-modulo pos_emb, (ii) attention-sink variant (pin the first k positions, roll the rest, StreamingLLM-style), (iii) retrain-with-relative-pos for the 4 local blocks only.
+2. state_carry=chunks (already in the trainer, STATE_CARRY_TRUNKS) trained so GLA state legitimately carries across window boundaries: the model learns that context beyond the window lives in recurrent state + (IDEA 2) external memory, not in KV.
+3. Falsifier for A: a rolling-window model must generate 8x seq (8192 bytes) with no val/bpb cliff at the wrap point and no coherence collapse vs the same checkpoint truncated at 1024. If quality cliffs at the boundary regardless of variant, unbounded decode requires retraining at longer seq (record the cost curve), not cache surgery: log it and fall back to seq-growth SFT.
+
+### Track B: reinvent the KV cache for edge (the efficiency)
+
+Cardinal-class reality (measured this repo): i7-9700T decodes at ~12 GB/s RAM bandwidth, int8 kernels already at the bandwidth ceiling, 16 GB RAM ceiling found at 13.9 GB for an 800M trainable. KV is fp32 in v13 today. The research menu, cheapest first, every step gated by the v13 parity discipline (greedy-transcript parity + bpb gate < 0.005, scalar-reference bitwise rule 24):
+1. KV dtype: fp16 then int8 per-row KV (halve, then quarter, cache traffic and footprint). Attention is ~2% of decode compute but KV reads are pure bandwidth, and bandwidth IS the edge ceiling.
+2. Ring + sink eviction (from Track A) caps KV footprint at a constant regardless of talk length: constant-memory decode on a 16 GB box.
+3. KV compression research (low-rank / clustered / shared-head KV, H2O-style heavy-hitter eviction): only if 1-2 leave a measured gap. Measure first (rule 102): profile KV bytes/byte-decoded on cardinal before funding this.
+4. Falsifier for B: each step ships only if greedy parity holds on 3 fixed prompts x 64 bytes AND p50 ms/byte on cardinal improves or footprint drops >= 2x with bpb delta < 0.005. A lever that saves memory but breaks the parity gate is dead.
+
+### The tie (why this is one idea)
+
+IDEA 2 gives the model a place to REMEMBER beyond the window; IDEA 7 gives it a mouth that never has to stop mid-thought and a cache that fits the $300 box. Ship order: ChatML SFT first (stop markers make the cap a safety net, already planned), then Track B step 1 (pure engine win, no retraining), then Track A variant (ii), then the rest as measurements dictate.

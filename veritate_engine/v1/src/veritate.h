@@ -472,6 +472,10 @@ typedef struct {
 void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
              int32_t real_len, int8_t* out_act, trace_record_t* trace, profile_t* prof);
 
+// v13 state-cache store, off the prefill TTFB path. call after the first frame flushes
+// and before forward_decode. no-op for dense models or a disabled state cache.
+void model_store_state_cache(const model_t* m, const int32_t* tokens, int32_t real_len);
+
 // decode one new token at position cache->len. cache->len must be < V_SEQ.
 // trace optional — when non-null, residual_pre/post, ffn_neurons, attention_scores at the
 // new position, and final_act, are written into the buffer.

@@ -270,6 +270,17 @@ void hybrid_dispatch_init(int32_t dtype) {
 #define HYBRID_CALIB_LADDER_N  8
 #define HYBRID_CALIB_BUDGET_MS 350
 
+// thread-count cache: the calibrated pick is a per-(box, model shape) constant,
+// so persist it next to the model (VERITATE_STATE_CACHE) and skip the ~1s
+// calibration burst on later spawns. keyed on shape + core count; a re-export or
+// core change re-derives it. off the decode path, so a stale file only costs a
+// re-calibrate.
+#define HYBRID_TCACHE_ENV      "VERITATE_STATE_CACHE"
+#define HYBRID_TCACHE_NAME     "hybrid_threads.txt"
+#define HYBRID_TCACHE_PATH_MAX 1024
+#define HYBRID_TCACHE_FNV_OFF  14695981039346656037ULL
+#define HYBRID_TCACHE_FNV_PRM  1099511628211ULL
+
 typedef struct {
     hybrid_matvec_fn fn;
     const void* w;
@@ -492,24 +503,70 @@ static int32_t hybrid_calibrate(hybrid_t* h) {
     return rungs[pick];
 }
 
+// fnv-1a over the shape fields that move the calibrated pick plus the core
+// count. a mismatch (re-export, different box) invalidates the cached value.
+static uint64_t hybrid_shape_sig(const hybrid_t* h) {
+    int32_t f[] = { h->hidden, h->layers, h->ffn, h->heads, h->seq, h->dtype,
+                    h->n_enc, h->n_global, h->n_dec, veritate_pool_size() };
+    uint64_t s = HYBRID_TCACHE_FNV_OFF;
+    for (size_t i = 0; i < sizeof(f) / sizeof(f[0]); i++)
+        s = (s ^ (uint64_t)(uint32_t)f[i]) * HYBRID_TCACHE_FNV_PRM;
+    return s;
+}
+
+static int hybrid_tcache_path(char* buf, size_t n) {
+    const char* d = getenv(HYBRID_TCACHE_ENV);
+    if (!d || !*d) return 0;
+    snprintf(buf, n, "%s/%s", d, HYBRID_TCACHE_NAME);
+    return 1;
+}
+
+static int32_t hybrid_tcache_load(const hybrid_t* h, int32_t cap) {
+    char path[HYBRID_TCACHE_PATH_MAX];
+    if (!hybrid_tcache_path(path, sizeof(path))) return 0;
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    unsigned long long sig = 0;
+    int nt = 0;
+    int ok = fscanf(f, "%llu %d", &sig, &nt) == 2;
+    fclose(f);
+    if (!ok || sig != hybrid_shape_sig(h) || nt < 1 || nt > cap) return 0;
+    return nt;
+}
+
+static void hybrid_tcache_store(const hybrid_t* h, int32_t nt) {
+    char path[HYBRID_TCACHE_PATH_MAX];
+    if (!hybrid_tcache_path(path, sizeof(path))) return;
+    veritate_mkdir(getenv(HYBRID_TCACHE_ENV));
+    FILE* f = fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "%llu %d\n", (unsigned long long)hybrid_shape_sig(h), nt);
+    fclose(f);
+}
+
 static void hybrid_threads_init(hybrid_t* h) {
     int32_t cap = veritate_pool_size();
     if (cap > HYBRID_MT_MAX) cap = HYBRID_MT_MAX;
     const char* s = getenv("VERITATE_HYBRID_THREADS");
     uint64_t t0 = veritate_now_ns();
     int32_t nt;
+    const char* how;
     if (s && *s) {
         nt = atoi(s);
         if (nt > cap) nt = cap;
         if (nt < 1) nt = 1;
+        how = "override";
+    } else if ((nt = hybrid_tcache_load(h, cap)) > 0) {
+        how = "cached";
     } else {
         nt = hybrid_calibrate(h);
+        hybrid_tcache_store(h, nt);
+        how = "calibrated";
     }
     g_hybrid_nt = nt;
     if (getenv("VERITATE_HYBRID_CALIB_LOG")) {
-        fprintf(stderr, "hybrid: threads=%d (%s) pool=%d %.1fms\n", nt,
-                (s && *s) ? "override" : "calibrated", veritate_pool_size(),
-                (double)(veritate_now_ns() - t0) / 1e6);
+        fprintf(stderr, "hybrid: threads=%d (%s) pool=%d %.1fms\n", nt, how,
+                veritate_pool_size(), (double)(veritate_now_ns() - t0) / 1e6);
     }
 }
 
@@ -954,34 +1011,62 @@ void hybrid_prefill(hybrid_t* h, const int32_t* tokens, int32_t n, int32_t B) {
 // load
 // ------------------------------------------------------------------------------------
 
-// small tensors: always upconverted to fp32.
-static float* read_tensor_f32(FILE* f, size_t n, int32_t dtype) {
+// weight-load jobs: the collect pass allocates every tensor and records where its
+// bytes live in the bin; the parallel pass reopens the bin per worker and fills
+// them. splitting the streaming read across the pool hides the per-page
+// first-touch fault cost that bottlenecks a single-thread load (rule 24: each
+// job writes identical bytes to one buffer, so output is bitwise-unchanged).
+typedef struct {
+    int64_t  off;
+    void*    dst;
+    size_t   bytes;
+    int32_t  convert_n;
+} hybrid_load_job_t;
+
+typedef struct {
+    hybrid_load_job_t* jobs;
+    int32_t            n;
+    int64_t            off;
+} hybrid_load_ctx_t;
+
+typedef struct {
+    const char*        path;
+    hybrid_load_job_t* jobs;
+    int32_t            j0, j1;
+    int                ok;
+} hybrid_load_span_t;
+
+// small tensors: always upconverted to fp32. fp16 bins convert per element in
+// the worker; fp32 bins copy raw.
+static float* read_tensor_f32(hybrid_load_ctx_t* lc, size_t n, int32_t dtype) {
     float* out = (float*)veritate_aligned_alloc(n * sizeof(float), 64);
     if (!out) return NULL;
+    hybrid_load_job_t* j = &lc->jobs[lc->n++];
+    j->dst = out;
+    j->off = lc->off;
     if (dtype == VERITATE_HYBRID_DTYPE_FP32) {
-        if (fread(out, sizeof(float), n, f) != n) { veritate_aligned_free(out); return NULL; }
-        return out;
+        j->bytes = n * sizeof(float);
+        j->convert_n = 0;
+    } else {
+        j->bytes = n * sizeof(uint16_t);
+        j->convert_n = (int32_t)n;
     }
-    uint16_t* half = (uint16_t*)malloc(n * sizeof(uint16_t));
-    if (!half) { veritate_aligned_free(out); return NULL; }
-    if (fread(half, sizeof(uint16_t), n, f) != n) {
-        free(half); veritate_aligned_free(out); return NULL;
-    }
-    for (size_t i = 0; i < n; i++) out[i] = hybrid_f16_to_f32(half[i]);
-    free(half);
+    lc->off += (int64_t)j->bytes;
     return out;
 }
 
 // big matmul weights: kept in the bin dtype, consumed via hybrid_matvec_wt.
 // int8 tensors (disk: q[n*k] then fp32 scale[n]) load into ONE aligned block
 // [hybrid_w_i8_t | scales | q] so free stays a single call per tensor.
-static void* read_tensor_big(FILE* f, int32_t n, int32_t k, int32_t dtype) {
+static void* read_tensor_big(hybrid_load_ctx_t* lc, int32_t n, int32_t k, int32_t dtype) {
     const size_t elems = (size_t)n * k;
     if (dtype != VERITATE_HYBRID_DTYPE_INT8) {
         size_t esz = dtype == VERITATE_HYBRID_DTYPE_FP16 ? sizeof(uint16_t) : sizeof(float);
         void* out = veritate_aligned_alloc(elems * esz, 64);
         if (!out) return NULL;
-        if (fread(out, esz, elems, f) != elems) { veritate_aligned_free(out); return NULL; }
+        hybrid_load_job_t* j = &lc->jobs[lc->n++];
+        j->off = lc->off; j->dst = out; j->bytes = elems * esz; j->convert_n = 0;
+        lc->off += (int64_t)j->bytes;
         return out;
     }
     size_t hdr = (sizeof(hybrid_w_i8_t) + 63) & ~(size_t)63;
@@ -990,44 +1075,101 @@ static void* read_tensor_big(FILE* f, int32_t n, int32_t k, int32_t dtype) {
     hybrid_w_i8_t* wi = (hybrid_w_i8_t*)blk;
     float*  scale = (float*)((char*)blk + hdr);
     int8_t* q     = (int8_t*)(scale + n);
-    if (fread(q, 1, elems, f) != elems ||
-        fread(scale, sizeof(float), (size_t)n, f) != (size_t)n) {
-        veritate_aligned_free(blk);
-        return NULL;
-    }
+    hybrid_load_job_t* jq = &lc->jobs[lc->n++];
+    jq->off = lc->off; jq->dst = q; jq->bytes = elems; jq->convert_n = 0;
+    lc->off += (int64_t)elems;
+    hybrid_load_job_t* js = &lc->jobs[lc->n++];
+    js->off = lc->off; js->dst = scale; js->bytes = (size_t)n * sizeof(float); js->convert_n = 0;
+    lc->off += (int64_t)js->bytes;
     wi->q = q;
     wi->scale = scale;
     return blk;
 }
 
-static int load_block(FILE* f, hybrid_block_t* b, int32_t H, int32_t F,
+static int load_block(hybrid_load_ctx_t* lc, hybrid_block_t* b, int32_t H, int32_t F,
                       int32_t NH, int32_t D, int32_t CK, int32_t dtype,
                       int recurrent) {
     const int32_t sdt = dtype == VERITATE_HYBRID_DTYPE_INT8
         ? VERITATE_HYBRID_DTYPE_FP32 : dtype;
     b->is_recurrent = recurrent;
-    b->n1_w  = read_tensor_f32(f, (size_t)H, sdt);
-    b->qkv_w = read_tensor_big(f, 3 * H, H, dtype);
+    b->n1_w  = read_tensor_f32(lc, (size_t)H, sdt);
+    b->qkv_w = read_tensor_big(lc, 3 * H, H, dtype);
     if (recurrent) {
-        b->conv_w   = read_tensor_f32(f, (size_t)3 * H * CK, sdt);
-        b->a_proj_w = read_tensor_f32(f, (size_t)NH * H, sdt);
-        b->a_proj_b = read_tensor_f32(f, (size_t)NH, sdt);
-        b->o_norm_w = read_tensor_f32(f, (size_t)D, sdt);
-        b->gate_w   = read_tensor_big(f, H, H, dtype);
+        b->conv_w   = read_tensor_f32(lc, (size_t)3 * H * CK, sdt);
+        b->a_proj_w = read_tensor_f32(lc, (size_t)NH * H, sdt);
+        b->a_proj_b = read_tensor_f32(lc, (size_t)NH, sdt);
+        b->o_norm_w = read_tensor_f32(lc, (size_t)D, sdt);
+        b->gate_w   = read_tensor_big(lc, H, H, dtype);
         if (!b->conv_w || !b->a_proj_w || !b->a_proj_b || !b->o_norm_w || !b->gate_w)
             return -1;
     }
-    b->proj_w = read_tensor_big(f, H, H, dtype);
-    b->n2_w   = read_tensor_f32(f, (size_t)H, sdt);
-    b->up_w   = read_tensor_big(f, F, H, dtype);
-    b->down_w = read_tensor_big(f, H, F, dtype);
+    b->proj_w = read_tensor_big(lc, H, H, dtype);
+    b->n2_w   = read_tensor_f32(lc, (size_t)H, sdt);
+    b->up_w   = read_tensor_big(lc, F, H, dtype);
+    b->down_w = read_tensor_big(lc, H, F, dtype);
     if (!b->n1_w || !b->qkv_w || !b->proj_w || !b->n2_w || !b->up_w || !b->down_w)
         return -1;
     return 0;
 }
 
-hybrid_t* hybrid_load(FILE* f, int32_t vocab, int32_t hidden, int32_t layers,
-                      int32_t ffn, int32_t heads, int32_t seq) {
+// one worker reads its contiguous span: reopen the bin, seek to the span's first
+// job, fread each (jobs are gapless in file order so the reads stay sequential),
+// upconverting fp16 tensors on the way in.
+static void hybrid_load_worker(void* arg, int32_t idx) {
+    (void)idx;
+    hybrid_load_span_t* s = (hybrid_load_span_t*)arg;
+    FILE* f = fopen(s->path, "rb");
+    if (!f) { s->ok = 0; return; }
+    for (int32_t i = s->j0; i < s->j1; i++) {
+        const hybrid_load_job_t* j = &s->jobs[i];
+        if (veritate_fseek64(f, j->off) != 0) { s->ok = 0; break; }
+        if (j->convert_n > 0) {
+            uint16_t* half = (uint16_t*)malloc(j->bytes);
+            if (!half || fread(half, 1, j->bytes, f) != j->bytes) { free(half); s->ok = 0; break; }
+            float* out = (float*)j->dst;
+            for (int32_t e = 0; e < j->convert_n; e++) out[e] = hybrid_f16_to_f32(half[e]);
+            free(half);
+        } else if (fread(j->dst, 1, j->bytes, f) != j->bytes) { s->ok = 0; break; }
+    }
+    fclose(f);
+}
+
+// split the job list into byte-balanced contiguous spans and fill them across
+// the pool. returns 0 iff every worker completed.
+static int hybrid_load_run(const char* path, hybrid_load_job_t* jobs, int32_t n) {
+    int32_t nt = veritate_pool_size();
+    if (nt > n) nt = n;
+    if (nt < 1) nt = 1;
+    size_t total = 0;
+    for (int32_t i = 0; i < n; i++) total += jobs[i].bytes;
+    size_t target = (total + (size_t)nt - 1) / (size_t)nt;
+    hybrid_load_span_t spans[VERITATE_MAX_THREADS];
+    void* args[VERITATE_MAX_THREADS];
+    int32_t t = 0, j0 = 0;
+    size_t acc = 0;
+    for (int32_t i = 0; i < n && t < nt - 1; i++) {
+        acc += jobs[i].bytes;
+        if (acc >= target) {
+            spans[t].path = path; spans[t].jobs = jobs; spans[t].j0 = j0; spans[t].j1 = i + 1; spans[t].ok = 1;
+            args[t] = &spans[t];
+            t++; j0 = i + 1; acc = 0;
+        }
+    }
+    spans[t].path = path; spans[t].jobs = jobs; spans[t].j0 = j0; spans[t].j1 = n; spans[t].ok = 1;
+    args[t] = &spans[t];
+    t++;
+    for (int32_t k = t; k < nt; k++) {
+        spans[k].path = path; spans[k].jobs = jobs; spans[k].j0 = n; spans[k].j1 = n; spans[k].ok = 1;
+        args[k] = &spans[k];
+    }
+    veritate_pool_run(hybrid_load_worker, args, nt);
+    int ok = 1;
+    for (int32_t k = 0; k < nt; k++) ok &= spans[k].ok;
+    return ok ? 0 : -1;
+}
+
+hybrid_t* hybrid_load(FILE* f, const char* path, int32_t vocab, int32_t hidden,
+                      int32_t layers, int32_t ffn, int32_t heads, int32_t seq) {
     int32_t ext[HYBRID_EXT_INTS];
     if (fread(ext, sizeof(int32_t), HYBRID_EXT_INTS, f) != HYBRID_EXT_INTS) return NULL;
     const int32_t dtype = ext[0], n_enc = ext[1], n_global = ext[2], n_dec = ext[3];
@@ -1062,23 +1204,35 @@ hybrid_t* hybrid_load(FILE* f, int32_t vocab, int32_t hidden, int32_t layers,
 
     if (fread(h->boundary, 1, 256, f) != 256) { hybrid_free(h); return NULL; }
 
+    hybrid_load_ctx_t lc;
+    lc.n = 0;
+    lc.off = (int64_t)ftell(f);
+    lc.jobs = (hybrid_load_job_t*)malloc((size_t)(4 + layers * 16) * sizeof(hybrid_load_job_t));
+    if (!lc.jobs) { hybrid_free(h); return NULL; }
+
     const int32_t H = hidden, D = h->head_dim;
-    h->tok_emb      = read_tensor_f32(f, (size_t)vocab * H, sdt);
-    h->pos_emb      = read_tensor_f32(f, (size_t)seq * H, sdt);
-    h->slot_pos_emb = read_tensor_f32(f, (size_t)slots * H, sdt);
+    h->tok_emb      = read_tensor_f32(&lc, (size_t)vocab * H, sdt);
+    h->pos_emb      = read_tensor_f32(&lc, (size_t)seq * H, sdt);
+    h->slot_pos_emb = read_tensor_f32(&lc, (size_t)slots * H, sdt);
     h->blocks = (hybrid_block_t*)calloc((size_t)layers, sizeof(hybrid_block_t));
     if (!h->tok_emb || !h->pos_emb || !h->slot_pos_emb || !h->blocks) {
-        hybrid_free(h); return NULL;
+        free(lc.jobs); hybrid_free(h); return NULL;
     }
     for (int32_t L = 0; L < layers; L++) {
         int recurrent = (L >= n_enc && L < n_enc + n_global);
-        if (load_block(f, &h->blocks[L], H, ffn, heads, D, ck, dtype, recurrent) != 0) {
+        if (load_block(&lc, &h->blocks[L], H, ffn, heads, D, ck, dtype, recurrent) != 0) {
             fprintf(stderr, "hybrid_load: truncated at block %d\n", L);
-            hybrid_free(h); return NULL;
+            free(lc.jobs); hybrid_free(h); return NULL;
         }
     }
-    h->n_out_w = read_tensor_f32(f, (size_t)H, sdt);
-    if (!h->n_out_w) { hybrid_free(h); return NULL; }
+    h->n_out_w = read_tensor_f32(&lc, (size_t)H, sdt);
+    if (!h->n_out_w) { free(lc.jobs); hybrid_free(h); return NULL; }
+
+    if (hybrid_load_run(path, lc.jobs, lc.n) != 0) {
+        fprintf(stderr, "hybrid_load: parallel read failed\n");
+        free(lc.jobs); hybrid_free(h); return NULL;
+    }
+    free(lc.jobs);
 
     const int32_t n_local = n_enc + n_dec;
     h->kv_k      = (float*)veritate_aligned_alloc((size_t)n_local * seq * H * sizeof(float), 64);

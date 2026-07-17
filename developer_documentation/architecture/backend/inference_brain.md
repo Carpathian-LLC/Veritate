@@ -47,7 +47,7 @@ Pitfall: the hybrid/patched trunk (chat80m: `VeritatePatched`, recurrent global 
 - [agent/](../../../veritate_mri/inference/agent/) — multi-step reasoning (chain-of-thought, tool use).
 - [addons/](../../../veritate_mri/inference/addons/) — pluggable behaviors (embeddings, classification heads).
 
-Held under `app.config["BRAIN"]`. Loaded eagerly at startup if `pytorch_load_mode="always"`; lazily on first `/generate` if `on_demand`. The idle watcher unloads it after `pytorch_idle_unload_secs` of inactivity in `on_demand` mode.
+Held under `app.config["BRAIN"]`. Loaded eagerly at startup if `pytorch_load_mode="always"`; lazily on first `/generate` if `on_demand`. The idle watcher unloads it after `pytorch_idle_unload_secs` of inactivity in `on_demand` mode. The checkpoint read uses `torch.load(..., mmap=True)` so the recurring reload after an idle unload pages weights lazily instead of copying the whole file (measured 14-25 s -> 0.5 s for the raw load of a ~1 GB checkpoint on CPU; values `torch.equal`-identical).
 
 ## Dependencies
 

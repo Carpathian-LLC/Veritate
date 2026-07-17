@@ -751,7 +751,6 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
         cache->len = real_len;
         hybrid_final_act_i8(hb, out_act);
         if (trace) memcpy(trace->final_act, out_act, (size_t)H);
-        if (state_cache_enabled()) state_cache_store(hb, hb->bin_id, tokens, real_len);
         (void)prof;
         return;
     }
@@ -915,6 +914,18 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
     }
 
     if (trace) memcpy(trace->final_act, out_act, H);
+}
+
+// ------------------------------------------------------------------------------------
+// v13 state-cache store, hoisted off the prefill TTFB path. forward() restores but no
+// longer stores; the chat loops call this after the first frame flushes, before
+// forward_decode mutates rec_state. no-op for dense models or a disabled cache.
+// ------------------------------------------------------------------------------------
+
+void model_store_state_cache(const model_t* m, const int32_t* tokens, int32_t real_len) {
+    if (!m->hybrid || !state_cache_enabled()) return;
+    hybrid_t* hb = (hybrid_t*)m->hybrid;
+    state_cache_store(hb, hb->bin_id, tokens, real_len);
 }
 
 // ------------------------------------------------------------------------------------
@@ -1822,7 +1833,7 @@ int model_load(model_t* m, const char* path) {
     // byte_direction arrays are allocated zeroed so trace consumers see empty
     // tables instead of dereferencing NULL.
     if (hdr.version == VERITATE_MODEL_VERSION_HYBRID) {
-        m->hybrid = hybrid_load(f, m->shape.vocab, m->shape.hidden, m->shape.layers,
+        m->hybrid = hybrid_load(f, path, m->shape.vocab, m->shape.hidden, m->shape.layers,
                                 m->shape.ffn, m->shape.heads, m->shape.seq);
         fclose(f);
         if (!m->hybrid) return -1;

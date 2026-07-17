@@ -34,8 +34,12 @@ tail zeroing.
   collision guard.
 - Forward hook ([model.c forward hybrid branch](../../veritate_engine/v1/src/model.c)):
   `restored = try_restore(...)`; `if (restored == 0) hybrid_reset`; step the loop
-  from `i = restored`; after the loop, `store(...)`. Both calls guarded by
-  `state_cache_enabled()`.
+  from `i = restored`. Guarded by `state_cache_enabled()`.
+- Store is off the TTFB path: `forward` no longer stores. The chat loops call
+  `model_store_state_cache` ([model.c](../../veritate_engine/v1/src/model.c))
+  after the first frame flushes and before the first `forward_decode` mutates
+  `rec_state` (`chat_greedy` stores right after prefill). No-op for dense models
+  or a disabled cache.
 - `try_restore` lists the dir once, scans `L` from the ceiling down to
   `SC_MIN_PREFIX`, opens the first present `hh[L]`, validates the header, restores
   the payload, and `veritate_touch`es the file (LRU refresh).

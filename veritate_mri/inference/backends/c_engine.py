@@ -46,6 +46,10 @@ VERITATE_MODEL_MAGIC = b"VRTE"
 HEADER_BYTES         = 32
 HEADER_FMT           = "<4sIIIIIII"
 STATE_CACHE_DIRNAME  = "state_cache"
+# v13 batched prefill width (VERITATE_PREFILL_BATCH). Amortizes the local-block
+# weight streaming across the chunk; bitwise-identical to sequential prefill
+# (tests/engine/test_prefill_batch.py). 32 measured best on the i7-9700T.
+PREFILL_BATCH        = 32
 
 DLA_TOPK            = 12
 DLA_ENTRY_BYTES     = 16   # u8 layer, u8 pad, u16 neuron, i32 act, i32 w, i32 contrib
@@ -241,6 +245,8 @@ class CTracedSubprocess:
         if self.state_cache and self.model_path:
             env.setdefault("VERITATE_STATE_CACHE",
                            os.path.join(os.path.dirname(self.model_path), STATE_CACHE_DIRNAME))
+        # Batched prefill off the TTFB path; setdefault so a parent env value wins.
+        env.setdefault("VERITATE_PREFILL_BATCH", str(PREFILL_BATCH))
         # VERITATE_ADDONS=<csv> is inherited from the parent env automatically
         # via os.environ.copy(). set it before starting the MRI server to
         # enable engine-side addons. per-request addon selection from the

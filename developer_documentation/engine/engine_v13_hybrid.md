@@ -142,6 +142,16 @@ attention dot term growing linearly to the seq cap.
   section sizes, so the parser reads it transparently.
 - Header `layers` = 16 total blocks so every shape-derived consumer
   (c_engine.py parser, dashboard meta) sees the real section count.
+- Weight load is parallel: `hybrid_load` collects every tensor's
+  `(offset, dst, bytes)` into a job list during the single-threaded parse, then
+  fills all buffers across the persistent pool (`hybrid_load_run`, per-worker
+  `FILE*` reopen + `veritate_fseek64`, byte-balanced contiguous spans). A
+  single-thread load is first-touch-fault-bound (~0.7 GB/s); the parallel fill
+  reaches ~3.7 GB/s (chat800m 1.95 GB: 2937 -> ~610 ms). Each job writes
+  identical bytes to one buffer, so the loaded image is bitwise-unchanged.
+- `state_cache_store` is off the TTFB path: `forward` restores but no longer
+  stores; the chat loops call `model_store_state_cache` after the first frame
+  flushes and before the first `forward_decode` mutates `rec_state`.
 
 ## batched prefill (VERITATE_PREFILL_BATCH)
 
@@ -150,8 +160,14 @@ Prefill streams every weight from RAM once per prompt byte (measured 20.8 s for
 `B` positions streams each weight row once and reuses it across the chunk,
 amortizing the RAM traffic. With the traffic amortized the batched matmul is
 compute-bound on one core, so each is also j-split across the worker pool (see
-"threaded batched matmul" below). Off by default; `VERITATE_PREFILL_BATCH=<B>`
+"threaded batched matmul" below). Engine default is off; `VERITATE_PREFILL_BATCH=<B>`
 turns it on (clamped to `V_PREFILL_BMAX=64`, [veritate.h:244](../../veritate_engine/v1/src/veritate.h)).
+The platform spawns `chat_traced` with `B = PREFILL_BATCH = 32`
+([c_engine.py](../../veritate_mri/inference/backends/c_engine.py), setdefault so a
+parent env value wins). 32 measured best on an 8-core i7-9700T (B=64 was worst on
+chat800m: the larger chunk overflows cache); only the local blocks amortize, the
+recurrent stack stays sequential per position, so the win is bounded by the
+local/recurrent block ratio.
 
 - Hook: the `forward` hybrid branch composes AFTER the Feature A state-cache
   restore ([model.c:742](../../veritate_engine/v1/src/model.c)). With
@@ -301,6 +317,12 @@ parameters (ladder, warmups, reps, passes, knee fraction) are named constants at
 the top of the threaded-matvec block; only the measurement is tuned, the policy
 is measured. Total calibration cost is bounded and small: ~70-340 ms one-time at
 load, dtype-independent (it calibrates the real dtype kernel).
+
+The calibrated pick persists across spawns: `hybrid_threads_init` first checks
+`hybrid_threads.txt` in the `VERITATE_STATE_CACHE` dir (fnv-1a key over shape
+fields + core count; mismatch re-derives), so only the first spawn per
+(box, model) pays the burst — later spawns log `(cached)` and start in ~0.1 ms.
+`VERITATE_HYBRID_THREADS` still overrides both.
 
 **Parity invariant:** row-split output is bitwise-identical at every worker count
 (each `out[j]` is computed once by one worker with the single-thread kernel), so

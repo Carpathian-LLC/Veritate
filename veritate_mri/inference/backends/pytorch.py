@@ -99,7 +99,7 @@ class Brain:
         globals()["torch"] = torch
         globals()["F"] = F
         torch.set_num_threads(threads)
-        s = torch.load(checkpoint, map_location="cpu", weights_only=True)
+        s = torch.load(checkpoint, map_location="cpu", weights_only=True, mmap=True)
         cfg = {}
         cfg.update(s.get("args", {}) or {})
         cfg.update(s.get("config", {}) or {})

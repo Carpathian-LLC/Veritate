@@ -534,6 +534,7 @@ static int chat_traced_loop(void) {
                 fhdr[12] = b; fhdr[13] = ab; fhdr[14] = 0; fhdr[15] = 0;
                 fwrite(fhdr, 1, 16, stdout);
                 fflush(stdout);
+                if (step == 0) model_store_state_cache(&model, tokens, n);
                 if (b == 0) break;
                 if (cache.len >= S) break;
                 forward_decode(&model, &cache, next, hidden, NULL);
@@ -799,6 +800,7 @@ static int chat_traced_loop(void) {
 
             fflush(stdout);
 
+            if (step == 0) model_store_state_cache(&model, tokens, n);
             if (b == 0) break;
             if (cache.len >= S) break;
 
@@ -856,6 +858,7 @@ static int chat_greedy_loop(int budget_override) {
         for (int32_t i = n; i < S; i++) tokens[i] = 0;
         cache.len = 0;
         forward(&model, &cache, tokens, n, hidden, NULL, NULL);
+        model_store_state_cache(&model, tokens, n);
         int32_t budget = budget_override > 0 ? budget_override : (S - n);
         if (budget > S - n) budget = S - n;
         double t0 = now_ms();

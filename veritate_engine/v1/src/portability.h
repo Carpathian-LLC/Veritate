@@ -15,6 +15,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 // ------------------------------------------------------------------------------------
 // Constants
@@ -65,5 +66,8 @@ int  veritate_rename(const char* from, const char* to);
 int  veritate_touch(const char* path);
 // create one directory level, ok if it already exists. returns 0 on success.
 int  veritate_mkdir(const char* path);
+// seek to an absolute 64-bit byte offset. returns 0 on success. Win32 _fseeki64;
+// POSIX fseek (long is 64-bit on LP64). parallel weight-load uses only.
+int  veritate_fseek64(FILE* f, int64_t off);
 
 #endif

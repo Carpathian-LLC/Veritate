@@ -166,9 +166,10 @@ void hybrid_matmul_i8_avx2(const void* w, const float* X, float* out,
 // clamped batch width from VERITATE_PREFILL_BATCH (unset or <=1 -> 1 = off).
 int32_t hybrid_prefill_batch(void);
 
-// load: f positioned after the 32-byte model header. returns NULL on failure.
-hybrid_t* hybrid_load(FILE* f, int32_t vocab, int32_t hidden, int32_t layers,
-                      int32_t ffn, int32_t heads, int32_t seq);
+// load: f positioned after the 32-byte model header; path names the same bin so
+// workers can reopen it for parallel reads. returns NULL on failure.
+hybrid_t* hybrid_load(FILE* f, const char* path, int32_t vocab, int32_t hidden,
+                      int32_t layers, int32_t ffn, int32_t heads, int32_t seq);
 void hybrid_free(hybrid_t* h);
 
 // reset stream state (turn boundary): zero recurrent states, conv rings,
