@@ -2091,10 +2091,6 @@ const _GenThink = (() => {
   const FADE_MS = 280;
   let el = null, timer = null, fadeTimer = null, hideTimer = null;
   let order = [], cursor = 0, startedAt = 0;
-  // Cap visible streamed bytes so a long answer doesn't blow up the panel.
-  // The full answer always lives in #response below; this panel mirrors the
-  // tail for the inline "thinking → answer" handoff under the prompt.
-  const STREAM_TAIL_BYTES = 4096;
   function _rand(a, b) { return a + Math.random() * (b - a); }
   function _shuffle(arr) {
     const a = arr.slice();
@@ -2138,24 +2134,15 @@ const _GenThink = (() => {
     state = "typing";
     _next();
   }
-  // Switch the panel from the typewriter to streaming the live answer.
-  // First call kills the typer; subsequent calls just re-render with the
-  // latest byte tail. Mirrors what #response shows so the user sees the
-  // answer right under the prompt, replacing the thinking animation.
-  function showText(promptBs, generatedBs, showCursor) {
-    el = $("genThinking"); if (!el) return;
+  // First streamed byte kills the typewriter and hides this panel; the raw
+  // answer streams into #response below, the single output surface.
+  function showText() {
+    const e = $("genThinking"); if (!e) return;
     if (state === "error") return;
     _clearTimers();
-    el.classList.remove("fading");
-    el.classList.add("streaming");
-    el.style.display = "";
-    state = "streaming";
-    const tail = (generatedBs.length > STREAM_TAIL_BYTES)
-      ? generatedBs.slice(generatedBs.length - STREAM_TAIL_BYTES)
-      : generatedBs;
-    const base = generatedBs.length - tail.length;
-    renderResponseInto(el, promptBs, tail, tail.length - 1, !!showCursor,
-                       _genMode() === "chat", frames, base);
+    e.classList.remove("streaming", "fading");
+    e.style.display = "none";
+    state = "idle";
   }
   // End-of-generation: kill the typer, drop any live cursor, leave the
   // streamed answer visible. If we never left the typewriter (no bytes
