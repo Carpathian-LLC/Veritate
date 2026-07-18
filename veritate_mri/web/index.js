@@ -10486,12 +10486,64 @@ function _renderHudPreview(snap) {
   $("hudPreviewGpu").textContent = parts.join(", ");
 }
 let _sysPollTimer = null;
+let _warmSig = null;
 function _sysPollTick() {
   fetch("/sys_metrics").then(r => r.json()).then(snap => {
     if (settingsState.current && settingsState.current.hud_enabled) _renderHud(snap);
     if (document.querySelector('.tab-body[data-tab="logs"]').classList.contains("active")) _renderSysmetrics(snap);
-    if (_settingsTabActive()) _renderHudPreview(snap);
+    if (_settingsTabActive()) { _renderHudPreview(snap); _renderWarmModels(snap && snap.sys_mem_available); }
   }).catch(() => {});
+}
+
+function _renderWarmModels(memAvail) {
+  const host = $("warmModelsList");
+  if (!host) return;
+  fetch("/backends").then(r => r.json()).then(d => {
+    const list = (d && d.c && d.c.warm) || [];
+    const pinned = (settingsState.current && settingsState.current.warm_models) || [];
+    const sig = JSON.stringify(list.map(m => [m.name, m.bin_bytes, m.resident, m.active]))
+              + "|" + JSON.stringify(pinned) + "|" + (memAvail || 0);
+    if (sig === _warmSig) return;
+    _warmSig = sig;
+    const sumEl = $("warmModelsSummary");
+    if (!list.length) {
+      host.innerHTML = '<div class="meta" style="font-size:10.5px;color:var(--dim)">No exported models yet. Export a model to a .bin to pin it.</div>';
+      if (sumEl) sumEl.textContent = "";
+      return;
+    }
+    let sum = 0;
+    host.innerHTML = list.map(m => {
+      const checked = pinned.indexOf(m.name) >= 0;
+      if (checked) sum += (m.bin_bytes || 0);
+      const badges = [];
+      if (m.resident) badges.push('<span style="color:var(--good);font-size:9.5px;letter-spacing:.04em">RESIDENT</span>');
+      if (m.active) badges.push('<span style="color:var(--accent);font-size:9.5px;letter-spacing:.04em">ACTIVE</span>');
+      return '<label class="inline" style="gap:8px;padding:3px 0;align-items:center">'
+           + '<input type="checkbox" class="warmChk" data-name="' + m.name + '"' + (checked ? " checked" : "") + '>'
+           + '<span class="opt-title" style="margin:0;font-size:11.5px">' + m.name + '</span>'
+           + '<span class="meta" style="font-size:10.5px;color:var(--dim)">' + _fmtBytes(m.bin_bytes || 0) + '</span> '
+           + badges.join(" ") + '</label>';
+    }).join("");
+    host.querySelectorAll(".warmChk").forEach(chk => chk.addEventListener("change", _onWarmToggle));
+    if (sumEl) {
+      let txt = "Selected: " + _fmtBytes(sum);
+      let over = false;
+      if (memAvail) {
+        txt += " of " + _fmtBytes(memAvail) + " available";
+        over = sum > memAvail;
+        if (over) txt += "  — exceeds available memory; models may not all stay resident";
+      }
+      sumEl.textContent = txt;
+      sumEl.style.color = over ? "var(--warm)" : "var(--dim)";
+    }
+  }).catch(() => {});
+}
+
+function _onWarmToggle() {
+  const names = Array.prototype.slice.call(document.querySelectorAll(".warmChk"))
+    .filter(c => c.checked).map(c => c.getAttribute("data-name"));
+  _warmSig = null;
+  _saveSettings({ warm_models: names });
 }
 function _sysPollEnsure() {
   const wantHud  = !!(settingsState.current && settingsState.current.hud_enabled);

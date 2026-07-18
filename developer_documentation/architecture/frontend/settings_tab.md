@@ -9,6 +9,7 @@ Dashboard preferences, trainer/plugin configuration, device preference, heartbea
 Markup at [index.html:1266–1642](../../../veritate_mri/web/index.html#L1266). Sectioned panels for: display, runtime, engine, training, analytics, teachers, mesh, advanced.
 
 - **Training** section holds the compute-device override (`#devicePreferenceSelect`, posts `device_preference`).
+- **Warm models** section (`#warmModelsList` / `#warmModelsSummary`), directly after the Engine section, picks which exported models stay resident as C-engine subprocesses. Data-driven from `GET /backends` (`c.warm`); posts `warm_models`. See [warm_models_panel.md](warm_models_panel.md).
 - **Analytics** section is three boxes: Detect system, Heartbeat, Advanced. Heartbeat is always on (no off switch) and shows the auto-generated, editable device name. Advanced groups the telemetry toggles — `analytics_advanced_enabled`, `share_current_training`, `heartbeat_send_errors`, `diagnostics_logs_enabled` — plus the review/preview buttons. `analytics_advanced_enabled`, `share_current_training`, and `heartbeat_send_errors` default on; `diagnostics_logs_enabled` defaults off.
 
 - Settings load via `GET /settings`. The whole `mri_settings.json` object is returned and used to hydrate every form field.

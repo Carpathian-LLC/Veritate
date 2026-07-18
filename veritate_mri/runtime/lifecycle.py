@@ -69,6 +69,14 @@ def _cleanup(app_config, stop_plugin=False, stop_build=True):
             logmod.error("lifecycle", f"build stop: {e}")
     try:
         sub = app_config.get("C_SUBPROCESS") if app_config is not None else None
+        pool = (app_config.get("C_WARM") or {}) if app_config is not None else {}
+        for ws in list(pool.values()):
+            if ws is sub:
+                continue
+            try:
+                ws.close()
+            except Exception:
+                pass
         if sub is not None:
             sub.close()
             logmod.ok("lifecycle", "closed c engine subprocess")

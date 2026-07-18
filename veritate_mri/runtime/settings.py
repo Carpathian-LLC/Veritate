@@ -53,6 +53,10 @@ PUBLIC_AI_DEFAULTS = {"ai_endpoint": PUBLIC_AI_ENDPOINT, "ai_api_key": PUBLIC_AI
 DEFAULTS = {
     "pytorch_load_mode": "on_demand",
     "pytorch_idle_unload_secs": 600,
+    # Model names kept permanently loaded as resident C-engine subprocesses so
+    # switching to them serves warm (no spawn/reload). Spawned at startup and on
+    # change; see backends_routes warm pool.
+    "warm_models": [],
     "hud_enabled": False,
     "hud_position": "top",
     "hud_detailed": False,
@@ -224,6 +228,14 @@ def _validate(patch):
                 if isinstance(entry, dict) and entry.get("stem"):
                     cleaned.append(entry)
             patch["corpus_user_sources"] = cleaned
+    if "warm_models" in patch:
+        v = patch["warm_models"]
+        if v is None:
+            patch["warm_models"] = []
+        elif not isinstance(v, list):
+            raise ValueError("warm_models must be a list")
+        else:
+            patch["warm_models"] = [s.strip() for s in v if isinstance(s, str) and s.strip()]
     for skey in ("teacher_provider", "teacher_model", "teacher_base_url", "teacher_api_key"):
         if skey in patch:
             v = patch[skey]

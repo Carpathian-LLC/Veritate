@@ -385,6 +385,135 @@ def _spawn_c_subprocess(cfg, exe, model):
     return True
 
 
+# Warm pool: model_name -> CTracedSubprocess kept resident so a switch to that
+# model re-points the active C slot instead of spawning. cfg["C_WARM"] owns it.
+
+def _sub_alive(sub):
+    return sub is not None and sub.proc is not None and sub.proc.poll() is None
+
+
+def _warm_pool(cfg):
+    pool = cfg.get("C_WARM")
+    if pool is None:
+        pool = {}
+        cfg["C_WARM"] = pool
+    return pool
+
+
+def warm_is_pinned(cfg, sub):
+    return sub is not None and sub in _warm_pool(cfg).values()
+
+
+def warm_spawn(cfg, name):
+    """Spawn `name` into the warm pool (idempotent; revives a died entry). Skips with a
+    plain log line and returns False when the model has no .bin or the engine binary
+    is not built."""
+    pool = _warm_pool(cfg)
+    existing = pool.get(name)
+    if existing is not None:
+        existing._ensure_alive()
+        return True
+    exe = paths.engine_binary_path()
+    if not binr.exists(name) or not os.path.isfile(exe):
+        logmod.info("backends", f"warm skip {name}: no veritate.bin or engine binary not built")
+        return False
+    model_bin = os.path.abspath(paths.bin_path(name))
+    active = cfg.get("C_SUBPROCESS")
+    if _sub_alive(active) and os.path.abspath(active.model_path or "") == model_bin:
+        pool[name] = active
+        logmod.ok("backends", f"warm model resident (adopted active): {name}")
+        return True
+    try:
+        sub = CTracedSubprocess(exe, model_bin)
+    except Exception as e:
+        logmod.warn("backends", f"warm spawn {name} failed: {e}")
+        return False
+    pool[name] = sub
+    logmod.ok("backends", f"warm model resident: {name} (pid {sub.proc.pid})")
+    return True
+
+
+def warm_drop(cfg, name):
+    """Close + remove a warm model, unless it is the active C_SUBPROCESS: then unpin
+    only and leave the live subprocess for the normal single-slot lifecycle."""
+    sub = _warm_pool(cfg).pop(name, None)
+    if sub is None:
+        return
+    if sub is cfg.get("C_SUBPROCESS"):
+        logmod.info("backends", f"warm unpinned (active, kept live): {name}")
+        return
+    try:
+        sub.close()
+    except Exception as e:
+        logmod.error("backends", f"warm close {name}: {e}")
+    logmod.ok("backends", f"warm model released: {name}")
+
+
+def warm_select(cfg, name):
+    """Point the active C slot at a warm-pinned model without spawning; revives a
+    died entry. Returns True when `name` was warm and is now selected."""
+    sub = _warm_pool(cfg).get(name)
+    if sub is None:
+        return False
+    sub._ensure_alive()
+    cfg["C_SUBPROCESS"] = sub
+    cfg["C_EXE"]        = sub.exe
+    cfg["C_MODEL"]      = sub.model_path
+    cfg["C_PENDING"]    = False
+    return True
+
+
+def warm_forget(cfg, sub):
+    """Drop a subprocess object from the pool by identity (used when it is closed
+    through another path)."""
+    pool = _warm_pool(cfg)
+    for name in [n for n, s in pool.items() if s is sub]:
+        pool.pop(name, None)
+
+
+def warm_apply(cfg, names):
+    """Reconcile the pool to `names`: spawn newly added, drop removed."""
+    want = list(dict.fromkeys(names))
+    pool = _warm_pool(cfg)
+    for name in want:
+        if name not in pool:
+            warm_spawn(cfg, name)
+    for name in list(pool):
+        if name not in want:
+            warm_drop(cfg, name)
+
+
+def warm_eager_start(cfg, names):
+    """Spawn every warm model off the main thread so startup is not serially blocked."""
+    def worker():
+        for name in dict.fromkeys(names):
+            warm_spawn(cfg, name)
+    threading.Thread(target=worker, name="c-warm-loader", daemon=True).start()
+
+
+def _warm_status(cfg):
+    pool = cfg.get("C_WARM") or {}
+    active = cfg.get("C_SUBPROCESS")
+    pinned = set(settings_mod.get().get("warm_models") or [])
+    out = []
+    for n in models.list_models():
+        if not binr.exists(n):
+            continue
+        sub = pool.get(n)
+        try:
+            size = os.path.getsize(paths.bin_path(n))
+        except OSError:
+            size = 0
+        out.append({
+            "name": n,
+            "bin_bytes": size,
+            "pinned": n in pinned,
+            "resident": _sub_alive(sub),
+            "active": sub is not None and sub is active,
+        })
+    return out
+
+
 def ensure_c_loaded(cfg, model_override=None):
     def worker():
         target_bin = paths.engine_binary_path()
@@ -468,6 +597,7 @@ def _backends_status_payload(cfg):
             "blocked_model":  cfg.get("C_BLOCKED_MODEL"),
             "build":     build_runner.state(),
             "bins_available": bins_available,
+            "warm":      _warm_status(cfg),
         },
     }
 
@@ -653,6 +783,7 @@ def register(app):
                     sub.close()
                 except Exception as e:
                     logmod.error("backends", f"c subprocess close: {type(e).__name__}: {e}")
+                warm_forget(cfg, sub)
                 cfg["C_SUBPROCESS"] = None
                 cfg["C_EXE"] = None
                 cfg["C_MODEL"] = None

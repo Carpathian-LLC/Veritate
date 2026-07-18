@@ -18,6 +18,7 @@ Startup sequence at [app.py:169–327](../../../veritate_mri/app.py#L169):
 8. **Route registration** ([lines 121–141](../../../veritate_mri/app.py#L121)) — each module under [veritate_mri/routes/](../../../veritate_mri/routes/) exposes `register(app)`. See [routes.md](routes.md).
 9. **App-sync reload hook** — binds `lifecycle.restart` for remote code pushes.
 10. **Eager-load brain** (optional) — background thread loads PyTorch if `pytorch_load_mode="always"`.
+11. **Warm C-engine pool** (optional) — `backends_routes.warm_eager_start` spawns every `settings.warm_models` entry into resident C subprocesses off a daemon thread (skipped in `MINIMAL`). The pre-build hook `_close_c_for_rebuild` closes the whole pool before an engine rebuild. See [warm_models.md](warm_models.md).
 
 ## Exception handling
 

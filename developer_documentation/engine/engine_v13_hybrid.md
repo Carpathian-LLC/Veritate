@@ -171,11 +171,21 @@ local/recurrent block ratio.
 
 - Hook: the `forward` hybrid branch composes AFTER the Feature A state-cache
   restore ([model.c:742](../../veritate_engine/v1/src/model.c)). With
-  `remaining = real_len - restored`, when `trace == NULL && B > 1 &&
-  remaining >= B`, `hybrid_prefill` runs the remaining span; otherwise the
-  sequential per-byte loop runs. `trace != NULL` always stays sequential (every
-  traced position needs a per-byte frame), so `chat_traced` and `trace` are
-  untouched. Unset or `<= 1` is the exact pre-feature path, byte-for-byte.
+  `remaining = real_len - restored` and `B = hybrid_prefill_batch()`:
+  untraced (`trace == NULL && B > 1 && remaining >= B`) batches the whole span
+  via `hybrid_prefill(tokens, real_len, B)`; traced (`trace != NULL && B > 1 &&
+  remaining > B`) batches all but the last position via
+  `hybrid_prefill(tokens, real_len - 1, B)` UNTRACED then runs one
+  `hybrid_step(tokens[real_len-1], trace)` so only `pos = real_len-1` is
+  traced. That is the sole prompt frame `chat_traced` emits (step 0 reads
+  `pos = n-1`, [main.c:513](../../veritate_engine/v1/src/main.c)); positions
+  `[restored, n-2]` had their trace buffers filled then discarded, so batching
+  them untraced loses nothing displayed. Batched state is bitwise-identical to
+  sequential, so the emitted `pos = n-1` frame is byte-identical to a
+  fully-sequential-traced run (verified A/B: `tests/engine/test_prefill_batch.py::test_traced_batched_matches_sequential`,
+  and old-vs-new binary over 3 prompts x 2 models). Otherwise (either mode too
+  short to batch, or unset / `<= 1`) the sequential per-byte loop runs, the exact
+  pre-feature path byte-for-byte.
 - `hybrid_prefill` ([hybrid.c:913](../../veritate_engine/v1/src/hybrid.c))
   chunks `tokens[h->pos .. n-1]` into `ceil(rem/B)` blocks. Per chunk: batched
   embed, then each local (enc/dec) block via `prefill_local_block`

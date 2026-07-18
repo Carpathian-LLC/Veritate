@@ -39,6 +39,9 @@ def register(app):
             except ValueError as ve:
                 return {"error": str(ve)}, 400
             cfg = current_app.config
+            if "warm_models" in body:
+                from .backends_routes import warm_apply
+                warm_apply(cfg, out.get("warm_models") or [])
             if out.get("pytorch_load_mode") == "always" and cfg.get("BRAIN") is None:
                 try:
                     name = cfg.get("BRAIN_MODEL") or cfg.get("DEFAULT_MODEL")

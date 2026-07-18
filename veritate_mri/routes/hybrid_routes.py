@@ -279,7 +279,7 @@ def _ensure_pytorch(cfg, name):
 
 def _ensure_c(cfg, name):
     from readers import bin as binr
-    from .backends_routes import _spawn_c_subprocess
+    from .backends_routes import _spawn_c_subprocess, warm_select, warm_is_pinned
     if not binr.exists(name):
         raise FileNotFoundError(f"{name} has no veritate.bin; export it or use the pytorch engine")
     exe = paths.engine_binary_path()
@@ -289,7 +289,14 @@ def _ensure_c(cfg, name):
     if cfg.get("C_SUBPROCESS") is not None and os.path.abspath(cfg.get("C_MODEL") or "") == model_bin:
         return
     old = cfg.get("C_SUBPROCESS")
-    if old is not None:
+    # A warm-pinned outgoing model stays resident in the pool; only a non-pinned
+    # single-slot subprocess is closed on switch.
+    if warm_select(cfg, name):
+        if old is not None and not warm_is_pinned(cfg, old):
+            try: old.close()
+            except Exception: pass
+        return
+    if old is not None and not warm_is_pinned(cfg, old):
         try: old.close()
         except Exception: pass
     if not _spawn_c_subprocess(cfg, exe, model_bin):

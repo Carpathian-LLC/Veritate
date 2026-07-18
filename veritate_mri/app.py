@@ -200,6 +200,17 @@ def main():
 
     def _close_c_for_rebuild():
         sub = app.config.get("C_SUBPROCESS")
+        pool = app.config.get("C_WARM") or {}
+        for ws in list(pool.values()):
+            if ws is sub:
+                continue
+            try:
+                ws.close()
+            except Exception:
+                pass
+        if pool:
+            pool.clear()
+            logmod.warn("build", "closed warm C subprocesses to release binary lock")
         if sub is None:
             return
         try:
@@ -345,6 +356,12 @@ def main():
             finally:
                 app.config["PYTORCH_PENDING"] = False
         threading.Thread(target=_eager_load, name="pytorch-eager-load", daemon=True).start()
+
+    # Warm pool: keep the selected models resident as C-engine subprocesses so a
+    # switch to them serves warm. Threaded so startup is not serially blocked.
+    warm_models = settings_mod.get().get("warm_models") or []
+    if not MINIMAL and warm_models:
+        backends_routes.warm_eager_start(app.config, warm_models)
 
     print(f"http://0.0.0.0:{args.port}")
     app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True,

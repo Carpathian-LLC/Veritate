@@ -741,11 +741,16 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
         if (restored == 0) hybrid_reset(hb);
         int32_t bp = hybrid_prefill_batch();
         int32_t i = restored;
-        // batch only untraced prefill: every traced position needs a per-byte
-        // frame, so trace runs stay fully sequential (byte-identical to today).
-        if (!trace && bp > 1 && real_len - restored >= bp) {
+        // batch the bandwidth-bound prefill (state stays bitwise-identical to
+        // sequential). untraced: batch the whole span. traced: batch all but the
+        // last position, then step real_len-1 with trace so the sole emitted
+        // prompt frame (pos n-1) carries real per-byte telemetry.
+        if (bp > 1 && !trace && real_len - restored >= bp) {
             hybrid_prefill(hb, tokens, real_len, bp);
             i = real_len;
+        } else if (bp > 1 && trace && real_len - restored > bp) {
+            hybrid_prefill(hb, tokens, real_len - 1, bp);
+            i = real_len - 1;
         }
         for (; i < real_len; i++) hybrid_step(hb, tokens[i], trace);
         cache->len = real_len;

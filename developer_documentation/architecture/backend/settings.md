@@ -20,6 +20,7 @@ Validation lives inline: e.g., `device_name` capped at 15 characters at [setting
 | -------------------------------- | -------------------------------------------------------------- |
 | `pytorch_load_mode`              | `always` / `on_demand` / `off` — when to load the brain        |
 | `pytorch_idle_unload_secs`       | Idle watcher timeout                                           |
+| `warm_models`                    | Model names kept resident as C-engine subprocesses (warm pool); see [warm_models.md](warm_models.md) |
 | `heartbeat_enabled`              | Master switch for the Carpathian webhook                       |
 | `heartbeat_send_errors`          | Include error detail in presence pings                         |
 | `analytics_advanced_enabled`     | Include host/os/arch, runtime totals, model counts, hardware block, training-start events (default on) |
@@ -39,7 +40,7 @@ Validation lives inline: e.g., `device_name` capped at 15 characters at [setting
 
 ## Dependencies
 
-- [settings_routes.py](../../../veritate_mri/routes/settings_routes.py) — GET/POST `/settings` for the dashboard; POST `/settings/api-key` (`{"action":"rotate"|"clear"}`) mints/clears the API key via `rotate_api_key()` / `clear_api_key()`.
+- [settings_routes.py](../../../veritate_mri/routes/settings_routes.py) — GET/POST `/settings` for the dashboard; POST `/settings/api-key` (`{"action":"rotate"|"clear"}`) mints/clears the API key via `rotate_api_key()` / `clear_api_key()`. A `warm_models` change applies the C-engine warm pool via `backends_routes.warm_apply` (see [warm_models.md](warm_models.md)), mirroring the `pytorch_load_mode="always"` eager-load hook.
 - [api_auth_routes.py](../../../veritate_mri/routes/api_auth_routes.py) — reads `api_key`, calls `record_api_key_use()` on each authed programmatic request.
 - [runtime/heartbeat.py](../../../veritate_mri/runtime/heartbeat.py) — reads consent flags.
 - [training/trainer_runner.py](../../../veritate_mri/training/trainer_runner.py) — reads `device_preference`.

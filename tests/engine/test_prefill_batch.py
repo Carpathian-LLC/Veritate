@@ -102,6 +102,26 @@ def test_batched_composes_with_state_cache(tmp_path):
     assert warm == reference
 
 
+def _traced(exe, prompt, batch=None, model_path=V13_FIXTURE):
+    env = dict(os.environ, VERITATE_MODEL_PATH=model_path)
+    if batch is not None:
+        env["VERITATE_PREFILL_BATCH"] = batch
+    else:
+        env.pop("VERITATE_PREFILL_BATCH", None)
+    env.pop("VERITATE_STATE_CACHE", None)
+    header = b"0 1 32 -1 -1 - 0 0 0 1 0\n"
+    p = subprocess.run([exe, "chat_traced"], input=header + prompt + b"\n",
+                       capture_output=True, env=env, timeout=300)
+    assert p.returncode == 0, p.stderr.decode(errors="replace")
+    return p.stdout
+
+
+def test_traced_batched_matches_sequential():
+    """Traced prefill with batching emits byte-identical MRI frames to the sequential traced path."""
+    exe = _engine()
+    assert _traced(exe, PROMPT, batch=BATCH) == _traced(exe, PROMPT, batch=None)
+
+
 def _export_fixture(tmp_path, monkeypatch, shape, name, dtype):
     torch = pytest.importorskip("torch")
     from training import export
