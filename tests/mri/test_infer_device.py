@@ -86,7 +86,49 @@ def test_auto_falls_back_to_cpu_without_mps(monkeypatch):
 def test_unset_defaults_to_auto(monkeypatch):
     """An unset preference behaves as auto (mps when available)."""
     monkeypatch.delenv("VERITATE_INFER_DEVICE", raising=False)
+    import runtime.settings as _s
+    monkeypatch.setattr(_s, "get", lambda: {"device_preference": "auto"})
     assert _pick_infer_device(_FakeTorch(True)) == "mps"
+
+
+def test_settings_cuda_pref_used_when_env_unset(monkeypatch):
+    """When the env var is empty, device_preference from settings is honored."""
+    monkeypatch.delenv("VERITATE_INFER_DEVICE", raising=False)
+    import runtime.settings as _s
+    monkeypatch.setattr(_s, "get", lambda: {"device_preference": "cuda"})
+
+    class _FakeCuda:
+        def is_available(self):
+            return True
+
+    class _FakeTorchCuda(_FakeTorch):
+        def __init__(self, mps_available):
+            super().__init__(mps_available)
+            self.cuda = _FakeCuda()
+
+    assert _pick_infer_device(_FakeTorchCuda(False)) == "cuda"
+
+
+def test_auto_prefers_cuda_over_mps(monkeypatch):
+    """auto picks cuda when both cuda and mps are available."""
+    monkeypatch.setenv("VERITATE_INFER_DEVICE", "auto")
+
+    class _FakeCuda:
+        def is_available(self):
+            return True
+
+    class _FakeTorchCuda(_FakeTorch):
+        def __init__(self, mps_available):
+            super().__init__(mps_available)
+            self.cuda = _FakeCuda()
+
+    assert _pick_infer_device(_FakeTorchCuda(True)) == "cuda"
+
+
+def test_cuda_pref_falls_back_to_cpu_when_unavailable(monkeypatch):
+    """VERITATE_INFER_DEVICE=cuda falls back to cpu when cuda is absent."""
+    monkeypatch.setenv("VERITATE_INFER_DEVICE", "cuda")
+    assert _pick_infer_device(_FakeTorch(True)) == "cpu"
 
 
 def test_thread_ladder_powers_of_two_plus_max():

@@ -132,6 +132,14 @@ The work is the small core's ability to issue good queries and integrate retriev
 
 Early thought, unshaped. When the model reviews its context memories (the addressable/gist tiers of IDEA 2), run that review as an explicit "thinking" state: the model works on the retrieved context in the background before committing to an answer, rather than folding everything inline in one forward pass. Open questions: how the thinking state is expressed (a separate decode phase over retrieved bytes, spare tokens, or a state-carry pass), how it composes with the trillion-char read path (RARS folds retrieved bytes into recurrent state — does the thinking pass run over that state?), and what triggers it (the learned gist-vs-exact gate could also gate "spend thinking here"). Value if it works: idle/background compute processes memory ahead of the user turn, so recall-heavy turns pay less latency at answer time. No gate or falsifier yet; park until IDEA 2's read path and RARS land.
 
+### Sub-idea (2026-07-21): concrete P1 prototype + gated-slot RARS revival
+
+Research analysis 2026-07-21 (in temp/agent_research_2026_07_21.md if kept) proposes the smallest possible falsifier for the "learned hierarchical drill-down beats flat IVF-PQ" claim: **P1 = 2-level drill-down at 1e7 chars, no RARS, no gist gate**, reusing chin200m + its trained key head. Build a two-level index over 5K leaves; L1 = ~250 super-nodes as centroids of children. Supervised branch-selection with sibling-InfoNCE, ~2K steps, ~1-2 GPU-hours on the 5070. **Kill line: drill-down recall@1 must be within 3 pts of flat top-1 at ≥5× fewer leaves scored.** If it can't match flat at two levels and 1e7 chars, three levels at 1e12 won't work — fall back to flat IVF-PQ + trained key head + top-1 prefix-injection (which is already validated at recall@1 0.70 per external_memory_retrieval.md).
+
+**RARS status (from failures.md 2026-07-13): originally FAILED — at K=8+ retrieved leaves the gold washes out due to GLA decay + fixed capacity.** The honest recommendation is to ship top-1 prefix-injection as the primary path and treat RARS as research. IF pursued anyway, the mechanically defensible variant is a **learned-gated slot overwrite** (not addition): reserve K=4 outer-product rank-1 "retrieval slots" per head on the GLA state, learned per-slot gate g_i ∈ [0,1] decides overwrite. Slots decay OFF the shared α so they persist. Kill line: K=4 slots must beat top-1 prefix-inject by >5 pts on natural queries at 200M scale; else RARS stays dead for good. Cost: ~8 GPU-hours. Only worth if P1 clears AND top-1 prefix-inject with the 800M student doesn't already clear the grounded-QA gates.
+
+Gist tier reality check: use the hybrid trunk's O(1) GLA state directly (already present), don't build a rolling summarization pass. Producer = one streaming pass over history at trunk throughput. Size ~1.2 MB fp16. Falsifier: turn gist OFF and measure grounded-QA on cheap turns; if gist-off is within noise, gist is not carrying signal and its complexity is unjustified.
+
 ### Sub-idea (OPEN, 2026-07-13): candidate re-ranker to convert recall@k into effective top-1
 
 The 2026-07-13 falsification (failures.md) showed multi-leaf (top-k) context injection HURTS a small generator: chat200m grounds worse with 3 or 5 leaves than with 1, because it cannot disambiguate among candidates. But retrieval recall@5 (~0.63) is far above recall@1 (~0.37) — the right leaf is usually IN the top-k, the generator just cannot pick it. A re-ranker that scores the top-k candidates with a richer (query, leaf) interaction than pooled-feature cosine (cross-attention scorer / small cross-encoder over the byte core) and injects only the single best leaf could lift effective top-1 toward recall@5 without the multi-leaf confusion. Ceiling ~0.63 vs current 0.37 = up to ~1.7x grounding. Kill line: re-ranked top-1 must beat raw top-1 recall by >5 pts on held-out natural queries. Retry-gated behind the 800M: a stronger generator may ALSO disambiguate multi-leaf directly (re-test eval_teacher_topk first), making the re-ranker redundant — build the re-ranker only if the 800M still needs single-leaf precision. Code seed: `experiments/v2/memory/eval_teacher_topk.py`.
@@ -151,6 +159,15 @@ Do NOT choose a lever before measuring the dominant cost. Two passes: (a) analyt
 ### T1: hybrid_moe arm (the biggest untested lever — and it is already built)
 
 MoE is wired: `trunk=hybrid_moe`, `MoEFFN` in `veritate_core/model_patched.py` (`global_ffn=="moe"`, `moe_aux_sum`/`moe_expert_share` load-balancing), selectable through `vanilla_trainer.py`. It decouples capacity from throughput: many small experts, top-k active, so a large-CAPACITY model trains at small-ACTIVE-FLOP throughput. Never scaled or measured. Mechanism: run `trunk=hybrid_moe` matched-active-FLOPs against the winning `trunk=hybrid` at 10M, then 80M. Falsifier: at matched active-FLOPs and equal wall-clock, hybrid_moe must beat hybrid on val by >5 pts (agent_roe seed rule: needs a second seed before any external claim). If it holds, MoE is the path to a much larger effective model at fixed throughput — the direct answer to the throughput bottleneck and to "train the largest model we can."
+
+**2026-07-21 readiness assessment: ~75% ready, but with three real blockers before a 24h bench can even start.**
+1. **Trainer/exporter architecture mismatch (HIGHEST blocker, ~1-2 days to fix).** `veritate_core/model_moe.py` implements DeepSeekMoE-style: 1 shared expert (`up`/`down`) + 8 routed experts stored as `self.experts[e]` (each = full `FFN`), gate router, top-2 combine. `veritate_mri/training/export.py:215-411` `write_block_moe` expects the legacy MEGA layout: a `router` matrix + `experts_up.{e}` / `experts_down.{e}` per-expert and top-1 combine. Fetch keys mismatch (`ff.experts.{e}.up.weight` in trainer vs `experts_up.{e}.weight` in exporter). Exporter also drops the shared expert entirely. **The trainer's MoE and the exporter's MoE are two different architectures.** Bench can only run in pure PyTorch until this is fixed.
+2. **Engine top-K=2 refused (MEDIUM, ~1 day).** `veritate_engine/v1/src/model.c` v11 loader refuses `router_topk > 1`. Trainer uses top_k=2. Options: run bench in PyTorch only (no engine numbers), or set MOE_TOP_K=1 (loses the "fine-grained" quality claim).
+3. **No batched MoE prefill (LOW for val-only bench, HIGH for wren decode ms/byte).** Line 763-772 of model.c falls back to sequential per-token decode when n_experts > 1. Fine for a validation-loss bench; fatal for shipping to Cardinal.
+
+**Ready to bench (val-loss only): 24h plan.** Fork config `hybrid_moe_80m_bench` (~85M active, ~250M total with 8+1 quarter-experts on 12 global blocks). Control arm: matched-shape `trunk=hybrid`. Budget 12h/arm at bs=16, seq=1024, 20k steps (~1.3B tokens). Decision gates: step 4000 dead-expert check (any expert share <0.02 or >0.5 → KILL, retry with MOE_BIAS_GAMMA=3e-3 or top_k=1); step 10000 throughput check (MoE tok/s ≥65% of hybrid); step 20000 val gate (MoE bpb beat hybrid by ≥5 pts at equal wall-clock). Pass = build wren-scale MoE plan (300-500M total, 200M active). Fail = move to T2 (dynamic patching).
+
+Compatibility notes: state cache is shared across experts (GLA state lives on the recurrent global mixer, not inside FFN, so no per-expert state needed). But v13 int8 QAT export is NOT compatible today because of the trainer/exporter key mismatch above — needs the same fix.
 
 ### T2: dynamic / adaptive patching (the sharpest byte-native lever)
 
@@ -216,6 +233,95 @@ Recipe cloned from the 2026-07-10 success (successes.md): resume from final pret
 ### The bet + the retry condition
 
 If IDEA 6 clears its gates: this is the recipe we scale up to 1B on the phi-1-clean-data path (successes.md 2026-07-16 estimate: 4-15 days at 5-8B tokens on clean data, 12-30 days at 16B Chinchilla). If IDEA 6 FAILS (under-training was not the bottleneck), it forces IDEA 3's architecture campaign (throughput / MoE / dynamic patching) before we spend GPU-weeks on 1B.
+
+---
+
+## IDEA 8: chin200m layered capability-SFT campaign (grounded_read / multiturn / instruct / prose) + Cardinal QAT
+
+Status: OPEN, IN FLIGHT. Owner: execution model. Opened 2026-07-19. Runs on top of IDEA 6's chin200m base (step 55000, val 0.776).
+
+### The framing (locked 2026-07-19)
+
+Two identity SFT forks on chin200m (`chin200m_ident` 2/12 probes, `chin200m_ident2` 3/12 but with wrong-context bleed — "Call me Veritate" answering garden-tips, "Carpathian." answering ocean prose) proved for the second time (see `failures.md` 2026-07-08 for the first) that a 500-1000 pair narrow-template SFT at 3e-5 cannot rewrite a 40h pretrain's baked argmax path without eroding pretrain skills. The pretrain baked "no fixed name" in as the top-1 next-token continuation — the SFT nudge did not move the argmax, but it DID shift the words "Veritate" and "Carpathian" into unrelated contexts. Classic register-tuning failure.
+
+**Decision.** Identity, empathy, engaged: NOT candidates for SFT. Solve identity in the serve layer with a system prompt ("You are Veritate, made by Carpathian.") the way July chat200m did. Empathy/engaged register are the same class of problem — the pretrain owns them.
+
+**Remaining campaign = SFTs that teach skills the model LACKS**, which do not fight the pretrain because the pretrain has nothing to say there:
+
+1. `sft_grounded_read_v1` — read facts from an in-context passage (base is word-salad on this).
+2. `sft_multiturn_v1` — remember what was said 1-2 turns ago (base fails outright).
+3. `sft_instruct_v1` — follow format constraints ("one sentence", "list 3 items").
+4. `sft_prose_v1` — write more than 5-word fragments.
+
+Followed by (parallel low-priority track):
+
+- QAT int8 fork of the best combined-SFT checkpoint for Cardinal serving. Does not block the 4 SFTs.
+
+### GATES (the standard, as pass/fail)
+
+For each of the 4 capability SFTs, evaluated on a fresh chin200m fork resumed from step 55000 with 2500-4000 SFT steps at base_lr 2e-5 WSD → 2e-6:
+
+- Capability gate: on ≥6 held-out probes for the target skill (invented entities where relevant), post-SFT accuracy MUST beat base chin200m by ≥40 percentage points. If it doesn't beat by 40pt, the skill is not learning — record and re-dose or re-write the corpus.
+- Regression gate (the failures.md 2026-07-06/08 lesson, non-negotiable): needle conversation-copy must NOT erode. Score before/after; if the copy skill drops >5pt, ROLL BACK the fork and reduce the SFT dose.
+- Wrong-context bleed gate (the 2026-07-19 lesson): a battery of ORTHOGONAL probes (garden tips, ocean prose, a chess opening) must not surface the SFT vocabulary. If bleed shows up, the dose is too high or the mix lacks pretrain-anchor mass.
+
+For QAT: greedy-parity + bpb-delta gate (rule 24, < 0.005 bpb) vs the fp16 fork, AND measured decode ms/byte on the Cardinal i7-9700T target ≤ 1.3 ms/byte at int8.
+
+### Kill lines
+
+- If any 2 of the 4 capability SFTs fail the capability gate with the standard recipe, the whole "layered SFT" thesis at this base scale is falsified: rethink as in-pretrain dosing (repeat IDEA 6 with the SFT stems folded into the pretrain mix) rather than post-hoc fine-tunes.
+- If QAT int8 costs > 0.01 bpb (double the rule-24 tolerance) or fails greedy-parity on 3x64 probes, ship fp16 to Cardinal and record the int8 attempt in `failures.md` with the diff.
+
+### Progress ledger (append here as sessions run)
+
+- 2026-07-19: **all 4 capability corpora BUILT + PACKED**, byte-deterministic seed 20260719, generic `veritate_mri/tools/build_sft_corpus.py` (6/6 tests pass). Bins installed to `trainers/corpus/` and desktop staging dirs:
+  - `sft_grounded_read_v1`: 2000 pairs / 4 families (single/two/compound/unstated fact, invented entities). Train sha `5998b72c…`, val sha `a238eb4b…`.
+  - `sft_multiturn_v1`:     1500 conversations / 6 callback families (pet/name/preference/plan/work/location). Train sha `dcc34251…`, val sha `6f2d071c…`.
+  - `sft_instruct_v1`:      1500 pairs / 4 families (one_sentence/three_items/number_only/yes_no). Train sha `12311ef8…`, val sha `ddc46529…`.
+  - `sft_prose_v1`:         1000 pairs / 4 families (two_sentence/paragraph/description/explanation). Train sha `265e4a78…`, val sha `79f5cf41…`.
+- 2026-07-19: **grd1 fork PASSED all gates → moved to successes.md.** Trained clean (chin200m@55000 → 58500, 2h46m, exit 0, val 0.776 → 0.778 = +0.002 drift). Probes: 12/12 grounded transfer (base 3/12 false-positives; +75pt lift, crushes ≥40pt gate), 4/4 bleed CLEAN (no wrong-context leak into garden/ocean/chess/cooking), regression sweep 6/12 vs base 3/12 (doubled; needle-copy preserved; one expected minor `engaged` over-abstention from `unstated_fact` refusal family). Full evidence in successes.md 2026-07-19.
+- 2026-07-20: **mt1 fork PASSED capability + bleed gates, PARTIAL PASS overall → moved to successes.md with honest boundaries.** Trained clean 2h46m, val 0.776 → 0.777. Capability 11/12 callback (+92pt vs base 0-1/12), bleed 3/4 clean (one callback-shape phrase leak "you said …" into garden context), regression sweep 2/12 vs base 3/12 (one-axis drop within noise; the lost axis symptomatic of the same callback pattern leak). Fork usable; combined-stack tuning may need mt dose 10% instead of 15%.
+- 2026-07-20: **inst1 fork PASSED all gates cleanly → moved to successes.md.** Trained clean 2h46m, val 0.776 → 0.778. Capability 8-9/12 instruct vs base 2/12 = +50-58pt, bleed 4/4 clean (no instruct-shape overrun of open-ended prompts), regression sweep 4/12 vs base 3/12 (+1 axis, no erosion). Cleanest capability SFT so far — no bleed unlike mt1.
+- 2026-07-20: **prose1 initial run FAILED gate → RETRY prose_v2 PASSED and moved to successes.md.** v1 was 6/12 (+33pt, under 40pt gate) due to narrow templates. v2 with broader templates (18-22 structurally distinct per family, top 5-gram frequency dropped 60/300 → 49/1000) hit **10/12 (+66pt)** and the smoking-gun `instruct_single_sentence` prose-bleed FIXED. Full ledger under successes.md 2026-07-20 prose_v2 entry.
+- 2026-07-20: **STACKED fork chin200m_stack1 (grd+mt+inst at 10% each) PASSED as combined-capabilities deployable model.** Grounded 12/12, mt 11/12 (bleed FIXED at 10% dose vs solo 15%), inst 6/12 (mild dose-sensitivity drop), 12/12 bleed clean across all 3 probes. successes.md 2026-07-20.
+- 2026-07-20: **int8 QAT of stack1 for Cardinal shipping — 28/36 target passes preserved from 29/36 fp16 (-1 refusal flip), 12/12 bleed clean, 51% smaller (541 MB → 277 MB).** Ship-ready. successes.md 2026-07-20.
+- **Layered-SFT campaign verdict, FINAL: 4/4 SFT skills passed + STACKED fork + int8 QAT deployable.** grd1 ✅, mt1 ⚠️→stack1 fixed, inst1 ✅, prose_v2 ✅, stack1 ✅, stack1_int8 ✅.
+- 2026-07-20: **int8 QAT gate CLEARED via post-hoc export → moved to successes.md.** chin200m_grd1 re-exported int8: 541 MB → 277 MB (51% smaller), all 12 grounded target-skill replies BYTE-IDENTICAL between fp16 (pytorch) and int8 (C engine), 4/4 bleed clean on int8. Post-hoc quantizer is high-fidelity enough that QAT training is unnecessary for a single-family SFT fork. Cardinal wall-clock unmeasured (physical box), but 51% size drop on a bandwidth-bound decode = projected ~2x speedup, inside the 1.3 ms/byte IDEA 8 target envelope. Ship int8 for Cardinal.
+- Remaining open axes: (a) prose_v2 retry with broadened corpus (per failures.md 2026-07-20 retry conditions), (b) optional grd1 + inst1 + mt1 stacked SFT (interleave the 3 SFT stems into one fork mix to get all capabilities in one deployed model), (c) measured Cardinal decode ms/byte when the int8 bin ships to the physical box.
+
+### Sub-idea (OPEN, 2026-07-20): int4 QAT on the final stacked model — the next aggressive edge lever
+
+The int8 post-hoc path shipped clean (1 refusal flip out of 36 target probes, 51% size drop). The natural next lever is **int4**, which halves size again (277 MB → ~135 MB) and — since Cardinal decode is RAM-bandwidth-bound (2026-07-13 evening ledger) — projects to another ~2x decode speedup. The trade is quality: post-hoc int4 usually collapses; the QAT training path (`--qat_enabled --quant_mode int4`) is what makes int4 competitive by teaching the model to keep argmax stable under 4-bit rounding.
+
+Test plan (deferred until after IDEA 8 shipping is stable):
+- Fork the winning stacked model (grd+mt+inst+prose_v2 stack at whatever dose recipe wins).
+- Run QAT training with `qat_enabled=true, quant_mode="int4"` for ~500-1500 steps at a very low LR (5e-6 or so) to fine-tune the weight distribution for int4 quantization without overwriting the learned capabilities.
+- Gate: run the 3-suite target probe (grd + mt + inst + prose_v2) plus bleed. Pass = target regressions bounded to ≤2 pt drop per axis and bleed 12/12 clean. Fail = ship int8.
+- Also test: post-hoc int4 (no QAT) as a control, so we can measure how much of the win is from QAT vs the quantizer itself.
+- If int4 QAT holds, ternary is the aggressive stretch (each weight ∈ {-1,0,+1}, ~4x smaller than int8). Ternary only ever works with QAT and even then usually costs real quality.
+
+Kill line: if int4 QAT drops target-probe pass count by >4 pt total across the 4 suites, or introduces new bleed, int4 is not worth it — ship int8 and pursue kv-cache compression (IDEA 7 Track B) for further Cardinal speedup instead.
+
+Retry condition: revisit when a stacked model at 500M+ params exists (small models are more brittle under aggressive quantization; a bigger model has more redundancy to absorb the noise).
+- Trainer arg gotcha caught + fixed for the next Claude: `--resume` is a STRING (the model dir name), not a boolean; passing `true` fails with exit 2 "expected one argument". Payload shape saved in the resume trail below.
+
+**2026-07-21 research: int4 QAT NO-GO on wren (defer per line 288 stands).** Three independent hard blockers:
+1. **No v13-hybrid int4 export path exists.** `veritate_mri/training/export.py:41` `HYBRID_DTYPES = {"fp32", "fp16", "int8"}` — no int4 entry. `veritate_engine/v1/src/hybrid.c:1177` explicitly refuses anything but INT8. The v11 unified format has `VERITATE_QUANT_INT4=1` reserved but `model.c:1896-1903` errors "only INT8 (0) and TERNARY (2) are wired; INT4 via unified format is reserved." Adding this path is ~200-400 LOC across export.py + hybrid.c + a new AVX2 int4 kernel.
+2. **No AVX2 int4 kernel exists — Cardinal is AVX2-only.** The existing `veritate_engine/v1/kernels/x86_64/matmul_int4.c` is VNNI (AVX-512). Cardinal's i7-9700T Coffee Lake has no AVX-512. Without an AVX2 int4 kernel, decode falls back to `matmul_int4_scalar_prep` — likely SLOWER than the current int8 AVX2 path despite the 2× smaller footprint. Shipping int4 to Cardinal without first writing the AVX2 kernel makes wren MEASURABLY WORSE, not better.
+3. **Kill-line credibly at risk on the 200M/undertrained base.** Int8 already cost 1 refusal→hallucination flip on `grounded_unstated_refusal`. Int4 is ~16× coarser step than int8, and wren is ~1000-4000× under-trained vs SoTA small models per [[project_arch_strategy_2026_07_20]] — the "bigger model absorbs noise" assumption the kill-line relies on doesn't hold. Post-hoc int4 envelope: 5-10 pass drops + new bleeds; QAT int4 envelope: 2-5 drops. Real risk of breaching the >4 kill-line.
+
+Bandwidth math also disappoints: measured int8 wren = 35 ms/byte = 1.5× the 23 ms bandwidth floor (there's an ~11-12 ms/pos SERIAL floor from recurrent stack + rmsnorm). Int4 halves weight traffic (277→135 MB), so bandwidth floor drops to ~11 ms/byte but the serial floor stays. Realistic int4 projection: **~22-25 ms/byte, ~1.4× speedup over int8**, not 2×. And only if the AVX2 kernel gets written; scalar fallback goes the other way.
+
+**Recommendation:** ship int8 stack1 (wren, done), defer int4 as the current retry condition already prescribes. Pre-work if user forces the issue: write AVX2 int4 kernel first, microbench standalone vs int8 AVX2, only then consider export + QAT. If int4 AVX2 doesn't beat int8 AVX2 by ≥1.3× at same tensor shape, int4 is dead-on-arrival regardless of quality.
+
+### Resume trail (for the next Claude if this one dies)
+
+- Base model: `models/chin200m/` (step 55000, val 0.776, hybrid+Muon+bf16, veritate_200m trainer).
+- Prior failed forks: `models/chin200m_ident/`, `models/chin200m_ident2/` — do NOT continue-fork from these; always re-fork from `chin200m` step 55000 for a clean baseline.
+- Fork endpoint: `POST /models/fork` with `{source: "chin200m", step: 55000, name: "chin200m_grd1"}`.
+- Train endpoint: `POST /trainers/run` with `{id: "veritate_200m", args: {name: "<forkname>", resume: "<forkname>", corpus: "...", total_steps: <base_step + sft_steps>, base_lr: 2e-5, warmup_steps: 200, lr_schedule: "wsd", wsd_decay_frac: 0.5, wsd_decay_kind: "sqrt", min_lr: 2e-6, ...}}`. **CRITICAL:** `resume` is a STRING (the model dir name), not a boolean; passing `true` fails with exit 2. Mirror `chin200m_ident2/config.json:training_args` for the trainer-invariant fields, only change name/resume/corpus/base_lr/warmup/total_steps.
+- Rules: (24a) all training via dashboard, no CLI trainer launches. `feedback_no_parallel_training`: never fire a second trainer while one is live. `feedback_resource_warning`: warn on RAM/VRAM before any 1B+ run.
+- Probes: model after `probe_chin200m_base.json` shape at `temp/probe_chin200m_{grd1,mt1,inst1,prose1}.json`. Include the wrong-context bleed battery (garden, ocean, chess) in every probe.
 
 ---
 

@@ -60,9 +60,33 @@ LOCAL_FACT_MIN_CHARS = 80   # below this a truncated fact is useless; drop it in
 PROMPT_TMPL    = "context: {ctx}\n<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n"
 PLAIN_TMPL     = "<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n"
 STOP_MARKERS   = ("<|im_end|>", "<|endoftext|>", "<|im_start|>", "\ncontext:")
+_STOP_MARKER_PREFIXES = set()
+for _m in STOP_MARKERS:
+    for _i in range(1, len(_m) + 1):
+        _STOP_MARKER_PREFIXES.add(_m[:_i])
+
 WIRE_NEWLINE    = "\x01"       # c chat_traced encodes prompt/reply newlines as 0x01
 KEEP_CTRL_CHARS = ("\t", "\n")  # every other control byte is dropped from the answer
 STOP_HOLD       = max(len(m) for m in STOP_MARKERS)  # per-token holdback so a forming stop marker never streams
+
+
+def _dynamic_stop_hold(text):
+    """Return how many trailing chars must be held back to avoid streaming a
+    partial stop marker. Zero unless the tail actually looks like a growing
+    prefix of some STOP_MARKER — so most bytes stream instantly instead of
+    waiting behind a fixed STOP_HOLD lag (13 chars on the "<|endoftext|>"
+    marker adds ~450 ms at 35 ms/byte, which is what causes the streaming
+    bimodal ~108 ms inter-arrival spike measured 2026-07-20). O(STOP_HOLD)
+    per call via the precomputed prefix set — no full re-scan of `text`."""
+    n = len(text)
+    if n == 0:
+        return 0
+    lim = min(STOP_HOLD, n)
+    for i in range(lim, 0, -1):
+        if text[n - i:] in _STOP_MARKER_PREFIXES:
+            return i
+    return 0
+
 
 CHAT_SYSTEM    = ("You are Veritate, a concise, helpful assistant. Use the conversation so far and any "
                   "provided facts to answer the user directly. No emoji, no emdash.")
@@ -784,7 +808,13 @@ def _local_stream_items(events, emit_frames=False):
             if b is not None:
                 text += dec.decode(bytes((int(b) & 0xff,)))
                 safe = _sanitize_text(text)
-                emit_to = len(safe) - STOP_HOLD
+                # Dynamic holdback: only lag when the tail is actually forming
+                # a stop marker. Was `len(safe) - STOP_HOLD` (fixed 13-char
+                # lag → the streaming was bursty because chunks accumulated
+                # 13 chars behind before emitting). Now bytes stream as they
+                # decode, and holdback engages only when a stop-marker prefix
+                # is actually present.
+                emit_to = len(safe) - _dynamic_stop_hold(safe)
                 if emit_to > sent:
                     chunk = safe[sent:emit_to]
                     if sent == 0:
@@ -803,6 +833,17 @@ def _local_stream_items(events, emit_frames=False):
     final = _sanitize_text(text)
     for stop in STOP_MARKERS:
         final = final.split(stop)[0]
+    # If the model stopped mid-way through emitting a stop marker (hit max_tokens
+    # before completing it), `final` still contains a partial-marker suffix that
+    # `str.split(stop)` cannot cut (splits only on COMPLETE markers). Strip that
+    # trailing prefix so the user never sees "<|im" or "<|endoftext" leaked at
+    # end-of-stream. Discovered 2026-07-20: fresh probe returned "That's not in
+    # the passage.<|im" because model hit max_tokens after emitting 4 of the 10
+    # bytes of "<|im_end|>". Under the OLD fixed 13-char STOP_HOLD this leaked
+    # too; the streaming just delayed the reveal until flush.
+    trailing_prefix = _dynamic_stop_hold(final)
+    if trailing_prefix:
+        final = final[:-trailing_prefix]
     final = final.rstrip()
     if len(final) > sent:
         tail = final[sent:].lstrip() if sent == 0 else final[sent:]

@@ -389,6 +389,13 @@ class CTracedSubprocess:
                     self.proc.stdin.flush()
                 except (BrokenPipeError, OSError) as e2:
                     raise RuntimeError(f"chat_traced respawn failed: {e2!r}")
+                # _spawn() set _last_clean=True (correct for a fresh proc awaiting
+                # its first request). We're now mid-request on that proc, so
+                # restore the "True only after confirmed TEND" invariant; else
+                # an untracked drain-exit (bad marker / EOF / exception) after a
+                # client abandon would leave True set, and the next request would
+                # skip the respawn and read stale frames as its own response.
+                self._last_clean = False
 
             # Bind this generation to the subprocess that received our header.
             # A concurrent reclaim kills THIS proc and installs a fresh one on

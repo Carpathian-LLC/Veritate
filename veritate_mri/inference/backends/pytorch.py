@@ -63,17 +63,30 @@ INT8_SAT_THRESHOLD    = 127.0 / ACTIVATION_INT8_SCALE  # ~3.97
 # Functions
 
 def _pick_infer_device(torch):
-    """Inference device from VERITATE_INFER_DEVICE (auto|cpu|mps). 'auto' takes
-    MPS when the platform offers it (Apple Silicon GPU), else CPU. Values run in
-    fp32 on either device so greedy decodes match; MPS wins on any non-trivial
-    model because the per-byte forward is FLOP-bound."""
-    pref = (os.environ.get("VERITATE_INFER_DEVICE", "auto") or "auto").strip().lower()
-    if pref == "cpu":
-        return torch.device("cpu")
+    """Inference device from VERITATE_INFER_DEVICE (auto|cpu|cuda|mps). When the
+    env var is unset, falls back to the persisted `device_preference` setting.
+    'auto' prefers CUDA, then MPS, then CPU. Values run in fp32 on any device so
+    greedy decodes match; accelerators win on any non-trivial model because the
+    per-byte forward is FLOP-bound."""
+    pref = (os.environ.get("VERITATE_INFER_DEVICE") or "").strip().lower()
+    if not pref:
+        try:
+            from runtime import settings as _settings_mod
+            pref = (_settings_mod.get().get("device_preference") or "auto").strip().lower()
+        except Exception:
+            pref = "auto"
+    cuda_mod = getattr(torch, "cuda", None)
+    have_cuda = bool(cuda_mod) and cuda_mod.is_available()
     mps = getattr(torch.backends, "mps", None)
     have_mps = bool(mps) and mps.is_available()
+    if pref == "cpu":
+        return torch.device("cpu")
+    if pref == "cuda":
+        return torch.device("cuda") if have_cuda else torch.device("cpu")
     if pref == "mps":
         return torch.device("mps") if have_mps else torch.device("cpu")
+    if have_cuda:
+        return torch.device("cuda")
     return torch.device("mps") if have_mps else torch.device("cpu")
 
 
