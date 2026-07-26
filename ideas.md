@@ -435,6 +435,103 @@ Cheapest, most testable, and it might crack F4. Start a 10M on simple concepts, 
 - Growth gate (next): a GROWN 10M->N beats a from-scratch N at equal-or-less total compute on val AND on the concept/role eval. Kill line: grown <= scratch at equal compute => growth is not a lever here, record in failures.md.
 - Honest confound to control: concepts_v1 has a fixed small vocab (no invented entities), so role-binding "success" must be checked on HELD-OUT (subject, verb, object) combinations, not just seen ones, before any claim. A held-out split of the action combos is the required next build.
 
+### STAGE-1 RESULT (measured 2026-07-25): F6 — the data lever does NOT crack F4 at 10M
+
+**Negative, and clean.** The held-out probe was built and run as the gate demanded. `conceptsho_10m` = 10M trained to completion (2000 steps, final val 0.092) on `concepts_ho`, where 30% of (subject,object) pairs appear DECLARATIVE-ONLY (no who/what questions) with a fixed verb; those pairs' questions are the held-out test (`holdout_verb_map` / `test_items`, deterministic Random(SEED+99)). Leakage checked: the held-pair-specific answer string appears 0/12 times in train.
+
+| n=12 each | who (subject) | what (object) |
+|---|---|---|
+| CONTROL (pairs seen with questions) | 50% | 25% |
+| HELD-OUT (declarative-only) | 17% | 0% |
+
+Confounds controlled: fp16 and int8 exports give BIT-IDENTICAL scores (not quantization); model-load verified by probe before scoring (a first run scored `chat800m` by mistake — the c backend silently kept the old model; always probe-verify the loaded model before an eval); fully trained, not an early checkpoint (an earlier step-500 read of CONTROL who=100% did NOT survive to step 2000, see below).
+
+**The failure MODE is the finding.** It is not noise — it is a specific shortcut:
+- `"The dog chases the boy. Who chases the boy?"` -> `"The boy does."` — it ECHOES the noun from the question.
+- `"The bird carries the man. Who carries the man?"` -> `"The man does."` — same echo.
+- `"What does the dog chase?"` -> `"The boy."` / `"The cat."` — a fixed salient entity, context-independent.
+
+Three consequences worth keeping:
+1. **F4 replicates at 10M on role-diverse data.** Relational role binding failed at 122M/200M/800M on bland data (F1-F5); it also fails at 10M on data explicitly built to break the positional shortcut. Stating each event four ways was NOT sufficient. Supports "missing architectural primitive," weakens "just a data problem." The stage-1 gate's "big if true" did not fire.
+2. **Low loss != binding.** Final val 0.092 is near-memorization on this corpus, yet CONTROL (SEEN pairs, in-distribution) is only 50%/25%. The model drives byte-loss down with surface statistics while the role QA stays broken. Do not read loss as competence on a drill corpus.
+3. **More training made it WORSE on the seen set** (CONTROL who 100% @ step500 -> 50% @ step2000). Consistent with the model settling HARDER onto the echo/positional shortcut as it optimizes. This is the sharpest version of the F4 story: gradient descent on next-byte loss actively prefers the shortcut.
+
+Caveats stated plainly: n=12 per cell (small); one architecture, one size, one corpus; the object-question ("what") may be additionally penalized by the answer format (`What does X chase? The cat.`) being short and high-entropy. None of these rescue the result — CONTROL is in-distribution and still fails.
+
+**What it means for the growth bet.** It does NOT kill IDEA 9; it sharpens it. The stated hypothesis was that a model which learns primitives BEFORE it has capacity to take the shortcut may bind roles. Stage-1 shows the 10M takes the shortcut anyway and hardens into it. So the growth experiment now has a real, pre-registered question: **does growing 10M->N with the curriculum move CONTROL and HELD-OUT role scores off these numbers, or does the grown model inherit the shortcut?** Baseline to beat is now measured (50/25 control, 17/0 held-out), which is exactly what a falsifier needs. If a grown model also lands ~17/0 held-out, "grow the brain" is not a role-binding lever and the F4 fix must be architectural (explicit variable/register binding, or relations in the INDEX per F5) — record in failures.md.
+
+### STAGE-2 (RUNNING 2026-07-25): the growth experiment, PRE-REGISTERED
+
+**Honest framing first.** F4 (role binding absent at 122M/200M/800M) plus F6 (absent at 10M, and HARDENED by more training) means growing 16M->26M is very unlikely to produce role binding that 800M lacks. So role binding is NOT the headline metric here; it is a cheap secondary readout whose expected value is "no change". The question growth genuinely answers, and the one that serves the green/cheap mission, is the **compute-saving** claim from the growth literature (Net2Net / progressive stacking report 20-50% pretrain cost cuts).
+
+**Growth lever chosen: `stretch_ffn` (Net2WiderNet), ffn 1280 -> 2560, every block.** Reused `experiments/v2/upcycle/` rather than rebuilding. Rejected `stack_depth` (12 -> 24 blocks) because the hybrid trunk assigns a subset of blocks as global mixers by a pattern derived from layers/n_global — duplicating blocks would scramble local-vs-global assignment and confound the result. `stretch_hidden` is documented incomplete for attention/FFN. NOTE: the kit's `_smoke.py` and model-level wrappers import the DELETED `veritate_800m` plugin and are dead; the state_dict-level functions (`stretch_ffn_state_dict`, `stack_depth_state_dict`) are pure tensor ops and work fine.
+
+**Function preservation VERIFIED twice** — statically (new `down` columns exactly 0.0, old columns bit-exact vs parent, all 12 blocks) and dynamically (**resume loss 0.0917 vs the 10M parent's final 0.0923 — no spike**). This is the first time the upcycle kit has been validated on the hybrid trunk; it was written for the old dense stack.
+
+**DESIGN CORRECTED MID-FLIGHT (recorded honestly, the first version was unfalsifiable).** The first launch continued the grown model on `concepts_ho` — the SAME stage-1 corpus — and was killed at step ~2600 after ~12 min. Reason: **stage 1 is saturated.** The 10M reached val 0.0925 by step 1250 and moved 0.0005 over the next 750 steps; the grown arm's loss sat flat at 0.0917-0.0931. With no headroom, both arms would land on the corpus's floor and the val-loss gate would compare noise. Killing it cost ~12 min and saved ~2.5 h of unfalsifiable compute. **Lesson: check that the benchmark has headroom BEFORE pre-registering a gate on it** — a saturated corpus makes any capacity comparison meaningless.
+
+The fix is also truer to the hypothesis, which says grow capacity AS harder material arrives: a **stage-2 corpus** (`--stage 2`, corpus `concepts2_ho`, 35 MB) with genuinely harder structure — three-role ditransitives ("X gives the Y to Z" + who/what/whom), pronoun coreference, negation, comparatives, counting, subordinate clauses, and every inventory widened (44 objects, 18 animates, 20 verbs, 9 ditransitives, 16 places). Headroom confirmed two ways: block diversity **63% unique vs stage 1's 22%**, and the grown model's opening loss on stage 2 is **0.756 vs 0.092** on stage 1. Bonus: the held-out role test grows from **n=12 to n=91**, fixing F6's weakest caveat.
+
+Arms (sequential, `feedback_no_parallel_training`), both 10m_w2 / batch 64 / bf16 / muon / corpus `concepts2_ho`, **`lr_schedule=constant` at 4e-4**:
+- **A GROWN** = `conceptsho_grown`: 2000 cheap SMALL steps on stage 1 (spent) -> Net2Net widen -> 2000 LARGE steps on stage 2 (2000->4000).
+- **C SCRATCH** = same 10m_w2 shape from random init, 4000 LARGE steps on stage 2.
+
+Constant LR is deliberate: `lr_at()` keys off ABSOLUTE step/total, so a resuming arm and a from-scratch arm cannot be given the same decaying trajectory — constant is the only schedule that is identical for both. Honest asymmetry: C gets 150 warmup steps, A is past warmup and starts flat. C also gets 2x the stage-2 steps and strictly more FLOPs than A.
+
+Comparison points: **A@4000 vs C@2000** = equal stage-2 steps, so it isolates whether the cheap small-model stage-1 phase plus growth is worth anything. **A@4000 vs C@4000** = can growth match an arm given double the stage-2 compute.
+
+**Rule 24e:** re-benched the grown shape rather than assuming — peak 88,709 tok/s at **batch 64** (96/128/192 all flatten or dip: 84.5k/85.1k/86.7k). Same knee as the 10M, so both arms share batch 64 honestly. Trainer edit required and announced: `trainers/veritate_10m/manifest.json` gained a `10m_w2` size (layers 8, hidden 320, ffn 2560, heads 8) because `vanilla_trainer` takes shape ONLY from `manifest.sizes` (`shape = size_presets[args.size]`, no CLI override); `native/trainer` accepts custom shapes but has no hybrid trunk. Pure addition, backwards-compatible.
+
+**METRIC CORRECTED A SECOND TIME — and the reason is a real methodological finding.** Stage 2 ALSO saturates: arm A's val went 0.1232 (step 2250) -> 0.1207 (step 2500) with train flat at ~0.121 from step 2300. Root cause, stated generally: **a procedurally-generated corpus has an entropy floor set by the COMPLEXITY OF ITS GENERATOR.** This generator is a few KB of Python; once a model has learned the ~12 templates plus the inventories, the remaining bytes are near-deterministic. "63% unique blocks" was a misleading diversity measure — unique STRINGS, not unique INFORMATION. A 16M model can already represent the generator, so added capacity has nothing to buy. **Consequence worth generalizing: synthetic template corpora cannot measure capacity or growth benefit, at ANY size. Do not run capacity experiments on them again** — use real text (fineweb_edu / openwebtext), where entropy is not bounded by a small program.
+
+The design survives because the METRIC was wrong, not the arms. Growth never claimed a lower final loss — the literature claims **steps-to-target** (a 1.5x-style speedup to a fixed loss). That is still measurable on a saturating corpus, because the floor is shared and only the approach RATE differs.
+
+**GATES (re-registered NOW, before arm C is run — threshold fixed from arm A's already-observed value, C's data does not exist yet):**
+Target threshold is defined as a **PROTOCOL, not a hand-picked number**: `T` = the val loss arm A reaches at its **250th stage-2 step**. (The earlier draft fixed T=0.1232 as a literal, taken from the pre-fix corpus run; that corpus was rebuilt after the leak/agreement fixes, so a literal from it would be both stale and post-hoc. A protocol definition is immune to both.) Let `S_C` = stage-2 steps for arm C (random init) to first reach val <= T. Both arms use the identical eval grid (`eval_every 50`) — an earlier draft had A on a 250-grid, which would have made A's steps-to-target merely BOUNDED (<=250) while C's was measured, an asymmetry capable of manufacturing a result in either direction.
+- **PASS (growth is a compute lever):** `S_C >= 500`. Growth at least halves the large-model steps to target -> successes.md.
+- **PARTIAL:** `250 < S_C < 500`. Real but sub-2x saving; report the measured speedup `S_C/250`.
+- **FAIL:** `S_C <= 250`. The stage-1 phase plus growth bought nothing -> failures.md.
+- **VOID:** if arm C reaches T within its first 2 evals (<=100 steps), the threshold is too loose to discriminate and the comparison is declared uninformative rather than spun as a FAIL.
+
+**Supplementary (registered before arm C too, because a single threshold near the floor may not discriminate).** Arm A descends very fast on stage 2 (val 0.730 -> 0.273 -> 0.136 over its first 100 steps), so T will sit close to the floor and both arms may cross it quickly. Therefore also report **steps-to-target at a LADDER of thresholds — 0.30 / 0.20 / 0.15 / T — plus the full val-vs-steps curve for both arms.** The ladder is the honest instrument: growth's benefit, if real, should show up as a leftward shift of the WHOLE curve, not as one threshold crossing. A speedup that appears at exactly one threshold and nowhere else is noise, and will be reported as such. The pre-registered single-threshold gate above remains the headline verdict; the ladder is context, not a second chance to find a win.
+Honest caveat recorded up front: this metric was chosen AFTER seeing arm A's curve, which is exactly the kind of post-hoc selection that inflates results. The protection is that the threshold and gates are fixed before arm C runs, and **C is the arm that decides the outcome**. A second protection: the speedup must also be visible in wall-clock FLOPs, since A's 2000 stage-1 steps were at 16M and are not free.
+
+**Superseded gates (voided by saturation, kept for the record):** PASS was A@4000 val <= C@4000 val; PARTIAL A@4000 <= C@2000; FAIL A@4000 > C@2000. All three are uninformative when every arm lands on the same floor.
+- **Secondary (role binding):** score both arms on the held-out eval vs the F6 baseline (CONTROL 50/25, HELD-OUT 17/0). Expected: no meaningful change. If HELD-OUT stays ~17/0, the F4-is-architectural conclusion is reinforced and the fix must be an explicit binding primitive or relations-in-the-index (F5), NOT capacity. If it moves materially, that is a genuine surprise and worth a dedicated follow-up.
+
+### STAGE-2 RESULT (measured 2026-07-25): growth IS a step-lever (3.6x) but NOT a compute win as run; role binding still absent
+
+Arms completed. A GROWN = `conceptsho_grown` (stage-1 10M@2000 -> Net2Net ffn widen -> 1000 stage-2 steps). C SCRATCH = `conceptscratch_10m_w2` (26M random init, 1000 stage-2 steps). Identical corpus, batch 64, constant LR 4e-4, eval grid 50. T = 0.121434.
+
+**Result 1 — steps-to-target: PASS, and it is a whole-curve shift, not a single crossing.**
+
+| threshold | A GROWN | C SCRATCH | speedup |
+|---|---|---|---|
+| 0.30 | 50 | 450 | 9.0x |
+| 0.20 | 100 | 500 | 5.0x |
+| 0.15 | 100 | 550 | 5.5x |
+| **T = 0.1214** | **250** | **900** | **3.6x** |
+
+`S_C = 900 >= 500` clears the pre-registered PASS gate, and the ladder registered beforehand is satisfied — the advantage appears at every threshold, so it is not a threshold artifact. C never catches A within 1000 steps (C 0.1208 vs A 0.1185 at step 1000).
+
+**Result 2 — the falsifier I registered alongside the gate FIRES: in TOTAL compute, growth LOST.** Charging both arms honestly (params x steps, identical tokens/step): A = 2000 small steps x 15.99M + 250 large x 25.74M = **38.42 G**; C = 900 large x 25.74M = **23.17 G**. **A cost 1.66x MORE than C.** The 3.6x is real but it is denominated in LARGE-model steps only, and the stage-1 phase is not free.
+
+The break-even is the useful number: stage-1 could have afforded **1046 small steps** before growth stopped paying. Stage 1 saturated at ~1250 steps and I ran **2000** — so I overspent the cheap phase by ~950 steps and converted a likely net win into a 1.66x loss. **Conclusion: growth-coupled curriculum is a genuine compute lever ONLY if the small-model phase is stopped at its saturation point.** Corollary for the flagship: stop each stage the moment its val curve flattens; a stage run past saturation is pure waste that the later stage cannot recover.
+
+**Result 3 — role binding: still absent at 26M. F6 replicates with n=91 (vs n=12).** Raw scores looked like a breakthrough for A (CONTROL what 81%, HELD-OUT what 60%) — they are not. Decomposing which entity each answer names:
+
+- **A GROWN answers with the OBJECT regardless of the question**: on "who" it names the object **78%** (correct subject only 11%); on "what" it names the object 60%. A constant "emit the object" policy reproduces both numbers exactly. The 81%/60% is that bias, not binding.
+- **C SCRATCH echoes the noun from the QUESTION**: "Who sees the boy?" -> "The boy does."; "What does the baker see?" -> "The baker." Both directions, 6/8 sampled.
+
+Two different shortcuts, neither is role binding. Subject-role accuracy is 11% (A) and 29% (C) against a 6% chance floor. **This is now the fourth consecutive size (10M, 26M, 122M/200M/800M) at which relational role binding fails, and the second data regime (bland web text, and purpose-built role-diverse curriculum with active/passive/who/what plus three-role ditransitives and coreference).** The architectural reading of F4 is now strongly supported and the data-lever reading is falsified. **Kill line reached for "fix role binding with better data or more capacity at small scale" -> failures.md.** The remaining routes are unchanged: relations in the INDEX (F5, already validated 36% -> 100%), or an explicit binding primitive.
+
+**Method lessons banked (cost real time, worth more than the result):**
+1. A saturated benchmark cannot measure capacity — check headroom BEFORE pre-registering a gate on it.
+2. A procedurally-generated corpus floors at its GENERATOR's complexity, not its byte count. Unique-string counts are not information. Capacity work belongs on real text.
+3. Audit the held-out set for leakage every time — 7/91 answers were sitting in train because one block type drew objects from a list containing the animate entities.
+4. Score WHICH entity a wrong answer names, never just accuracy. Both arms looked partly competent on aggregate scores and were running fixed policies.
+5. The C backend can silently keep the previously-loaded model through a load call — probe-verify before every eval.
+
 ### Second idea, honestly ranked lower: the value/aversion module
 
 A small separate network that learns "avoid this kind of output" and modulates the main model's decoding (limbic-nudging-cortex analogy). Buildable, somewhat novel as a standalone region vs baked-in RLHF. Ranked second: harder to make falsifiable, and it is a learned aversion signal, NOT "feelings" (no phenomenal claim). Park until growth-coupled-curriculum is measured.
