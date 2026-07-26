@@ -353,3 +353,88 @@ Cardinal-class reality (measured this repo): i7-9700T decodes at ~12 GB/s RAM ba
 ### The tie (why this is one idea)
 
 IDEA 2 gives the model a place to REMEMBER beyond the window; IDEA 7 gives it a mouth that never has to stop mid-thought and a cache that fits the $300 box. Ship order: ChatML SFT first (stop markers make the cap a safety net, already planned), then Track B step 1 (pure engine win, no retraining), then Track A variant (ii), then the rest as measurements dictate.
+
+---
+
+## IDEA 8: green-AI small-model product + the measured RAG-writer architecture
+
+Status: OPEN, PRODUCT-COMMITTED (2026-07-23). Owner: execution model. Consolidated 2026-07-23 from the retired `ideas_mirach.md`. The green-AI thread: smallest possible model that is a strong CONVERSATIONALIST + prose writer, all facts external via RAG / the trillion-char context (IDEA 1/2). This section holds the measured evidence (F1-F5), the shipped techniques (M1-M2), the committed product direction (P1/P2), and the open architectural bet (bind-then-read).
+
+### The measured findings (chat_80m 122M / chat200m / chat800m, int8, on the veritate engine; harnesses in scratchpad, evidence is real runs)
+
+- **F1 — the reader floor is tiny.** Grounded single-fact slot copy ("width of X is Y" -> Y) is 100% at 122M (the whole model is 127 MB int8), 100% at 200M, 97% at 800M. 4x-7x params buys NOTHING. Accuracy collapses with stuffed chunk count: 1->100%, 2->87%, 3->60%, 5->53%, 8->30%. QUALIFIED by F4: "reading" here = slot copy only, the easy case.
+- **F2 (negative) — the model is a great READER but a poor JUDGE.** Asked whether a single chunk is relevant, 36% of irrelevant chunks get a confident fabrication instead of a refusal. One-chunk-at-a-time + confidence picking was WORSE than stuffing (35% vs 50%); confidence did not track correctness. Prompting cannot fix it.
+- **F3 — retrieval, not parameters, is the lever.** A ~30-line IDF lexical retriever + the 200M reader = 100% on the K=8 task the model alone gets 40% on. Law: `system_acc ~= retriever_precision@1 x reader_acc(1 chunk)`, reader_acc(1 chunk) ~= 1.0, so ALL system error is retrieval. Caveat: synthetic unique entity names flatter lexical retrieval to 100%; real corpora need paraphrase matching, expect 70-90% precision@1 from embeddings+reranker.
+- **F4 (THE WALL) — zero relational role binding, immune to scale.** Given "P founded the E Summit", asked "which summit was founded by P?" the model answers P (the person), not E. OBJECT-role accuracy: 4% at 122M, 0% at 200M, 0% at 800M (4 phrasings: 0/20/7/7%). Same failure across a 7x parameter range => a MISSING ARCHITECTURAL PRIMITIVE (transformers have no variables/registers), not a small-model or training defect. The 100% on the SUBJECT-role question is a false positive (it always emits the person). This is the real ceiling and the empirical motivation for the bind-then-read work below.
+- **F5 — route around the wall: relations in the index, not the model.** Store facts as (subject, relation, object) triples so a multi-hop "hop" is a DB join executed OUTSIDE the model; the model only verbalizes the one resulting fact (which it does at 100%). Multi-hop 36% -> 100% with the same 200M. HONEST COST: this MOVES relational extraction to index-build time (offline, batchable, can afford a big model / structured sources), it does not eliminate it.
+
+**The runtime architecture these prove:** reader <=122M; retriever does relevance (never the LM, F2); index does relation traversal (never the LM, F4); the LM only verbalizes one retrieved fact + abstains honestly. **Next spend = index construction quality, NOT model size.**
+
+### Shipped techniques (would migrate to successes.md under the workflow; kept here for the thread)
+
+- **M1 — role-masked (assistant-only) byte loss.** `trainers/common/vanilla_trainer.py`, opt-in `loss_mask=assistant`, default off, backwards-compatible, upstream mirror pending. Masks non-assistant target positions to -1 (all loss paths honor ignore_index=-1), per-row marker-gated so raw replay stays fully active. Zero throughput cost. Used in chat800m_v2: capability preserved AND partly recovered vs unmasked (grammar 0.72->0.82, reading 0.748->0.762). Not a clean isolated ablation (mask+corpus+replay changed together) — same-corpus A/B is the open falsifier.
+- **M2 — INT8 shrink.** The hybrid trunk exports v13-hybrid INT8 (chat800m_v2 = 990 MB, chat_80m = 127 MB), and plain PTQ generation == fp16, so QAT is NOT needed at these sizes (rule 102). Only INT8 has a real arm64 kernel; ternary=disk-only, int4=no exporter. MRI-guided mixed-precision QAT is DEFERRED until a mixed-precision serving path exists.
+
+### PRODUCT DIRECTION P1 — on-device private knowledge assistant [COMMITTED 2026-07-23]
+
+Param count is "the money" in exactly ONE arena: the general-assistant "ask me anything" arena, where users compare to ChatGPT and dismiss anything smaller. A 127 MB model loses that comparison forever, by architecture (F4). The trap is fighting there. Reframe: users buy outcomes, not parameters — param count only becomes visible when you invite the ChatGPT comparison by putting the model in a chat box.
+
+**Product: "ask questions about YOUR documents — instant, offline, free, private, and it never makes things up."** Not a chatbot; a specific outcome ChatGPT structurally cannot deliver, so the user never compares. Four edges ChatGPT can never match:
+- Private (data never leaves the machine; cloud is banned in legal/medical/financial/IP work).
+- Offline / $0 (no network, no API bill, embeds inside an app or device).
+- Honest on THEIR data (MEASURED: 100% single-fact retrieval + honest abstention; ChatGPT hallucinates on private files it never saw, so a tiny grounded model BEATS it there).
+- Embeddable (127 MB ships inside a product).
+
+Winnable NOW because the core is de-risked (F1/F3/F5); remaining work is retrieval/index quality + writer, not params. Build order: (1) real index pipeline (embedding retrieval + reranker over real prose — the F3 paraphrase caveat), (2) writer polish (the SFT recipe is validated), (3) scoped product shell that never invites the ChatGPT comparison. The banned move: making 127 MB feel like GPT-4 in a chat box (measured dead end, F4).
+
+### PRODUCT DIRECTION P2 — local-first, cloud-fallback (the expectation-manager)
+
+For the open-ended "ask anything" tail without pretending 127 MB is GPT-4: every query hits the small model first, which either (1) answers locally (grounded in the user's docs or simple chat — the 80-90% case, where it beats ChatGPT), (2) escalates to a big-model API (open-ended world-knowledge / hard reasoning it structurally can't do), or (3) abstains. **The router is the crux, and it must NOT be the LM self-judging** (F2: LMs are poor judges) — it is gated by RETRIEVAL SCORE: strong support in the user's docs -> answer locally; weak/empty retrieval -> escalate. The same retrieval layer that powers P1 IS the P2 router; no second system. Costs: you pay for the big model on the tail (surface an "answered locally vs cloud" trust indicator); escalation adds latency; router calibration (the retrieval-score threshold) is the single most important tunable number. Strategic note: P2's moat is thin (every "local LLM + cloud fallback" wrapper competes) — treat it as the expectation-manager that stops the dismissal, while P1 (honest private on-device grounding) stays the differentiator. Recommendation: build P1, architect for P2.
+
+### The open architectural bet — "bind-then-read" (attack F4 directly) [NOVEL]
+
+F4 is now the empirical motivation, target metric = OBJECT-role accuracy 0-4% -> ?. A discrete slot/register layer between retrieval and the LM body: write each candidate fact/role into an addressable slot, do a HARD (argmax/Gumbel-straight-through) question->slot match, LM body reads only the selected slot. Hands the transformer the variable binding it structurally lacks, supervised-trainable on grounded_v3 (gold chunk known). Small head, not a new backbone. Pointer nets / slot attention / neural memory exist separately; the composition (supervised discrete selector fused into a byte-level on-device SMALL model as the RAG front-end, specifically to keep the cortex tiny) is the contribution. Companion green lever [SPECULATIVE]: adaptive-depth latent recurrence (loop a small block MORE times on hard tokens instead of adding params — compute scales with difficulty). Honest risk: both are finicky — halting collapse (ACT), Gumbel/straight-through instability. The selector head is the safer, data-motivated one; start there.
+
+### Falsifiers / open work
+
+- P1 index quality: re-run F3/F5 with PARAPHRASED queries sharing no exact token with the gold chunk; measure where lexical retrieval collapses and how much embedding+reranker recovers. That number is the real design budget.
+- bind-then-read: does the selector head move OBJECT-role off the ~0% floor without wrecking slot copy? Kill line: no measurable lift over the prompt baseline => the primitive is not the fix, record in failures.md.
+- P2 router: is the retrieval-score gate calibratable to escalate the hard tail without over-escalating (becoming a ChatGPT proxy) or under-escalating (embarrassing local answers)? Measure escalation precision/recall on a mixed query set.
+- Below 122M: untested. Slot copy at 122M is 100% — find the true floor (10M/40M points) before assuming 127 MB is minimal.
+
+---
+
+## IDEA 9: developmental training — grow the model like a brain, curriculum-coupled
+
+Status: OPEN, TESTING (stage-1 launched 2026-07-24). Owner: execution model. From the user (2026-07-24): model a training process after human development — start tiny, teach simple concepts (objects, properties, relations) the way a child learns, then EXPAND capacity (add neurons/layers) and teach harder ideas, with memory and a value/aversion signal. Honest scoping below separates what is genuinely open from what already exists.
+
+### What already exists (do not reinvent)
+
+- "Simple concepts first" = curriculum learning (Bengio 2009). Real but scale-payoff is mixed; it helps SMALL models most (TinyStories is the proof), which is our regime.
+- "Expand neurons over time" = model growth / progressive stacking (Net2Net, LiGO, bert2BERT). Already a COMPUTE-SAVING technique (20-50% pretrain cost cut) — serves "cheap" directly.
+- "A region that remembers not to do something" = value/aversion signal; today baked into weights via RLHF, not held as a separate modulating module.
+- "Teach it memories" = external/episodic memory = IDEA 1/2 (our lane already).
+
+**The novelty is NOT the parts, it is the SYSTEM:** a small model whose capacity grows in lockstep with a difficulty curriculum, with a separate value module and episodic memory, as one methodology for a tiny on-device model. Under-explored composition.
+
+### The trap to avoid (stated so nobody funds it)
+
+Do NOT copy the brain's LEARNING RULE. Backprop-free biology (spiking nets, Hebbian, forward-forward) has underperformed backprop for decades. Steal the brain's STRUCTURE and SCHEDULE (developmental growth, modularity, memory), keep backprop as the engine.
+
+### The bet worth making first: growth coupled to curriculum
+
+Cheapest, most testable, and it might crack F4. Start a 10M on simple concepts, then grow width/layers AS harder material is introduced. Three reasons: (1) most direct route to CHEAP training (near-zero compute while tiny on easy data, pay for scale once, late); (2) falsifiable in hours on our box; (3) may dodge the F4 shortcut — a model that first learns "entity" and "relation" as robust primitives before it has the capacity to take the "emit the salient noun" shortcut may actually learn role binding, especially if the late curriculum is relationally diverse.
+
+### Stage-1 (RUNNING 2026-07-24): the child-concept corpus
+
+`veritate_mri/tools/build_curriculum_corpus.py` -> `concepts_v1` (39 MB train / 1.2 MB val, deterministic seed=0). Compositional, child-like: objects/categories -> properties -> spatial relations -> ACTIONS stated four ways (active / passive / who-question / what-question) so subject-vs-object roles cannot be guessed from position. That action stage IS the F4 role-binding seed (the relational-diversity lever from the F4 discussion, built into the data by design). Model `concepts_10m` (15.9M actual params, hybrid trunk, full precision — qat OFF; the 10m manifest defaults qat_enabled=True, disabled here to keep the concept/growth signal clean), 12000 steps, ~94k tok/s, ~2.3h.
+
+### GATES / falsifiers
+
+- Stage-1 concept gate: does the 10M answer in-distribution concept queries (what color is the X / where is the X / who Xed the Y / what did X Y)? Especially the who/what role questions — if a 10M trained ON role-diverse data gets role binding right where the 200M trained on bland data got 0% (F4), that is early evidence the wall is partly a DATA problem, not pure scale/architecture. Big if true.
+- Growth gate (next): a GROWN 10M->N beats a from-scratch N at equal-or-less total compute on val AND on the concept/role eval. Kill line: grown <= scratch at equal compute => growth is not a lever here, record in failures.md.
+- Honest confound to control: concepts_v1 has a fixed small vocab (no invented entities), so role-binding "success" must be checked on HELD-OUT (subject, verb, object) combinations, not just seen ones, before any claim. A held-out split of the action combos is the required next build.
+
+### Second idea, honestly ranked lower: the value/aversion module
+
+A small separate network that learns "avoid this kind of output" and modulates the main model's decoding (limbic-nudging-cortex analogy). Buildable, somewhat novel as a standalone region vs baked-in RLHF. Ranked second: harder to make falsifiable, and it is a learned aversion signal, NOT "feelings" (no phenomenal claim). Park until growth-coupled-curriculum is measured.
