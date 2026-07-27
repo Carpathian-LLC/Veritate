@@ -21,8 +21,12 @@ prefix, so a request whose prompt begins with what was read resumes from there.
 
 A chat client posts `messages` instead and the box renders the prefix through
 `render_local_open` in [hybrid_routes.py](../../../veritate_mri/routes/hybrid_routes.py),
-the same function `_render_local` builds the wire prompt from. Framing stays in the one
-module that owns it, so a client cannot get the scaffold wrong.
+the same function `_render_local` builds the wire prompt from, after fitting the
+conversation with the same `fit_chat_history` the chat routes fit it with. Framing and
+history bounding stay in the one module that owns them, so a client cannot get the
+scaffold wrong or read a prefix the submitted turn will no longer contain. `max_tokens`
+sizes the reply room that fit is measured against, so a client sending it on submit
+sends it here too.
 
 ## Why it needs no prediction
 

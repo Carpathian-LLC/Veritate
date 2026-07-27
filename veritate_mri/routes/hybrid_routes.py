@@ -528,6 +528,26 @@ def _render_local(messages, system):
     return render_local_open(messages, system) + CHAT_CLOSE
 
 
+def fit_chat_history(messages, system, seq, max_new=MAX_NEW):
+    """As many whole prior turns as the engine will read, newest first, always keeping
+    the turn being answered.
+
+    The engine cuts an over-long prompt at a byte offset, not a turn boundary, so a
+    conversation that outgrows the context arrives with its first turn sliced in half
+    and no opening marker. The model then answers whichever earlier question survived
+    the cut rather than the newest one. Dropping oldest whole turns keeps every marker
+    it sees intact."""
+    from inference.backends.c_engine import max_prompt_chars
+    budget = max_prompt_chars(seq, max_new)
+    *prior, last = messages
+    kept = []
+    for m in reversed(prior):
+        if len(_render_local([m, *kept, last], system)) > budget:
+            break
+        kept.insert(0, m)
+    return [*kept, last]
+
+
 def _system_text(kind, summary, facts):
     """Preamble for one turn. Remote models get the chat system prompt plus
     framed summary + facts; local byte models get raw summary + facts (rendered
@@ -1165,6 +1185,8 @@ def register(app):
         mri = bool(body.get(MRI_KEY))
         gen = _gen_params_in(body)
         complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, _default_local_backend(model))
+        if kind == "local":
+            conv = fit_chat_history(conv, system, _local_seq(model), gen.get("max_new", MAX_NEW))
         if bool(body.get("stream")):
             if kind == "local":
                 return _openai_stream_local(cfg, model, resp_backend, conv, system, mri=mri,
@@ -1208,6 +1230,7 @@ def register(app):
         if kind != "local":
             return ({"error": {"message": "mri is available only for local Veritate models",
                                "type": "invalid_request_error"}}, 400)
+        conv = fit_chat_history(conv, system, _local_seq(model), gen.get("max_new", MAX_NEW))
         if bool(body.get("stream", True)):
             return _openai_stream_mri(cfg, model, resp_backend, conv, system, gen_params=gen)
         try:

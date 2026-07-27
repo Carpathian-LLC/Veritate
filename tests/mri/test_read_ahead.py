@@ -23,6 +23,7 @@ from inference import speculate
 PARAMS = {"temperature": 0.7, "top_k": 40, "ablate_layer": -1, "ablate_neuron": -1,
           "addons_csv": "", "rep_window": 0, "rep_penalty": 0.0, "no_repeat_ngram": 0}
 PREFIX  = "<|im_start|>user\nwhat is the cap"
+SEQ     = 512
 LONGER  = "<|im_start|>user\nwhat is the capital of France"
 SETTLE_S = 0.5
 POLL_S   = 0.01
@@ -153,11 +154,23 @@ def test_prefill_wraps_a_messages_body_in_the_chat_template():
     """A client posts chat messages and this box renders the prefix, scaffold excluded."""
     from routes import backends_routes, hybrid_routes
     body = {"messages": [{"role": "user", "content": "what is the cap"}]}
-    assert backends_routes._chat_prefix_in(body) == \
+    assert backends_routes._chat_prefix_in(body, SEQ) == \
         hybrid_routes.render_local_open(body["messages"], system="")
 
 
 def test_prefill_reads_nothing_from_a_body_with_no_messages():
     """A body carrying no messages leaves the raw-prompt path to answer for itself."""
     from routes import backends_routes
-    assert backends_routes._chat_prefix_in({}) == ""
+    assert backends_routes._chat_prefix_in({}, SEQ) == ""
+
+
+def test_prefill_fits_a_long_conversation_like_the_turn_that_follows():
+    """A conversation past the context is fitted here exactly as submit fits it, so the
+    prefix still matches."""
+    from routes import backends_routes, hybrid_routes
+    messages = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}" + "x" * 100}
+                for i in range(13)]
+    prefix = backends_routes._chat_prefix_in({"messages": messages}, SEQ)
+    submitted = hybrid_routes._render_local(
+        hybrid_routes.fit_chat_history(messages, "", SEQ), "")
+    assert submitted.startswith(prefix)

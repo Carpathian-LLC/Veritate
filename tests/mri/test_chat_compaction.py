@@ -7,6 +7,8 @@
 # - Unit tests for hybrid_routes._compact: conversation-memory bounding. A local
 #   byte model cannot summarize itself, so it slides (drop oldest, no model call);
 #   a remote model folds the head into a model-written summary. No model loads.
+# - Also hybrid_routes.fit_chat_history: prompt bounding for the turn being sent. The
+#   engine cuts an over-long prompt mid-turn, so whole turns go first.
 # tests/mri/test_chat_compaction.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -19,6 +21,11 @@ from routes import hybrid_routes as H
 # Constants
 
 LIMIT = 250
+# A trained context small enough that a dozen 100-char turns overflow it, as they do
+# on the byte models this runs on.
+SEQ      = 512
+MAX_NEW  = 256
+IM_START = "<|im_start|>"
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -77,3 +84,35 @@ def test_remote_keeps_the_verbatim_tail():
     turns = _turns(10)
     _summary, kept = H._compact(lambda messages, system: "SUMMARY", "", turns, 200, "remote")
     assert kept == turns[-H.CTX_KEEP_TAIL_TURNS:]
+
+
+def test_fitted_history_renders_within_the_engine_budget():
+    """A conversation past the context fits the prompt the engine reads whole."""
+    from inference.backends.c_engine import max_prompt_chars
+    fitted = H.fit_chat_history(_turns(13), "", SEQ, MAX_NEW)
+    assert len(H._render_local(fitted, "")) <= max_prompt_chars(SEQ, MAX_NEW)
+
+
+def test_fitted_history_keeps_the_turn_being_answered():
+    """The newest user turn survives however little of the conversation fits."""
+    turns = _turns(13)
+    assert H.fit_chat_history(turns, "", SEQ, MAX_NEW)[-1] == turns[-1]
+
+
+def test_fitted_history_keeps_the_newest_suffix():
+    """What survives is the newest run of turns, not an arbitrary subset."""
+    turns = _turns(13)
+    fitted = H.fit_chat_history(turns, "", SEQ, MAX_NEW)
+    assert fitted == turns[len(turns) - len(fitted):]
+
+
+def test_fitted_history_opens_on_a_turn_marker():
+    """The rendered prompt starts on a turn marker, never inside a dropped message."""
+    fitted = H.fit_chat_history(_turns(13), "", SEQ, MAX_NEW)
+    assert H._render_local(fitted, "").startswith(IM_START)
+
+
+def test_history_within_the_budget_is_untouched():
+    """A conversation that already fits is sent whole."""
+    turns = _turns(5, size=1)
+    assert H.fit_chat_history(turns, "", SEQ, MAX_NEW) == turns

@@ -146,6 +146,19 @@ assert FFN_TOP_DTYPE.itemsize == 6 and LENS_DTYPE.itemsize == 5 and FLOW_DTYPE.i
 # ------------------------------------------------------------------------------------
 # Functions
 
+def max_prompt_chars(seq, max_new):
+    """Longest prompt the engine reads whole, in chars (latin-1, so chars == bytes).
+
+    Two caps. fgets(prompt_line, seq + PROMPT_FGETS_BUFSIZE) stores at most (size - 1)
+    chars including the newline, so the payload caps at seq + PROMPT_FGETS_BUFSIZE - 2;
+    a longer line leaves residue in stdin and permanently desyncs the persistent
+    subprocess. The generation budget is seq - prompt_len with no window slide, so reply
+    room comes out of seq too, capped at seq // 2 so a pathological max_new cannot wipe
+    out the context. A prompt over this is cut at an anchored offset, which can leave it
+    starting mid-turn: callers rendering chat framing fit whole turns to this first."""
+    return min(seq + PROMPT_FGETS_BUFSIZE - 2, seq - min(int(max_new), seq // 2))
+
+
 def _read_exact(f, n):
     out = bytearray()
     while len(out) < n:
@@ -417,16 +430,11 @@ class CTracedSubprocess:
             # chat_traced maps them back so chat-template prompts keep their
             # trained framing.
             p = prompt.replace(CARRIAGE_RETURN, "").replace(NEWLINE, NEWLINE_WIRE_ESCAPE)
-            # fgets(prompt_line, seq+4) stores <= seq+3 chars incl '\n'; payload caps at
-            # seq+2. an over-long line must be cut so it cannot leave residue and desync
-            # the subprocess (engine also drains residue defensively). generation budget
-            # is seq - prompt_len with no window slide, so also reserve reply room;
-            # reserve caps at seq//2 so a pathological max_new cannot wipe out the context.
+            # an over-long line cannot reach the subprocess intact, so cut it at an
+            # anchored offset (engine also drains residue defensively).
             prompt_bytes = p.encode("latin-1", "replace")
-            seq = self.shape["seq"]
-            max_payload = min(seq + PROMPT_FGETS_BUFSIZE - 2,
-                              seq - min(int(max_new), seq // 2))
-            prompt_bytes = self._anchor_prompt(prompt_bytes, max_payload)
+            prompt_bytes = self._anchor_prompt(prompt_bytes,
+                                               max_prompt_chars(self.shape["seq"], max_new))
             # addons token: empty -> use whatever chain was set at spawn time
             # (env var path); "-" -> clear any prior chain; otherwise comma-
             # separated id list. token must contain no whitespace.

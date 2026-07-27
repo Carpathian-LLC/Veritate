@@ -784,15 +784,25 @@ def _ahead_allowed(read):
     return bool(cur.get("read_ahead_enabled")) if read else bool(cur.get("speculative_enabled"))
 
 
-def _chat_prefix_in(body):
+def _chat_prefix_in(body, seq):
     """The open chat prefix for a `messages` body, rendered by the same template the
-    chat routes submit through, so a client never reproduces the scaffold itself. Empty
-    when the body carries no messages."""
-    from .hybrid_routes import _openai_messages_in, render_local_open
+    chat routes submit through and fitted to the same context, so a client never
+    reproduces the scaffold itself and the prefix still matches once a conversation
+    outgrows the window. Empty when the body carries no messages."""
+    from .hybrid_routes import (
+        MAX_NEW,
+        _gen_params_in,
+        _openai_messages_in,
+        fit_chat_history,
+        render_local_open,
+    )
     if not body.get("messages"):
         return ""
     conv, system = _openai_messages_in(body)
-    return render_local_open(conv, system)
+    # max_tokens sizes the reply room the history is fitted around, so a client that
+    # sends it on submit sends it here too or the two fit different histories.
+    max_new = _gen_params_in(body).get("max_new", MAX_NEW)
+    return render_local_open(fit_chat_history(conv, system, seq, max_new), system)
 
 
 def _decode_params(temperature, top_k, ablate_layer=ABLATE_OFF, ablate_neuron=ABLATE_OFF,
@@ -1069,11 +1079,7 @@ def register(app):
         and nothing is ever discarded. Omit both to stand down."""
         cfg = current_app.config
         body = request.get_json(silent=True) or {}
-        try:
-            prompt = body.get("prompt") or _chat_prefix_in(body)
-        except ValueError as e:
-            return ({"error": user_error(e, "bad prefill messages")}, 400)
-        if not prompt:
+        if not (body.get("prompt") or body.get("messages")):
             return speculate.read_stand_down()
         if not _ahead_allowed(read=True):
             return {"reading": False, "reason": "read-ahead is off for this caller",
@@ -1083,6 +1089,7 @@ def register(app):
             return {"reading": False, "reason": "c engine not loaded",
                     "stats": speculate.read_status()["stats"]}
         try:
+            prompt = body.get("prompt") or _chat_prefix_in(body, sub.shape["seq"])
             params = _decode_params(
                 body.get("temperature", TEMPERATURE_DEFAULT),
                 max(1, min(int(body.get("top_k", TOP_K_DEFAULT)), BYTE_VOCAB)))
