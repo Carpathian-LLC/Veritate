@@ -179,25 +179,100 @@
 <div class="tab-body active" data-tab="generation">
 
   <div class="panel" style="margin-bottom: 10px;">
-    <h2>prompt <em id="promptModeHint">ask the model a question. answers go in the conversation below.</em></h2>
+    <h2>prompt <em id="promptModeHint">ask the model a question. the conversation builds up above the box.</em></h2>
     <div class="body">
-      <div id="modeRow" style="display:flex;gap:14px;align-items:center;margin-bottom:6px;font-size:11px;color:var(--dim)">
-        <span style="color:var(--text);font-weight:600">mode</span>
-        <label data-tier="autocomplete" title="Autocomplete: byte-by-byte continuation. Any byte-level model can do this.">
-          <input type="radio" name="genMode" value="autocomplete" checked> autocomplete
+
+      <!-- who you are talking to, and how -->
+      <div class="gen-bar">
+        <div id="modeRow" class="mode-seg">
+          <label data-tier="chat" title="Chat: conversational turns. Requires a chat-SFT trainer.">
+            <input type="radio" name="genMode" value="chat" checked> chat
+          </label>
+          <label data-tier="agent" title="Agent: tool-use over a ReAct loop. Requires a tool-SFT (agent) trainer.">
+            <input type="radio" name="genMode" value="agent"> agent
+          </label>
+          <label data-tier="autocomplete" title="Autocomplete: byte-by-byte continuation. Any byte-level model can do this.">
+            <input type="radio" name="genMode" value="autocomplete"> autocomplete
+          </label>
+        </div>
+        <label class="gen-model">model
+          <select id="cModel" disabled>
+            <option value="">loading…</option>
+          </select>
         </label>
-        <label data-tier="chat" title="Chat: conversational turns. Requires a chat-SFT trainer.">
-          <input type="radio" name="genMode" value="chat"> chat
-        </label>
-        <label data-tier="agent" title="Agent: tool-use over a ReAct loop. Requires a tool-SFT (agent) trainer.">
-          <input type="radio" name="genMode" value="agent"> agent
-        </label>
-        <span class="stat" id="modeBadge" style="color:var(--dim);margin-left:auto"></span>
+        <span id="backendState" class="stat gen-chip"></span>
+        <span id="cQatWarning" class="stat gen-chip gen-chip-warm" style="display:none">
+          <span id="cQatWarningText"></span>
+          <a href="#" id="cQatHelpLink">Help</a>
+        </span>
+        <span id="ablBadge" class="stat gen-chip gen-chip-hot" style="display:none">ablated</span>
+        <span class="stat gen-chip" id="modeBadge" style="margin-left:auto"></span>
       </div>
-      <textarea id="prompt" rows="2" placeholder="Ask a question, e.g. &quot;what is the Eiffel Tower's height?&quot;"></textarea>
-      <div id="genThinking" class="gen-thinking" style="display:none"></div>
-      <div id="response" class="response"></div>
-      <div class="out-tools">
+
+      <!-- the transcript: every past turn, each reply carrying its own measurements -->
+      <div id="chatFeed" class="chat-feed" style="display:none"></div>
+
+      <!-- the turn happening now: same shape as a finished turn, so committing it to
+           the transcript above is continuous instead of a hand-off between panels -->
+      <div id="liveTurn" class="chat-live" style="display:none">
+        <div class="turn turn-model">
+          <div class="turn-who">model</div>
+          <div class="turn-bubble">
+            <div id="genThinking" class="gen-thinking" style="display:none"></div>
+            <div id="response" class="response"></div>
+            <div id="liveStats" class="stats"></div>
+          </div>
+        </div>
+      </div>
+      <div class="timeline live-scrub" id="timelineRow" style="display:none">
+        <button id="goLive">live</button>
+        <label for="scrub" class="scrub-title">timeline <em>drag to scrub backward</em></label>
+        <input type="range" id="scrub" min="0" max="0" value="0" step="1" disabled>
+        <span class="scrub-tape" id="scrubTape" title="context · current byte · next"></span>
+        <span class="frame-label" id="frameLabel">0 / 0</span>
+      </div>
+
+      <!-- ask -->
+      <div class="composer">
+        <!-- the reply being written while the question is still being typed -->
+        <div id="primeRail" class="prime" style="display:none">
+          <div class="prime-head">
+            <span class="prime-dot"></span>
+            <span class="prime-label" id="primeLabel">writing the answer</span>
+            <span class="prime-bar"><i id="primeFill"></i></span>
+            <span class="prime-count" id="primeCount"></span>
+          </div>
+          <div class="prime-text" id="primeText"></div>
+        </div>
+        <textarea id="prompt" rows="2"></textarea>
+        <div class="composer-actions">
+          <button id="go" class="go">generate</button>
+          <button id="stop" disabled>stop</button>
+          <label class="prime-toggle" title="Answer the question while you are still typing it. Pause and the engine runs ahead; pressing generate keeps those bytes instead of starting over.">
+            <input type="checkbox" id="prefetchEnable"> answer while typing
+          </label>
+          <span class="composer-hint">enter sends · shift+enter for a new line</span>
+          <button id="chatClear" class="composer-clear" title="Clear the transcript on this device">clear chat</button>
+        </div>
+      </div>
+
+      <details id="advancedWrap">
+      <summary>advanced <span>- engine, sampling, decode, RAG, tools, addons</span></summary>
+      <div class="controls adv-row">
+        <span class="adv-key" title="Which runtime executes the model, and which weights it loads.">engine</span>
+        <label>backend
+          <select id="backend" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px">
+            <option value="c">Veritate (C engine)</option>
+            <option value="pytorch">PyTorch (full hooks)</option>
+          </select>
+        </label>
+        <label style="font-size:11px;color:var(--dim)" title="auto-switch to the freshest .bin when a new model is exported">
+          <input type="checkbox" id="followLatest" style="vertical-align:middle"> follow latest
+        </label>
+        <span id="cConfigStatus" class="stat" style="font-size:10px;color:var(--dim)"></span>
+      </div>
+      <div class="out-tools adv-row">
+        <span class="adv-key" title="How the answer is annotated after it arrives.">output</span>
         <label class="out-tool"><input type="checkbox" id="confColorToggle" checked> confidence coloring</label>
         <select id="confColorLevel" class="out-tool" title="coloring granularity">
           <option value="word" selected>word</option>
@@ -207,53 +282,21 @@
         <button id="detectHalluc" class="halluc-btn">re-check hallucinations</button>
         <span id="detectStatus" class="halluc-status"></span>
       </div>
-      <div class="timeline live-scrub">
-        <button id="go" class="go">generate</button>
-        <button id="stop" disabled>stop</button>
-        <button id="goLive">live</button>
-        <label for="scrub" class="scrub-title">timeline <em>drag to scrub backward</em></label>
-        <input type="range" id="scrub" min="0" max="0" value="0" step="1" disabled>
-        <span class="scrub-tape" id="scrubTape" title="context · current byte · next"></span>
-        <span class="frame-label" id="frameLabel">0 / 0</span>
-      </div>
-      <div class="controls">
-        <label>backend
-          <select id="backend" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px">
-            <option value="c">Veritate (C engine)</option>
-            <option value="pytorch">PyTorch (full hooks)</option>
-          </select>
-        </label>
-        <span id="backendState" class="stat" style="font-size:10.5px;color:var(--dim);display:inline-flex;align-items:center;gap:6px"></span>
-        <label>model
-          <select id="cModel" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px" disabled>
-            <option value="">loading…</option>
-          </select>
-        </label>
-        <label style="font-size:11px;color:var(--dim)" title="auto-switch to the freshest .bin when a new model is exported">
-          <input type="checkbox" id="followLatest" style="vertical-align:middle"> follow latest
-        </label>
-        <span id="cConfigStatus" class="stat" style="font-size:10px;color:var(--dim)"></span>
-        <span id="cQatWarning" class="stat" style="display:none;font-size:10.5px;color:var(--warm);border:1px solid var(--warm);border-radius:3px;padding:2px 8px">
-          <span id="cQatWarningText"></span>
-          <a href="#" id="cQatHelpLink" style="color:var(--accent);margin-left:8px;text-decoration:underline">Help</a>
-        </span>
-        <label>temp <input type="number" id="temp" value="0.7" step="0.1" min="0.1" max="2"></label>
-        <label>top_k <input type="number" id="topk" value="40" step="1" min="1"></label>
-        <label>max <input type="number" id="maxnew" value="240" step="20" min="1"></label>
-        <label title="ablate one FFN neuron at this layer for the next generation. -1 disables.">
+      <div class="controls adv-row">
+        <span class="adv-key" title="How the next byte is picked, and how many bytes to allow.">sampling</span>
+        <label title="Higher is more random. 0.7 is a sane chat default.">temp <input type="number" id="temp" value="0.7" step="0.1" min="0.1" max="2"></label>
+        <label title="Sample from the k most likely bytes only.">top_k <input type="number" id="topk" value="40" step="1" min="1"></label>
+        <label title="Longest reply to allow. Defaults to everything the context window has left.">max <input type="number" id="maxnew" value="240" step="20" min="1"></label>
+        <span id="maxHint" class="stat" style="font-size:10px;color:var(--dim)"></span>
+        <label title="Ablate one FFN neuron at this layer for the next generation. -1 disables.">
           abl L <input type="number" id="ablLayer" value="-1" step="1" min="-1" style="width:54px">
         </label>
-        <label title="ablate this neuron index. -1 disables.">
+        <label title="Ablate this neuron index. -1 disables.">
           abl N <input type="number" id="ablNeuron" value="-1" step="1" min="-1" style="width:70px">
         </label>
-        <span id="ablBadge" class="stat" style="font-size:10px;color:#ff6b6b;display:none">ablated</span>
-        <span id="maxHint" class="stat" style="font-size:10px;color:var(--dim)"></span>
-        <span id="liveStats" class="stats"></span>
       </div>
-      <details id="advancedWrap" style="margin-top:8px;border:1px solid var(--line);border-radius:4px;padding:6px 8px">
-      <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600">advanced <span style="color:var(--dim);font-weight:400;font-size:11px">- decode, RAG, tools, addons</span></summary>
-      <div id="decodeRow" style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
-        <span style="color:var(--text);font-weight:600" title="Decode speed mode + output shape constraint.">decode</span>
+      <div id="decodeRow" class="adv-row" style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:11px;color:var(--dim)">
+        <span class="adv-key" title="Decode speed mode + output shape constraint.">decode</span>
         <label title="Decode speed mode. Skips telemetry for raw speed.">
           fast
           <select id="genFastMode" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
@@ -278,8 +321,8 @@
           </select>
         </label>
       </div>
-      <div id="chatRow" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
-        <span style="color:var(--text);font-weight:600" title="Chat-mode identity + loop control. Only applied in chat mode.">chat</span>
+      <div id="chatRow" class="adv-row" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:11px;color:var(--dim)">
+        <span class="adv-key" title="Repetition control for chat mode. Only applied in chat mode.">chat</span>
         <label title="No-repeat n-gram size in bytes. Blocks verbatim phrase loops. 0 disables.">
           no-repeat
           <input id="genRepNgram" type="number" value="16" step="1" min="0" max="64" style="width:56px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
@@ -293,8 +336,8 @@
           <input id="genRepWindow" type="number" value="256" step="32" min="0" style="width:64px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
         </label>
       </div>
-      <div id="ragRow" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
-        <span style="color:var(--text);font-weight:600" title="Retrieve relevant snippets from a local folder and inject as prompt context.">RAG</span>
+      <div id="ragRow" class="adv-row" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:11px;color:var(--dim)">
+        <span class="adv-key" title="Retrieve relevant snippets from a local folder and inject as prompt context.">RAG</span>
         <label title="File or folder of text. Leave blank to disable.">
           corpus
           <input id="ragCorpus" type="text" placeholder="/path/to/folder" style="width:260px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
@@ -315,8 +358,8 @@
         </label>
         <span id="ragStat" class="stat" style="font-size:10px;color:var(--dim)"></span>
       </div>
-      <div id="agentRow" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
-        <span style="color:var(--text);font-weight:600" title="Let the model use tools to answer. Every step shows up in the reasoning trace below.">tools</span>
+      <div id="agentRow" class="adv-row" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:11px;color:var(--dim)">
+        <span class="adv-key" title="Let the model use tools to answer. Every step shows up in the reasoning trace below.">tools</span>
         <label class="agentToolBox" title="Do math. The model writes an expression and gets the answer.">
           <input type="checkbox" class="agentTool" data-tool="calculator" checked> do math
         </label>
@@ -343,10 +386,20 @@
         </label>
         <span id="agentStat" class="stat" style="font-size:10px;color:var(--dim)"></span>
       </div>
-      <div id="addonsRow" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)">
-        <span style="color:var(--text);font-weight:600" title="Bias next-byte logits before sampling. PyTorch backend only.">addons</span>
+      <div id="addonsRow" class="adv-row" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:11px;color:var(--dim)">
+        <span class="adv-key" title="Bias next-byte logits before sampling. PyTorch backend only.">addons</span>
         <span id="addonsList" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"></span>
       </div>
+      <details class="more">
+        <summary>what these knobs do</summary>
+        <div class="more-content">
+          <p><b>temperature</b> - sharpens (&lt;1) or flattens (&gt;1) the next-byte distribution. 0.6-0.9 for coherent prose; 0.1 nearly deterministic; 1.5+ noisy.</p>
+          <p><b>top_k</b> - only the K highest-logit bytes are sampleable. <code>k=1</code> = greedy. <code>k=256</code> = no filter. Default 40 cuts the long tail without losing variety.</p>
+          <p><b>max bytes</b> - bytes to generate before stopping. One forward pass per byte.</p>
+          <p>top_k wins ties: <code>top_k=1</code> is greedy regardless of temperature. Sweep temperature with top_k held to compare variants.</p>
+          <p><b>answer while typing</b> - pause on a question and the C engine starts writing the reply. Pressing generate keeps those bytes, so the answer opens where the engine got to instead of at nothing. Typing again throws the draft away.</p>
+        </div>
+      </details>
       </details>
       <details id="ragPanel" style="display:none;position:relative;margin-top:8px;border:1px solid var(--line);border-radius:4px;padding:6px 8px;font-size:11px" open>
         <summary style="cursor:pointer">
@@ -366,20 +419,11 @@
         <span id="agentPanelMeta" class="stat" style="position:absolute;top:6px;right:8px;color:var(--dim);pointer-events:none"></span>
         <div id="agentTimeline" style="margin-top:4px;display:flex;flex-direction:column;gap:4px"></div>
       </details>
-      <details class="more">
-        <summary>what these knobs do</summary>
-        <div class="more-content">
-          <p><b>temperature</b> - sharpens (&lt;1) or flattens (&gt;1) the next-byte distribution. 0.6-0.9 for coherent prose; 0.1 nearly deterministic; 1.5+ noisy.</p>
-          <p><b>top_k</b> - only the K highest-logit bytes are sampleable. <code>k=1</code> = greedy. <code>k=256</code> = no filter. Default 40 cuts the long tail without losing variety.</p>
-          <p><b>max bytes</b> - bytes to generate before stopping. One forward pass per byte.</p>
-          <p>top_k wins ties: <code>top_k=1</code> is greedy regardless of temperature. Sweep temperature with top_k held to compare variants.</p>
-        </div>
-      </details>
     </div>
     <p class="desc">The model is byte-level. It predicts one of 256 raw bytes at a time, no tokenizer.
        <b>PyTorch</b> runs the model in Python with full activation capture (slower; every MRI panel is live).
-       <b>Veritate</b> is the project's own assembly-tuned inference runtime (fast; bytes only, no panels yet).
-       Pick the runtime under <i>backend</i>; pick which trained weights to run under <i>model</i>.</p>
+       <b>Veritate</b> is the project's own assembly-tuned inference runtime (fast; bytes only, and the only backend that can answer while you type).
+       Pick the runtime under <i>advanced &rarr; engine</i>; pick which trained weights to run under <i>model</i>.</p>
   </div>
 
   <div class="grid r1">
@@ -1654,6 +1698,28 @@
             <div class="meta" style="font-size:10.5px;color:var(--dim)">Models with an exported .bin. A checked model stays resident and serves warm. RESIDENT = subprocess live now; ACTIVE = currently selected engine.</div>
             <div id="warmModelsList" style="display:flex;flex-direction:column;gap:2px;margin-top:4px"></div>
             <div id="warmModelsSummary" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Answer while typing</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">Pause while typing a question and the Veritate engine starts writing the reply. Press generate and the answer opens on the bytes it already wrote instead of starting from nothing. Editing the question throws the draft away, so a reply is never stale, but the work spent on it is lost. Applies to the loaded C-engine model in chat and autocomplete; the Generation tab carries the same switch.</div>
+            <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
+              <input type="checkbox" id="speculativeEnable">
+              <span class="opt-title" style="margin:0;font-size:11.5px">Answer while typing</span>
+            </label>
+            <div class="inline" style="gap:6px;margin-top:4px">
+              <span class="meta" style="font-size:10.5px">write at most</span>
+              <input type="number" id="speculativeBytes" min="1" max="4096" step="64" value="1024" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 6px;font:inherit;border-radius:3px;font-size:11px">
+              <span class="meta" style="font-size:10.5px">bytes per draft</span>
+            </div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">The draft stops here if the model has not finished its answer first. Higher gets more of a long answer ready; lower wastes less on drafts you never send.</div>
+            <div class="inline" style="gap:6px">
+              <span class="meta" style="font-size:10.5px">in turns of</span>
+              <input type="number" id="speculativeChunkBytes" min="1" max="256" step="8" value="32" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 6px;font:inherit;border-radius:3px;font-size:11px">
+              <span class="meta" style="font-size:10.5px">bytes</span>
+            </div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">How long a real request can wait behind a draft turn already in flight. Smaller reacts faster when you press generate; larger spends less time re-reading what it already wrote.</div>
+            <div id="speculativeStats" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:2px"></div>
           </div>
         </div>
       </div>

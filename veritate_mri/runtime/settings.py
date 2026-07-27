@@ -57,6 +57,15 @@ DEFAULTS = {
     # switching to them serves warm (no spawn/reload). Spawned at startup and on
     # change; see backends_routes warm pool.
     "warm_models": [],
+    # Speculative prefetch. While a client is still typing, generate up to
+    # speculative_bytes of the reply for the draft prompt; the real request flushes
+    # the buffer instead of paying prefill. speculative_chunk_bytes is the engine
+    # turn size, which bounds how long a real request waits behind a speculative
+    # turn. Off by default: it spends compute on drafts that may be discarded.
+    # See routes/backends_routes POST /prefetch.
+    "speculative_enabled": False,
+    "speculative_bytes": 1024,
+    "speculative_chunk_bytes": 32,
     "hud_enabled": False,
     "hud_position": "top",
     "hud_detailed": False,
@@ -116,6 +125,11 @@ DEFAULTS = {
 }
 
 VALID_TEMPERATURE_UNITS = ("C", "F", "K")
+
+# Speculative prefetch bounds. The byte cap matches the engine's own max_new cap so
+# a draft can never be told to speculate more than a real request could generate.
+SPECULATIVE_BYTES_MAX      = 4096
+SPECULATIVE_CHUNK_BYTES_MAX = 256
 
 # Optional API-key gate for the programmatic API surface (/v1/*, /generate,
 # /agent/stream). Off by default (empty api_key). Minted keys carry this prefix.
@@ -260,6 +274,16 @@ def _validate(patch):
                 raise ValueError(f"{skey} must be a string")
             else:
                 patch[skey] = v.strip()
+    if "speculative_enabled" in patch:
+        patch["speculative_enabled"] = bool(patch["speculative_enabled"])
+    if "speculative_bytes" in patch:
+        v = patch["speculative_bytes"]
+        if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= SPECULATIVE_BYTES_MAX:
+            raise ValueError(f"speculative_bytes must be an integer 1..{SPECULATIVE_BYTES_MAX}")
+    if "speculative_chunk_bytes" in patch:
+        v = patch["speculative_chunk_bytes"]
+        if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= SPECULATIVE_CHUNK_BYTES_MAX:
+            raise ValueError(f"speculative_chunk_bytes must be an integer 1..{SPECULATIVE_CHUNK_BYTES_MAX}")
     if "warm_models" in patch:
         v = patch["warm_models"]
         if v is None:

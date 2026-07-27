@@ -47,6 +47,7 @@ Server-side architecture: Flask app, training pipeline, runtime, readers, engine
 - [hybrid_chat.md](hybrid_chat.md): RAG chat endpoint (`/chat`, `/hybrid/*`)
 - [hallucination_detector.md](hallucination_detector.md): span-level hallucination grading
 - [warm_models.md](warm_models.md): resident C-engine warm pool
+- [speculative_prefetch.md](speculative_prefetch.md): generate ahead while a client types (`/prefetch`)
 
 ## Federation
 

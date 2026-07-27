@@ -271,6 +271,7 @@ function applyShapeControls() {
   setMax("ablNeuron",    modelShape.ffn - 1);
   setMax("topk",         modelShape.vocab);
   setMax("genRepWindow", modelShape.seq);
+  updateMaxHint();
 }
 
 // Explainer prose carries the loaded model's numbers via data-shape spans.
@@ -1340,9 +1341,29 @@ function _groundedAnswerHtml(report) {
 // bytes (chat template scaffolding included) so the timeline scrubs the actual
 // output. The clean answer streams into #genThinking; grounding + the colored
 // answer live in the hallucination panel.
+// Chat renders the reply alone, turn markers stripped: the wire prompt is
+// scaffolding the model was handed, not something a reader should see. Only
+// autocomplete shows the prompt, where the continuation is the whole point.
+// The streaming turn: shown while a reply is in flight or being scrubbed, hidden
+// once the turn has committed to the transcript. In chat the reply IS the bubble
+// text, so the raw-byte frame is dropped (`mode-chat`); autocomplete keeps it.
+function _showLiveTurn(on) {
+  const wrap = $("liveTurn");
+  wrap.style.display = on ? "" : "none";
+  wrap.classList.toggle("mode-chat", _genMode() !== "autocomplete");
+  if (!on) { $("response").innerHTML = ""; $("liveStats").innerHTML = ""; }
+}
+
 function renderResponse() {
-  renderResponseInto($("response"), promptBytes, generatedBytes, currentFrame, live,
-                     false, frames, 0);
+  const chat = _genMode() !== "autocomplete";
+  // Live shows every byte received; the frame index only bounds the text while
+  // scrubbing. Fast-mode bytes carry no frame, so keying the live view off the
+  // frame index would render an empty panel for a reply that did arrive.
+  const idx = live ? generatedBytes.length - 1 : currentFrame;
+  // No cursor before the first byte: it would blink next to the thinking indicator
+  // as a second thing claiming to be the answer.
+  renderResponseInto($("response"), chat ? [] : promptBytes, generatedBytes, idx,
+                     live && generatedBytes.length > 0, chat, frames, 0);
 }
 
 function blankCanvas(c, ctx, msg) {
@@ -1764,7 +1785,7 @@ const EMPTY_PALE = "color:var(--warm);font-style:italic;padding:6px 4px";
 // Mode tiers must match readers/capabilities.py::TIERS. The picker enables
 // only tiers the loaded model has been trained for.
 const GEN_MODE_TIERS = ["autocomplete", "chat", "agent"];
-const GEN_MODE_DEFAULT = "autocomplete";
+const GEN_MODE_DEFAULT = "chat";
 
 function _genMode() {
   const r = document.querySelector('input[name="genMode"]:checked');
@@ -1819,14 +1840,6 @@ function _legacyCaps() {
   };
 }
 
-function _highestTrainedTier(caps) {
-  for (let i = GEN_MODE_TIERS.length - 1; i >= 0; i--) {
-    const t = GEN_MODE_TIERS[i];
-    if (caps && caps[t] && caps[t].status === "trained") return t;
-  }
-  return null;
-}
-
 const TIER_NEEDS = { chat: "chat SFT", agent: "tool SFT" };
 
 function _tierTooltip(tier, entry) {
@@ -1843,38 +1856,30 @@ function _tierTooltip(tier, entry) {
     : `${tier}: needs ${TIER_NEEDS[tier] || "training"}`;
 }
 
+// A mode the loaded model was never trained for is not selectable: offering it
+// produces a reply the model cannot give, which reads as the platform being broken.
+// The tooltip on the greyed tier names the training it needs.
 function _applyModeAvailability() {
   const caps = _activeCapabilities();
-  const labels = document.querySelectorAll('#modeRow label[data-tier]');
-  let firstAvailable = null;
-  let checkedTier = null;
-  labels.forEach(lab => {
+  let firstTrained = null;
+  document.querySelectorAll('#modeRow label[data-tier]').forEach(lab => {
     const tier  = lab.dataset.tier;
     const input = lab.querySelector('input[name="genMode"]');
-    if (!input) return;
     const entry = (caps && caps[tier]) || { status: "untrained" };
     const trained = entry.status === "trained";
     input.disabled = !trained;
-    lab.style.opacity = trained ? "" : "0.45";
-    lab.style.cursor  = trained ? "" : "not-allowed";
-    // Disabled inputs swallow pointer events, so the tooltip lives on BOTH
-    // the label (catches hovers over the text) and the input (catches the
-    // radio dot, which the browser still routes to the input).
+    lab.classList.toggle("is-off", !trained);
+    // Disabled inputs swallow pointer events, so the tooltip lives on both the
+    // label (catches the text) and the input (catches the radio itself).
     const tip = _tierTooltip(tier, entry);
-    lab.title   = tip;
-    input.title = tip;
-    if (trained && firstAvailable === null) firstAvailable = tier;
-    if (input.checked) checkedTier = tier;
+    lab.title = input.title = tip;
+    if (trained && firstTrained === null) firstTrained = tier;
   });
   const checked = document.querySelector('input[name="genMode"]:checked');
-  if (checked && checked.disabled) {
-    const next = firstAvailable || GEN_MODE_DEFAULT;
-    const pick = document.querySelector(`input[name="genMode"][value="${next}"]`);
-    if (pick) { pick.checked = true; applyGenMode(); }
-  } else if (checked === null && firstAvailable) {
-    const pick = document.querySelector(`input[name="genMode"][value="${firstAvailable}"]`);
-    if (pick) pick.checked = true;
-  }
+  if (!checked || !checked.disabled) return;
+  const pick = document.querySelector(
+    `input[name="genMode"][value="${firstTrained || GEN_MODE_DEFAULT}"]`);
+  if (pick) { pick.checked = true; applyGenMode(); _primeSync(); }
 }
 
 // Caps change on disk while a run trains (chat SFT flips in_progress -> trained);
@@ -1950,22 +1955,48 @@ const CHAT_ASSISTANT_TAG = "<|assistant|>";
 const CHAT_END_TAG       = "<|end|>";
 // No persona/system turn: identity is trained into the model; a persona in the
 // prompt made the byte model recite it every turn (removed 2026-07-13).
-function wrapChat(prompt) {
-  return `${CHATML_IM_START}user\n${prompt}${CHATML_IM_END}\n${CHATML_IM_START}assistant\n`;
+// Fraction of the context window held back for the reply. The rest carries the
+// conversation so far; without it the model answers every question as if it were
+// the first thing ever said to it.
+const CHAT_CONTEXT_REPLY_SHARE = 0.5;
+
+function _chatTurn(role, text) {
+  const who = (role === "model") ? "assistant" : "user";
+  return `${CHATML_IM_START}${who}\n${text}${CHATML_IM_END}\n`;
 }
+
+// The wire prompt: as many whole prior turns as the context window allows, newest
+// first, then the new question and the assistant header. Oldest turns drop first,
+// and a turn is never cut in half.
+function wrapChat(prompt) {
+  const head = `${CHATML_IM_START}user\n${prompt}${CHATML_IM_END}\n${CHATML_IM_START}assistant\n`;
+  const seq = modelShape.seq;
+  if (seq < 1) return head;
+  let budget = Math.floor(seq * (1 - CHAT_CONTEXT_REPLY_SHARE)) - head.length;
+  const msgs = loadChatHistory();
+  const past = [];
+  for (let i = msgs.length - 1; i >= 0 && budget > 0; i--) {
+    const turn = _chatTurn(msgs[i].role, msgs[i].text);
+    if (turn.length > budget) break;
+    budget -= turn.length;
+    past.unshift(turn);
+  }
+  return past.join("") + head;
+}
+// Cut markers, matched WITHOUT the closing bracket: a byte model reproduces a marker
+// approximately ("<|im_start|2018|"), and a mangled marker still ends the reply. Must
+// stay in step with CHAT_STOP_MARKERS in routes/backends_routes.py.
+const CHAT_CUT_MARKERS = [CHAT_END_TAG, CHAT_USER_TAG, CHAT_ASSISTANT_TAG,
+                          CHATML_IM_END, CHATML_IM_START, CHATML_EOT].map(m => m.slice(0, -1));
 function stripChatResponse(text) {
-  // Trim at the first end-of-turn / next-turn marker (either framing).
-  const cuts = [CHAT_END_TAG, CHAT_USER_TAG, CHAT_ASSISTANT_TAG,
-                CHATML_IM_END, CHATML_EOT, `${CHATML_IM_START}user`, `${CHATML_IM_START}tool`];
   let cut = text.length;
-  for (const m of cuts) {
+  for (const m of CHAT_CUT_MARKERS) {
     const i = text.indexOf(m);
     if (i >= 0 && i < cut) cut = i;
   }
   return text.slice(0, cut).replace(/\s+$/, "");
 }
-const CHAT_STREAM_MARKERS = [CHAT_END_TAG, CHAT_USER_TAG, CHAT_ASSISTANT_TAG,
-                             CHATML_IM_END, CHATML_IM_START];
+const CHAT_STREAM_MARKERS = CHAT_CUT_MARKERS;
 function stripChatStream(text) {
   // Live chat view: cut at the first complete turn marker, then drop a trailing
   // partial marker so a forming "<|us" never flashes as self-talk.
@@ -1988,27 +2019,62 @@ function saveChatHistory(msgs) {
   try { localStorage.setItem(CHAT_KEY, JSON.stringify(msgs.slice(-100))); }
   catch (_) {}
 }
+// A model turn carries the measurements that produced it, so the transcript is a
+// record of how the answer was generated and not only what it said.
+function _turnMetricsHtml(m) {
+  const parts = [
+    m.bytes ? `<span><b>${m.bytes}</b> bytes</span>` : "",
+    m.bps   ? `<span><b>${m.bps.toFixed(1)}</b> b/s</span>` : "",
+    m.conf != null ? `<span>confidence <b>${m.conf.toFixed(2)}</b></span>` : "",
+    m.ahead ? `<span class="m-ahead"><b>${m.ahead}</b> answered ahead</span>` : "",
+  ].filter(Boolean);
+  return parts.length ? `<div class="turn-metrics">${parts.join("")}</div>` : "";
+}
+
 function renderChatHistory() {
-  const wrap = $("chatHistory");
+  const wrap = $("chatFeed");
   if (!wrap) return;
   const msgs = loadChatHistory();
-  if (!msgs.length) {
+  if (!msgs.length || _genMode() === "autocomplete") {
     wrap.innerHTML = "";
     wrap.style.display = "none";
     return;
   }
-  if (_genMode() === "chat") wrap.style.display = "";
-  wrap.innerHTML = msgs.map(m => `
-    <div style="margin-bottom:6px">
-      <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:0.5px">${_esc(m.role)}</div>
-      <div style="color:var(--text);white-space:pre-wrap">${_esc(m.text)}</div>
-    </div>
-  `).join("");
+  const last = msgs.length - 1;
+  wrap.style.display = "";
+  wrap.innerHTML = msgs.map((m, i) => {
+    const model = m.role === "model";
+    // The newest turn animates in once; re-rendering the whole feed on every push
+    // would otherwise replay the animation on every turn at once.
+    const land = (i === last && model) ? " turn-landed" : "";
+    return `<div class="turn turn-${model ? "model" : "you"}${land}">
+        <div class="turn-who">${model ? "model" : "you"}</div>
+        <div class="turn-bubble">
+          <div class="turn-text">${_esc(m.text)}</div>
+          ${model ? _turnMetricsHtml(m) : ""}
+        </div>
+      </div>`;
+  }).join("");
   wrap.scrollTop = wrap.scrollHeight;
 }
-function pushChatMessage(role, text) {
+
+// Bytes answered ahead are excluded from the rate: they were produced before the
+// clock started and would inflate it.
+function _turnStats(t0, ahead) {
+  const secs = (performance.now() - t0) / 1000;
+  const fresh = Math.max(0, generatedBytes.length - ahead);
+  const confs = frames.map(f => f.confidence).filter(c => typeof c === "number");
+  return {
+    bytes: generatedBytes.length,
+    bps:   secs > 0 && fresh > 0 ? fresh / secs : null,
+    conf:  confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null,
+    ahead: ahead || 0,
+  };
+}
+
+function pushChatMessage(role, text, stats) {
   const msgs = loadChatHistory();
-  msgs.push({ role, text, ts: Date.now() });
+  msgs.push(Object.assign({ role, text, ts: Date.now() }, stats || {}));
   saveChatHistory(msgs);
   renderChatHistory();
 }
@@ -2016,39 +2082,36 @@ function clearChatHistory() {
   saveChatHistory([]);
   renderChatHistory();
 }
+$("chatClear").addEventListener("click", clearChatHistory);
 
 // ---- mode toggle wiring ----
 function applyGenMode() {
   const mode = _genMode();
   const isConversational = (mode === "chat" || mode === "agent");
   const isAgent = (mode === "agent");
-  const chat = $("chatHistory");
-  if (chat) chat.style.display = isConversational ? "" : "none";
   const agentRow = $("agentRow");
   if (agentRow) agentRow.style.display = isAgent ? "" : "none";
   const agentPanel = $("agentPanel");
   if (agentPanel && !isAgent) agentPanel.style.display = "none";
-  const promptBox = $("prompt");
-  if (promptBox) {
-    promptBox.placeholder = isConversational
-      ? 'Ask a question, e.g. "what is the Eiffel Tower\'s height?"'
-      : "Start a sentence, the model finishes it…";
-    promptBox.rows = isConversational ? 2 : 3;
-  }
+  $("prompt").rows = isConversational ? 2 : 3;
   const hint = $("promptModeHint");
   if (hint) {
     if (isAgent) {
-      hint.textContent = "ask the model to use a tool. responses run through a ReAct loop.";
+      hint.textContent = "ask the model to use a tool. every step shows up in the reasoning trace.";
     } else if (mode === "chat") {
-      hint.textContent = "ask the model a question. answers go in the conversation below.";
+      hint.textContent = "ask the model a question. the conversation builds up above the box.";
     } else {
       hint.textContent = "type the start of a sentence. the model autocompletes byte-by-byte.";
     }
   }
-  if (isConversational) renderChatHistory();
+  const clear = $("chatClear");
+  if (clear) clear.style.display = isConversational ? "" : "none";
+  renderChatHistory();
 }
+// The top-level call runs before the settings module initializes, so the prime rail
+// is synced from the change handler, not from applyGenMode itself.
 document.querySelectorAll('input[name="genMode"]').forEach(r => {
-  r.addEventListener("change", applyGenMode);
+  r.addEventListener("change", () => { applyGenMode(); _primeSync(); });
 });
 applyGenMode();
 function appendAgentEvent(ev) {
@@ -2206,6 +2269,7 @@ const _GenThink = (() => {
   }
   function showError(msg, actionsHtml) {
     el = $("genThinking"); if (!el) return;
+    _showLiveTurn(true);
     _clearTimers();
     el.classList.remove("fading");
     el.classList.add("error");
@@ -2231,6 +2295,10 @@ const _GenThink = (() => {
 })();
 
 $("go").addEventListener("click", async () => {
+  // Trimmed, because the speculative draft was: an untrimmed submit would never
+  // match the buffer the server is holding for the same question.
+  const prompt = $("prompt").value.trim();
+  if (!prompt) return;
   if (evtSrc) { evtSrc.close(); evtSrc = null; }
   if (replay.timer) { clearInterval(replay.timer); replay.timer = null; }
   frames = []; generatedBytes = []; currentFrame = -1; live = true;
@@ -2238,13 +2306,33 @@ $("go").addEventListener("click", async () => {
   resetHallucination();
   setReplayMode("live");
 
-  const prompt = $("prompt").value;
   const temp = $("temp").value, topk = $("topk").value, maxnew = $("maxnew").value;
   promptBytes = Array.from(new TextEncoder().encode(prompt));
 
-  renderResponse();
+  // Built BEFORE the question joins the transcript, so it carries the same history
+  // the speculative draft was built from and the claim can match.
+  const mode = _genMode();
+  const wirePrompt = (mode === "chat") ? wrapChat(prompt) : prompt;
+  // A claimed draft is already answered: paint those bytes now, from the copy the
+  // rail was already showing, so the reply is on screen before the stream reopens.
+  // The arriving frames then overwrite it byte for byte.
+  const claim = _prefetchClaim(wirePrompt);
+  // The question joins the transcript before anything is asked of the engine, so a
+  // slow backend load never leaves the screen looking like nothing was submitted,
+  // and the box empties with it so a failed turn cannot be sent twice.
+  if (mode !== "autocomplete") { pushChatMessage("you", prompt); _promptSent(); }
+  _showLiveTurn(true);
   $("liveStats").innerHTML = "";
-  _GenThink.start();
+  $("response").innerHTML = "";
+  if (claim) {
+    const banked = document.createElement("span");
+    banked.className = "banked";
+    banked.textContent = _prefetchReadyText();
+    $("response").appendChild(banked);
+    _primeFire();
+  } else {
+    _GenThink.start();
+  }
   $("go").disabled = true; $("go").dataset.generating = "1"; $("stop").disabled = false;
 
   const backend = $("backend").value;
@@ -2302,12 +2390,8 @@ $("go").addEventListener("click", async () => {
   }
   const ragStatEl = $("ragStat"); if (ragStatEl) ragStatEl.textContent = ragCorpus ? "indexing..." : "";
 
-  // Mode: agent (tool-use, requires tool SFT) or chat / autocomplete (both go
-  // through /generate; chat just adds the conversation panel and history).
-  const mode = _genMode();
   resetAgentPanel();
   if (mode === "agent") {
-    pushChatMessage("you", prompt);
     const checkedTools = Array.from(document.querySelectorAll(".agentTool"))
       .filter(cb => cb.checked).map(cb => cb.dataset.tool);
     if (checkedTools.length === 0) {
@@ -2322,6 +2406,7 @@ $("go").addEventListener("click", async () => {
       const toolsQ = `&tools=${encodeURIComponent(checkedTools.join(","))}`;
       const aurl = `/agent/stream?prompt=${encodeURIComponent(prompt)}&temperature=${temp}&top_k=${topk}&max_turns=${maxT}&best_of_n=${bon}${corpusQ}${fsQ}${toolsQ}`;
       evtSrc = new EventSource(aurl);
+      _promptSent();
       let agentGotAnswer = false;
       // Set when the server's data stream ends cleanly (answer or stop event).
       // Flask closes the SSE connection after the generator returns, which
@@ -2339,6 +2424,7 @@ $("go").addEventListener("click", async () => {
           _GenThink.showText(promptBytes, generatedBytes, false);
           renderResponse();
           pushChatMessage("model", ev.text);
+          _showLiveTurn(false);
         }
         if (ev.kind === "error") {
           _GenThink.showError(ev.message || "stream error");
@@ -2378,10 +2464,6 @@ $("go").addEventListener("click", async () => {
     }
   }
 
-  if (mode === "chat") pushChatMessage("you", prompt);
-  // Platform chat-marker wrap for chat mode so a chat-SFT model recognizes
-  // the frame it learned. Autocomplete mode sends the raw prompt.
-  const wirePrompt = (mode === "chat") ? wrapChat(prompt) : prompt;
   // Repetition control is chat-only: loops are chat-lethal but autocomplete
   // legitimately repeats. Autocomplete omits the params (server default off).
   let repParam = "";
@@ -2393,9 +2475,12 @@ $("go").addEventListener("click", async () => {
              + `&rep_penalty=${isNaN(repPen) ? 0.5 : repPen}`
              + `&no_repeat_ngram=${isNaN(repNg) ? 16 : repNg}`;
   }
-  const url = `/generate?prompt=${encodeURIComponent(wirePrompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}${ragParam}${repParam}`;
+  const url = `/generate?prompt=${encodeURIComponent(wirePrompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}${ragParam}${repParam}${claim}`;
   evtSrc = new EventSource(url);
   const t0 = performance.now();
+  _promptSent();
+  let prefetchNote = "";
+  let prefetchedCount = 0;
   evtSrc.onmessage = (e) => {
     if (!e.data) return;
     const ev = JSON.parse(e.data);
@@ -2432,6 +2517,14 @@ $("go").addEventListener("click", async () => {
       $("liveStats").innerHTML += ` <span class="stat" style="color:var(--warm)">stop: ${reason}</span>`;
       return;
     }
+    if (ev.kind === "prefetch") {
+      // Bytes the engine wrote while the question was still being typed. They arrive
+      // as ordinary traced token frames, so the brain scan covers them too.
+      prefetchNote = `<span class="stat" style="color:var(--data-pos)"><b>${ev.bytes}</b> written ahead</span>`;
+      $("liveStats").innerHTML = prefetchNote;
+      prefetchedCount = ev.bytes;
+      return;
+    }
     if (ev.kind === "fast_byte") {
       // Fast mode (KV / MTP). No brain-scan telemetry on these bytes; just
       // accumulate the byte for the response panel and the throughput meter.
@@ -2443,7 +2536,7 @@ $("go").addEventListener("click", async () => {
         <span class="stat"><b>${generatedBytes.length}</b> bytes</span>
         <span class="stat"><b>${(generatedBytes.length/dt).toFixed(1)}</b> b/s</span>
         <span class="stat"><b>${(ev.ms_per_byte ?? 0).toFixed(1)}</b> ms/byte (fast)</span>
-        ${fastLbl}
+        ${fastLbl}${prefetchNote}
       `;
       renderResponse();
       return;
@@ -2479,6 +2572,7 @@ $("go").addEventListener("click", async () => {
         <span class="stat"><b>${ev.fwd_ms.toFixed(1)}</b> ms/forward</span>
         <span class="stat">surprise <b>${ev.surprise_bits.toFixed(1)}</b></span>
         <span class="stat">uncertainty <b>${ev.entropy_bits.toFixed(1)}</b></span>
+        ${prefetchNote}
       `;
     }
   };
@@ -2488,12 +2582,23 @@ $("go").addEventListener("click", async () => {
     live = false; renderResponse();
     setReplayMode("ready");
     if (mode === "chat" && generatedBytes.length > 0) {
-      try {
-        const raw   = new TextDecoder("utf-8", { fatal: false }).decode(Uint8Array.from(generatedBytes));
-        const clean = stripChatResponse(raw);
-        if (clean) pushChatMessage("model", clean);
-      } catch (_) {}
+      const raw   = new TextDecoder("utf-8", { fatal: false }).decode(Uint8Array.from(generatedBytes));
+      const clean = stripChatResponse(raw);
+      // The finished turn moves into the transcript wearing the same shape it had
+      // while streaming, so the reply is never shown twice and never blinks.
+      if (clean) {
+        pushChatMessage("model", clean, _turnStats(t0, prefetchedCount));
+        _showLiveTurn(false);
+      } else {
+        // The model emitted only turn markers. Say so, rather than leaving a bubble
+        // that reads as an answer nobody can see.
+        $("response").textContent = "the model ended the turn without saying anything. "
+          + "raise max, lower temperature, or try a model with chat SFT.";
+      }
     }
+    // Speculation is blocked while a response streams, so re-arm on the way out:
+    // a question typed during the answer gets speculated the moment the engine frees.
+    _primeSync();
     if (generatedBytes.length > 0) runHallucinationDetect(true);
   });
   evtSrc.onerror = () => {
@@ -2530,6 +2635,7 @@ $("scrub").addEventListener("input", (e) => {
   currentFrame = idx;
   live = (idx === frames.length - 1);
   render(frames[idx]);
+  _showLiveTurn(true);
   renderResponse();
   if (replay.mode === "playing") setReplayMode("paused");
 });
@@ -2540,6 +2646,10 @@ const replay = { mode: "live", timer: null, msPerFrame: 80 };
 function setReplayMode(mode) {
   replay.mode = mode;
   if (replay.timer) { clearInterval(replay.timer); replay.timer = null; }
+  // The scrubber only means something once frames exist; keep it off the page
+  // until then rather than showing a dead 0 / 0 control.
+  const row = $("timelineRow");
+  if (row) row.style.display = frames.length ? "" : "none";
   const btn = $("goLive");
   if (mode === "live") {
     btn.textContent = "live";
@@ -2667,6 +2777,8 @@ setTimeout(() => activateTab(location.hash.slice(1)), 0);
 // keep the max-bytes hint in sync with the prompt length. the cap is the loaded
 // model's sequence length minus the prompt. no model, no guess: the hint says so
 // and the field stays uncapped.
+// Set once the user edits the max field by hand; until then it tracks the cap.
+var _maxNewTouched = false;
 function updateMaxHint() {
   const seq = modelShape.seq;
   const maxnew = $("maxnew");
@@ -2679,9 +2791,301 @@ function updateMaxHint() {
   const cap = Math.max(0, seq - promptBs);
   $("maxHint").textContent = `engine cap: ${cap} bytes (seq ${seq} minus ${promptBs} prompt)`;
   maxnew.max = String(cap);
+  // Default to everything the context allows. A fixed default truncates a reply
+  // mid-sentence for no reason: a chat model ends its own turn on a stop marker,
+  // and an untouched field should not be the thing that cuts it short.
+  if (!_maxNewTouched) maxnew.value = String(cap);
 }
+$("maxnew").addEventListener("input", () => { _maxNewTouched = true; });
 $("prompt").addEventListener("input", updateMaxHint);
 updateMaxHint();
+
+// ---- speculative prefetch: the prime rail ----
+// A pause in typing is the signal that a question is worth answering ahead. The
+// draft goes to /prefetch, the engine writes the reply, and the rail above the
+// composer shows it arriving. Pressing generate claims those bytes, so the answer
+// opens where the engine already got to. Editing the question drops the draft: a
+// reply to a question that no longer exists is worse than no reply.
+//
+// Speculating costs a real generation, so the bar is "this person has stopped
+// typing", not "this person paused". Pauses inside a sentence are constant and
+// short; the gap that means DONE is much longer, and it is personal, so the
+// threshold is a multiple of the typist's own median keystroke gap rather than a
+// fixed timeout. Ending on . ? ! is the one unambiguous done signal and skips most
+// of the wait. Deleting means still editing, so it waits longer. Mid-word never
+// fires at all: nobody finishes a question halfway through a word.
+const PREFETCH_MIN_WORDS      = 2;
+const PREFETCH_PAUSE_MIN_MS   = 900;
+const PREFETCH_PAUSE_MAX_MS   = 2500;
+const PREFETCH_PAUSE_FACTOR   = 6;
+const PREFETCH_SENTENCE_MS    = 250;
+const PREFETCH_EDIT_FACTOR    = 2.0;
+const PREFETCH_MIDWORD_FACTOR = 1.6;
+const PREFETCH_SENTENCE_END   = /[.?!]["'”’)\]]?$/;
+// Word boundary in the raw box value; a trailing space counts.
+const PREFETCH_WORD_END       = /[\s.,;:!?"'”’)\]]$/;
+// Words nobody ends a question on. A draft trailing one of these is mid-sentence no
+// matter how long the pause, which is what separates a think-pause from a finish.
+const PREFETCH_OPEN_WORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "do", "does", "for",
+  "from", "has", "have", "how", "i", "if", "in", "is", "it", "its", "my", "of", "on",
+  "or", "our", "should", "than", "that", "the", "their", "then", "there", "these",
+  "they", "this", "to", "was", "were", "what", "when", "where", "which", "who", "why",
+  "will", "with", "would", "you", "your",
+]);
+const TYPING_SAMPLE_MAX       = 12;
+const TYPING_GAP_MAX_MS       = 2000;
+const PREFETCH_POLL_MS        = 200;
+const PRIME_FIRE_MS           = 450;
+// Why the engine stopped writing, so a rail that stops is explainable rather than
+// looking stuck. Keys match speculate.py REASON_*.
+const PRIME_STOPPED = {
+  done:   "answer ready",
+  budget: "answer ready, hit the byte limit",
+  busy:   "engine busy elsewhere",
+  error:  "draft failed",
+};
+let _prefetchTimer     = null;
+let _prefetchPollTimer = null;
+let _prefetchSent      = "";
+// The live draft: the id to claim on submit, the exact request body it was
+// speculated for, and the reply so far. Submit claims it only when the body it
+// would send now is identical, so a changed knob is a miss the client detects.
+let _prefetchDraft = null;
+// Rolling keystroke gaps, for the typist's own idea of a pause.
+const _typingGaps = [];
+let _lastKeyAt = 0;
+let _lastDraftLen = 0;
+
+function _typingMedianMs() {
+  if (_typingGaps.length < 3) return PREFETCH_PAUSE_MAX_MS / PREFETCH_PAUSE_FACTOR;
+  const sorted = _typingGaps.slice().sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+// How long to wait before treating the current draft as a finished question.
+function _prefetchDelayMs(raw) {
+  if (PREFETCH_SENTENCE_END.test(raw)) return PREFETCH_SENTENCE_MS;
+  let ms = Math.min(PREFETCH_PAUSE_MAX_MS,
+                    Math.max(PREFETCH_PAUSE_MIN_MS, _typingMedianMs() * PREFETCH_PAUSE_FACTOR));
+  // Mid-word waits longer rather than never firing: plenty of people never punctuate,
+  // and their finished question ends on a letter like any half-typed one.
+  if (!PREFETCH_WORD_END.test($("prompt").value)) ms *= PREFETCH_MIDWORD_FACTOR;
+  if (raw.length < _lastDraftLen) ms *= PREFETCH_EDIT_FACTOR;
+  return ms;
+}
+
+// The last whole word, for the open-word test. A word still being typed does not
+// count: "wha" is not "what".
+function _trailingWord(box) {
+  if (!PREFETCH_WORD_END.test(box)) return "";
+  const words = box.trim().split(/\s+/);
+  return (words[words.length - 1] || "").toLowerCase().replace(/[^a-z']/g, "");
+}
+
+function _prefetchEnabled() {
+  return !!(settingsState.current && settingsState.current.speculative_enabled);
+}
+
+// The wire prompt to speculate, or "" when nothing should be running: the feature
+// is off, the mode or backend cannot serve it, a generation owns the engine, or the
+// draft is not yet a question worth answering.
+function _prefetchWirePrompt() {
+  if (!_prefetchEnabled()) return "";
+  const mode = _genMode();
+  if (mode === "agent") return "";
+  if ($("backend").value !== "c") return "";
+  if ($("go").dataset.generating === "1") return "";
+  const box = $("prompt").value;
+  const raw = box.trim();
+  // Terminal punctuation is a finished question outright. Otherwise the draft needs a
+  // couple of words and must not trail an open word, which no finished question does.
+  if (!PREFETCH_SENTENCE_END.test(raw)) {
+    if (raw.split(/\s+/).length < PREFETCH_MIN_WORDS) return "";
+    if (PREFETCH_OPEN_WORDS.has(_trailingWord(box))) return "";
+  }
+  return (mode === "chat") ? wrapChat(raw) : raw;
+}
+
+// The server serves a buffer only to a request whose decode knobs are identical, so
+// a draft carries exactly what the generate button would send.
+function _prefetchBody(wire) {
+  const body = {
+    prompt: wire,
+    temperature: parseFloat($("temp").value),
+    top_k: parseInt($("topk").value, 10),
+    ablate_layer: parseInt($("ablLayer").value, 10),
+    ablate_neuron: parseInt($("ablNeuron").value, 10),
+    addons: collectSelectedAddons().join(","),
+  };
+  if (_genMode() === "chat") {
+    body.rep_window      = parseInt($("genRepWindow").value, 10);
+    body.rep_penalty     = parseFloat($("genRepPenalty").value);
+    body.no_repeat_ngram = parseInt($("genRepNgram").value, 10);
+  }
+  return body;
+}
+
+function _prefetchTick() {
+  const wire = _prefetchWirePrompt();
+  if (wire === _prefetchSent) return;
+  const hadDraft = !!_prefetchDraft;
+  _prefetchSent  = wire;
+  _prefetchDraft = null;
+  if (!wire) {
+    _primeRender(null);
+    _prefetchPollStop();
+    if (!hadDraft) return;
+  }
+  const sent = JSON.stringify(wire ? _prefetchBody(wire) : {});
+  fetch("/prefetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: sent })
+    .then(r => r.json())
+    .then(d => {
+      if (!wire || _prefetchSent !== wire) return;
+      if (d.reason) { _primeRender({ note: d.reason, warn: true }); return; }
+      _prefetchDraft = { id: d.draft_id, body: sent, text: "", asked: $("prompt").value.trim() };
+      _primeRender({ speculating: true, buffered: 0 });
+      _prefetchPollStart();
+    })
+    .catch(() => { if (wire) _primeRender({ note: "prefetch unreachable", warn: true }); });
+}
+
+// The prompt is in flight: free the box for the next question and reset the draft
+// state, so every subsequent turn speculates from scratch.
+function _promptSent() {
+  $("prompt").value = "";
+  updateMaxHint();
+  _prefetchSent  = "";
+  _prefetchDraft = null;
+  _lastDraftLen  = 0;
+  _prefetchPollStop();
+}
+
+// The prefetch id to claim on submit, or "" when anything changed since the draft.
+function _prefetchClaim(wire) {
+  if (!_prefetchDraft) return "";
+  return JSON.stringify(_prefetchBody(wire)) === _prefetchDraft.body
+    ? `&prefetch_id=${_prefetchDraft.id}` : "";
+}
+
+// Bytes already written for the claim being submitted, for the instant paint.
+function _prefetchReadyText() {
+  return (_prefetchDraft && _prefetchDraft.text) || "";
+}
+
+// Polling runs only while a draft is live and only until the engine stops adding to
+// it, so a finished or dropped draft costs nothing.
+function _prefetchPollStart() {
+  if (!_prefetchPollTimer) _prefetchPollTimer = setInterval(_prefetchPollTick, PREFETCH_POLL_MS);
+}
+function _prefetchPollStop() {
+  if (_prefetchPollTimer) { clearInterval(_prefetchPollTimer); _prefetchPollTimer = null; }
+}
+function _prefetchPollTick() {
+  // Never poll while a real generation streams: the answer owns the connection.
+  if (!_prefetchDraft || $("go").dataset.generating === "1") { _prefetchPollStop(); return; }
+  fetch("/prefetch").then(r => r.json()).then(d => {
+    if (!_prefetchDraft || d.draft_id !== _prefetchDraft.id) return;
+    _prefetchDraft.text = stripChatStream(d.text || "");
+    _primeRender(d);
+    if (!d.speculating) _prefetchPollStop();
+  }).catch(() => _prefetchPollStop());
+}
+
+// The rail reads as a meter filling over the draft: a dot and label for what the
+// engine is doing, a bar for how much of the budget is written, and the reply
+// itself underneath. Green and still means generate opens on that text.
+function _primeRender(state) {
+  const rail = $("primeRail");
+  if (!rail) return;
+  if (!state) {
+    rail.style.display = "none";
+    rail.className = "prime";
+    $("primeText").textContent = "";
+    return;
+  }
+  rail.style.display = "";
+  if (state.note) {
+    rail.className = "prime";
+    $("primeLabel").textContent = state.note;
+    $("primeLabel").style.color = state.warn ? "var(--warm)" : "";
+    $("primeCount").textContent = "";
+    $("primeFill").style.width = "0%";
+    $("primeText").textContent = "";
+    return;
+  }
+  const budget  = state.budget || (settingsState.current || {}).speculative_bytes || 1;
+  const written = state.buffered || 0;
+  const running = !!state.speculating;
+  rail.className = "prime " + (running ? "is-running" : "is-armed");
+  $("primeLabel").style.color = "";
+  $("primeLabel").textContent = running ? "writing the answer" : PRIME_STOPPED[state.state] || "answer ready";
+  $("primeCount").textContent = running
+    ? `${written} of ${budget} bytes`
+    : `${written} bytes \u00b7 generate opens here`;
+  $("primeFill").style.width = `${Math.min(100, (written / budget) * 100)}%`;
+  const el = $("primeText");
+  el.textContent = _prefetchReadyText();
+  el.scrollTop = el.scrollHeight;
+}
+
+// Generate claimed the buffer: run the rail out so the written bytes visibly move
+// into the answer instead of the draft silently disappearing.
+function _primeFire() {
+  const rail = $("primeRail");
+  if (!rail || rail.style.display === "none") return;
+  rail.classList.add("is-fired");
+  setTimeout(() => _primeRender(null), PRIME_FIRE_MS);
+}
+
+// Re-arm from the current state of the page. Called whenever something the draft
+// depends on moves: the setting, the mode, the backend, the end of a generation.
+function _primeSync() {
+  _prefetchSent  = "";
+  _prefetchDraft = null;
+  _prefetchPollStop();
+  _primeRender(null);
+  _prefetchTick();
+}
+
+// The question moved on from the draft. Grey the rail on the keystroke itself: the
+// debounced tick is up to a couple of seconds away, and until it runs the rail would
+// otherwise keep advertising a finished answer to a question that no longer exists.
+function _primeStale() {
+  const rail = $("primeRail");
+  if (!rail || rail.style.display === "none") return;
+  rail.className = "prime is-stale";
+  $("primeLabel").style.color = "";
+  $("primeLabel").textContent = "waiting for you to finish";
+  $("primeCount").textContent = "";
+}
+
+$("prompt").addEventListener("input", () => {
+  const now = performance.now();
+  if (_lastKeyAt) {
+    const gap = now - _lastKeyAt;
+    if (gap < TYPING_GAP_MAX_MS) {
+      _typingGaps.push(gap);
+      if (_typingGaps.length > TYPING_SAMPLE_MAX) _typingGaps.shift();
+    }
+  }
+  _lastKeyAt = now;
+  const raw = $("prompt").value.trim();
+  if (_prefetchDraft && _prefetchDraft.asked !== raw) _primeStale();
+  clearTimeout(_prefetchTimer);
+  _prefetchTimer = setTimeout(_prefetchTick, _prefetchDelayMs(raw));
+  _lastDraftLen = raw.length;
+});
+// Enter sends, shift+enter breaks the line: the composer hint promises it.
+$("prompt").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey) return;
+  e.preventDefault();
+  if (!$("go").disabled) $("go").click();
+});
+$("backend").addEventListener("change", _primeSync);
+$("prefetchEnable").addEventListener("change", () => {
+  _saveSettings({ speculative_enabled: $("prefetchEnable").checked });
+});
 
 // probe server for backend availability and prefill model meta
 function fmtMtime(t) {
@@ -2962,7 +3366,7 @@ const _GenPrefs = (() => {
       if (el) p[id] = el[attr];
     }
     const mode = document.querySelector("input[name=genMode]:checked");
-    if (mode) p.genMode = mode.value;
+    if (mode) { p.genMode = mode.value; p.genModePicked = true; }
     p.agentTools = Array.from(document.querySelectorAll(".agentTool"))
       .filter(c => c.checked).map(c => c.dataset.tool);
     _save(p);
@@ -2977,10 +3381,15 @@ const _GenPrefs = (() => {
       if (attr === "checked") el.checked = !!p[id];
       else el.value = p[id];
     }
+    // A stored autocomplete is not necessarily a choice: the picker used to force
+    // it whenever the model reported no chat SFT, and that forced value was saved.
+    // Drop those once so the chat default applies; an explicit pick from here on
+    // carries the marker and survives.
+    if (p.genMode && !p.genModePicked && p.genMode !== "chat") p.genMode = null;
     if (p.genMode) {
       // Migrate pre-tier-rename values: old "chat" was the tool-use agent
       // flow; old "complete" was autocomplete. New picker is
-      // autocomplete / chat / agent.
+      // chat / agent / autocomplete.
       const legacy = { "complete": "autocomplete" };
       const v = legacy[p.genMode] || p.genMode;
       const r = document.querySelector(`input[name=genMode][value="${v}"]`);
@@ -10907,10 +11316,28 @@ function _sysPollTick() {
   }).catch(() => {});
 }
 
+// The feature buys latency with wasted generation, so the panel reports the trade:
+// bytes actually handed to a request against bytes written for drafts.
+function _renderSpeculativeStats(spec) {
+  const host = $("speculativeStats");
+  if (!host) return;
+  const st = (spec && spec.stats) || null;
+  if (!st || !st.spent_bytes) {
+    host.textContent = spec && spec.speculating ? "writing a draft now" : "no drafts written yet";
+    host.style.color = "var(--dim)";
+    return;
+  }
+  const rate = (st.served_bytes / st.spent_bytes) * 100;
+  host.textContent = `${st.served} used, ${st.discarded} thrown away \u00b7 `
+                   + `${st.served_bytes} of ${st.spent_bytes} written bytes reached an answer (${rate.toFixed(0)}%)`;
+  host.style.color = rate < 50 ? "var(--warm)" : "var(--dim)";
+}
+
 function _renderWarmModels(memAvail) {
   const host = $("warmModelsList");
   if (!host) return;
   fetch("/backends").then(r => r.json()).then(d => {
+    _renderSpeculativeStats(d && d.c && d.c.speculative);
     const list = (d && d.c && d.c.warm) || [];
     const pinned = (settingsState.current && settingsState.current.warm_models) || [];
     const sig = JSON.stringify(list.map(m => [m.name, m.bin_bytes, m.resident, m.active]))
@@ -10978,6 +11405,12 @@ function _applySettingsToUI(s) {
     if (wrap) wrap.classList.toggle("checked", r.checked);
   });
   $("idleSecs").value = s.pytorch_idle_unload_secs;
+  // Settings and the composer toggle drive the same key, so both read back from it.
+  $("speculativeEnable").checked = !!s.speculative_enabled;
+  $("prefetchEnable").checked    = !!s.speculative_enabled;
+  $("speculativeBytes").value      = s.speculative_bytes;
+  $("speculativeChunkBytes").value = s.speculative_chunk_bytes;
+  _primeSync();
   $("idleTimeoutWrap").style.display = (s.pytorch_load_mode === "on_demand") ? "" : "none";
   $("hudEnable").checked = !!s.hud_enabled;
   $("hudDetailed").checked = !!s.hud_detailed;
@@ -14287,6 +14720,22 @@ document.addEventListener("DOMContentLoaded", () => {
   if (idle) idle.addEventListener("change", () => {
     const v = Math.max(60, parseInt(idle.value, 10) || 600);
     _saveSettings({ pytorch_idle_unload_secs: v });
+  });
+  const specEnable = $("speculativeEnable");
+  if (specEnable) specEnable.addEventListener("change", () => {
+    _saveSettings({ speculative_enabled: specEnable.checked });
+  });
+  const specBytes = $("speculativeBytes");
+  if (specBytes) specBytes.addEventListener("change", () => {
+    const v = Math.max(1, Math.min(4096, parseInt(specBytes.value, 10) || 256));
+    specBytes.value = v;
+    _saveSettings({ speculative_bytes: v });
+  });
+  const specChunk = $("speculativeChunkBytes");
+  if (specChunk) specChunk.addEventListener("change", () => {
+    const v = Math.max(1, Math.min(256, parseInt(specChunk.value, 10) || 32));
+    specChunk.value = v;
+    _saveSettings({ speculative_chunk_bytes: v });
   });
   const hud = $("hudEnable");
   if (hud) hud.addEventListener("change", () => {

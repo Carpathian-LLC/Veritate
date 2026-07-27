@@ -59,6 +59,9 @@ NEWLINE              = "\n"
 # and emits TEND, so a caller never has to abandon a live generator. An engine
 # built before the field ignores it and generates to max_new as it always did.
 STOP_SEQ_SEP         = ","
+# Stop markers are byte sequences on the wire; latin-1 is the 1:1 byte<->char map
+# the prompt line already uses.
+WIRE_ENCODING        = "latin-1"
 STOP_SEQ_NONE        = "-"
 STOP_SEQ_MAX         = 8     # VERITATE_MAX_STOPS in main.c
 STOP_SEQ_MAX_LEN     = 31    # VERITATE_MAX_STOP_LEN - 1 in main.c
@@ -68,8 +71,10 @@ STOP_SEQ_MAX_LEN     = 31    # VERITATE_MAX_STOP_LEN - 1 in main.c
 PROMPT_ANCHOR_DIVISOR = 8
 # Hybrid-trunk batched prefill width (VERITATE_PREFILL_BATCH). Amortizes the local-block
 # weight streaming across the chunk; bitwise-identical to sequential prefill
-# (tests/engine/test_prefill_batch.py). 32 measured best on the i7-9700T.
-PREFILL_BATCH        = 32
+# (tests/engine/test_prefill_batch.py). Off: on the 200m hybrid trunk a cold 734-byte
+# prompt costs 14.4s batched against 1.15s sequential (M3 Ultra, 2026-07-27). Raise it
+# only per-arch behind a measurement.
+PREFILL_BATCH        = 1
 
 DLA_TOPK            = 12
 DLA_ENTRY_BYTES     = 16   # u8 layer, u8 pad, u16 neuron, i32 act, i32 w, i32 contrib
@@ -351,12 +356,13 @@ class CTracedSubprocess:
 
     @staticmethod
     def _stop_token(stop_sequences):
-        """Header token for the engine's stop-sequence field. Sequences carrying a
-        comma or a character the line protocol cannot express are dropped: the
-        engine then generates to max_new, which is the pre-stop-sequence behavior."""
+        """Header token for the engine's stop-sequence field. Callers pass str or
+        bytes; bytes decode as latin-1 to stay byte-for-byte on the wire. Sequences
+        carrying a comma or a character the line protocol cannot express are dropped:
+        the engine then generates to max_new, the pre-stop-sequence behavior."""
         out = []
         for s in stop_sequences or ():
-            s = str(s)
+            s = s.decode(WIRE_ENCODING) if isinstance(s, (bytes, bytearray)) else str(s)
             if not s or STOP_SEQ_SEP in s or len(s) > STOP_SEQ_MAX_LEN:
                 continue
             out.append(s.replace(CARRIAGE_RETURN, "").replace(NEWLINE, NEWLINE_WIRE_ESCAPE))

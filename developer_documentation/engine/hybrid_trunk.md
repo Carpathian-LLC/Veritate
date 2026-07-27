@@ -170,31 +170,35 @@ amortizing the RAM traffic. With the traffic amortized the batched matmul is
 compute-bound on one core, so each is also j-split across the worker pool (see
 "threaded batched matmul" below). Engine default is off; `VERITATE_PREFILL_BATCH=<B>`
 turns it on (clamped to `V_PREFILL_BMAX=64`, [veritate.h:244](../../veritate_engine/src/veritate.h)).
-The platform spawns `chat_traced` with `B = PREFILL_BATCH = 32`
-([c_engine.py](../../veritate_mri/inference/backends/c_engine.py), setdefault so a
-parent env value wins). 32 measured best on an 8-core i7-9700T (B=64 was worst on
-chat800m: the larger chunk overflows cache); only the local blocks amortize, the
-recurrent stack stays sequential per position, so the win is bounded by the
-local/recurrent block ratio.
+
+**The platform ships it off (`PREFILL_BATCH = 1`,
+[c_engine.py](../../veritate_mri/inference/backends/c_engine.py), setdefault so a
+parent env value wins).** It is a large regression on the M3 Ultra / 200m hybrid
+trunk: a cold 734-byte prompt costs **14.4 s batched against 1.15 s sequential**
+(2026-07-27, `chat_200m`, layers 16 hidden 1024 ffn 4096 seq 1024). The sequential
+walk runs at ~1.8 ms per prompt position; batching at B=32 raises that to ~10 ms.
+B=32 measured best on an 8-core i7-9700T, so the win is arch-specific and does not
+survive the move to Apple Silicon. Only the local blocks amortize, the recurrent
+stack stays sequential per position, so the ceiling is bounded by the
+local/recurrent block ratio in any case. Raise `B` only per-arch behind a fresh
+measurement on that box.
 
 - Hook: the `forward` hybrid branch composes AFTER the Feature A state-cache
-  restore ([model.c:742](../../veritate_engine/src/model.c)). With
-  `B = hybrid_prefill_batch()` and `end = trace ? real_len - 1 : real_len`, any
-  span with `B > 1 && end - restored > 1` batches via
-  `hybrid_prefill(tokens, end, B)`. `hybrid_prefill` clamps its own chunk to
-  `min(rem, B)`, so a span shorter than `B` batches as one partial chunk instead
-  of falling back to per-byte stepping. Untraced that covers the whole prompt;
-  traced it covers all but the last position, then one
-  `hybrid_step(tokens[real_len-1], trace)` so only `pos = real_len-1` is
-  traced. That is the sole prompt frame `chat_traced` emits (step 0 reads
-  `pos = n-1`, [main.c:513](../../veritate_engine/src/main.c)); positions
-  `[restored, n-2]` had their trace buffers filled then discarded, so batching
-  them untraced loses nothing displayed. Batched state is bitwise-identical to
-  sequential, so the emitted `pos = n-1` frame is byte-identical to a
-  fully-sequential-traced run (verified A/B: `tests/engine/test_prefill_batch.py::test_traced_batched_matches_sequential`,
-  and old-vs-new binary over 3 prompts x 2 models). Otherwise (either mode too
-  short to batch, or unset / `<= 1`) the sequential per-byte loop runs, byte-for-byte
-  the unbatched path.
+  restore ([model.c:742](../../veritate_engine/src/model.c)). `last = real_len - 1`
+  is the only position `chat_traced` ever emits a frame for (step 0 reads
+  `pos = n-1`, [main.c:513](../../veritate_engine/src/main.c)), so the prompt walk
+  is three stages: batch `[restored, last)` via `hybrid_prefill(tokens, last, B)`
+  when `B > 1` and the span is over one position, step whatever is left of
+  `[restored, last)` untraced, then step `last` with the trace. `hybrid_prefill`
+  clamps its own chunk to `min(rem, B)`, so a span shorter than `B` batches as one
+  partial chunk instead of falling back to per-byte stepping.
+- **Positions before `last` are never traced, whatever `B` is.** Filling the trace
+  buffers for a frame no caller reads costs roughly 170x the plain walk, and until
+  2026-07-27 the sequential path (`B <= 1`, or a span too short to batch) paid it on
+  every prompt byte. Batched state is bitwise-identical to sequential, so the emitted
+  `pos = n-1` frame is byte-identical to a fully-sequential-traced run (verified A/B:
+  `tests/engine/test_prefill_batch.py::test_traced_batched_matches_sequential`, and
+  old-vs-new binary over 3 prompts x 2 models).
 - `hybrid_prefill` ([hybrid.c:913](../../veritate_engine/src/hybrid.c))
   chunks `tokens[h->pos .. n-1]` into `ceil(rem/B)` blocks. Per chunk: batched
   embed, then each local (enc/dec) block via `prefill_local_block`

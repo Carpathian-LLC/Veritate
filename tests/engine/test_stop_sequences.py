@@ -41,6 +41,20 @@ def test_chatml_markers_render_comma_separated(stop_token):
     assert stop_token(("<|im_end|>", "<|im_start|>")) == "<|im_end|>,<|im_start|>"
 
 
+def test_bytes_markers_render_as_their_bytes(stop_token):
+    """A bytes stop sequence reaches the engine as its bytes, not as repr("b'...'")."""
+    assert stop_token((b"<|im_end|>", b"<|im_start|>")) == "<|im_end|>,<|im_start|>"
+
+
+def test_chat_stop_seq_output_survives_the_header_encoding(stop_token):
+    """The markers _chat_stop_seq returns render verbatim, so the engine can match them."""
+    from routes.backends_routes import _chat_stop_seq
+    wire = "<|im_start|>user\nhi<|im_end|>\n<|im_start|>assistant\n"
+    token = stop_token(_chat_stop_seq(wire))
+    assert "b'" not in token
+    assert token.split(c_engine.STOP_SEQ_SEP) == [m.decode() for m in _chat_stop_seq(wire)]
+
+
 def test_embedded_newline_is_wire_escaped(stop_token):
     """A stop sequence containing a newline is escaped the way the prompt line is."""
     assert stop_token(("\ncontext:",)) == c_engine.NEWLINE_WIRE_ESCAPE + "context:"

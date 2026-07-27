@@ -21,6 +21,7 @@ import time
 
 import numpy as np
 from flask import Response, current_app, request
+from inference import speculate
 from inference.addons import build_chain, list_addons
 from inference.agent.loop import AgentLoop
 from inference.agent.rag import build_rag_prefix, crude_compressor, make_word_ppl_compressor
@@ -120,6 +121,13 @@ CHAT_USER_TAG      = b"<|user|>"
 CHAT_ASSISTANT_TAG = b"<|assistant|>"
 PLATFORM_STOP_MARKERS = (CHAT_END_TAG, CHAT_USER_TAG, CHAT_ASSISTANT_TAG)
 CHATML_STOP_MARKERS   = (CHATML_IM_END, CHATML_IM_START)
+# A reply never contains a turn marker of EITHER framing. Models trained on a mix
+# answer a ChatML prompt with a platform marker, so gating the stop set on the
+# prompt's framing lets the engine run on into a self-conversation the client then
+# has to throw away. Matched WITHOUT the closing bracket: a byte model reproduces a
+# marker approximately ("<|im_start|2018|"), and a mangled marker is still the model
+# starting a turn it was not asked for.
+CHAT_STOP_MARKERS = tuple(m[:-1] for m in CHATML_STOP_MARKERS + PLATFORM_STOP_MARKERS)
 
 def _is_chatml_prompt(prompt):
     if not isinstance(prompt, str):
@@ -127,15 +135,11 @@ def _is_chatml_prompt(prompt):
     return "<|im_start|>" in prompt
 
 def _chat_stop_seq(prompt):
-    """Turn-stop markers for a framed chat prompt. A reply never contains a turn
-    marker, so platform prompts stop at the first of end/user/assistant tags,
-    legacy ChatML at im_end / im_start; plain prompts stream to max_new (None)."""
+    """Turn-stop markers for a framed chat prompt; plain prompts stream to max_new."""
     if not isinstance(prompt, str):
         return None
-    if "<|im_start|>" in prompt:
-        return CHATML_STOP_MARKERS
-    if "<|assistant|>" in prompt:
-        return PLATFORM_STOP_MARKERS
+    if "<|im_start|>" in prompt or "<|assistant|>" in prompt:
+        return CHAT_STOP_MARKERS
     return None
 
 def _stop_on_bytes(gen, stop_markers):
@@ -350,14 +354,29 @@ def _build_c_mri_frame_compact(raw, fwd_ms, shape):
     return _assemble_frame(raw, _reduce_compact(raw, shape), fwd_ms, shape)
 
 
+def _frame_builder(shape):
+    """Assemble one MRI frame from a raw engine frame. Both the live stream and a
+    speculative turn build frames here, so a flushed draft is indistinguishable from
+    a byte the engine just produced."""
+    def build(raw, fwd_ms):
+        if raw.get("compact"):
+            return _build_c_mri_frame_compact(raw, fwd_ms, shape)
+        return _build_c_mri_frame(raw, fwd_ms, shape)
+    return build
+
+
 def _c_engine_stream(cfg, prompt, max_new, temperature=TEMPERATURE_DEFAULT, top_k=TOP_K_DEFAULT,
                      ablate_layer=ABLATE_OFF, ablate_neuron=ABLATE_OFF, addons_csv="",
                      rep_window=REP_WINDOW_OFF, rep_penalty=REP_PENALTY_OFF,
-                     no_repeat_ngram=NO_REPEAT_NGRAM_OFF, trace=False):
+                     no_repeat_ngram=NO_REPEAT_NGRAM_OFF, trace=False, prefetched=()):
     sub = cfg["C_SUBPROCESS"]
     if sub is None:
         yield {"kind": "error", "message": "c chat_traced subprocess not running"}
         return
+    # Any real generation owns the engine. /generate already consumed its draft via
+    # take(); this covers every other caller so a speculative job can never hold the
+    # subprocess lock against a user who is waiting on an answer.
+    speculate.stand_down()
     model_path = cfg["C_MODEL"]
     exe        = cfg["C_EXE"]
     model_name = os.path.basename(os.path.dirname(model_path)) if model_path else "(random)"
@@ -384,6 +403,18 @@ def _c_engine_stream(cfg, prompt, max_new, temperature=TEMPERATURE_DEFAULT, top_
     # mri_settings.json, survives deploys). Read per stream so a GUI toggle takes
     # effect on the next chat with no restart.
     want_compact = bool(trace and settings_mod.get().get("mri_compact_frames", False))
+    # Frames a speculative prefetch already generated for this exact request. They
+    # are the same assembled token frames a live turn yields, telemetry included, so
+    # the dashboard replays them as normal bytes; the engine then continues from
+    # prompt + reply for whatever is left.
+    if prefetched:
+        reply = bytes(f["byte"] for f in prefetched)
+        yield {"kind": "prefetch", "bytes": len(prefetched), "backend": "c"}
+        yield from prefetched
+        prompt   = prompt + reply.decode(speculate.WIRE_ENCODING)
+        max_new -= len(prefetched)
+        if max_new < 1:
+            return
     try:
         last = time.perf_counter()
         # Hand the same turn markers to the engine. Without them Python stops at the
@@ -640,6 +671,7 @@ def _backends_status_payload(cfg):
             "build":     build_runner.state(),
             "bins_available": bins_available,
             "warm":      _warm_status(cfg),
+            "speculative": speculate.status(),
         },
     }
 
@@ -733,6 +765,22 @@ def _build_constraint(spec):
             raise ValueError(f"unknown stop preset {rest!r}; allowed: {sorted(_STOP_PRESETS)}")
         return StopOnConstraint(_STOP_PRESETS[rest])
     raise ValueError(f"unknown constrained spec: {spec!r}")
+
+
+def _decode_params(temperature, top_k, ablate_layer=ABLATE_OFF, ablate_neuron=ABLATE_OFF,
+                   addons_csv="", rep_window=REP_WINDOW_OFF, rep_penalty=REP_PENALTY_OFF,
+                   no_repeat_ngram=NO_REPEAT_NGRAM_OFF):
+    """The knobs a speculative turn generates with, parsed from a /prefetch body."""
+    return {
+        "temperature":     float(temperature),
+        "top_k":           int(top_k),
+        "ablate_layer":    int(ablate_layer),
+        "ablate_neuron":   int(ablate_neuron),
+        "addons_csv":      addons_csv,
+        "rep_window":      int(rep_window),
+        "rep_penalty":     float(rep_penalty),
+        "no_repeat_ngram": int(no_repeat_ngram),
+    }
 
 
 def _sse_error_response(message):
@@ -942,6 +990,46 @@ def register(app):
             logmod.error("addons", f"list failed: {type(e).__name__}: {e}")
             return ({"error": user_error(e)}, 500)
 
+    @app.route("/prefetch", methods=["GET", "POST"])
+    def prefetch():
+        """POST speculates a reply for a draft the client is still typing. `prompt` is
+        the exact wire prompt the client will send on submit; omit it to stand down
+        (the client started typing again). At most one draft is live process-wide.
+        GET reports the live draft and the reply so far without consuming it."""
+        cfg  = current_app.config
+        if request.method == "GET":
+            return speculate.preview()
+        body = request.get_json(silent=True) or {}
+        prompt = body.get("prompt") or ""
+        if not prompt:
+            return speculate.stand_down()
+        cur = settings_mod.get()
+        budget = int(cur.get("speculative_bytes") or 0)
+        if not cur.get("speculative_enabled") or budget < 1:
+            return {"speculating": False, "reason": "speculative prefetch is off",
+                    "stats": speculate.status()["stats"]}
+        sub = cfg.get("C_SUBPROCESS")
+        if sub is None:
+            return {"speculating": False, "reason": "c engine not loaded",
+                    "stats": speculate.status()["stats"]}
+        try:
+            params = _decode_params(
+                body.get("temperature", TEMPERATURE_DEFAULT),
+                max(1, min(int(body.get("top_k", TOP_K_DEFAULT)), BYTE_VOCAB)),
+                ablate_layer=body.get("ablate_layer", ABLATE_OFF),
+                ablate_neuron=body.get("ablate_neuron", ABLATE_OFF),
+                addons_csv=body.get("addons", ""),
+                rep_window=body.get("rep_window", REP_WINDOW_OFF),
+                rep_penalty=body.get("rep_penalty", REP_PENALTY_OFF),
+                no_repeat_ngram=body.get("no_repeat_ngram", NO_REPEAT_NGRAM_OFF))
+        except (TypeError, ValueError) as e:
+            return ({"error": user_error(e, "bad prefetch param")}, 400)
+        return speculate.start(sub, prompt, params, budget,
+                               int(cur.get("speculative_chunk_bytes") or 1),
+                               _chat_stop_seq(prompt) or (),
+                               _frame_builder(sub.shape),
+                               compact=bool(cur.get("mri_compact_frames", False)))
+
     @app.route("/generate")
     def generate():
         cfg = current_app.config
@@ -986,13 +1074,19 @@ def register(app):
                        "or switch to the PyTorch backend." if bins == 0
                        else "C engine not loaded. Pick a model from the dropdown.")
                 return _sse_error_response(msg)
+            # Bytes a /prefetch draft already generated. prefetch_id is the client
+            # asserting nothing it would send has changed since that draft; the
+            # prompt is checked too. A miss returns empty and costs nothing.
+            prefetched = speculate.take(cfg["C_SUBPROCESS"], prompt,
+                                        request.args.get("prefetch_id", 0, type=int))
             def stream_c():
                 try:
                     base = _c_engine_stream(cfg, prompt, max_new, temperature=temperature, top_k=top_k,
                                             ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
                                             addons_csv=",".join(addons_sel),
                                             rep_window=rep_window, rep_penalty=rep_penalty,
-                                            no_repeat_ngram=no_repeat_ngram, trace=True)
+                                            no_repeat_ngram=no_repeat_ngram, trace=True,
+                                            prefetched=prefetched)
                     stop_seq = _chat_stop_seq(prompt)
                     for ev in _stop_on_bytes(base, stop_seq):
                         yield f"data: {json.dumps(ev)}\n\n"

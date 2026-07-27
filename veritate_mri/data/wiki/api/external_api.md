@@ -13,6 +13,7 @@ Two shapes:
 
 - **OpenAI-compatible**: `/v1/models`, `/v1/chat/completions`, `/v1/chat/mri`. Point any OpenAI client at the base URL.
 - **Native SSE**: `/generate` and `/agent/stream`. Byte-level generation and agent traces with full telemetry.
+- **Speculative prefetch**: `/prefetch`. Hands the box a draft prompt while a user is still typing, so the real request serves bytes that are already generated.
 
 The complete platform contract, including everything an on-box extension calls, is in the platform API reference entry.
 
@@ -28,7 +29,7 @@ Off until a key is set. On a trusted LAN the endpoints stay open. Set a key befo
 
 - **Enable:** dashboard **Settings, API access, generate key**, or `POST /settings/api-key {"action":"rotate"}`. Clear it with `{"action":"clear"}`.
 - **Use:** when a key is set, every protected request carries `Authorization: Bearer <key>`. A missing or wrong key returns `401 {"ok": false, "error": "invalid or missing api key"}`.
-- **What is protected:** the exact paths `/generate` and `/agent/stream`, plus **every path beginning with `/v1/`**. The gate in `veritate_mri/routes/api_auth_routes.py` is a prefix test, not a list of endpoints, so any `/v1/` route added later is covered the moment it exists. Today that is `/v1/models`, `/v1/chat/completions`, and `/v1/chat/mri`.
+- **What is protected:** the exact paths `/generate`, `/agent/stream`, and `/prefetch`, plus **every path beginning with `/v1/`**. The gate in `veritate_mri/routes/api_auth_routes.py` is a prefix test, not a list of endpoints, so any `/v1/` route added later is covered the moment it exists. Today that is `/v1/models`, `/v1/chat/completions`, and `/v1/chat/mri`.
 - **What is not protected:** the dashboard, `/chat`, the `/hybrid/*` routes, and `/static`. The bare path `/v1` with no trailing slash is not protected either.
 
 The dashboard password gate is a separate mechanism and runs first. When `VERITATE_DASHBOARD_PASSWORD` is set, `/v1/*` is not on its public list, so a programmatic client also needs a dashboard session for those paths. A bearer key alone is enough only when the dashboard password is unset.
@@ -81,10 +82,22 @@ The same request body and model routing as `/v1/chat/completions`, with per-byte
 
 Byte-by-byte generation with per-byte telemetry. SSE.
 
-- Params: `prompt` (required), `temperature` (0.7), `top_k` (40), `max_new` (200, capped at 4096), `backend` (`c` by default, or `pytorch`). The full parameter list, covering ablation, repetition control, decode addons, and constrained decoding, is in the platform API reference.
+- Params: `prompt` (required), `temperature` (0.7), `top_k` (40), `max_new` (200, capped at 4096), `backend` (`c` by default, or `pytorch`), `prefetch_id` (claims a `/prefetch` draft). The full parameter list, covering ablation, repetition control, decode addons, and constrained decoding, is in the platform API reference.
 - Stream: a `meta` frame with the model and engine shape, then one `kind:"token"` frame per byte carrying entropy, surprise, confidence, and attention fields, then `kind:"stop"` and `done`.
 - A bad numeric parameter yields a `kind:"error"` frame followed by `done` rather than a 500, so an `EventSource` client stays parseable.
 - `rag=` is loopback only. A remote client passing it gets `403`.
+
+## POST /prefetch
+
+Speculate a reply for a prompt a user is still typing. Off until it is enabled, either from **Settings, Warm models, Speculative prefetch** or from **answer while typing** on the Generation tab.
+
+- Body: `prompt`, the exact wire prompt the client will send on submit, plus every decode knob submit will use: `temperature`, `top_k`, `ablate_layer`, `ablate_neuron`, `addons`, `rep_window`, `rep_penalty`, `no_repeat_ngram`. Omit `prompt` to stand down.
+- Response: `{"speculating": true, "buffered": 0, "draft_id": 7, "stats": {...}}`. A `reason` field appears when the box declined (feature off, C engine not loaded).
+- The box keeps one draft. A new prompt supersedes the previous one; a stand-down drops it.
+- On submit, pass `prefetch_id=<draft_id>` to `GET /generate` to claim the buffer. Passing the id asserts that nothing the client would send has changed since the draft; the box also requires the prompt to match. A miss generates normally, so a wrong or stale id costs nothing. The buffer is claimed by `/generate` only; the chat endpoints ignore it.
+- `GET /prefetch` reports the live draft and the reply so far without consuming it.
+
+The intended client loop: debounce the input, and on each pause POST the current prompt and keep the `draft_id` alongside the exact body you sent. On submit, echo the id only when the body you would send now is identical. A buffer is only ever flushed once.
 
 ## GET /agent/stream
 

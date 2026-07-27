@@ -22,7 +22,7 @@ from runtime import settings as settings_mod
 # ------------------------------------------------------------------------------------
 # Constants
 
-PROTECTED_EXACT    = ("/generate", "/agent/stream")
+PROTECTED_EXACT    = ("/generate", "/agent/stream", "/prefetch")
 PROTECTED_PREFIXES = ("/v1/",)
 BEARER_PREFIX      = "Bearer "
 

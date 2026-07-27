@@ -741,18 +741,16 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
         if (restored == 0) hybrid_reset(hb);
         int32_t bp = hybrid_prefill_batch();
         int32_t i = restored;
-        // batch the bandwidth-bound prefill (state stays bitwise-identical to
-        // sequential). untraced: batch the whole span. traced: batch all but the
-        // last position, then step real_len-1 with trace so the sole emitted
-        // prompt frame (pos n-1) carries real per-byte telemetry. hybrid_prefill
-        // clamps its own chunk to the span, so any span over one position batches.
-        if (bp > 1) {
-            int32_t end = trace ? real_len - 1 : real_len;
-            if (end - restored > 1) {
-                hybrid_prefill(hb, tokens, end, bp);
-                i = end;
-            }
+        // only pos real_len-1 is emitted, so every earlier position walks untraced
+        // whatever bp is: tracing a frame no caller reads costs ~170x the plain walk.
+        // batching stays bitwise-identical to sequential; hybrid_prefill clamps its
+        // own chunk to the span.
+        const int32_t last = real_len - 1;
+        if (bp > 1 && last - i > 1) {
+            hybrid_prefill(hb, tokens, last, bp);
+            i = last;
         }
+        for (; i < last; i++)     hybrid_step(hb, tokens[i], NULL);
         for (; i < real_len; i++) hybrid_step(hb, tokens[i], trace);
         cache->len = real_len;
         hybrid_final_act_i8(hb, out_act);

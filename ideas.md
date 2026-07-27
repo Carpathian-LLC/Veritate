@@ -554,3 +554,54 @@ Two different shortcuts, neither is role binding. Subject-role accuracy is 11% (
 ### Second idea, honestly ranked lower: the value/aversion module
 
 A small separate network that learns "avoid this kind of output" and modulates the main model's decoding (limbic-nudging-cortex analogy). Buildable, somewhat novel as a standalone region vs baked-in RLHF. Ranked second: harder to make falsifiable, and it is a learned aversion signal, NOT "feelings" (no phenomenal claim). Park until growth-coupled-curriculum is measured.
+
+---
+
+## IDEA 10: byte n-gram speculative decode — the only lossless lever left on weak hardware
+
+Status: OPEN. Owner: engine. Motivated by a measured wall, not a hunch.
+
+### WHY THIS IS THE NEXT ENGINE SPEND
+
+Decode cost on a bandwidth-poor box is `bytes-touched / achievable-DRAM-bandwidth`, not FLOPs. Measured on cardinal-01 (i7-9700T, 8 cores, sustained read 4.5 GB/s at 1 thread, 12.9 at 4, 15.6 saturated) with wren (270M int8, `n_enc=2 n_global=16 n_dec=2`):
+
+| what runs | weights touched | floor at 15.6 GB/s | measured now |
+|---|---|---|---|
+| ordinary byte (4 local blocks + unembed) | 51 MB | 3.3 ms | 3.99 ms |
+| boundary byte (+16 recurrent blocks) | 269 MB | 17.2 ms | 27.3 ms |
+
+Non-boundary decode sits at **83% of what the memory system can physically deliver**. The kernel and threading axis is spent: threading the GLA head loop measured -15% (L2-resident, rendezvous-bound), fusing GELU into the FFN-up matvec measured neutral, and the pool spin budget is already optimal. No lossless rearrangement of the same work goes meaningfully faster. The only remaining lever is touching fewer bytes per byte emitted, and speculation is the one member of that family that costs no quality and no retraining.
+
+### MECHANISM
+
+Draft `K` bytes with zero model cost, verify all `K` in ONE weight stream, accept the longest matching prefix.
+
+- **Draft:** longest-suffix match of the last `k` bytes against the prompt plus the bytes generated so far, proposing the continuation that followed that context (prompt-lookup / n-gram, no second model, no training). Byte-level is the favorable regime: mid-word bytes are near-deterministic, and grounded chat and RAG answers quote their context verbatim.
+- **Verify:** the batched multi-position path already exists and already amortizes exactly the right things. `prefill_local_block` streams each local weight row once across a chunk of positions, and `prefill_recurrent_chunk` (added 2026-07-27) runs each global block across all live slots in the chunk. So one verify pass over `K` drafted bytes pays one stream of the local blocks AND groups every boundary byte inside the window into a single stream of the global stack, which is the expensive half.
+- **Accept:** exact verification against the real logits, so greedy output is byte-identical and sampled output keeps its distribution. Lossless, not an approximation.
+
+### WHAT THE ENGINE IS MISSING
+
+1. Per-position logits during the batched pass. `hybrid_prefill` computes `rmsnorm + lm_head` only at the last position; verification needs all `K`. That is `K` vocab matvecs over a 1 MB fp32 `tok_emb`, cheap and cache-resident.
+2. Rollback on rejection: `rec_state`, `conv_ring`, `slot_count`, `pos`. KV rows need no rollback, later positions overwrite them. **Rollback is free in the common case** — the recurrent state only advances on boundary bytes, so a draft window containing none needs no snapshot at all; otherwise it is a ~4.8 MB copy (~0.37 ms) against multiple ~51 MB streams saved.
+
+### GATES (pre-registered, before any code)
+
+Headline metric is **mean accepted length** `a` on realistic traffic, measured per byte emitted.
+
+- **PASS:** `a >= 2.5`. Ships. Records the measured end-to-end ms/byte on cardinal alongside it.
+- **PARTIAL:** `1.5 <= a < 2.5`. Real but sub-2x; ship only if end-to-end ms/byte improves after the verify overhead is charged honestly.
+- **FAIL:** `a < 1.5` -> `failures.md`. Retry condition: a trained draft source exists (MTP head or a small draft model), which changes the draft quality term entirely and invalidates this measurement.
+
+**Traffic requirement, because the mean is easy to inflate.** Measure on three regimes separately and report all three: (a) grounded RAG answers that quote context, (b) free-form prose continuation, (c) code. A mean carried by long verbatim quotes from (a) is a different product claim than a mean that holds in (b). Report the accept-length DISTRIBUTION, not just the mean. Charge the wasted compute of rejected drafts to the result.
+
+**Falsifier for the whole idea:** if end-to-end ms/byte on cardinal does not improve at the measured `a`, the verify overhead exceeds the streaming saved and speculation is wrong for this shape. Say so and move to the byte-reduction levers below.
+
+### RANKED BELOW THIS, SAME FAMILY (fewer bytes per emitted byte)
+
+Both are real and larger in raw factor, but neither is lossless and both are projects rather than engine changes:
+
+- **int4 weights**, ~2x. Needs an exporter, a bin format version, an AVX2/NEON int4 matvec plus scalar reference, and a bits-per-byte validation against the int8 bin. The unpack is free because the path is bandwidth-bound.
+- **Contextual FFN sparsity (top-k neurons)**, ~1.9x. FFN is 67% of a local block and 62% of a recurrent one. Needs a low-rank predictor and `down_w` stored `[F][H]` so a skipped neuron skips a contiguous row instead of a stride.
+
+Composed with an accepted `a` around 3, these land the 270M shape under 1 ms/byte on a $300 box, which is the green-AI product claim.

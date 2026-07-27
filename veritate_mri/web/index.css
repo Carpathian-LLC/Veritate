@@ -30,6 +30,8 @@
   .panel > .body { flex: 1; min-height: 0; }
   textarea, input[type=number] { background: #0a0c12; border: 1px solid var(--line); color: var(--text); padding: 6px 8px; font: inherit; border-radius: 3px; }
   textarea { width: 100%; resize: vertical; }
+  /* The prompt is the one control on the page a person types into: give it room. */
+  #prompt { padding: 12px 14px; font-size: 14px; line-height: 1.6; min-height: 76px; margin-top: 4px; }
   input[type=number] { width: 64px; }
   label { font-size: 11px; color: var(--dim); margin-right: 12px; }
   button { background: #1a2030; border: 1px solid var(--line); color: var(--text); padding: 6px 14px; border-radius: 3px; cursor: pointer; font: inherit; }
@@ -88,6 +90,111 @@
 
   /* output + timeline */
   .response { background: #060709; border: 1px solid var(--line); padding: 12px 14px; border-radius: 4px; min-height: 80px; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.55; color: #fff; }
+  /* ---- prompt panel: control bar, transcript, composer, prime rail ---- */
+  .gen-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .gen-bar .gen-model { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+  .gen-bar select { background: #0a0c12; border: 1px solid var(--line); color: var(--text); padding: 5px 8px; font: inherit; border-radius: 3px; max-width: 320px; }
+  .gen-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--dim); }
+  .gen-chip-warm { color: var(--warm); border: 1px solid var(--warm); border-radius: 3px; padding: 2px 8px; }
+  .gen-chip-warm a { color: var(--accent); text-decoration: underline; }
+  .gen-chip-hot { color: var(--hot); border: 1px solid var(--hot); border-radius: 3px; padding: 2px 8px; }
+
+  /* Mode picker as one segmented control: three exclusive states read as one control. */
+  .mode-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .mode-seg label { margin: 0; padding: 5px 14px; font-size: 11px; color: var(--dim); cursor: pointer; border-right: 1px solid var(--line); background: #0a0c12; transition: color .15s, background .15s; }
+  .mode-seg label:last-child { border-right: 0; }
+  .mode-seg label:hover { color: var(--text); }
+  .mode-seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .mode-seg label:has(input:checked) { background: rgba(106, 166, 255, .14); color: var(--accent); font-weight: 600; }
+  /* a tier the loaded model was never trained for */
+  .mode-seg label.is-off { opacity: .4; cursor: not-allowed; }
+  .mode-seg label.is-off:hover { color: var(--dim); }
+
+  /* Transcript: turns read top to bottom, each model turn carrying the measurements
+     that produced it, so the record is not just text. */
+  .chat-feed { max-height: min(52vh, 640px); overflow-y: auto; margin-bottom: 12px; padding-right: 4px; display: flex; flex-direction: column; gap: 8px; }
+  .turn { display: flex; gap: 10px; }
+  .turn-who { flex: none; width: 54px; padding-top: 7px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); text-align: right; }
+  .turn-bubble { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 5px; background: #0a0c12; padding: 7px 11px; }
+  .turn-you .turn-bubble { background: transparent; border-style: dashed; }
+  .turn-model .turn-who { color: var(--accent); }
+  .turn-text { font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; color: #fff; }
+  .turn-you .turn-text { color: var(--soft); }
+  .turn-metrics { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; font-size: 10px; color: var(--dim); }
+  .turn-metrics b { color: var(--text); font-weight: 600; }
+  .turn-metrics .m-ahead { color: var(--data-pos); }
+  .turn-landed { animation: turnLand .5s ease-out; }
+  @keyframes turnLand { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  /* The streaming turn wears the finished turn's shape, so committing it to the
+     transcript is continuous. In chat the reply IS the bubble, so the raw-byte
+     panel drops its own frame; autocomplete keeps the frame, where the panel is
+     the byte inspector and not a chat message. */
+  .chat-live { margin-bottom: 14px; }
+  .chat-live .response { min-height: 0; }
+  .chat-live.mode-chat .response { background: transparent; border: 0; padding: 0; max-height: 300px; }
+  .chat-live.mode-chat .response:empty { display: none; }
+  .chat-live .gen-thinking { margin: 0; padding: 0; border: 0; background: transparent; min-height: 0; font-size: 12px; }
+  .chat-live .gen-thinking.error { padding: 8px 10px; border: 1px solid var(--hot); border-radius: 4px; }
+  .chat-live .stats { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 10.5px; gap: 14px; }
+  .chat-live .stats:empty { display: none; }
+
+  .composer { border: 1px solid var(--line); border-radius: 5px; padding: 14px 16px 16px; background: #08090d; transition: border-color .15s; }
+  .composer:focus-within { border-color: var(--accent); }
+  .composer #prompt { border: 0; background: transparent; padding: 2px 0; margin: 0; min-height: 52px; }
+  .composer #prompt:focus { outline: none; }
+  .composer-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+  .composer-hint { font-size: 10.5px; color: var(--dim); }
+  .prime-toggle { display: inline-flex; align-items: center; gap: 5px; margin: 0; font-size: 10.5px; cursor: pointer; }
+  .composer-clear { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--dim); border-radius: 3px; padding: 3px 8px; font: inherit; font-size: 10.5px; cursor: pointer; }
+  .composer-clear:hover { color: var(--text); border-color: var(--dim); }
+
+  /* Prime rail: the reply the engine is writing while the question is still being
+     typed. It sits on top of the composer as a charging meter over the draft text,
+     so the answer that lands on generate is the one already visible here. */
+  .prime { border-left: 2px solid var(--line); border-radius: 0 4px 4px 0; background: rgba(93, 200, 255, .05); padding: 7px 11px 8px; margin: 0 0 14px; transition: border-color .2s, box-shadow .2s, background .2s; }
+  .prime-head { display: flex; align-items: center; gap: 9px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+  .prime-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+  .prime-label { white-space: nowrap; }
+  .prime-bar { flex: 1; min-width: 60px; height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; }
+  .prime-bar i { display: block; height: 100%; width: 0; background: var(--cool); transition: width .2s linear; }
+  .prime-count { flex: none; text-transform: none; letter-spacing: 0; white-space: nowrap; }
+  .prime-text { margin-top: 5px; max-height: 132px; overflow-y: auto; font-size: 12.5px; line-height: 1.5; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
+  .prime-text:empty { display: none; }
+  /* running: the engine is adding bytes right now */
+  .prime.is-running { border-left-color: var(--cool); }
+  .prime.is-running .prime-dot { background: var(--cool); animation: blink .8s steps(2) infinite; }
+  .prime.is-running .prime-label { color: var(--cool); }
+  /* armed: the reply is written and generate opens on it */
+  .prime.is-armed { border-left-color: var(--data-pos); background: rgba(93, 156, 117, .07); }
+  .prime.is-armed .prime-dot { background: var(--data-pos); animation: none; }
+  .prime.is-armed .prime-label { color: var(--data-pos); }
+  .prime.is-armed .prime-bar i { background: var(--data-pos); }
+  .prime.is-armed .prime-text { color: var(--soft); }
+  /* stale: typing moved past the draft. it is not gone yet, but it is not the answer
+     to what is in the box now, so it must not read as ready */
+  .prime.is-stale { border-left-color: var(--line); background: transparent; }
+  .prime.is-stale .prime-dot { background: var(--line); animation: none; }
+  .prime.is-stale .prime-text { opacity: .45; }
+  .prime.is-stale .prime-bar i { background: var(--line); }
+  /* fired: generate claimed the buffer. the rail discharges into the answer above */
+  .prime.is-fired { animation: primeFire .45s ease-in forwards; }
+  @keyframes primeFire {
+    0%   { opacity: 1; transform: none; border-color: var(--data-pos); }
+    35%  { opacity: 1; transform: translateY(-3px); box-shadow: 0 0 22px rgba(93, 156, 117, .5); }
+    100% { opacity: 0; transform: translateY(-16px) scaleY(.85); }
+  }
+  /* the flushed bytes, marked in the live answer so an instant reply reads as one */
+  .response .banked { color: var(--data-pos); }
+
+  /* advanced */
+  #advancedWrap { margin-top: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; }
+  #advancedWrap > summary { cursor: pointer; font-size: 12px; color: var(--text); font-weight: 600; }
+  #advancedWrap > summary span { color: var(--dim); font-weight: 400; font-size: 11px; }
+  .adv-row { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .adv-row:first-of-type { border-top: 0; }
+  .adv-key { flex: none; width: 62px; color: var(--text); font-weight: 600; font-size: 11px; }
+
   .response .pr { color: var(--dim); }
   .response .cur { background: #fff; color: #000; animation: blink .8s steps(2) infinite; padding: 0 1px; }
   @keyframes blink { 50% { background: transparent; color: inherit; } }
