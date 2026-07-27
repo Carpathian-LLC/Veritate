@@ -6,8 +6,12 @@
 # Notes:
 # - Assembles the single from-scratch PRETRAINING corpus for a 1B byte-level model.
 #   Chinchilla-optimal at 20 tokens/param; byte-level means 1 byte = 1 token, so the
-#   default target is 20 GB. Mixes the registered sources at DEFAULT_MIX ratios and
-#   writes ONE train .bin plus ONE val .bin.
+#   default target is 20 GB. The mix comes from training/mix_planner.py (intent
+#   profile + epoch cap + availability), never from a ratio table in this file.
+#   Writes ONE train .bin plus ONE val .bin.
+# - --mix overrides the planner's weights with an explicit user mix, given either as
+#   a json path ({"stem": fraction}) or a multicorpus spec ("a:0.6,b:0.4"). A spec
+#   without weights ("a+b") selects the sources and lets the planner weight them.
 # - Sources resolve through the platform corpus library (training/sync/corpus_sync):
 #   the catalog supplies format/size, install() does any download. "skills" and the
 #   optional hand-authored extra corpus are local .bin paths, not catalog entries.
@@ -35,39 +39,34 @@ import os
 import random
 import sys
 
-HERE     = os.path.dirname(os.path.abspath(__file__))
-MRI_ROOT = os.path.normpath(os.path.join(HERE, ".."))
+HERE      = os.path.dirname(os.path.abspath(__file__))
+MRI_ROOT  = os.path.normpath(os.path.join(HERE, ".."))
+REPO_ROOT = os.path.normpath(os.path.join(MRI_ROOT, ".."))
 
 sys.path.insert(0, MRI_ROOT)
 sys.path.insert(0, HERE)
+sys.path.insert(0, REPO_ROOT)
 
 import corpus_filters  # noqa: E402
 
 from readers import paths  # noqa: E402
+from training import mix_planner  # noqa: E402
 from training.sync import corpus_sync  # noqa: E402
 from training.sync import sync_common as sc  # noqa: E402
+
+from veritate_core.plugin import multicorpus  # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants
 
-DEFAULT_MIX = {
-    "fineweb_edu":    0.27,
-    "chat_5gb":       0.26,
-    "pg19":           0.20,
-    "openwebtext10g": 0.15,
-    "skills":         0.06,
-    "tinystories":    0.05,
-    "wikitext103":    0.01,
-}
-
 SKILLS_SOURCE = "skills"
 EXTRA_SOURCE  = "extra"
 
-DEFAULT_TARGET_GB       = 20.0
-DEFAULT_VAL_RATIO       = 0.005
-DEFAULT_SEED            = 20260725
-DEFAULT_EXTRA_FRACTION  = 0.001
-MIX_SUM_TOLERANCE       = 1e-6
+DEFAULT_TARGET_GB        = 20.0
+DEFAULT_VAL_RATIO        = 0.005
+DEFAULT_SEED             = 20260725
+DEFAULT_EXTRA_FRACTION   = 0.001
+DEFAULT_TOKENS_PER_PARAM = 20.0
 
 OUT_STEM           = "base_1b"
 EXTRA_STEM         = "synthetic_v1"
@@ -100,15 +99,20 @@ PLAN_HEADER  = f"{'source':<16}{'budget GB':>12}{'available GB':>14}  state"
 # ------------------------------------------------------------------------------------
 # Functions
 
-def _load_mix(mix_path):
-    if not mix_path:
-        return dict(DEFAULT_MIX)
-    with open(mix_path, "r", encoding=ENCODING) as f:
-        mix = json.load(f)
-    total = sum(float(v) for v in mix.values())
-    if abs(total - 1.0) > MIX_SUM_TOLERANCE:
-        raise ValueError(f"mix fractions must sum to 1.0 (got {total})")
-    return {k: float(v) for k, v in mix.items()}
+def _selection(mix_arg, profile):
+    """Resolve --mix into (stems, explicit_weights_or_None). Empty --mix takes the
+    profile's own stem list and lets the planner weight it."""
+    if not mix_arg:
+        return mix_planner.profile_stems(profile), None
+    if os.path.isfile(mix_arg):
+        with open(mix_arg, "r", encoding=ENCODING) as f:
+            mix = json.load(f)
+        return list(mix), {k: float(v) for k, v in mix.items()}
+    parsed = multicorpus.parse_spec(mix_arg)
+    stems = [stem for stem, _ in parsed]
+    if any(w is None for _, w in parsed):
+        return stems, None
+    return stems, {stem: float(w) for stem, w in parsed}
 
 
 def _new_stat():
@@ -262,14 +266,15 @@ def assemble(plan, out_train, out_val, val_ratio, seed):
     return written
 
 
-def build_manifest(plan, args, out_train, out_val, mix):
+def build_manifest(plan, args, out_train, out_val, mix_plan):
     return {
         "name": "veritate_base_1b",
         "purpose": "From-scratch byte-level pretraining corpus for a 1B model at 20 tokens/param.",
         "seed": args.seed,
         "target_gb": args.target_gb,
         "val_ratio": args.val_ratio,
-        "mix": mix,
+        "mix": mix_plan["spec"],
+        "mix_plan": mix_plan,
         "extra_fraction": args.extra_fraction,
         "sources": [{
             "name": p["name"],
@@ -294,8 +299,15 @@ def build_manifest(plan, args, out_train, out_val, mix):
 
 
 def build(args):
-    mix = _load_mix(args.mix)
     total_bytes = int(args.target_gb * BYTES_PER_GB)
+    stems, weights = _selection(args.mix, args.profile)
+    mix_plan = mix_planner.plan(stems, total_bytes, profile=args.profile,
+                                max_epochs=args.max_epochs, weights=weights,
+                                model_params=int(total_bytes / args.tokens_per_param))
+    for warning in mix_plan["warnings"]:
+        print(f"warning: {warning}")
+    print(f"mix: {mix_plan['spec']}\n")
+    mix = {s["stem"]: s["weight"] for s in mix_plan["sources"] if s["weight"] > 0}
     plan = resolve_plan(mix, total_bytes, args.skills_bin, args.extra_bin, args.extra_fraction)
     print_plan(plan, total_bytes, args.val_ratio)
     if args.dry_run:
@@ -304,7 +316,7 @@ def build(args):
     install_missing(plan)
     print("\nassembling ...")
     assemble(plan, args.out_train, args.out_val, args.val_ratio, args.seed)
-    manifest = build_manifest(plan, args, args.out_train, args.out_val, mix)
+    manifest = build_manifest(plan, args, args.out_train, args.out_val, mix_plan)
     os.makedirs(os.path.dirname(os.path.abspath(args.manifest)), exist_ok=True)
     with open(args.manifest, "w", encoding=ENCODING) as f:
         json.dump(manifest, f, indent=2)
@@ -322,7 +334,12 @@ def main(argv=None):
     ap.add_argument("--target-gb",      type=float, default=DEFAULT_TARGET_GB)
     ap.add_argument("--val-ratio",      type=float, default=DEFAULT_VAL_RATIO)
     ap.add_argument("--seed",           type=int,   default=DEFAULT_SEED)
-    ap.add_argument("--mix",            default="", help="json path overriding the default mix")
+    ap.add_argument("--mix",            default="",
+                    help="explicit mix: json path or multicorpus spec (a:0.6,b:0.4 | a+b)")
+    ap.add_argument("--profile",        default="", help="mix planner profile (default: from settings)")
+    ap.add_argument("--max-epochs",     type=float, default=None,
+                    help="cap on redraws of any one source (default: from settings)")
+    ap.add_argument("--tokens-per-param", type=float, default=DEFAULT_TOKENS_PER_PARAM)
     ap.add_argument("--skills-bin",     default=DEFAULT_SKILLS_BIN)
     ap.add_argument("--extra-bin",      default=DEFAULT_EXTRA_BIN)
     ap.add_argument("--extra-fraction", type=float, default=DEFAULT_EXTRA_FRACTION)

@@ -9,12 +9,16 @@
 #   the JS render code (veritate_mri/web/index.js) groups on. Also verifies the
 #   coming-soon sft_idk entry stays present with a placeholder train_url and
 #   the coming_soon flag set, and _entry_skeleton preserves the two fields.
+#   Also guards the mix planner's dashboard contract: every #corpusMix* id the
+#   JS looks up exists exactly once in index.html, and no profile id from
+#   corpus_mix_profiles.json is hardcoded in the JS.
 # tests/mri/test_corpus_catalog_shape.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
 import json
 import os
+import re
 import sys
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
@@ -36,6 +40,15 @@ CATALOG_PATH = os.path.join(
 # updating this set fails the test on purpose.
 ALLOWED_FAMILIES = {"carpathian", "public"}
 ALLOWED_TOPICS = {"chat", "agent", "mcp", "code", "knowledge", "market", "special_sft"}
+
+PROFILES_PATH = os.path.join(REPO_ROOT, "veritate_mri", "data", "corpus_mix_profiles.json")
+
+WEB_DIR  = os.path.join(REPO_ROOT, "veritate_mri", "web")
+INDEX_JS = os.path.join(WEB_DIR, "index.js")
+INDEX_HTML = os.path.join(WEB_DIR, "index.html")
+MIX_ID_RE = re.compile(r'\$\("(corpusMix\w+)"\)')
+MIX_SECTION_START = "// ---- Corpus mix planner ----"
+MIX_SECTION_END   = "function _corpusCloseLibraryModal"
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -160,6 +173,34 @@ def test_entry_skeleton_defaults_missing_family_topic_to_none():
     out = corpus_sync._entry_skeleton(src)
     assert out["family"] is None
     assert out["topic"] is None
+
+
+def test_mix_planner_ids_exist_in_the_markup():
+    """Every #corpusMix* element the mix planner looks up is present exactly
+    once in index.html; a typo would make $() return null and the panel would
+    fail silently. Ids the JS creates in its own rendered HTML are excluded."""
+    with open(INDEX_JS, "r", encoding="utf-8") as f:
+        js = f.read()
+    with open(INDEX_HTML, "r", encoding="utf-8") as f:
+        html = f.read()
+    rendered = set(re.findall(r'id="(corpusMix\w+)"', js))
+    for ident in sorted(set(MIX_ID_RE.findall(js)) - rendered):
+        assert html.count(f'id="{ident}"') == 1, \
+            f"{ident}: expected exactly one element in index.html"
+
+
+def test_mix_planner_profile_names_are_not_baked_into_the_dashboard():
+    """Intent profiles are user-editable data (corpus_mix_profiles.json), so
+    the dashboard must fetch them; a profile id copied into index.js would go
+    stale the moment the file is retuned."""
+    with open(INDEX_JS, "r", encoding="utf-8") as f:
+        js = f.read()
+    assert "/corpus/mix/profiles" in js, "the dashboard must ask the server for the profile list"
+    section = js[js.index(MIX_SECTION_START):js.index(MIX_SECTION_END, js.index(MIX_SECTION_START))]
+    with open(PROFILES_PATH, "r", encoding="utf-8") as f:
+        shipped = json.load(f)["profiles"]
+    for name in shipped:
+        assert f'"{name}"' not in section, f"profile id {name!r} is hardcoded in the mix planner JS"
 
 
 def test_no_claude_curated_language_in_labels_or_descriptions():

@@ -472,7 +472,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
     Memory fingerprint probe runs first: builds top-k activating stories per
     (layer, neuron) from a sampled slice of corpus_path, then each per-token
     frame's memory[] is filled by _memory_lookup. Defaults to
-    trainers/corpus/tinystories_train.bin."""
+    trainers/corpus/fineweb_edu_train.bin."""
     t0 = time.time()
     os.makedirs(out_dir, exist_ok=True)
     device = next(model.parameters()).device
@@ -927,7 +927,7 @@ def dump_grades(model, out_dir: str, step: int):
     # best ppl on whichever band suits its training distribution best, and a
     # harder band counts as "passing" when its ppl is within a multiplicative
     # factor of that floor. This self-calibrates per model size and per
-    # training-data distribution -- a 200m TinyStories model and a 1B web-
+    # training-data distribution -- a 200m narrow-corpus model and a 1B web-
     # scale model are no longer judged by the same absolute number.
     # An absolute CEILING is also enforced: if the band's ppl is above the
     # sanity ceiling, the model is barely above random there and the band

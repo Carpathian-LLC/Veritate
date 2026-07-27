@@ -5511,7 +5511,7 @@ const AXIS_META = {
     colors:   { t1_arith1: "#ff5d5d", t2_arith2: "#ff9a5d", t3_algebra: "#ffe45d",
                 t4_word:   "#5dff9b", t5_multi:  "#5d9bff" },
     title:    "math fluency",
-    blurb:    "% correct via argmax-decode and string match. Floor on a TinyStories-trained model is expected — math curriculum has to be in training data for this to move.",
+    blurb:    "% correct via argmax-decode and string match. Floor on a model with no math curriculum is expected: math has to be in training data for this to move.",
   },
   grammar: {
     rootKey:  "grammarLevelId",
@@ -5617,7 +5617,7 @@ function render_score_axis(axisName, refs, axisSteps, axisByStep, haveCheckpoint
 // concept added there but missing from a group will still show in the heatmap
 // detail at the bottom; only the grouped strips are categorised.
 const CONCEPT_GROUPS = [
-  { name: "objects",    blurb: "everyday nouns the model sees constantly in TinyStories",  words: ["cat","dog","bird","fish","tree","house","car","ball","water","food","baby"] },
+  { name: "objects",    blurb: "everyday nouns the model sees constantly",                  words: ["cat","dog","bird","fish","tree","house","car","ball","water","food","baby"] },
   { name: "emotions",   blurb: "internal states; common in story phrasing",                 words: ["happy","sad","angry","scared","kind","love"] },
   { name: "family",     blurb: "relationship words",                                        words: ["friend","mother","father"] },
   { name: "colors",     blurb: "modifiers tied to common nouns",                            words: ["red","blue","green","yellow"] },
@@ -7263,6 +7263,9 @@ fetch("/meta").then(r => r.json()).then(setMeta).catch(() => {});
 
 const backendsState = { pytorch: { loaded: false, pending: false }, c: { loaded: false, pending: false }, busy: false, lastError: "" };
 
+const BACKEND_SETTLE_POLL_MS    = 1000;
+const BACKEND_SETTLE_TIMEOUT_MS = 10 * 60 * 1000;
+
 function _renderBackendState() {
   const sel = $("backend"), lbl = $("backendState");
   if (!sel || !lbl) return;
@@ -7414,24 +7417,31 @@ function _pollBackends() {
   }).catch(() => null);
 }
 
-function _waitUntilSettled(which) {
+function _waitUntilSettled(which, deadlineMs) {
+  const end = deadlineMs || (Date.now() + BACKEND_SETTLE_TIMEOUT_MS);
+  const again = () => new Promise(r => setTimeout(r, BACKEND_SETTLE_POLL_MS))
+    .then(() => _waitUntilSettled(which, end));
+  const giveUp = msg => {
+    backendsState.busy = false;
+    backendsState.lastError = msg;
+    _renderBackendState();
+  };
   return _pollBackends().then(d => {
-    const s = (d && d[which]) || {};
+    // a failed poll is not a failed load: keep waiting until the deadline
+    if (!d) return Date.now() > end ? giveUp("backend state unreachable") : again();
+    const s = d[which] || {};
     const stillPending = s.pending || (which === "c" && s.build && s.build.status === "building");
-    if (!stillPending) {
-      backendsState.busy = false;
-      if (which === "c" && s.build && s.build.status === "failed" && !s.loaded) {
-        backendsState.lastError = (s.build && s.build.error) || "build failed";
-      } else if (which === "c" && s.bins_available === 0) {
-        // suppress "did not load"; _renderBackendState shows the no-export hint
-        backendsState.lastError = "";
-      } else if (!s.loaded && !backendsState.lastError) {
-        backendsState.lastError = "did not load";
-      }
-      _renderBackendState();
-      return;
+    if (stillPending) return Date.now() > end ? giveUp("timed out waiting for backend") : again();
+    backendsState.busy = false;
+    if (which === "c" && s.build && s.build.status === "failed" && !s.loaded) {
+      backendsState.lastError = (s.build && s.build.error) || "build failed";
+    } else if (which === "c" && s.bins_available === 0) {
+      // suppress "did not load"; _renderBackendState shows the no-export hint
+      backendsState.lastError = "";
+    } else if (!s.loaded && !backendsState.lastError) {
+      backendsState.lastError = "did not load";
     }
-    setTimeout(() => _waitUntilSettled(which), 1000);
+    _renderBackendState();
   });
 }
 
@@ -8725,6 +8735,29 @@ function _trRestoreFormState() {
   }
 }
 
+// A mix accepted in the corpus library lands here: the spec becomes the corpus
+// field's value, the picker ticks whichever stems it names, and the handoff is
+// consumed so it applies once. No-op until the form has a corpus field.
+function _trApplyPendingMix() {
+  let spec = null;
+  try { spec = localStorage.getItem(CORPUS_MIX_SPEC_KEY); } catch (_e) { return; }
+  if (!spec) return;
+  const el = _trArgEl("corpus");
+  if (!el) return;
+  el.value = spec;
+  const picker = el.parentElement && el.parentElement.querySelector(".corpus-picker");
+  if (picker) {
+    const stems = new Set(spec.split(/[+,]/).map(s => s.split(":")[0].trim()).filter(Boolean));
+    picker.querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = stems.has(cb.value); });
+    const summary = picker.querySelector("[data-corpus-summary]");
+    if (summary) summary.textContent = spec;
+  }
+  try { localStorage.removeItem(CORPUS_MIX_SPEC_KEY); } catch (_e) { /* private mode */ }
+  _trSaveFormState();
+  _trUpdateCorpusMeta();
+  _trUpdateComposedName();
+}
+
 // Named knob combinations validated by measured A/B runs on this platform.
 // Sources: developer_documentation/training/research_successes.md (per-entry
 // run dirs + numbers). "custom" applies nothing.
@@ -8841,6 +8874,9 @@ function _trApplyDefaults() {
   // defaults + resume config so user edits override both. This is what makes
   // the "go to settings → install corpus → come back" round-trip non-lossy.
   _trRestoreFormState();
+  // A mix accepted in the corpus library wins over both, because the user
+  // chose it after everything else.
+  _trApplyPendingMix();
   // Continue-saved flow only: render the fork button next to the resume
   // picker so the user can branch a base model into a new training root
   // without first touching disk by hand.
@@ -9436,7 +9472,7 @@ function _trRenderPicker() {
   const hint = _trEl("trainEmptyHint");
   const flowLabel = _trEl("trainFlowCurrent");
   if (flowLabel) {
-    const labels = { scratch: "start a new model", continue: "continue a saved model", rag: "answer from context (RAG)", synth: "generate training data", export: "export to .bin" };
+    const labels = { scratch: "start a new model", continue: "continue a saved model", rag: "answer from context (RAG)", synth: "generate training data", author: "author a corpus", export: "export to .bin" };
     if (trainState.flow) {
       flowLabel.textContent = labels[trainState.flow] || trainState.flow;
       flowLabel.style.color = "var(--accent)";
@@ -9448,7 +9484,7 @@ function _trRenderPicker() {
   if (!sel || !row) return;
   // export uses its own model/step picker; synth and rag have their own
   // inline panels. None of them use the trainer picker.
-  const NO_PICKER = ["export", "synth", "rag"];
+  const NO_PICKER = ["export", "synth", "rag", "author"];
   if (!trainState.flow || NO_PICKER.includes(trainState.flow)) { row.style.display = "none"; return; }
   row.style.display = "flex";
   const list = _trFiltered();
@@ -9538,16 +9574,17 @@ function _exPopulateSteps() {
 }
 
 // flows that require a configured teacher model
-const TEACHER_REQUIRED_FLOWS = ["synth", "rag"];
+const TEACHER_REQUIRED_FLOWS = ["synth", "rag", "author"];
 const SYNTH_TRAIN_BTN_ID = "trainRun";
 
 const synthState = { seeds: [], jobId: null, pollTimer: null, jobs: [] };
+const authorState = { spec: null, jobId: null, pollTimer: null };
 
 // Persist the selected flow + active synth job so a reload lands the user back
 // on the same action with its live status reattached.
 const TRAIN_FLOW_STORE = "vt:training:flow";
 const SYNTH_JOB_STORE = "vt:training:synth_job";
-const TRAIN_VALID_FLOWS = ["scratch", "continue", "rag", "synth", "export"];
+const TRAIN_VALID_FLOWS = ["scratch", "continue", "rag", "synth", "author", "export"];
 
 // Per-flow job descriptors: one place owns how to stop each running job type.
 // Consumed by the per-panel stop buttons (all confirm-gated).
@@ -9556,11 +9593,15 @@ const SYNTH_JOB = { stop: () => fetch(TEACHER_SYNTH_STOP, { method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ job_id: synthState.jobId }) }) };
 const RAG_JOB = { stop: () => fetch("/rag/stop", { method: "POST" }) };
+const AUTHOR_JOB = { stop: () => fetch(TEACHER_SYNTH_STOP, { method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ job_id: authorState.jobId }) }) };
 const TRAIN_FLOWS = {
   scratch:  { job: TRAIN_JOB },
   continue: { job: TRAIN_JOB },
   rag: { job: RAG_JOB },
   synth:    { job: SYNTH_JOB },
+  author:   { job: AUTHOR_JOB },
   export:   { job: null },
 };
 
@@ -9953,6 +9994,240 @@ function _trShowRagPanel(show) {
   if (panel) panel.style.display = show ? "block" : "none";
 }
 
+// ---- author a corpus ----
+// The teacher writes original records; every one is gated before it is kept.
+// Live counters are in real units (records, MB, rejects by reason) and the
+// distinct-5-gram ratio is surfaced with a loud warning under the floor.
+const TEACHER_AUTHOR_SPEC = "/teacher/authoring/spec";
+const TEACHER_AUTHOR_START = "/teacher/authoring/start";
+const TEACHER_AUTHOR_BUILD = "/teacher/authoring/build";
+const AUTHOR_JOB_STORE = "vt:training:author_job";
+const AUTHOR_REJECT_SHOWN = 6;
+const AUTHOR_MB = 1024 * 1024;
+
+function _authorStore(id) { try { localStorage.setItem(AUTHOR_JOB_STORE, id); } catch (e) {} }
+function _authorStored() { try { return localStorage.getItem(AUTHOR_JOB_STORE); } catch (e) { return null; } }
+
+function _authorRenderGenres(spec) {
+  const host = $("authorGenreList");
+  if (!host) return;
+  host.innerHTML = (spec.genres || []).map(g =>
+    `<label class="author-genre-row" title="${_trEsc(g.brief || "")}">
+      <input type="checkbox" class="author-genre-cb" data-id="${_trEsc(g.id)}" checked>
+      <span>${_trEsc(g.label || g.id)}</span>
+      <span class="meta">${Math.round((g.weight || 0) * 100)}% of target</span>
+    </label>`).join("");
+  const floor = $("authorNgramFloor");
+  if (floor && spec.gates) floor.value = spec.gates.ngram_distinct_floor;
+}
+
+function _authorLoadSpec() {
+  return fetch(TEACHER_AUTHOR_SPEC).then(r => r.json()).then(spec => {
+    authorState.spec = spec;
+    _authorRenderGenres(spec);
+    return spec;
+  }).catch(() => {});
+}
+
+function _authorSelectedGenres() {
+  return Array.from(document.querySelectorAll(".author-genre-cb"))
+    .filter(cb => cb.checked).map(cb => cb.dataset.id);
+}
+
+function _authorRenderStats(s) {
+  const a = s.authoring || {};
+  const row = $("authorStatsRow");
+  const warn = $("authorRepWarn");
+  const rej = $("authorRejectRow");
+  const plan = $("authorPlanLine");
+  if (!row) return;
+  const running = !!s.running;
+  const mb = (a.bytes || 0) / AUTHOR_MB;
+  const ratio = a.ngram_ratio === undefined ? 1 : a.ngram_ratio;
+  row.style.display = "flex";
+  row.innerHTML = [
+    ["records kept", (a.records || 0).toLocaleString()],
+    ["text written", mb.toFixed(2) + " MB"],
+    ["wording variety", (ratio * 100).toFixed(1) + "%"],
+    ["em dashes rewritten", (a.em_dash_rewritten || 0).toLocaleString()],
+    ["batches failed", (s.failed || 0).toLocaleString()],
+  ].map(p =>
+    `<span class="author-stat"><b>${_trEsc(String(p[1]))}</b> <span>${p[0]}</span></span>`).join("");
+  if (warn) {
+    if (a.ngram_below_floor) {
+      warn.style.display = "block";
+      warn.innerHTML = `Repetition warning: only <b>${(ratio * 100).toFixed(1)}%</b> of five-word ` +
+        `sequences in the recent records are unique, below your floor of ` +
+        `<b>${((a.ngram_floor || 0) * 100).toFixed(1)}%</b>. The teacher is reusing templates. ` +
+        `Stop the run, widen the voices or situations for the affected genre in the spec file, ` +
+        `then start again. Do not train on this as it stands.`;
+    } else {
+      warn.style.display = "none";
+    }
+  }
+  if (rej) {
+    const r = a.rejects || {};
+    const keys = Object.keys(r);
+    rej.textContent = keys.length
+      ? "rejected: " + keys.slice(0, AUTHOR_REJECT_SHOWN).map(k => `${k} x${r[k]}`).join(", ")
+      : "";
+  }
+  if (plan) {
+    const head = s.aborted ? "ABORTED" : (running ? "authoring" : "stopped");
+    plan.textContent = `${head}: job ${authorState.jobId || ""}` +
+      (s.last_error ? ` - last error: ${s.last_error}` : "");
+    plan.style.color = s.aborted ? "var(--hot)" : (running ? "var(--warm)" : "var(--dim)");
+  }
+  const stop = $("authorStopBtn");
+  if (stop) stop.style.display = running ? "" : "none";
+  const build = $("authorBuildRow");
+  if (build) build.style.display = (!running && (a.records || 0) > 0) ? "block" : "none";
+}
+
+function _authorLoadSamples() {
+  if (!authorState.jobId) return;
+  fetch(`${TEACHER_SYNTH_SAMPLES}?job_id=${encodeURIComponent(authorState.jobId)}`)
+    .then(r => r.json())
+    .then(d => {
+      const wrap = $("authorLiveWrap");
+      const out = $("authorLiveOutput");
+      const cnt = $("authorLiveCount");
+      if (!wrap || !out || !d || !d.samples || !d.samples.length) return;
+      wrap.style.display = "block";
+      if (cnt) cnt.textContent = `(${d.samples.length} shown)`;
+      const stick = out.scrollHeight - out.scrollTop - out.clientHeight < SYNTH_SCROLL_STICK_PX;
+      out.innerHTML = d.samples.map(s =>
+        `<div style="border-bottom:1px solid var(--line);padding:6px 0">` +
+        `<div style="color:var(--accent);font-size:10px;margin-bottom:2px">${_trEsc(s.id)}</div>` +
+        `${_trEsc(s.response || "")}</div>`).join("");
+      if (stick) out.scrollTop = out.scrollHeight;
+    })
+    .catch(() => {});
+}
+
+function _authorPollOnce() {
+  if (!authorState.jobId) return;
+  _authorLoadSamples();
+  fetch(`${TEACHER_SYNTH_STATUS}?job_id=${encodeURIComponent(authorState.jobId)}`)
+    .then(r => r.json())
+    .then(s => {
+      if (!s || s.error) return;
+      _authorRenderStats(s);
+      if (!s.running && authorState.pollTimer) {
+        clearInterval(authorState.pollTimer);
+        authorState.pollTimer = null;
+      }
+    })
+    .catch(() => {});
+}
+
+function _authorPollStart() {
+  if (authorState.pollTimer) clearInterval(authorState.pollTimer);
+  authorState.pollTimer = setInterval(_authorPollOnce, TEACHER_POLL_MS);
+  _authorPollOnce();
+}
+
+function _authorStart() {
+  const plan = $("authorPlanLine");
+  const genres = _authorSelectedGenres();
+  if (!genres.length) {
+    if (plan) { plan.textContent = "pick at least one genre"; plan.style.color = "var(--hot)"; }
+    return;
+  }
+  const body = {
+    genres: genres,
+    target_mb: parseFloat(($("authorTargetMb") || {}).value || "0"),
+    ngram_distinct_floor: parseFloat(($("authorNgramFloor") || {}).value || "0"),
+  };
+  const conc = parseInt(($("authorConcurrency") || {}).value || "", 10);
+  if (conc > 0) body.max_concurrency = conc;
+  const dest = ($("authorJobSelect") || {}).value || "";
+  if (dest) body.job_id = dest;
+  if (plan) { plan.textContent = "starting..."; plan.style.color = "var(--warm)"; }
+  fetch(TEACHER_AUTHOR_START, { method: "POST", headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) {
+        if (plan) { plan.textContent = "error: " + ((d && d.error) || "failed"); plan.style.color = "var(--hot)"; }
+        return;
+      }
+      authorState.jobId = d.job_id;
+      _authorStore(d.job_id);
+      if (plan) {
+        plan.textContent = `job ${d.job_id}: ${d.total_calls} teacher calls planned, ` +
+          `${d.max_concurrency} at a time. Output in ${d.output_dir}`;
+        plan.style.color = "var(--warm)";
+      }
+      _authorPollStart();
+      _synthLoadJobs().then(() => _authorFillJobs());
+    })
+    .catch(e => { if (plan) { plan.textContent = _backendErrMsg(e); plan.style.color = "var(--hot)"; } });
+}
+
+function _authorStop() {
+  if (!authorState.jobId) return;
+  confirmDialog("Stop authoring? Records written so far are kept and the run can resume.", "Stop")
+    .then(ok => { if (ok) AUTHOR_JOB.stop().then(() => _authorPollOnce()).catch(() => {}); });
+}
+
+function _authorFillJobs() {
+  const sel = $("authorJobSelect");
+  if (!sel) return;
+  const cur = sel.value || authorState.jobId || "";
+  sel.innerHTML = '<option value="">&mdash; new corpus &mdash;</option>' +
+    (synthState.jobs || []).map(j =>
+      `<option value="${_trEsc(j.job_id)}">${_trEsc(j.job_id)} (${j.completed || 0} records)</option>`).join("");
+  if (cur && (synthState.jobs || []).some(j => j.job_id === cur)) sel.value = cur;
+}
+
+function _authorBuild() {
+  const stat = $("authorBuildStatus");
+  const stem = (($("authorStem") || {}).value || "").trim();
+  if (!authorState.jobId) { if (stat) { stat.textContent = "no job"; stat.style.color = "var(--hot)"; } return; }
+  if (!stem) { if (stat) { stat.textContent = "name the corpus"; stat.style.color = "var(--hot)"; } return; }
+  if (stat) { stat.textContent = "building..."; stat.style.color = "var(--warm)"; }
+  fetch(TEACHER_AUTHOR_BUILD, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: authorState.jobId, stem: stem,
+                           label: (($("authorLabel") || {}).value || "").trim() }) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) {
+        if (stat) { stat.textContent = "error: " + ((d && d.error) || "failed"); stat.style.color = "var(--hot)"; }
+        return;
+      }
+      const m = d.manifest || {};
+      if (stat) {
+        stat.textContent = `built ${d.stem}: ${(m.train_bytes / AUTHOR_MB).toFixed(2)} MB train, ` +
+                           `${(m.val_bytes / AUTHOR_MB).toFixed(2)} MB val`;
+        stat.style.color = "var(--data-pos)";
+      }
+      const box = $("authorHandoff");
+      if (box) {
+        box.style.display = "block";
+        box.innerHTML = "<b>What to do next</b><ol>" +
+          (d.next_steps || []).map(s => `<li>${_trEsc(s)}</li>`).join("") +
+          `</ol><div style="margin-top:8px;color:var(--dim)">zip sha256 <code>${_trEsc(d.zip_sha256)}</code><br>` +
+          `train bin sha256 <code>${_trEsc(m.train_sha256 || "")}</code><br>` +
+          `val bin sha256 <code>${_trEsc(m.val_sha256 || "")}</code></div>`;
+      }
+      _trPoll();
+    })
+    .catch(e => { if (stat) { stat.textContent = _backendErrMsg(e); stat.style.color = "var(--hot)"; } });
+}
+
+function _trShowAuthorPanel(show) {
+  const panel = $("authorPanel");
+  if (panel) panel.style.display = show ? "block" : "none";
+  if (!show) return;
+  const pickerRow = _trEl("trainPickerRow");
+  if (pickerRow) pickerRow.style.display = "none";
+  const formWrap = _trEl("trainFormWrap");
+  if (formWrap) formWrap.style.display = "none";
+  const runRow = _trEl("trainRunRow");
+  if (runRow) runRow.style.display = "none";
+}
+
 function _trGotoTeacherSettings(ev) {
   if (ev && ev.preventDefault) ev.preventDefault();
   location.hash = "settings";
@@ -9992,10 +10267,24 @@ document.addEventListener("DOMContentLoaded", () => {
     coreTrainersState.ready = false;
     _trShowSynthPanel(flow === "synth");
     _trShowRagPanel(flow === "rag");
+    _trShowAuthorPanel(flow === "author");
     _trUpdateTeacherGate();
     if (flow === "synth") {
       if (!synthState.seeds.length) _synthLoadSeeds();
       _synthLoadJobs().then(() => _synthReattach());
+    }
+    if (flow === "author") {
+      if (!authorState.spec) _authorLoadSpec();
+      _synthLoadJobs().then(() => {
+        _authorFillJobs();
+        const saved = _authorStored();
+        if (saved && (synthState.jobs || []).some(j => j.job_id === saved)) {
+          authorState.jobId = saved;
+          const sel = $("authorJobSelect");
+          if (sel) sel.value = saved;
+          _authorPollStart();
+        }
+      });
     }
     _trRenderPicker();
     _trRenderForm();
@@ -10022,6 +10311,20 @@ document.addEventListener("DOMContentLoaded", () => {
   if (synthStop) synthStop.addEventListener("click", _synthStopJob);
   const synthBuild = $("synthBuildBtn");
   if (synthBuild) synthBuild.addEventListener("click", _synthBuild);
+  const authorStart = $("authorStartBtn");
+  if (authorStart) authorStart.addEventListener("click", _authorStart);
+  const authorStop = $("authorStopBtn");
+  if (authorStop) authorStop.addEventListener("click", _authorStop);
+  const authorBuild = $("authorBuildBtn");
+  if (authorBuild) authorBuild.addEventListener("click", _authorBuild);
+  const authorJobSel = $("authorJobSelect");
+  if (authorJobSel) authorJobSel.addEventListener("change", () => {
+    const jid = authorJobSel.value;
+    if (!jid) return;
+    authorState.jobId = jid;
+    _authorStore(jid);
+    _authorPollStart();
+  });
   const filesRefresh = $("trainFilesRefresh");
   if (filesRefresh) filesRefresh.addEventListener("click", _synthLoadJobs);
   const synthJobSel = $("synthJobSelect");
@@ -12201,7 +12504,7 @@ const corpusLibState = {
 // entry (corpus_catalog.json) with train_url = "PLACEHOLDER_URL" and render as
 // a disabled "coming soon" button; corpus_sync.install() also refuses them
 // server-side as a second guard. Third-party HF datasets (fineweb_edu,
-// tinystories, etc.) install normally.
+// wikitext103, etc.) install normally.
 
 // Corpus grouping is two-level: family (who publishes it) -> topic (what it
 // teaches). Both come from the catalog entry (family + topic fields, added
@@ -12234,7 +12537,7 @@ const CORPUS_STEM_FAMILY_FALLBACK = {
   mixed_code_raw_200mb: "carpathian", mixed_code_files_200mb: "carpathian",
   mixed_code_edu_200mb: "carpathian", mixed_code_qa_200mb: "carpathian",
   code_textbook_v1: "carpathian", sft_idk: "carpathian",
-  shakespeare: "public", tinystories: "public", fineweb_edu: "public",
+  shakespeare: "public", fineweb_edu: "public",
   wikitext103: "public", enwik8: "public", pg19: "public",
   openwebtext10g: "public", the_pile: "public",
   slimpajama627b: "public", redpajama_v2: "public",
@@ -12250,12 +12553,15 @@ const CORPUS_STEM_TOPIC_FALLBACK = {
   mixed_code_raw_200mb: "code", mixed_code_files_200mb: "code",
   mixed_code_edu_200mb: "code", mixed_code_qa_200mb: "code",
   code_textbook_v1: "code", sft_idk: "special_sft",
-  shakespeare: "knowledge", tinystories: "knowledge", fineweb_edu: "knowledge",
+  shakespeare: "knowledge", fineweb_edu: "knowledge",
   wikitext103: "knowledge", enwik8: "knowledge", pg19: "knowledge",
   openwebtext10g: "knowledge", the_pile: "knowledge",
   slimpajama627b: "knowledge", redpajama_v2: "knowledge",
 };
 const CORPUS_MODE_TOPIC = { chat: "chat", agent: "agent", autocomplete: "code" };
+// Left indent for a row's secondary lines, so they line up under the label
+// past the mix checkbox + status dot.
+const CORPUS_ROW_INDENT = "45px";
 
 // Market LLM corpora (crypto, stocks) are now published as real raw_bytes catalog
 // entries hosted on COS, so no coming-soon placeholders are needed.
@@ -12449,6 +12755,10 @@ function _corpusRenderCatalog(data) {
   list.querySelectorAll("[data-corpus-remove-source]").forEach(b => {
     b.addEventListener("click", () => _corpusRemoveSourceTrigger(b.getAttribute("data-corpus-remove-source")));
   });
+  list.querySelectorAll("[data-corpus-mix]").forEach(b => {
+    b.addEventListener("change", () => _corpusMixToggle(b.getAttribute("data-corpus-mix"), b.checked));
+  });
+  _corpusMixRender();
 }
 
 function _corpusRowHtml(c) {
@@ -12520,7 +12830,7 @@ function _corpusRowHtml(c) {
       : "";
 
     const descLine = c.description
-      ? `<div style="padding:1px 8px 0 26px;font-size:10.5px;color:var(--dim);line-height:1.55">${_corpusEsc(c.description)}</div>`
+      ? `<div style="padding:1px 8px 0 ${CORPUS_ROW_INDENT};font-size:10.5px;color:var(--dim);line-height:1.55">${_corpusEsc(c.description)}</div>`
       : "";
 
     let progressLine = "";
@@ -12533,16 +12843,24 @@ function _corpusRowHtml(c) {
         ? `<div style="flex:1;height:3px;background:#0a0c12;border-radius:2px;overflow:hidden;min-width:80px"><div style="width:${pct}%;height:100%;background:var(--warm);transition:width .3s"></div></div>`
         : `<div style="flex:1;height:3px;background:repeating-linear-gradient(90deg,var(--warm) 0 8px,#0a0c12 8px 16px);background-size:32px 100%;animation:cprogslide 1s linear infinite;border-radius:2px;min-width:80px"></div>`;
       progressLine = `
-        <div style="display:flex;align-items:center;gap:8px;padding:3px 8px 0 26px;font-size:10px;color:var(--dim)">
+        <div style="display:flex;align-items:center;gap:8px;padding:3px 8px 0 ${CORPUS_ROW_INDENT};font-size:10px;color:var(--dim)">
           ${bar}
           <span style="white-space:nowrap;color:var(--warm)">${kind} ${_corpusFmtBytes(wrote)}${total ? ` / ${_corpusFmtBytes(total)} (${pct}%)` : ""}</span>
         </div>`;
     }
 
+    // Mix checkbox: adds the row to the mix planner above. Coming-soon rows
+    // can't be drawn from, so theirs is disabled rather than absent.
+    const mixBox = c.coming_soon
+      ? `<input type="checkbox" class="mix-check" disabled title="cannot go in a mix: this corpus is not published yet">`
+      : `<input type="checkbox" class="mix-check" data-corpus-mix="${_corpusEsc(c.stem)}"` +
+        `${corpusMixState.picked.includes(c.stem) ? " checked" : ""} title="add this corpus to the mix planner">`;
+
     return `
       <div style="border-bottom:1px solid #131722;padding:6px 0">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 8px">
           <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:240px">
+            ${mixBox}
             ${leading}
             <span style="color:var(--text);font-weight:500;font-size:11.5px">${_corpusEsc(c.label)}</span>
             <span style="color:var(--dim);font-size:10.5px">(${_corpusEsc(c.stem)})</span>
@@ -12574,28 +12892,30 @@ function _corpusRefreshCatalog() {
     .finally(() => { corpusLibState.inflight = false; });
 }
 
+// Returns a promise that settles when the install finishes, so the mix planner
+// can run a queue of downloads one at a time.
 function _corpusInstallTrigger(stem) {
-  if (!stem || corpusLibState.installing.has(stem)) return;
+  if (!stem || corpusLibState.installing.has(stem)) return Promise.resolve();
   const data = corpusLibState.catalog;
-  if (!data) return;
+  if (!data) return Promise.resolve();
   const entry = (data.corpora || []).find(c => c.stem === stem);
-  if (!entry) return;
+  if (!entry) return Promise.resolve();
 
   const fmt = entry.format || "raw_bytes";
   if (fmt === "raw_bytes" && !entry.train_url) {
     const lab = $("corpusActionStatus");
     if (lab) { lab.textContent = `${stem}: no train URL configured`; lab.style.color = "var(--hot)"; }
-    return;
+    return Promise.resolve();
   }
   if (fmt === "hf_dataset" && !entry.hf_dataset) {
     const lab = $("corpusActionStatus");
     if (lab) { lab.textContent = `${stem}: hf_dataset name missing`; lab.style.color = "var(--hot)"; }
-    return;
+    return Promise.resolve();
   }
   if (fmt === "native" && !entry.native_available) {
     const lab = $("corpusActionStatus");
     if (lab) { lab.textContent = `${stem}: built-in corpus files missing from this install`; lab.style.color = "var(--hot)"; }
-    return;
+    return Promise.resolve();
   }
 
   // Compute expected total bytes (train + val if applicable). >10 GB requires
@@ -12612,7 +12932,7 @@ function _corpusInstallTrigger(stem) {
     const msg = `Heads up: ${entry.label} will download ~${gb} GB into trainers/corpus/.\n\n` +
                 `Large downloads may take a while and consume significant disk space and bandwidth.\n\n` +
                 `Continue installing ${stem}?`;
-    if (!confirm(msg)) return;
+    if (!confirm(msg)) return Promise.resolve();
     confirmLarge = true;
   }
 
@@ -12622,7 +12942,7 @@ function _corpusInstallTrigger(stem) {
   if (lab) { lab.textContent = `installing ${stem}...`; lab.style.color = "var(--warm)"; }
   const poll = setInterval(_corpusRefreshCatalog, 2000);
 
-  fetch("/corpus/library/install", {
+  return fetch("/corpus/library/install", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       stem,
@@ -12731,7 +13051,487 @@ function _corpusOpenLibraryModal() {
   if (!m) return;
   m.classList.remove("hidden");
   document.body.classList.add("no-scroll");
+  _corpusMixOnOpen();
   _corpusRefreshCatalog();
+}
+
+// ---- Corpus mix planner ----
+// Builds a multicorpus spec ("stem:0.45,stem:0.30") out of several catalog
+// entries. Weights come from POST /corpus/mix/plan; the dashboard never
+// invents them. The plan is shown in full before anything is downloaded, and
+// the accepted spec is handed to the Training tab's corpus field.
+const CORPUS_MIX_SPEC_KEY  = "vt:corpus:mix:spec";
+const CORPUS_MIX_RATE_KEY  = "vt:corpus:mix:rate_mbs";
+const CORPUS_MIX_PLAN_URL  = "/corpus/mix/plan";
+const CORPUS_MIX_PROFILES_URL = "/corpus/mix/profiles";
+const CORPUS_MIX_PROFILES_FILE = "veritate_mri/data/corpus_mix_profiles.json";
+const CORPUS_MIX_CUSTOM_PROFILE = "__custom__";
+const CORPUS_MIX_DEFAULTS  = { target: 1024, unit: "MB" };
+const CORPUS_MIX_UNIT_BYTES = { MB: 1024 * 1024, GB: 1024 * 1024 * 1024 };
+const CORPUS_MIX_RATE_MIN_SECS = 5;   // ignore rate samples shorter than this
+
+const corpusMixState = {
+  picked: [],        // stems, in the order they were ticked
+  plan: null,        // last /corpus/mix/plan body
+  planError: null,
+  planning: false,
+  downloading: null, // { stem, index, total } while the queue runs
+  accepted: null,    // spec handed to the Training tab
+  profiles: {},      // id -> { label, blurb } from the server
+  profileNote: "",   // plain-language state of the profile list
+};
+
+function _corpusMixEntry(stem) {
+  const cat = corpusLibState.catalog;
+  return (cat && (cat.corpora || []).find(c => c.stem === stem)) || null;
+}
+
+function _corpusMixTargetBytes() {
+  const el = $("corpusMixTarget");
+  const unitEl = $("corpusMixTargetUnit");
+  const n = parseFloat(el ? el.value : "");
+  const unit = (unitEl && unitEl.value) || CORPUS_MIX_DEFAULTS.unit;
+  if (!(n > 0)) return 0;
+  return Math.round(n * (CORPUS_MIX_UNIT_BYTES[unit] || CORPUS_MIX_UNIT_BYTES.MB));
+}
+
+function _corpusMixEpochCap() {
+  const el = $("corpusMixEpochs");
+  const n = parseFloat(el ? el.value : "");
+  return n > 0 ? n : 0;
+}
+
+function _corpusMixFmtSecs(s) {
+  if (!(s > 0)) return "?";
+  if (s < 90) return Math.round(s) + " s";
+  if (s < 5400) return (s / 60).toFixed(1) + " min";
+  return (s / 3600).toFixed(1) + " h";
+}
+
+function _corpusMixSize(c) {
+  return c.installed_size_train != null ? c.installed_size_train : c.size_train;
+}
+
+function _corpusMixMissing() {
+  return corpusMixState.picked
+    .map(_corpusMixEntry)
+    .filter(c => c && !c.installed_train && !c.coming_soon);
+}
+
+function _corpusMixToggle(stem, on) {
+  if (!stem) return;
+  const at = corpusMixState.picked.indexOf(stem);
+  if (on && at < 0) corpusMixState.picked.push(stem);
+  if (!on && at >= 0) corpusMixState.picked.splice(at, 1);
+  // The picks changed, so the last plan no longer describes them.
+  corpusMixState.plan = null;
+  corpusMixState.planError = null;
+  corpusMixState.accepted = null;
+  const panel = $("corpusMixPanel");
+  if (panel && corpusMixState.picked.length) panel.open = true;
+  _corpusMixNote("picks changed: press \"preview plan\" to see the new split.", "var(--dim)");
+  _corpusMixRender();
+}
+
+function _corpusMixNote(msg, color) {
+  const s = $("corpusMixStatus");
+  if (s) { s.textContent = msg || ""; s.style.color = color || "var(--dim)"; }
+}
+
+// Panel open: seed the epoch cap from the saved setting (the same number the
+// planner uses when a request omits it) and pull the two server-owned lists.
+function _corpusMixOnOpen() {
+  const ep = $("corpusMixEpochs");
+  const cur = settingsState.current;
+  if (ep && !ep.value && cur && cur.corpus_mix_max_epochs) ep.value = cur.corpus_mix_max_epochs;
+  _corpusMixLoadProfiles();
+  _corpusMixLoadModels();
+}
+
+function _corpusMixProfileValue() {
+  const sel = $("corpusMixProfile");
+  const v = (sel && sel.value) || "";
+  if (v !== CORPUS_MIX_CUSTOM_PROFILE) return v;
+  const custom = $("corpusMixProfileCustom");
+  return (custom && custom.value.trim()) || "";
+}
+
+// Intent profiles are data on the server (corpus_mix_profiles.json), never a
+// list baked into the dashboard. When the server does not publish them, the
+// panel says so and falls back to the configured default plus a free-text
+// entry, the same pattern the teacher-model picker uses.
+function _corpusMixLoadProfiles() {
+  const sel = $("corpusMixProfile");
+  if (!sel || sel.dataset.loaded === "1") return;
+  fetch(CORPUS_MIX_PROFILES_URL)
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      const got = (d && d.profiles) || null;
+      if (!got) return null;
+      corpusMixState.profiles = got;
+      corpusMixState.profileNote = "";
+      return got;
+    })
+    .catch(() => null)
+    .then(got => {
+      if (got) return null;
+      corpusMixState.profileNote = `This server does not publish its intent profiles yet, so only the saved default is offered. Profile names live in ${CORPUS_MIX_PROFILES_FILE}; pick "other..." to type one.`;
+      return fetch("/settings").then(r => r.json()).then(s => {
+        const fallback = (s && s.corpus_mix_default_profile) || "";
+        if (fallback) corpusMixState.profiles = { [fallback]: { label: fallback } };
+      }).catch(() => {});
+    })
+    .finally(() => {
+      sel.dataset.loaded = "1";
+      sel.innerHTML = Object.keys(corpusMixState.profiles)
+        .map(id => `<option value="${_corpusEsc(id)}">${_corpusEsc(corpusMixState.profiles[id].label || id)}</option>`)
+        .join("") + `<option value="${CORPUS_MIX_CUSTOM_PROFILE}">other...</option>`;
+      _corpusMixRender();
+    });
+}
+
+// Size dropdown fed from the trainer manifests, so the parameter counts are
+// the ones the platform actually ships.
+function _corpusMixLoadModels() {
+  const sel = $("corpusMixModel");
+  if (!sel || sel.dataset.loaded === "1") return;
+  fetch("/trainers").then(r => r.json()).then(d => {
+    const byParams = new Map();
+    for (const p of (d.trainers || [])) {
+      const sizes = (p.manifest && p.manifest.sizes) || {};
+      for (const [key, shape] of Object.entries(sizes)) {
+        if (!shape || !shape.params) continue;
+        byParams.set(shape.params, `${key} (${_corpusFmtParams(shape.params)} params)`);
+      }
+    }
+    const rows = Array.from(byParams.entries()).sort((a, b) => a[0] - b[0]);
+    sel.innerHTML = rows.length
+      ? rows.map(([params, label]) => `<option value="${params}">${_corpusEsc(label)}</option>`).join("")
+      : '<option value="">no trainers installed</option>';
+    sel.dataset.loaded = "1";
+    _corpusMixRender();
+  }).catch(e => _corpusMixNote(`could not read trainer sizes: ${_backendErrMsg(e)}`, "var(--hot)"));
+}
+
+function _corpusMixPickedHtml() {
+  if (!corpusMixState.picked.length) {
+    return `<div class="mix-empty">Nothing picked yet. Tick the checkbox on any row in the list below and it shows up here.</div>`;
+  }
+  return corpusMixState.picked.map(stem => {
+    const c = _corpusMixEntry(stem);
+    if (!c) {
+      return `<div class="mix-pick"><b>${_corpusEsc(stem)}</b> <span class="mix-bad">no longer in the catalog. Untick it, or add it back as a custom source.</span></div>`;
+    }
+    const fam = CORPUS_FAMILIES.find(f => f.id === _corpusFamilyOf(c));
+    const top = CORPUS_TOPICS.find(t => t.id === _corpusTopicOf(c));
+    const size = _corpusMixSize(c);
+    const bits = [
+      `<b>${_corpusEsc(c.label)}</b>`,
+      `<span class="mix-dim">${_corpusEsc(stem)}</span>`,
+      `<span class="corpus-tag t-dim">${size != null ? _corpusFmtBytes(size) : "size unknown"}</span>`,
+      `<span class="corpus-tag t-info">${_corpusEsc(top ? top.label : _corpusTopicOf(c))}</span>`,
+      `<span class="corpus-tag t-dim">${_corpusEsc(fam ? fam.label : _corpusFamilyOf(c))}</span>`,
+    ];
+    let todo = "";
+    if (c.installed_train) {
+      bits.push(`<span class="corpus-tag t-good">on disk</span>`);
+    } else if (c.coming_soon) {
+      bits.push(`<span class="corpus-tag t-hot">not published</span>`);
+      todo = `<div class="mix-todo">This corpus is not published yet, so it cannot be downloaded. Untick it and pick another, or the mix will fail at launch.</div>`;
+    } else {
+      bits.push(`<span class="corpus-tag t-warm">needs downloading</span>`);
+      todo = `<div class="mix-todo">Not on this machine yet. It downloads ${size != null ? "about " + _corpusFmtBytes(size) : "an unknown amount"} into trainers/corpus/ when you press "download missing" below (or install on its own row). Training cannot start until it is there.</div>`;
+    }
+    return `<div class="mix-pick">${bits.join(" ")}${todo}</div>`;
+  }).join("");
+}
+
+function _corpusMixConsequenceHtml() {
+  const picks = corpusMixState.picked.map(_corpusMixEntry).filter(Boolean);
+  const onDisk = picks.filter(c => c.installed_train).length;
+  const blocked = picks.filter(c => c.coming_soon);
+  const missing = _corpusMixMissing();
+  const bytes = missing.reduce((a, c) => a + (_corpusMixSize(c) || 0), 0);
+  const rateEl = $("corpusMixRate");
+  const mbs = parseFloat(rateEl ? rateEl.value : "");
+  const lines = [`<div class="mix-head">Before you commit</div>`];
+  lines.push(`<div class="mix-note">${onDisk} of ${picks.length} picked ${picks.length === 1 ? "corpus" : "corpora"} ${onDisk === 1 ? "is" : "are"} already on this machine.</div>`);
+  if (blocked.length) {
+    lines.push(`<div class="mix-todo">${blocked.map(c => _corpusEsc(c.stem)).join(", ")} cannot be downloaded at all yet. Untick ${blocked.length === 1 ? "it" : "them"} before you launch.</div>`);
+  }
+  if (!missing.length) {
+    lines.push(`<div class="mix-note">Nothing to download. No disk space needed.</div>`);
+  } else {
+    const eta = mbs > 0 ? _corpusMixFmtSecs(bytes / (mbs * CORPUS_MIX_UNIT_BYTES.MB)) : null;
+    lines.push(
+      `<div class="mix-note">Download needed: ${missing.length} ${missing.length === 1 ? "corpus" : "corpora"} ` +
+      `(${missing.map(c => _corpusEsc(c.stem)).join(", ")}), about ${_corpusFmtBytes(bytes)}.</div>`,
+      `<div class="mix-note">Disk needed: about ${_corpusFmtBytes(bytes)} free under trainers/corpus/. The download refuses to start if there is not enough room and tells you how much is missing.</div>`,
+      `<div class="mix-note">Estimated time: ${eta ? eta + ` at ${mbs.toFixed(1)} MB/s` : "unknown until a download measures your connection. Fill in the speed control above for an estimate."}.</div>`
+    );
+  }
+  lines.push(`<div class="mix-note">A mix is not written to a new file. The trainer opens these corpus files directly and samples them at the weights above, so there is no build step and no extra disk beyond the downloads.</div>`);
+  return lines.join("");
+}
+
+function _corpusMixPlanHtml() {
+  if (corpusMixState.planning) return `<div class="mix-note">asking the planner how to split the budget...</div>`;
+  if (corpusMixState.planError) {
+    return `<div class="mix-head">Plan failed</div><div class="mix-bad">${_corpusEsc(corpusMixState.planError)}</div>`;
+  }
+  const p = corpusMixState.plan;
+  if (!p) {
+    return `<div class="mix-note">No plan yet. Press "preview plan" to see the exact split, how much of each corpus gets used, and any warnings. Nothing is committed by previewing.</div>`;
+  }
+  const cap = _corpusMixEpochCap();
+  const sources = p.sources || [];
+  const over = s => cap > 0 && s.epochs != null && s.epochs >= cap;
+  const rows = sources.map(s =>
+    `<tr${over(s) ? ' class="over"' : ""}>` +
+    `<td>${_corpusEsc(s.label || s.stem)}</td>` +
+    `<td>${_corpusEsc(s.topic || "no topic")}</td>` +
+    `<td>${s.weight == null ? "?" : (s.weight * 100).toFixed(1) + "%"}</td>` +
+    `<td>${_corpusFmtBytes(s.bytes_drawn)}</td>` +
+    `<td>${_corpusFmtBytes(s.bytes_available)}</td>` +
+    `<td>${s.epochs == null ? "?" : (+s.epochs).toFixed(2)}` +
+    `${over(s) ? ' <span class="corpus-tag t-warm">at/over cap</span>' : ""}</td>` +
+    `</tr>`).join("");
+  const warnings = (p.warnings || []).map(w => `<div class="mix-warn">${_corpusEsc(w)}</div>`).join("");
+  const overCount = sources.filter(over).length;
+  const target = _corpusMixTargetBytes();
+
+  const out = [
+    `<div class="mix-head">Plan preview (nothing committed yet)</div>`,
+    `<table class="mix-table"><thead><tr>` +
+    `<th>corpus</th><th>topic</th><th>weight</th><th>bytes drawn</th><th>bytes available</th><th>epochs</th>` +
+    `</tr></thead><tbody>${rows || `<tr><td colspan="6">planner returned no sources</td></tr>`}</tbody></table>`,
+    `<div class="mix-note">Total drawn: ${_corpusFmtBytes(p.bytes_planned)} of the ${_corpusFmtBytes(target)} you asked for.</div>`,
+    `<div class="mix-note">"epochs" is how many times the model would read that corpus end to end. ${cap > 0 ? `Your cap is ${cap}.` : "No cap set here, so the planner used the server's saved cap."}${overCount ? ` ${overCount} ${overCount === 1 ? "source is" : "sources are"} at or over it: shrink the target, raise the cap, or add another corpus.` : ""}</div>`,
+    `<div class="mix-head">Planner warnings</div>`,
+    warnings || `<div class="mix-note">None. The planner reported no warnings.</div>`,
+    `<div class="mix-head">What the planner used</div>`,
+    `<div class="mix-note"><code>${_corpusEsc(JSON.stringify(p.inputs == null ? {} : p.inputs))}</code></div>`,
+    _corpusMixConsequenceHtml(),
+  ];
+
+  const missing = _corpusMixMissing();
+  const busy = !!corpusMixState.downloading;
+  out.push(`<div class="inline" style="gap:6px;flex-wrap:wrap;margin-top:6px">`);
+  if (missing.length) {
+    out.push(`<button class="action" type="button" id="corpusMixDownloadBtn" ${busy ? "disabled" : ""}>` +
+             `${busy ? "downloading..." : `download missing (${missing.length})`}</button>`);
+  }
+  out.push(`<button class="action" type="button" id="corpusMixAcceptBtn" style="border-color:var(--accent);color:var(--accent)">use this mix for training</button>`);
+  out.push(`</div>`);
+
+  if (corpusMixState.accepted) out.push(_corpusMixHandoffHtml());
+  return out.join("");
+}
+
+function _corpusMixHandoffHtml() {
+  const spec = corpusMixState.accepted;
+  const missing = _corpusMixMissing();
+  const warn = missing.length
+    ? `<div class="mix-todo">${missing.length} of these sources ${missing.length === 1 ? "is" : "are"} still not on disk. Download ${missing.length === 1 ? "it" : "them"} first: the trainer stops with a missing-file error otherwise.</div>`
+    : "";
+  return [
+    `<div class="mix-head">This mix is now your training data</div>`,
+    `<div class="mix-note">Your next step: open the <b>Training</b> tab. The "training data file" field is already filled in with the spec below, so pick your trainer and press start when you are ready. Nothing trains until you do.</div>`,
+    `<div class="mix-spec"><code id="corpusMixSpecText">${_corpusEsc(spec)}</code>` +
+    `<button class="action" type="button" id="corpusMixCopyBtn">copy spec</button></div>`,
+    warn,
+  ].join("");
+}
+
+// Live download progress with real units. Per-source detail comes from the
+// catalog's `progress` block (bytes / total / kind / started_at).
+function _corpusMixProgressHtml() {
+  const active = corpusMixState.picked
+    .map(_corpusMixEntry)
+    .filter(c => c && c.progress);
+  if (!corpusMixState.downloading && !active.length) return "";
+  const now = Date.now() / 1000;
+  const head = corpusMixState.downloading
+    ? `<div class="mix-head">Downloading source ${corpusMixState.downloading.index + 1} of ${corpusMixState.downloading.total}: ${_corpusEsc(corpusMixState.downloading.stem)}</div>`
+    : `<div class="mix-head">Download in progress</div>`;
+  if (!active.length) {
+    return head + `<div class="mix-note">Started. The server has not reported bytes for this source yet.</div>`;
+  }
+  const rows = active.map(c => {
+    const p = c.progress;
+    const pct = (p.total && p.total > 0) ? Math.floor((p.bytes / p.total) * 100) : null;
+    const elapsed = p.started_at ? now - p.started_at : 0;
+    const bar = pct != null
+      ? `<span class="mix-bar"><i style="width:${pct}%"></i></span>`
+      : `<span class="mix-bar"><i style="width:100%;opacity:.35"></i></span>`;
+    const of = p.total ? ` / ${_corpusFmtBytes(p.total)} (${pct}%)` : " (total size not reported by the source)";
+    return `<div class="mix-prog">${bar}<span>${_corpusEsc(c.stem)} ${_corpusEsc(p.kind || "train")}: ` +
+           `${_corpusFmtBytes(p.bytes)}${of} &middot; ${_corpusMixFmtSecs(elapsed)} elapsed</span></div>`;
+  }).join("");
+  return head + rows + `<div class="mix-note">Leave this open or close it: the download runs on the server and keeps going either way.</div>`;
+}
+
+// Learn the machine's real download rate from a live install so the time
+// estimate is measured, not assumed.
+function _corpusMixObserveRate() {
+  const el = $("corpusMixRate");
+  if (!el || document.activeElement === el) return;
+  const now = Date.now() / 1000;
+  for (const stem of corpusMixState.picked) {
+    const c = _corpusMixEntry(stem);
+    const p = c && c.progress;
+    if (!p || !p.started_at || !(p.bytes > 0)) continue;
+    const dt = now - p.started_at;
+    if (dt < CORPUS_MIX_RATE_MIN_SECS) continue;
+    const mbs = (p.bytes / CORPUS_MIX_UNIT_BYTES.MB) / dt;
+    if (!(mbs > 0)) continue;
+    el.value = mbs.toFixed(1);
+    try { localStorage.setItem(CORPUS_MIX_RATE_KEY, el.value); } catch (_e) { /* private mode */ }
+  }
+}
+
+function _corpusMixRender() {
+  const panel = $("corpusMixPanel");
+  if (!panel) return;
+  _corpusMixObserveRate();
+  const count = $("corpusMixCount");
+  if (count) {
+    count.textContent = corpusMixState.picked.length
+      ? `${corpusMixState.picked.length} picked: ${corpusMixState.picked.join(" + ")}`
+      : "no corpora picked";
+  }
+  const profEl = $("corpusMixProfile");
+  const customEl = $("corpusMixProfileCustom");
+  const isCustom = !!(profEl && profEl.value === CORPUS_MIX_CUSTOM_PROFILE);
+  if (customEl) customEl.style.display = isCustom ? "" : "none";
+  const help = $("corpusMixProfileHelp");
+  if (help) {
+    help.textContent = "how the budget leans across topics. The planner owns the recipe; " +
+      `the plan below shows which one it used. ${corpusMixState.profileNote}`;
+  }
+  const picked = $("corpusMixPicked");
+  if (picked) picked.innerHTML = _corpusMixPickedHtml();
+  const prog = $("corpusMixProgress");
+  if (prog) prog.innerHTML = _corpusMixProgressHtml();
+  const out = $("corpusMixPlanOut");
+  if (out) {
+    out.innerHTML = _corpusMixPlanHtml();
+    const dl = $("corpusMixDownloadBtn");
+    if (dl) dl.addEventListener("click", _corpusMixDownloadMissing);
+    const acc = $("corpusMixAcceptBtn");
+    if (acc) acc.addEventListener("click", _corpusMixAccept);
+    const cp = $("corpusMixCopyBtn");
+    if (cp) cp.addEventListener("click", _corpusMixCopySpec);
+  }
+  const btn = $("corpusMixPlanBtn");
+  if (btn) btn.disabled = corpusMixState.planning || !corpusMixState.picked.length;
+}
+
+function _corpusMixPlanRequest() {
+  if (!corpusMixState.picked.length) {
+    _corpusMixNote("pick at least one corpus from the list below first.", "var(--warm)");
+    return;
+  }
+  const target = _corpusMixTargetBytes();
+  if (!target) {
+    _corpusMixNote("set a total training size above zero.", "var(--warm)");
+    return;
+  }
+  const modelEl = $("corpusMixModel");
+  const body = {
+    stems:        corpusMixState.picked.slice(),
+    target_bytes: target,
+    profile:      _corpusMixProfileValue(),
+    max_epochs:   _corpusMixEpochCap() || null,
+    model_params: parseInt((modelEl && modelEl.value) || "", 10) || null,
+  };
+  corpusMixState.planning = true;
+  corpusMixState.planError = null;
+  corpusMixState.accepted = null;
+  _corpusMixNote("planning...", "var(--warm)");
+  _corpusMixRender();
+  fetch(CORPUS_MIX_PLAN_URL, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+    .then(r => r.status === 404
+      ? { error: `This server has no mix planner yet (POST ${CORPUS_MIX_PLAN_URL} returned 404). Update Veritate from Settings, restart it, then reopen this panel.` }
+      : r.json())
+    .then(d => {
+      if (!d || d.error) {
+        corpusMixState.plan = null;
+        corpusMixState.planError = (d && d.error) ? String(d.error) : "the planner returned an empty response.";
+        _corpusMixNote("plan failed", "var(--hot)");
+        return;
+      }
+      corpusMixState.plan = d;
+      _corpusMixNote(`plan ready: ${(d.sources || []).length} sources.`, "var(--data-pos)");
+    })
+    .catch(e => {
+      corpusMixState.plan = null;
+      corpusMixState.planError = _backendErrMsg(e);
+      _corpusMixNote("plan failed", "var(--hot)");
+    })
+    .finally(() => { corpusMixState.planning = false; _corpusMixRender(); });
+}
+
+async function _corpusMixDownloadMissing() {
+  const queue = _corpusMixMissing().map(c => c.stem);
+  if (!queue.length || corpusMixState.downloading) return;
+  for (let i = 0; i < queue.length; i++) {
+    corpusMixState.downloading = { stem: queue[i], index: i, total: queue.length };
+    _corpusMixNote(`downloading ${queue[i]} (${i + 1} of ${queue.length})...`, "var(--warm)");
+    _corpusMixRender();
+    await _corpusInstallTrigger(queue[i]);
+  }
+  corpusMixState.downloading = null;
+  _corpusMixNote("downloads finished. Check each row for its result.", "var(--data-pos)");
+  _corpusRefreshCatalog();
+}
+
+function _corpusMixAccept() {
+  const spec = corpusMixState.plan && corpusMixState.plan.spec;
+  if (!spec) { _corpusMixNote("no plan to accept: press \"preview plan\" first.", "var(--warm)"); return; }
+  try { localStorage.setItem(CORPUS_MIX_SPEC_KEY, spec); } catch (_e) { /* private mode */ }
+  corpusMixState.accepted = spec;
+  _trApplyPendingMix();
+  _corpusMixNote("mix accepted: the Training tab's data field is now set.", "var(--data-pos)");
+  _corpusMixRender();
+}
+
+function _corpusMixCopySpec() {
+  if (!corpusMixState.accepted) return;
+  navigator.clipboard.writeText(corpusMixState.accepted)
+    .then(() => _corpusMixNote("spec copied to the clipboard.", "var(--data-pos)"))
+    .catch(() => _corpusMixNote("copy blocked by the browser: select the spec text and copy it by hand.", "var(--warm)"));
+}
+
+function _corpusMixInit() {
+  const prof = $("corpusMixProfile");
+  if (!prof) return;
+  const tgt = $("corpusMixTarget");
+  if (tgt) tgt.value = CORPUS_MIX_DEFAULTS.target;
+  const unit = $("corpusMixTargetUnit");
+  if (unit) unit.value = CORPUS_MIX_DEFAULTS.unit;
+  const rate = $("corpusMixRate");
+  if (rate) { try { rate.value = localStorage.getItem(CORPUS_MIX_RATE_KEY) || ""; } catch (_e) { /* private mode */ } }
+  for (const id of ["corpusMixProfile", "corpusMixProfileCustom", "corpusMixTarget", "corpusMixTargetUnit",
+                    "corpusMixEpochs", "corpusMixModel", "corpusMixRate"]) {
+    const el = $(id);
+    if (el) el.addEventListener("change", _corpusMixRender);
+  }
+  const planBtn = $("corpusMixPlanBtn");
+  if (planBtn) planBtn.addEventListener("click", _corpusMixPlanRequest);
+  const clearBtn = $("corpusMixClearBtn");
+  if (clearBtn) clearBtn.addEventListener("click", () => {
+    corpusMixState.picked = [];
+    corpusMixState.plan = null;
+    corpusMixState.planError = null;
+    corpusMixState.accepted = null;
+    _corpusMixNote("picks cleared.", "var(--dim)");
+    if (corpusLibState.catalog) _corpusRenderCatalog(corpusLibState.catalog); else _corpusMixRender();
+  });
+  _corpusMixRender();
 }
 
 function _corpusCloseLibraryModal() {
@@ -13754,6 +14554,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const row = $("corpusConfigRow");
     if (row) row.style.display = (row.style.display === "none" || !row.style.display) ? "flex" : "none";
   });
+  _corpusMixInit();
   const fmc = document.getElementById("forkModelModalClose");
   if (fmc) fmc.addEventListener("click", _trCloseForkModal);
   const fmcancel = document.getElementById("forkModelCancel");

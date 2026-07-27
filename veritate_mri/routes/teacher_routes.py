@@ -8,10 +8,15 @@
 #   start/status. api key value never leaves the server; responses surface
 #   only has_api_key. job handles live in a process-local dict guarded by a
 #   lock and queried by reading state.json + samples.jsonl on disk.
+# - /teacher/authoring/* runs the self-authored corpus pipeline: spec read/write,
+#   start (plans calls from a byte target and gates every record), build (packs
+#   ChatML bins, zips them, registers a coming_soon catalog entry). Status, stop,
+#   samples, and delete are shared with /teacher/synth/*.
 # veritate_mri/routes/teacher_routes.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import hashlib
 import importlib
 import json
 import os
@@ -19,6 +24,7 @@ import re
 import shutil
 import threading
 import uuid
+import zipfile
 
 from flask import request
 
@@ -26,7 +32,10 @@ from readers import paths as paths_mod
 from readers.paths import REPO_ROOT
 from runtime import logs as logmod
 from runtime import settings as settings_mod
+from teacher import authoring as authoring_mod
+from tools.build_sft_corpus import build as build_sft_bins
 from tools.jsonl_to_bin import jsonl_to_bin
+from training.sync.corpus_sync import LOCAL_CATALOG_PATH
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -46,6 +55,20 @@ CATALOG_VERSION = 1
 SYNTH_RESPONSE_KEY = "response"
 SYNTH_VAL_RATIO = 0.02
 STEM_RE = re.compile(r"^[a-z0-9_]+$")
+
+AUTHORING_ID_PREFIX = "auth_"
+AUTHORING_FAMILIES_DIR = "families"
+AUTHORING_DIST_DIR = "dist"
+AUTHORING_PURPOSE = "Self-authored Veritate chat and reading corpus."
+AUTHORING_LICENSE = "# Veritate Authored Corpus\n\nSelf-authored. For use with Veritate models only.\n"
+AUTHORING_FAMILY = "carpathian"
+AUTHORING_TOPIC = "chat"
+AUTHORING_FORMAT = "zip_bundle"
+AUTHORING_TRAINED_MODES = ["chat"]
+CATALOG_PLACEHOLDER_URL = "https://api.carpathian.ai/cos/PLACEHOLDER/{stem}.zip"
+CATALOG_INDENT = 1
+MB = 1024 * 1024
+SHA_CHUNK = 1 << 20
 
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
@@ -190,8 +213,23 @@ def _read_recent_samples(output_dir, limit):
                 rec = json.loads(line)
             except ValueError:
                 continue
-            rows.append({"id": rec.get("id", ""), "response": rec.get("response", "")})
+            rows.append({"id": rec.get("id", ""),
+                         "response": rec.get("response") or _render_record(rec.get(authoring_mod.RECORD_KEY))})
     return rows[-limit:]
+
+
+def _render_record(rec):
+    """Authoring rows carry a record, not a raw response. Show it readably."""
+    if not isinstance(rec, dict):
+        return ""
+    head = f"[{rec.get(authoring_mod.GENRE_KEY, '')} / {rec.get(authoring_mod.VOICE_KEY, '')}]"
+    turns = rec.get(authoring_mod.TURNS_KEY)
+    if isinstance(turns, list):
+        body = "\n".join(f"{t.get(authoring_mod.ROLE_KEY, '')}: {t.get(authoring_mod.TEXT_KEY, '')}"
+                         for t in turns)
+    else:
+        body = rec.get(authoring_mod.TEXT_KEY, "")
+    return f"{head}\n{body}"
 
 
 def _read_state_counts(output_dir):
@@ -201,6 +239,7 @@ def _read_state_counts(output_dir):
     last_error = ""
     error_summary = {}
     aborted = False
+    authoring = {}
     state_path = os.path.join(output_dir, STATE_FILE)
     if os.path.isfile(state_path):
         try:
@@ -211,6 +250,7 @@ def _read_state_counts(output_dir):
             last_error = st.get("last_error", "") or ""
             error_summary = st.get("error_summary", {}) or {}
             aborted = bool(st.get("aborted", False))
+            authoring = st.get("authoring", {}) or {}
         except (OSError, ValueError):
             pass
     return {
@@ -220,8 +260,95 @@ def _read_state_counts(output_dir):
         "last_error": last_error,
         "error_summary": error_summary,
         "aborted": aborted,
+        "authoring": authoring,
         "output_path": samples,
     }
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(SHA_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _write_families(output_dir, spec):
+    """Split gated authoring records into per-genre jsonl the ChatML packer eats."""
+    fam_dir = os.path.join(output_dir, AUTHORING_FAMILIES_DIR)
+    if os.path.isdir(fam_dir):
+        shutil.rmtree(fam_dir)
+    os.makedirs(fam_dir, exist_ok=True)
+    handles, counts = {}, {}
+    with open(os.path.join(output_dir, SAMPLES_FILE), "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line).get(authoring_mod.RECORD_KEY)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            genre = authoring_mod.genre_by_id(spec, rec.get(authoring_mod.GENRE_KEY, ""))
+            if genre is None:
+                continue
+            gid = genre["id"]
+            if gid not in handles:
+                handles[gid] = open(os.path.join(fam_dir, f"{gid}.jsonl"), "w", encoding="utf-8")
+                counts[gid] = 0
+            handles[gid].write(json.dumps(_to_family_row(rec, genre["schema"]),
+                                          ensure_ascii=False) + "\n")
+            counts[gid] += 1
+    for fp in handles.values():
+        fp.close()
+    return fam_dir, counts
+
+
+def _to_family_row(rec, schema):
+    if schema == authoring_mod.SCHEMA_TURNS:
+        return {"turns": [{"role": t[authoring_mod.ROLE_KEY], "content": t[authoring_mod.TEXT_KEY]}
+                          for t in rec[authoring_mod.TURNS_KEY]]}
+    return {"text": rec[authoring_mod.TEXT_KEY]}
+
+
+def _zip_bins(dist_dir, stem):
+    zip_path = os.path.join(dist_dir, f"{stem}.zip")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for suffix in ("_train.bin", "_val.bin"):
+            name = f"{stem}{suffix}"
+            z.write(os.path.join(dist_dir, name), arcname=name)
+    return zip_path
+
+
+def _register_catalog_entry(stem, label, description, manifest, min_params, max_params):
+    """Append a coming_soon zip_bundle entry so the corpus shows in the library."""
+    with open(LOCAL_CATALOG_PATH, "r", encoding="utf-8") as f:
+        cat = json.load(f)
+    entry = {
+        "stem": stem,
+        "label": label,
+        "family": AUTHORING_FAMILY,
+        "topic": AUTHORING_TOPIC,
+        "description": description,
+        "format": AUTHORING_FORMAT,
+        "train_url": CATALOG_PLACEHOLDER_URL.format(stem=stem),
+        "size_train": manifest["train_bytes"],
+        "size_val": manifest["val_bytes"],
+        "sha256_train": manifest["train_sha256"],
+        "sha256_val": manifest["val_sha256"],
+        "trained_modes": list(AUTHORING_TRAINED_MODES),
+        "recommended_min_params": min_params,
+        "recommended_max_params": max_params,
+        "coming_soon": True,
+    }
+    cat["corpora"] = [c for c in cat.get("corpora", []) if c.get("stem") != stem] + [entry]
+    tmp = LOCAL_CATALOG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cat, f, indent=CATALOG_INDENT, ensure_ascii=False)
+    os.replace(tmp, LOCAL_CATALOG_PATH)
+    return entry
 
 
 def register(app):
@@ -431,6 +558,113 @@ def register(app):
         return {"stem": stem, "train_bin": train_bin, "val_bin": val_bin,
                 "n_records": stats["n_records"], "n_train": stats["n_train"], "n_val": stats["n_val"]}
 
+    @app.route("/teacher/authoring/spec", methods=["GET", "POST"])
+    def teacher_authoring_spec_route():
+        if request.method == "POST":
+            body = request.get_json(silent=True)
+            if not isinstance(body, dict) or not body.get("genres") or not body.get("gates"):
+                return {"error": "spec must be an object with genres and gates"}, 400
+            authoring_mod.save_spec(body)
+            logmod.info(LOG_SOURCE, f"authoring spec saved: {len(body['genres'])} genres")
+            return authoring_mod.load_spec()
+        return authoring_mod.load_spec()
+
+    @app.route("/teacher/authoring/start", methods=["POST"])
+    def teacher_authoring_start_route():
+        body = request.get_json(silent=True) or {}
+        spec = authoring_mod.load_spec()
+        genre_ids = [g for g in (body.get("genres") or [])
+                     if authoring_mod.genre_by_id(spec, g) is not None]
+        if not genre_ids:
+            return {"error": "pick at least one genre"}, 400
+        s = settings_mod.get()
+        provider = s.get("teacher_provider") or ""
+        if not provider:
+            return {"error": "teacher_provider not configured"}, 400
+        target_mb = float(body.get("target_mb") or 0)
+        if target_mb <= 0:
+            return {"error": "target_mb must be greater than zero"}, 400
+        floor = body.get("ngram_distinct_floor")
+        if floor is not None:
+            spec["gates"]["ngram_distinct_floor"] = float(floor)
+        calls = authoring_mod.plan_calls(spec, genre_ids, int(target_mb * MB))
+        existing_id = (body.get("job_id") or "").strip()
+        if existing_id:
+            with _JOBS_LOCK:
+                entry = _JOBS.get(existing_id)
+            if entry is not None and entry["thread"].is_alive():
+                return {"error": "job still running"}, 409
+            job_id = existing_id
+        else:
+            job_id = uuid.uuid4().hex[:JOB_ID_LEN]
+        out_root = paths_mod.synth_job_dir(job_id)
+        os.makedirs(out_root, exist_ok=True)
+        _write_job_meta(out_root, [], genre_ids)
+        prompts = authoring_mod.build_prompts(spec, calls, int(spec["gates"]["build_seed"]),
+                                              AUTHORING_ID_PREFIX)
+        gate = authoring_mod.RecordGate(spec)
+        gate.seed_from_file(os.path.join(out_root, SAMPLES_FILE))
+        conc = int(body.get("max_concurrency") or 0) or _resolve_concurrency(s, provider)
+        job = synth_mod.SynthJob(
+            job_id, provider, s.get("teacher_model") or None, prompts, out_root,
+            base_url=s.get("teacher_base_url") or None,
+            api_key=os.environ.get(TEACHER_API_KEY_ENV) or s.get("teacher_api_key") or None,
+            temperature=float(s.get("teacher_temperature", 0.7)),
+            max_tokens=int(s.get("teacher_max_tokens", 2048)),
+            max_concurrency=conc,
+            record_gate=gate,
+        )
+        thread = threading.Thread(target=job.run, name=f"teacher-authoring-{job_id}", daemon=True)
+        with _JOBS_LOCK:
+            _JOBS[job_id] = {"job": job, "thread": thread, "output_dir": out_root}
+        thread.start()
+        logmod.info(LOG_SOURCE, f"authoring started: job={job_id} genres={','.join(genre_ids)} "
+                                f"calls={len(prompts)} concurrency={conc}")
+        return {"job_id": job_id, "output_dir": out_root, "calls": calls,
+                "total_calls": len(prompts), "max_concurrency": conc}
+
+    @app.route("/teacher/authoring/build", methods=["POST"])
+    def teacher_authoring_build_route():
+        body = request.get_json(silent=True) or {}
+        job_id = (body.get("job_id") or "").strip()
+        stem = (body.get("stem") or "").strip().lower()
+        if not stem or not STEM_RE.match(stem):
+            return {"error": "stem must be lowercase letters, digits, underscores"}, 400
+        output_dir = paths_mod.synth_job_dir(job_id)
+        if not os.path.isfile(os.path.join(output_dir, SAMPLES_FILE)):
+            return {"error": "no samples for job"}, 404
+        spec = authoring_mod.load_spec()
+        fam_dir, counts = _write_families(output_dir, spec)
+        if not counts:
+            return {"error": "no authored records in job"}, 400
+        dist_dir = os.path.join(output_dir, AUTHORING_DIST_DIR)
+        manifest = build_sft_bins(
+            stem, fam_dir, dist_dir, sorted(f"{g}.jsonl" for g in counts),
+            AUTHORING_PURPOSE, AUTHORING_LICENSE,
+            int(spec["gates"]["build_seed"]), float(spec["gates"]["build_val_ratio"]),
+            corpus_dir=paths_mod.corpus_dir())
+        zip_path = _zip_bins(dist_dir, stem)
+        entry = _register_catalog_entry(
+            stem, body.get("label") or stem, body.get("description") or AUTHORING_PURPOSE,
+            manifest, int(body.get("recommended_min_params") or 0),
+            body.get("recommended_max_params"))
+        logmod.ok(LOG_SOURCE, f"authored corpus built: stem={stem} "
+                              f"train={manifest['train_bytes']}B val={manifest['val_bytes']}B "
+                              f"zip={zip_path}")
+        return {
+            "stem": stem, "zip_path": zip_path, "zip_bytes": os.path.getsize(zip_path),
+            "zip_sha256": _sha256_file(zip_path),
+            "family_counts": counts, "manifest": manifest, "catalog_entry": entry,
+            "next_steps": [
+                f"Upload {zip_path} to COS. The zip holds {stem}_train.bin and "
+                f"{stem}_val.bin at the top level.",
+                f"COS returns a link. Paste it into corpus_catalog.json as the train_url "
+                f"for stem '{stem}', replacing the PLACEHOLDER value.",
+                f"Remove \"coming_soon\": true from that same entry to release the corpus "
+                f"in the corpus library.",
+            ],
+        }
+
     @app.route("/teacher/seeds", methods=["GET"])
     def teacher_seeds_route():
         cat = _load_seed_catalog()
@@ -495,5 +729,6 @@ def register(app):
             "last_error": counts["last_error"],
             "error_summary": counts["error_summary"],
             "aborted": counts["aborted"],
+            "authoring": counts["authoring"],
             "output_path": counts["output_path"],
         }

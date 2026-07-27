@@ -84,6 +84,12 @@ DEFAULTS = {
     "device_name": "",
     "corpus_catalog_url": "",
     "corpus_user_sources": [],
+    # Corpus mix planner (veritate_mri/training/mix_planner.py). max_epochs caps how
+    # many times any one source may be redrawn into a mix; profiles_path empty means
+    # the shipped veritate_mri/data/corpus_mix_profiles.json.
+    "corpus_mix_max_epochs": 4,
+    "corpus_mix_default_profile": "pretrain",
+    "corpus_mix_profiles_path": "",
     "teacher_provider": "",
     "teacher_model": "",
     "teacher_base_url": "",
@@ -228,6 +234,19 @@ def _validate(patch):
                 if isinstance(entry, dict) and entry.get("stem"):
                     cleaned.append(entry)
             patch["corpus_user_sources"] = cleaned
+    if "corpus_mix_max_epochs" in patch:
+        v = patch["corpus_mix_max_epochs"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            raise ValueError("corpus_mix_max_epochs must be a positive number")
+    for skey in ("corpus_mix_default_profile", "corpus_mix_profiles_path"):
+        if skey in patch:
+            v = patch[skey]
+            if v is None:
+                patch[skey] = ""
+            elif not isinstance(v, str):
+                raise ValueError(f"{skey} must be a string")
+            else:
+                patch[skey] = v.strip()
     if "warm_models" in patch:
         v = patch["warm_models"]
         if v is None:

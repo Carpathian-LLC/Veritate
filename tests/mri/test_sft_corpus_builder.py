@@ -91,6 +91,21 @@ def test_builder_is_deterministic(tmp_path):
     assert m1["train_sha256"] == m2["train_sha256"]
 
 
+def test_prose_row_renders_without_a_chatml_frame(tmp_path):
+    """A {"text": ...} row emits bare prose plus <|endoftext|>, no fabricated user turn."""
+    in_dir = tmp_path / "in"; in_dir.mkdir()
+    with open(in_dir / FAMILY_ONE, "w", encoding="utf-8") as f:
+        for i in range(4):
+            f.write(json.dumps({"text": f"the ferry was late again on day {i}"}) + "\n")
+    build_sft_corpus.build(STEM, str(in_dir), str(tmp_path / "out"),
+                            (FAMILY_ONE,), PURPOSE, LICENSE_TEXT,
+                            seed=1, val_ratio=0.25)
+    body = (tmp_path / "out" / f"{STEM}_train.bin").read_bytes()
+    assert b"<|im_start|>" not in body
+    assert body.count(b"<|endoftext|>\n") == 3
+    assert body.startswith(b"the ferry was late again on day ")
+
+
 def test_builder_rejects_bad_jsonl(tmp_path):
     """Malformed JSONL surfaces as a clear ValueError, not a silent skip."""
     in_dir = tmp_path / "in"; in_dir.mkdir()

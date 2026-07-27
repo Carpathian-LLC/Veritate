@@ -1093,6 +1093,52 @@
         </div>
       </div>
 
+      <div id="authorPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
+        <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Author a corpus</div>
+        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">The teacher writes original conversations and prose from scratch, one batch per call. Every record is checked before it is kept: schema, banned phrases, em dashes, duplicates, and repeated wording. Genres, prompts, the banned list, and the quality limits are editable data in <code>veritate_mri/data/authoring/corpus_spec.json</code>. Concurrency and the teacher model come from Settings.</div>
+        <div id="authorGenreList" class="author-genre-list"></div>
+        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+          <label>destination
+            <select id="authorJobSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:220px">
+              <option value="">&mdash; new corpus &mdash;</option>
+            </select>
+          </label>
+          <label>target size (MB)
+            <input type="number" id="authorTargetMb" min="1" step="1" value="50" style="width:90px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+          </label>
+          <label title="How many teacher calls run at once. Leave blank to use the value saved in Settings.">calls at once
+            <input type="number" id="authorConcurrency" min="1" max="128" placeholder="settings" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+          </label>
+          <label title="Share of 5-word sequences that must be unique. Below this the corpus is repeating itself and the run is warned loudly.">variety floor
+            <input type="number" id="authorNgramFloor" min="0" max="1" step="0.01" value="0.9" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+          </label>
+          <button id="authorStartBtn" class="action" type="button">Start authoring</button>
+          <button id="authorStopBtn" class="action" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
+        </div>
+        <div id="authorPlanLine" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:6px"></div>
+        <div id="authorRepWarn" class="author-warn" style="display:none"></div>
+        <div id="authorStatsRow" class="author-stats" style="display:none"></div>
+        <div id="authorRejectRow" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px;word-break:break-word"></div>
+        <div id="authorBuildRow" style="display:none;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:6px">Package what has been authored so far into <code>&lt;name&gt;_train.bin</code> and <code>&lt;name&gt;_val.bin</code>, zip them, and add the corpus to the library.</div>
+          <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <label>corpus name
+              <input type="text" id="authorStem" placeholder="authored_chat_v1" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+            </label>
+            <label>label
+              <input type="text" id="authorLabel" placeholder="Authored chat (v1)" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+            </label>
+            <button id="authorBuildBtn" class="action" type="button">Build corpus</button>
+            <span id="authorBuildStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+          </div>
+          <div id="authorHandoff" class="author-handoff" style="display:none"></div>
+        </div>
+        <div id="authorLiveWrap" style="display:none;margin-top:12px">
+          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:4px">live output <span id="authorLiveCount"></span></div>
+          <div id="authorLiveOutput" style="max-height:300px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:8px;font:11px monospace;white-space:pre-wrap;word-break:break-word"></div>
+        </div>
+      </div>
+
       <div id="ragTrainPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
         <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Answer from context (RAG)</div>
         <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Fine-tune a saved model so it answers from supplied context. Training auto-generates a small question/answer corpus from your configured Teacher Model the first time, then fine-tunes. One job runs at a time; the log below tails it.</div>
@@ -2082,6 +2128,10 @@
           <span class="train-flow-card-title">Generate training data</span>
           <span class="train-flow-card-desc">Run the teacher to build a corpus. Needs a teacher in Settings.</span>
         </button>
+        <button class="train-flow-card" data-flow="author" type="button">
+          <span class="train-flow-card-title">Author a corpus</span>
+          <span class="train-flow-card-desc">Write original conversations and prose from scratch, quality-gated. Needs a teacher in Settings.</span>
+        </button>
       </div>
       <div class="train-flow-group">
         <div class="train-flow-group-title">Deploy</div>
@@ -2131,6 +2181,55 @@
         <button id="corpusCatalogUrlSaveBtn" class="action" type="button">save</button>
         <span id="corpusCatalogUrlStatus" class="meta" style="font-size:10.5px"></span>
       </div>
+
+      <details id="corpusMixPanel" class="mix-panel">
+        <summary>Plan a mix <span id="corpusMixCount" class="mix-dim">no corpora picked</span></summary>
+        <div class="mix-body">
+          <div class="mix-lead">A mix trains one model on several corpora at once. Tick the corpora you want in the list below, set the controls, then preview the plan. Nothing is downloaded, written, or trained until you press a button that says so.</div>
+          <div class="mix-controls">
+            <label class="mix-ctl">
+              <span class="mix-ctl-name">what this mix is for</span>
+              <select id="corpusMixProfile"></select>
+              <input type="text" id="corpusMixProfileCustom" style="display:none" placeholder="profile name">
+              <span class="mix-ctl-help" id="corpusMixProfileHelp"></span>
+            </label>
+            <label class="mix-ctl">
+              <span class="mix-ctl-name">total training data to draw</span>
+              <span class="mix-ctl-pair">
+                <input type="number" id="corpusMixTarget" min="1" step="1">
+                <select id="corpusMixTargetUnit"><option value="MB">MB</option><option value="GB">GB</option></select>
+              </span>
+              <span class="mix-ctl-help">how many bytes the model reads in total. The planner splits this budget across the corpora you picked.</span>
+            </label>
+            <label class="mix-ctl">
+              <span class="mix-ctl-name">epoch cap</span>
+              <input type="number" id="corpusMixEpochs" min="0.1" step="0.1">
+              <span class="mix-ctl-help">how many times the model is allowed to see the same source; above 1 it starts memorizing instead of learning.</span>
+            </label>
+            <label class="mix-ctl">
+              <span class="mix-ctl-name">model that will read it</span>
+              <select id="corpusMixModel"></select>
+              <span class="mix-ctl-help">the planner sizes the budget against this model's parameter count.</span>
+            </label>
+            <label class="mix-ctl">
+              <span class="mix-ctl-name">your download speed</span>
+              <span class="mix-ctl-pair">
+                <input type="number" id="corpusMixRate" min="0.1" step="0.1" placeholder="not measured yet">
+                <span class="mix-unit">MB/s</span>
+              </span>
+              <span class="mix-ctl-help">used only for the "time to download" estimate below. It fills itself in from a download while one is running.</span>
+            </label>
+          </div>
+          <div id="corpusMixPicked" class="mix-picked"></div>
+          <div class="inline" style="gap:6px;flex-wrap:wrap">
+            <button id="corpusMixPlanBtn" class="action" type="button" style="border-color:var(--accent);color:var(--accent)">preview plan</button>
+            <button id="corpusMixClearBtn" class="action" type="button">clear picks</button>
+            <span id="corpusMixStatus" class="meta" style="font-size:10.5px"></span>
+          </div>
+          <div id="corpusMixProgress"></div>
+          <div id="corpusMixPlanOut"></div>
+        </div>
+      </details>
       <div id="corpusList" style="display:flex;flex-direction:column;gap:2px;overflow-y:auto;flex:1;min-height:0;padding-right:4px"></div>
     </div>
   </div>

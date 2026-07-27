@@ -207,7 +207,7 @@ def make_word_ppl_compressor(brain, keep_frac: float = 0.5, max_ctx_bytes: int =
     `keep_frac` ∈ (0, 1] is the fraction of words to retain.
     `max_ctx_bytes` caps scoring cost; longer passages are truncated.
     Smoke (85M, S60): word-level @ keep=0.5 ≈ 2× compression for
-    +0.19 nll on tinystories continuations; @ keep=0.25 ≈ 4.3× for +0.27.
+    +0.19 nll on held-out continuations; @ keep=0.25 ≈ 4.3× for +0.27.
     Output is human-readable, unlike per-byte deletion."""
     import re
     import torch

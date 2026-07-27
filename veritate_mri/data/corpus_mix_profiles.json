@@ -1,0 +1,52 @@
+{
+  "_comment": "Intent profiles for the corpus mix planner (veritate_mri/training/mix_planner.py). Each profile is a target share per catalog topic (chat, agent, mcp, code, knowledge, market, special_sft; see corpus_catalog.json). Shares are renormalized over the topics the selected corpora actually cover, and each topic's share is split across its corpora in proportion to their available bytes. unlisted_topic_share is the share given to a selected corpus whose topic the profile does not name (including corpora absent from the catalog). stems is the default source list the profile suggests when the caller supplies none. Edit this file to add or retune profiles; point corpus_mix_profiles_path in Settings at another file to use your own copy instead.",
+  "profiles": {
+    "pretrain": {
+      "label": "General pretraining",
+      "topics": {
+        "knowledge": 0.63,
+        "chat": 0.3,
+        "code": 0.05,
+        "agent": 0.02
+      },
+      "unlisted_topic_share": 0.02,
+      "stems": [
+        "fineweb_edu",
+        "openwebtext10g",
+        "wikitext103",
+        "skills",
+        "mixed_code_qa_200mb"
+      ]
+    },
+    "conversational": {
+      "label": "Chat and assistant",
+      "topics": {
+        "chat": 0.55,
+        "knowledge": 0.25,
+        "agent": 0.1,
+        "mcp": 0.05,
+        "code": 0.05
+      },
+      "unlisted_topic_share": 0.02,
+      "stems": [
+        "fineweb_edu",
+        "skills",
+        "wikitext103"
+      ]
+    },
+    "knowledge": {
+      "label": "Knowledge and reading",
+      "topics": {
+        "knowledge": 0.75,
+        "chat": 0.15,
+        "code": 0.1
+      },
+      "unlisted_topic_share": 0.02,
+      "stems": [
+        "fineweb_edu",
+        "wikitext103",
+        "openwebtext10g"
+      ]
+    }
+  }
+}

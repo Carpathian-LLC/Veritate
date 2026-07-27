@@ -9,6 +9,8 @@
 # - Byte-deterministic under fixed seed (regression: tests/mri/test_sft_builder.py).
 # - Multi-turn friendly: a JSONL row may be {"user","assistant"} (single-turn) OR
 #   {"turns":[{"role","content"},...]} (multi-turn). Both render via ChatML.
+# - A {"text": ...} row renders as a bare prose block terminated by <|endoftext|>,
+#   for authored prose that is not a conversation.
 # - Sibling tool to build_sft_idk_corpus.py; that stays as the IDK-specific entry
 #   point. Every other layered SFT (identity, grounded_read, multiturn, empathy,
 #   engaged, instruct, prose) invokes THIS builder with a different stem + config.
@@ -28,6 +30,7 @@ import random
 IM_START = "<|im_start|>"
 IM_END   = "<|im_end|>"
 EOT      = "<|endoftext|>"
+ROLE_TEXT = "text"
 
 LICENSE_FILENAME  = "LICENSE.md"
 MANIFEST_FILENAME = "manifest.json"
@@ -59,6 +62,11 @@ def _load_jsonl(path):
                             and isinstance(t.get("content"), str) and t["content"].strip()):
                         raise ValueError(f"{path}:{line_no}: invalid turn: {t!r}")
                 out.append(turns)
+            elif ROLE_TEXT in obj:
+                t = obj[ROLE_TEXT]
+                if not (isinstance(t, str) and t.strip()):
+                    raise ValueError(f"{path}:{line_no}: missing/empty text")
+                out.append([{"role": ROLE_TEXT, "content": t}])
             else:
                 u = obj.get("user"); a = obj.get("assistant")
                 if not (isinstance(u, str) and isinstance(a, str) and u.strip() and a.strip()):
@@ -72,7 +80,10 @@ def _format_conversation(turns):
     """Render a list of {"role","content"} turns as one ChatML conversation."""
     parts = []
     for t in turns:
-        parts.append(f"{IM_START}{t['role']}\n{t['content']}{IM_END}\n")
+        if t["role"] == ROLE_TEXT:
+            parts.append(f"{t['content']}\n")
+        else:
+            parts.append(f"{IM_START}{t['role']}\n{t['content']}{IM_END}\n")
     parts.append(f"{EOT}\n")
     return "".join(parts)
 

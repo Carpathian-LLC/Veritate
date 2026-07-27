@@ -38,11 +38,11 @@ Polling stops on tab switch.
 
 - The action picker (`#trainFlowModal`) sets `trainState.flow` via `flowPick()` (`index.js`). The
   selected flow is persisted to `localStorage["vt:training:flow"]` and restored on load so a reload
-  lands on the same action. Valid flows: `scratch`, `continue`, `rag`, `synth`, `export`.
+  lands on the same action. Valid flows: `scratch`, `continue`, `rag`, `synth`, `author`, `export`.
 - Per-flow job control goes through one job registry (`TRAIN_FLOWS` → `TRAIN_JOB`/`SYNTH_JOB`/
-  `RAG_JOB`), each exposing `stop()`. Every stop button routes through `confirmDialog()` (the
-  shared `#confirmModal`) before calling its endpoint: training `POST /trainers/stop`, synth
-  `POST /teacher/synth/stop` (cooperative), rag `POST /rag/stop`.
+  `RAG_JOB`/`AUTHOR_JOB`), each exposing `stop()`. Every stop button routes through `confirmDialog()`
+  (the shared `#confirmModal`) before calling its endpoint: training `POST /trainers/stop`, synth and
+  author `POST /teacher/synth/stop` (cooperative), rag `POST /rag/stop`.
 - Per-action layout: the metrics/charts block is wrapped in `#trainMetricsSection` and shown by
   `_trToggleMetrics(flow)` only for the training flows (`scratch`/`continue`/`rag`); it is hidden
   when no action is picked yet and for `synth`/`export`. The synth panel shows live teacher output instead (`#synthLiveWrap`
@@ -78,6 +78,28 @@ Polling stops on tab switch.
   both this list and the `#synthJobSelect` destination dropdown. A running job's delete button is disabled; the
   route refuses a live job (409) and rejects any id that does not resolve to a direct child of `veritate_mri/data/synth_jobs/` (404).
   Built corpora and trained models are not touched.
+
+### Author-a-corpus panel
+
+- `#authorPanel`, shown by `_trShowAuthorPanel` for the `author` flow only. It reuses the synth job
+  machinery (`GET /teacher/synth/status|samples|jobs`, `POST /teacher/synth/stop`) and adds three
+  routes of its own: `GET|POST /teacher/authoring/spec`, `POST /teacher/authoring/start`,
+  `POST /teacher/authoring/build`. Pipeline reference:
+  [corpus/authoring.md](../../corpus/authoring.md).
+- Genre list (`#authorGenreList`, `_authorRenderGenres`) is built from the spec, not from markup:
+  one checkbox per genre with its share of the byte target, the brief as the hover title. Inputs
+  are target size in MB, calls at once (blank falls back to the Settings concurrency), and the
+  variety floor, which is posted as `ngram_distinct_floor` and overrides the spec value for that run.
+- `_authorRenderStats` shows records kept, MB written, wording variety, em dashes rewritten, and
+  failed batches, plus a rejected-by-reason line. When `authoring.ngram_below_floor` is true it
+  raises `#authorRepWarn` in hot color naming the measured percentage, the floor, and the fix. This
+  is the guard that a template-expanded corpus cannot pass unnoticed.
+- Build (`_authorBuild`) appears only when the job is stopped and has records. On success
+  `#authorHandoff` prints the numbered upload steps returned by the route (which zip to upload,
+  that the returned link replaces the PLACEHOLDER `train_url`, and that `coming_soon` then comes
+  off) alongside the zip and bin sha256s.
+- The active authoring job id is stored at `localStorage["vt:training:author_job"]` and re-polled
+  when the flow reopens.
 
 ## Dependencies
 

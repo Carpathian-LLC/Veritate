@@ -49,7 +49,7 @@ models/<name>/
 Two valid forms accepted by `models.is_valid_name`:
 
 - **User-friendly:** `<slug>_<size>` — e.g., `chatty_otter_85m`.
-- **Legacy:** `<corpus>_<size>_<precision>_<version>` — e.g., `tinystories_25m_v1`.
+- **Legacy:** `<corpus>_<size>_<precision>_<version>` — e.g., `wikitext_25m_v1`.
 
 Validation lives at [veritate_mri/readers/models.py](../../veritate_mri/readers/models.py).
 

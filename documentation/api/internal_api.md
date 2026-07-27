@@ -76,14 +76,15 @@ Read-only endpoints (`GET` on `/pytorch-models`, `/meta`, `/runs`, `/run/*`, `/s
 | `POST /trainers/git/check` | `trainers_routes.py:98` | none | check-result dict; `500` | verify trainers repo integrity |
 | `GET /trainers/git/files` | `trainers_routes.py:102` | none | per-file table; `500` | file-level diff state for the trainers repo |
 | `POST /trainers/open_folder` | `trainers_routes.py:107` | none | `{ok, path}`; `500` | open the trainers root in the OS file browser |
-| `GET /corpus/library/catalog` | `corpus_routes.py:28` | none | catalog dict | corpus-library catalog |
-| `POST /corpus/library/install` | `corpus_routes.py:32` | body (install params) | install-result dict | install a corpus from the library |
-| `POST /corpus/library/install_deps` | `corpus_routes.py:37` | none | deps-result dict | pip-install HuggingFace dataset deps |
-| `POST /corpus/library/uninstall` | `corpus_routes.py:43` | body `stem:str` | uninstall-result dict | remove an installed corpus |
-| `POST /corpus/library/catalog_url` | `corpus_routes.py:48` | body `url:str` | result dict | set a custom catalog URL |
-| `POST /corpus/library/sources/add` | `corpus_routes.py:53` | body (source params) | add-result dict | add a user-defined corpus source |
-| `POST /corpus/library/sources/remove` | `corpus_routes.py:58` | body `stem:str` | remove-result dict | remove a user-defined corpus source |
-| `POST /corpus/open_folder` | `corpus_routes.py:63` | none | `{ok, path}` | open the corpus root in the OS file browser |
+| `GET /corpus/library/catalog` | `corpus_routes.py:62` | none | catalog dict | corpus-library catalog |
+| `POST /corpus/library/install` | `corpus_routes.py:66` | body (install params) | install-result dict | install a corpus from the library |
+| `POST /corpus/library/install_deps` | `corpus_routes.py:71` | none | deps-result dict | pip-install HuggingFace dataset deps |
+| `POST /corpus/library/uninstall` | `corpus_routes.py:77` | body `stem:str` | uninstall-result dict | remove an installed corpus |
+| `POST /corpus/library/catalog_url` | `corpus_routes.py:82` | body `url:str` | result dict | set a custom catalog URL |
+| `POST /corpus/library/sources/add` | `corpus_routes.py:87` | body (source params) | add-result dict | add a user-defined corpus source |
+| `POST /corpus/library/sources/remove` | `corpus_routes.py:92` | body `stem:str` | remove-result dict | remove a user-defined corpus source |
+| `POST /corpus/mix/plan` | `corpus_routes.py:97` | body `stems:[str]` (required, unique), `target_bytes:number` (required), `profile:str`, `max_epochs:number`, `model_params:number`, `weights:{stem:number}` | `{ok, spec, sources:[{stem,label,topic,weight,bytes_drawn,bytes_available,epochs}], warnings:[str], bytes_planned, inputs}`; `400` bad body / unknown profile / no data | plan a weighted corpus mix (epoch cap + intent profile + availability); `spec` feeds `--corpus` |
+| `POST /corpus/open_folder` | `corpus_routes.py:111` | none | `{ok, path}` | open the corpus root in the OS file browser |
 
 ## inference / generate
 
@@ -122,7 +123,7 @@ Read-only neuron + concept introspection over a trained model's dump artifacts.
 | `POST /settings/api-key` | `settings_routes.py:76` | body `action:"rotate"\|"clear"` | merged settings object; `400 {error}` on bad action | mint/rotate (`rotate`) or clear (`clear`) the optional programmatic API key |
 | `POST /ai/ask` | `settings_routes.py:86` | body `kind:str`, `payload:dict` | varies by `kind` | in-app AI assistant dispatch |
 
-Settings keys (`veritate_mri/runtime/settings.py:51`): `pytorch_load_mode` (`on_demand`\|`always`), `pytorch_idle_unload_secs`, `hud_enabled`, `hud_position`, `hud_detailed`, `temperature_unit` (`C`\|`F`\|`K`), `heartbeat_enabled`, `heartbeat_send_errors`, `consent_modal_seen`, `analytics_advanced_enabled`, `share_current_training`, `diagnostics_logs_enabled`, `device_preference`, `update_channel` (`stable`\|`experimental`), `auto_reload_on_update`, `extensions`, `ai_enabled`, `ai_endpoint_user`, `ai_api_key_user`, `last_acknowledged_build`, `device_name`, `corpus_catalog_url`, `corpus_user_sources`, `teacher_provider`, `teacher_model`, `teacher_base_url`, `teacher_api_key`, `teacher_configs`, `teacher_max_concurrency`, `teacher_max_tokens`, `teacher_temperature`, `mesh_role` (`off`\|`node`\|`hub`\|`both`), `mesh_hub_address`, `mesh_auth_token`, `tutorial_enabled`, `tutorial_completed`, `api_key` (optional programmatic API-key gate; empty = off), `api_key_request_count`, `api_key_last_used_at`. The `extensions` flag gates extension UI surfaces (the per-extension nav links and the Marketplace entry); the routes themselves register regardless.
+Settings keys (`veritate_mri/runtime/settings.py:51`): `pytorch_load_mode` (`on_demand`\|`always`), `pytorch_idle_unload_secs`, `hud_enabled`, `hud_position`, `hud_detailed`, `temperature_unit` (`C`\|`F`\|`K`), `heartbeat_enabled`, `heartbeat_send_errors`, `consent_modal_seen`, `analytics_advanced_enabled`, `share_current_training`, `diagnostics_logs_enabled`, `device_preference`, `update_channel` (`stable`\|`experimental`), `auto_reload_on_update`, `extensions`, `ai_enabled`, `ai_endpoint_user`, `ai_api_key_user`, `last_acknowledged_build`, `device_name`, `corpus_catalog_url`, `corpus_user_sources`, `corpus_mix_max_epochs`, `corpus_mix_default_profile`, `corpus_mix_profiles_path`, `teacher_provider`, `teacher_model`, `teacher_base_url`, `teacher_api_key`, `teacher_configs`, `teacher_max_concurrency`, `teacher_max_tokens`, `teacher_temperature`, `mesh_role` (`off`\|`node`\|`hub`\|`both`), `mesh_hub_address`, `mesh_auth_token`, `tutorial_enabled`, `tutorial_completed`, `api_key` (optional programmatic API-key gate; empty = off), `api_key_request_count`, `api_key_last_used_at`. The `extensions` flag gates extension UI surfaces (the per-extension nav links and the Marketplace entry); the routes themselves register regardless.
 
 ## teacher
 
@@ -130,19 +131,22 @@ Teacher endpoints configure and drive a remote frontier LLM used for synthetic-d
 
 | method + path | def | params | response | purpose |
 |---|---|---|---|---|
-| `GET, POST /teacher` | `teacher_routes.py:231` | POST body `teacher_provider`, `teacher_api_key`, `teacher_model`, `teacher_base_url`, `teacher_configs` | `{providers, configured:bool, provider, model, base_url, has_api_key:bool, configs, max_concurrency, max_tokens, temperature}`; `400` on invalid value | read / update teacher config |
-| `POST /teacher/test` | `teacher_routes.py:259` | body `provider`, `model`, `base_url`, `api_key` | `{ok, model, latency_ms}` or `{ok:false, error}` | test a provider connection |
-| `POST /teacher/models` | `teacher_routes.py:282` | body `provider`, `base_url`, `api_key` | `{models:[str]}`; `400` no provider | list a provider's available models |
-| `POST /teacher/complete` | `teacher_routes.py:295` | body `prompt` (required), `system`, `provider`, `model`, `base_url`, `api_key`, `max_tokens`, `temperature` | `{ok, text, provider, model}`; `400` no prompt/teacher, `502` provider error | one-shot completion from a user-added model (defaults to configured teacher); the surface extensions call to score text |
-| `POST /teacher/synth/start` | `teacher_routes.py:296` | body `prompts:[dict]` (required), `format`, `seed_ids`, `job_id`, `output_dir`, teacher overrides | `{job_id, output_dir}`; `400` bad prompts, `409` job running | start a synthetic-data generation job |
-| `POST /teacher/synth/stop` | `teacher_routes.py:420` | body `job_id` | `{job_id, stopping:bool}`; `404` unknown job | request a graceful stop |
-| `GET /teacher/synth/jobs` | `teacher_routes.py:342` | none | `{jobs:[{job_id, completed, categories, seeds, running}]}` | list synth jobs |
-| `GET /teacher/synth/status` | `teacher_routes.py:447` | `job_id` | `{job_id, running, completed, failed, skipped_dup, last_error, error_summary, aborted, output_path}`; `404` | synth job status + stats |
-| `GET /teacher/synth/samples` | `teacher_routes.py:432` | `job_id`, `limit` (default 20, max 100) | `{job_id, samples:[{id, response}]}`; `404` | recent sample outputs |
-| `POST /teacher/synth/delete` | `teacher_routes.py:361` | body `job_id` | `{job_id, deleted:bool}`; `400` missing, `409` running, `404` unknown | delete a finished job |
-| `POST /teacher/synth/build_corpus` | `teacher_routes.py:381` | body `job_id`, `stem` | `{stem, train_bin, val_bin, n_records, n_train, n_val}`; `400` bad stem, `404` no samples | build train/val `.bin` corpora from a job |
-| `GET /teacher/seeds` | `teacher_routes.py:406` | none | `{version, seeds:[...], total_count}` | list seed-prompt catalogs |
-| `GET /teacher/seeds/<seed_id>` | `teacher_routes.py:413` | none | `{id, count, prompts:[dict]}`; `404` unknown | prompts for one seed catalog |
+| `GET, POST /teacher` | `teacher_routes.py:357` | POST body `teacher_provider`, `teacher_api_key`, `teacher_model`, `teacher_base_url`, `teacher_configs` | `{providers, configured:bool, provider, model, base_url, has_api_key:bool, configs, max_concurrency, max_tokens, temperature}`; `400` on invalid value | read / update teacher config |
+| `POST /teacher/test` | `teacher_routes.py:385` | body `provider`, `model`, `base_url`, `api_key` | `{ok, model, latency_ms}` or `{ok:false, error}` | test a provider connection |
+| `POST /teacher/models` | `teacher_routes.py:408` | body `provider`, `base_url`, `api_key` | `{models:[str]}`; `400` no provider | list a provider's available models |
+| `POST /teacher/complete` | `teacher_routes.py:422` | body `prompt` (required), `system`, `provider`, `model`, `base_url`, `api_key`, `max_tokens`, `temperature` | `{ok, text, provider, model}`; `400` no prompt/teacher, `502` provider error | one-shot completion from a user-added model (defaults to configured teacher); the surface extensions call to score text |
+| `POST /teacher/synth/start` | `teacher_routes.py:451` | body `prompts:[dict]` (required), `format`, `seed_ids`, `job_id`, `output_dir`, teacher overrides | `{job_id, output_dir}`; `400` bad prompts, `409` job running | start a synthetic-data generation job |
+| `POST /teacher/synth/stop` | `teacher_routes.py:682` | body `job_id` | `{job_id, stopping:bool}`; `404` unknown job | request a graceful stop (also stops an authoring job) |
+| `GET /teacher/synth/jobs` | `teacher_routes.py:497` | none | `{jobs:[{job_id, completed, categories, seeds, running}]}` | list synth and authoring jobs |
+| `GET /teacher/synth/status` | `teacher_routes.py:709` | `job_id` | `{job_id, running, completed, failed, skipped_dup, last_error, error_summary, aborted, authoring, output_path}`; `404` | job status + stats; `authoring` carries `{records, bytes, em_dash_rewritten, ngram_ratio, ngram_floor, ngram_below_floor, rejects, per_genre}` for authoring jobs |
+| `GET /teacher/synth/samples` | `teacher_routes.py:694` | `job_id`, `limit` (default 20, max 100) | `{job_id, samples:[{id, response}]}`; `404` | recent sample outputs; authoring records render as `[genre / voice]` plus their turns |
+| `POST /teacher/synth/delete` | `teacher_routes.py:516` | body `job_id` | `{job_id, deleted:bool}`; `400` missing, `409` running, `404` unknown | delete a finished job |
+| `POST /teacher/synth/build_corpus` | `teacher_routes.py:536` | body `job_id`, `stem` | `{stem, train_bin, val_bin, n_records, n_train, n_val}`; `400` bad stem, `404` no samples | build train/val `.bin` corpora from a job |
+| `GET, POST /teacher/authoring/spec` | `teacher_routes.py:561` | POST body = the full spec object (`genres` + `gates` required) | the stored spec; `400` on a spec missing genres or gates | read / replace the editable authoring spec (genres, prompts, ban list, quality gates) |
+| `POST /teacher/authoring/start` | `teacher_routes.py:572` | body `genres:[str]` (required), `target_mb` (required), `ngram_distinct_floor`, `max_concurrency`, `job_id` | `{job_id, output_dir, calls, total_calls, max_concurrency}`; `400` no genre / no target / no teacher, `409` job running | start a self-authored corpus run; every record is gated before it is written |
+| `POST /teacher/authoring/build` | `teacher_routes.py:626` | body `job_id`, `stem` (required), `label`, `description`, `recommended_min_params`, `recommended_max_params` | `{stem, zip_path, zip_bytes, zip_sha256, family_counts, manifest, catalog_entry, next_steps:[str]}`; `400` bad stem / no records, `404` no samples | pack ChatML bins, zip both at zip top level, register a `coming_soon` catalog entry with a PLACEHOLDER `train_url` |
+| `GET /teacher/seeds` | `teacher_routes.py:668` | none | `{version, seeds:[...], total_count}` | list seed-prompt catalogs |
+| `GET /teacher/seeds/<seed_id>` | `teacher_routes.py:675` | none | `{id, count, prompts:[dict]}`; `404` unknown | prompts for one seed catalog |
 
 ## hybrid / chat
 

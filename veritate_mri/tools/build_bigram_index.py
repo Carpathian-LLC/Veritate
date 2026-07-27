@@ -14,7 +14,7 @@
 #     bi_c      bigram counts (M,) int64
 #     n_tokens, n_bigrams, config
 # - Usage:
-#     python veritate_mri/tools/build_bigram_index.py --corpus tinystories
+#     python veritate_mri/tools/build_bigram_index.py --corpus base_v1
 #     python veritate_mri/tools/build_bigram_index.py --all
 # veritate_mri/tools/build_bigram_index.py
 # ------------------------------------------------------------------------------------
@@ -166,7 +166,7 @@ def write_index(corpus_path: str, top_uni: int, top_bigrams: int, max_bytes: int
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus",      type=str, default=None,
-                    help="corpus stem (e.g. tinystories) -- looks up trainers/corpus/<stem>_train.bin")
+                    help="corpus stem (e.g. base_v1) -- looks up trainers/corpus/<stem>_train.bin")
     ap.add_argument("--corpus-path", type=str, default=None,
                     help="explicit absolute path to a corpus .bin")
     ap.add_argument("--all",         action="store_true",

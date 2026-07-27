@@ -10,6 +10,7 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import hashlib
 import json
 
 # ------------------------------------------------------------------------------------
@@ -19,7 +20,6 @@ DEFAULT_MIN_CHARS = 20
 DEFAULT_MAX_CHARS = 8192
 DEFAULT_HAMMING_THRESHOLD = 5
 _SIMHASH_BITS = 64
-_SIMHASH_MASK = (1 << _SIMHASH_BITS) - 1
 _FENCE_JSON = "```json"
 _FENCE_PLAIN = "```"
 
@@ -55,12 +55,13 @@ def strip_code_fence(text):
 
 
 def simhash64(text):
+    # blake2b, not builtin hash(): builtin string hashing is salted per process.
     tokens = text.split()
     if not tokens:
         return 0
     counts = [0] * _SIMHASH_BITS
     for tok in tokens:
-        h = hash(tok) & _SIMHASH_MASK
+        h = int.from_bytes(hashlib.blake2b(tok.encode("utf-8"), digest_size=8).digest(), "big")
         for i in range(_SIMHASH_BITS):
             if h & (1 << i):
                 counts[i] += 1

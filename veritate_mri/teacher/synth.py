@@ -8,6 +8,9 @@
 #   quality gates, writes accepted samples to jsonl, tracks state for resume,
 #   caches by content hash in sqlite. ThreadPoolExecutor concurrency; main
 #   thread serializes disk writes.
+# - opts["record_gate"] (teacher/authoring.py RecordGate) switches the job to
+#   batch mode: one response expands to N gated records, ids are <prompt>#<k>,
+#   and gate stats ride along in state.json.
 # veritate_mri/teacher/synth.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -43,6 +46,7 @@ from .quality import (
 # Constants
 
 STATE_FLUSH_EVERY = 10
+RECORD_ID_SEP = "#"
 SYNTH_REQUEST_TIMEOUT_S = 180
 SYNTH_MAX_RETRIES = 2
 CACHE_DB_NAME = "cache.sqlite"
@@ -105,7 +109,7 @@ def _load_done_ids(samples_path):
             try:
                 row = json.loads(line)
                 if "id" in row:
-                    done.add(row["id"])
+                    done.add(str(row["id"]).split(RECORD_ID_SEP)[0])
             except json.JSONDecodeError:
                 continue
     return done
@@ -132,6 +136,8 @@ class SynthJob:
         self.base_url = opts.get("base_url")
         self.api_key = opts.get("api_key")
         self.client_factory = opts.get("client_factory")
+        # authoring jobs pass a RecordGate: one response expands to N gated records.
+        self.record_gate = opts.get("record_gate")
         self._lock = threading.Lock()
         self._cache_lock = threading.Lock()
         self._stop = threading.Event()
@@ -237,12 +243,15 @@ class SynthJob:
                 return pid, None, str(e), False
 
         def flush_state():
-            self._write_state(remaining, {
+            counts = {
                 "completed": c["completed"], "failed": c["failed"],
                 "skipped_dup": c["skipped"], "last_error": c["last_error"],
                 "error_summary": dict(err_counts.most_common(ERROR_SUMMARY_TOP)),
                 "aborted": self._aborted,
-            })
+            }
+            if self.record_gate is not None:
+                counts["authoring"] = self.record_gate.stats()
+            self._write_state(remaining, counts)
 
         def maybe_abort():
             if self._stop.is_set():
@@ -312,6 +321,19 @@ class SynthJob:
                     if err is not None or resp is None:
                         record_failure(errors_fp, pid, err or "empty response")
                         continue
+                    if self.record_gate is not None:
+                        rows, why = self.record_gate(prompt, resp)
+                        if not rows:
+                            record_failure(errors_fp, pid, why[0] if why else "no records")
+                            continue
+                        record_ok(pid, "completed", None)
+                        with self._lock:
+                            for k, row in enumerate(rows):
+                                self._append_sample(samples_fp, {
+                                    "id": f"{pid}{RECORD_ID_SEP}{k}", "record": row,
+                                    "provider": self.provider_id, "model": self.model,
+                                    "ts": int(time.time())})
+                        continue
                     if self.format == "json" and not is_json_valid(strip_code_fence(resp)):
                         record_failure(errors_fp, pid, "invalid json")
                         continue
@@ -337,10 +359,13 @@ class SynthJob:
         flush_state()
         self._unload(client)
         conn.close()
-        return {
+        out = {
             "completed": c["completed"],
             "failed": c["failed"],
             "skipped_dup": c["skipped"],
             "aborted": self._aborted,
             "output_path": samples_path,
         }
+        if self.record_gate is not None:
+            out["authoring"] = self.record_gate.stats()
+        return out

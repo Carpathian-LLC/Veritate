@@ -33,7 +33,6 @@ summary: In-app updater no longer blocks on diverging branches or dirty trees; t
 | `shakespeare` | direct URL (Karpathy char-rnn) | 1 MB | <5M params |
 | `enwik8` | direct zip (mattmahoney.net) | 95 MB | 5M-50M |
 | `wikitext103` | HF `Salesforce/wikitext` | 500 MB | 30M-200M |
-| `tinystories` | HF `roneneldan/TinyStories` | 1 GB | 1M-50M |
 | `pg19` | HF `deepmind/pg19` | 9.7 GB | 50M+ |
 | `openwebtext10g` | HF `Skylion007/openwebtext` | 10 GB | 100M-500M |
 | `the_pile` | HF `monology/pile-uncopyrighted` | 50 GB | 500M-3B |
@@ -73,7 +72,7 @@ Click the yellow **reload python** button once after the update lands so the new
 2. Click **install** next to any corpus. Anything over 10 GB prompts a confirm dialog.
 3. Watch the spinner + progress bar live. When it lands, the green `installed` tag appears on the row and the corpus shows in the Training tab dropdown.
 
-Recommended starter: install `tinystories` (~1 GB) first to confirm the HF pipeline works on your machine before committing to multi-GB downloads.
+Recommended starter: install `wikitext103` (~500 MB) first to confirm the HF pipeline works on your machine before committing to multi-GB downloads.
 
 ### optional: add custom sources
 

@@ -28,7 +28,10 @@ MRI_ROOT        = os.path.join(REPO_ROOT, "veritate_mri")
 # subsets of MMLU / HellaSwag / IFEval; wiki/ holds dashboard wiki markdown;
 # corpus/ holds the Veritate-native corpora the Settings library installs by
 # copying into trainers/corpus/; synth_jobs/ holds raw teacher synth output
-# per job (samples, cache, state) until a corpus .bin is built from it.
+# per job (samples, cache, state) until a corpus .bin is built from it;
+# corpus_mix_profiles.json holds the mix planner's intent profiles;
+# authoring/corpus_spec.json holds the editable genre, prompt, and quality-gate
+# data the corpus authoring pipeline runs on.
 DATA_ROOT          = os.path.join(MRI_ROOT, "data")
 EVAL_ROOT          = os.path.join(DATA_ROOT, "eval")
 GRADE_EVAL_ROOT    = os.path.join(EVAL_ROOT, "grade")
@@ -36,6 +39,7 @@ EVAL_SAMPLES_ROOT  = os.path.join(EVAL_ROOT, "samples")
 WIKI_ROOT          = os.path.join(DATA_ROOT, "wiki")
 NATIVE_CORPUS_ROOT = os.path.join(DATA_ROOT, "corpus")
 SYNTH_JOBS_ROOT    = os.path.join(DATA_ROOT, "synth_jobs")
+AUTHORING_ROOT     = os.path.join(DATA_ROOT, "authoring")
 ENGINE_ROOT     = os.path.join(REPO_ROOT, "veritate_engine")
 # v1 is the primary (and only built) engine.
 ENGINE_PRIMARY  = os.path.join(ENGINE_ROOT, "v1")
@@ -69,6 +73,9 @@ CHECKPOINTS_DIR   = "checkpoints"
 HOOKS_DIR         = "hooks"
 
 WIKI_ENTRY_SUFFIX = ".md"
+
+MIX_PROFILES_NAME = "corpus_mix_profiles.json"
+AUTHORING_SPEC_NAME = "corpus_spec.json"
 
 CORPUS_TRAIN_SUFFIX = "_train.bin"
 CORPUS_VAL_SUFFIX   = "_val.bin"
@@ -119,6 +126,14 @@ def native_corpus_train_path(stem):
 
 def native_corpus_val_path(stem):
     return os.path.join(NATIVE_CORPUS_ROOT, f"{stem}{CORPUS_VAL_SUFFIX}")
+
+
+def mix_profiles_path():
+    return os.path.join(DATA_ROOT, MIX_PROFILES_NAME)
+
+
+def authoring_spec_path():
+    return os.path.join(AUTHORING_ROOT, AUTHORING_SPEC_NAME)
 
 
 def synth_jobs_root():

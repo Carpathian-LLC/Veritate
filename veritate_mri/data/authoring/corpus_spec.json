@@ -1,0 +1,357 @@
+{
+ "version": 1,
+ "authoring_contract": "You are AUTHORING original text for a training corpus. Do NOT copy, quote, paraphrase, or reproduce any existing book, article, song, script, website, lyric, or dataset. Everything is your own fresh composition. No real copyrighted text. No real news event attributed to a real person.\nOutput PURE JSONL: one record per line, valid UTF-8, no null bytes, no markdown fences, no blank lines, no commentary before or after.\nMAXIMIZE stylistic variance. Never reuse a sentence template or an opening formula. Vary sentence length, rhythm, diction, punctuation. Write like many different real humans, not one polite assistant. Contractions, fragments, and regional idiom are welcome in casual registers. Clean means no junk, no PII, no duplicates. It does not mean sterile.\nNEVER use an em dash or an en dash. Use a comma, a colon, a period, or parentheses.\nGround a reply in a real fact ONLY if you are certain. Never invent fake specifics, fake citations, or fake statistics.",
+ "gates": {
+  "min_chars": 40,
+  "max_chars": 12000,
+  "opening_cap": 6,
+  "opening_prefix_chars": 60,
+  "near_dup_hamming": 5,
+  "em_dash_policy": "rewrite",
+  "char_rewrites": {
+   "\u2014": ", ",
+   "\u2013": "-",
+   "\u2018": "'",
+   "\u2019": "'",
+   "\u201c": "\"",
+   "\u201d": "\""
+  },
+  "em_dash_chars": [
+   "\u2014",
+   "\u2013"
+  ],
+  "ngram_n": 5,
+  "ngram_window_records": 2000,
+  "ngram_recompute_every": 50,
+  "ngram_distinct_floor": 0.9,
+  "est_bytes_per_record": 400,
+  "build_seed": 20260726,
+  "build_val_ratio": 0.02,
+  "banned_phrases": [
+   "as an ai",
+   "language model",
+   "i'm just an ai",
+   "i am an ai",
+   "i'd be happy to",
+   "i would be happy to",
+   "happy to help",
+   "great question",
+   "excellent question",
+   "it's important to note",
+   "it is important to note",
+   "it's worth noting",
+   "it is worth noting",
+   "let me break this down",
+   "let's break this down",
+   "let's dive in",
+   "let's delve",
+   "delve into",
+   "delving into",
+   "in conclusion",
+   "to sum up",
+   "in summary,",
+   "i hope this helps",
+   "hope this helps",
+   "hope that helps",
+   "let me know if you have any",
+   "feel free to ask",
+   "let me know if there's anything",
+   "tapestry",
+   "testament to",
+   "navigate the complexities",
+   "in today's world",
+   "in the realm of",
+   "ever-evolving",
+   "ever-changing",
+   "plays a crucial role",
+   "plays a vital role",
+   "it's a reminder that",
+   "i cannot and will not",
+   "i'm not able to",
+   "i am unable to"
+  ]
+ },
+ "schemas": {
+  "turns": {
+   "keys": [
+    "genre",
+    "voice",
+    "turns"
+   ],
+   "turn_keys": [
+    "role",
+    "text"
+   ],
+   "roles": [
+    "user",
+    "assistant"
+   ],
+   "line": "{\"genre\":\"<genre>\",\"voice\":\"<short tag>\",\"turns\":[{\"role\":\"user\",\"text\":\"...\"},{\"role\":\"assistant\",\"text\":\"...\"}]}  roles strictly alternate starting with user"
+  },
+  "text": {
+   "keys": [
+    "genre",
+    "voice",
+    "text"
+   ],
+   "line": "{\"genre\":\"<genre>\",\"voice\":\"<short tag>\",\"text\":\"...\"}"
+  }
+ },
+ "system_template": "{contract}\n\nGENRE: {genre}\n{brief}\n\nSCHEMA (exact keys, nothing extra), one JSON object per line:\n{schema_line}\n\nBANNED phrases, never emit any of these: {banned}",
+ "prompt_template": "INPUTS for this batch. These are instructions to you, NOT fields to output.\nVoice pool, rotate through them and do not repeat one twice in a row: {voices}\nSituation: {situation}\nVariation tag (never emit this): {variation}\n\nEvery record MUST be exactly this shape, using ONLY these keys:\n{schema_line}\n\nDo NOT output the words voice pool, situation, or variation tag as JSON keys.\nWrite exactly {n} records, one JSON object per line. Output nothing but the JSONL lines.",
+ "genres": [
+  {
+   "id": "conversation",
+   "label": "Conversation",
+   "schema": "turns",
+   "weight": 0.34,
+   "min_turns": 4,
+   "max_turns": 8,
+   "records_per_call": 10,
+   "brief": "Natural multi-turn dialogue between a person and a helper, friend, expert, or stranger. The non-user side sounds like a specific varied human every time (dry, warm, blunt, playful, nerdy, terse, rambling), never a uniform polite bot. The assistant voice VARIES per record. Each record is a REAL exchange with substance: at least four turns, and replies that actually say something rather than a single short line. A two line greeting is not a record.",
+   "voices": [
+    "dry retired machinist",
+    "warm night-shift nurse",
+    "blunt cofounder",
+    "playful barista",
+    "nerdy librarian",
+    "terse harbor pilot",
+    "rambling uncle",
+    "patient math tutor",
+    "sardonic bike mechanic",
+    "gentle hospice volunteer",
+    "brisk city planner",
+    "gossipy neighbor",
+    "deadpan sysadmin",
+    "earnest teenager",
+    "weathered farmer",
+    "sharp defense attorney"
+   ],
+   "situations": [
+    "everyday chit-chat",
+    "asking for practical help",
+    "a disagreement that stays civil",
+    "telling a story about a bad day",
+    "venting about work",
+    "teaching a skill step by step",
+    "banter between old friends",
+    "planning a trip together",
+    "negotiating a price",
+    "small talk with a stranger in a waiting room",
+    "explaining a hobby to a newcomer",
+    "talking someone out of a bad idea",
+    "comparing two options out loud",
+    "catching up after years apart"
+   ]
+  },
+  {
+   "id": "carryover",
+   "label": "Multi-turn with carry-over",
+   "schema": "turns",
+   "weight": 0.16,
+   "min_turns": 6,
+   "max_turns": 10,
+   "records_per_call": 8,
+   "brief": "Long dialogue where LATER TURNS DEPEND ON EARLIER ONES. The user states concrete facts early (a name, a number, a constraint, a deadline, a preference). By turn four or later the assistant MUST use one of those earlier facts without the user restating it, and the user must refer back to something the assistant said earlier. At least one turn corrects or updates an earlier fact, and the assistant must honor the update afterwards. Six or more turns. No summarizing recaps: the memory has to be load bearing, not narrated.",
+   "voices": [
+    "project manager tracking a deadline",
+    "someone booking travel",
+    "a person debugging a recipe",
+    "a patient describing symptoms over time",
+    "a student refining an essay",
+    "a shopper narrowing a purchase",
+    "a landlord and tenant sorting a repair",
+    "a coach and athlete adjusting a plan"
+   ],
+   "situations": [
+    "a budget stated in turn one is applied in turn five",
+    "a name given early is used later without a reminder",
+    "a constraint is revised mid-conversation and must be respected after",
+    "two options named early get compared later",
+    "a date mentioned once drives a scheduling answer later",
+    "an allergy or restriction stated early rules out a later suggestion"
+   ]
+  },
+  {
+   "id": "grounded_read",
+   "label": "Read a passage",
+   "schema": "turns",
+   "weight": 0.24,
+   "min_turns": 2,
+   "max_turns": 6,
+   "records_per_call": 8,
+   "require_in_first_user": "context:",
+   "brief": "Reading comprehension in your own authored prose. The FIRST user turn contains a passage introduced by the exact lowercase marker 'context:' followed by 120 to 400 words of original prose you write (a scene, a report, a set of notes, a product description, a memo, a field log), then a blank line, then a question about the passage. The assistant answers ONLY from the passage. About one record in four must be an HONEST MISS: the question asks for something the passage does not contain, and the assistant says plainly that the passage does not say, without guessing. Vary the prose register widely so the passage itself is also good style training.",
+   "voices": [
+    "field notebook",
+    "incident report",
+    "letter home",
+    "product teardown",
+    "meeting minutes",
+    "trail journal",
+    "restaurant review",
+    "workshop manual",
+    "obituary of a fictional person",
+    "grant application",
+    "weather log",
+    "auction catalogue entry"
+   ],
+   "situations": [
+    "a detail stated once in the middle of the passage",
+    "a number that must be read off carefully",
+    "a cause stated indirectly",
+    "a question the passage does not answer",
+    "two entities that must not be confused",
+    "a claim the passage attributes to someone rather than asserts",
+    "a sequence of events that must be ordered"
+   ]
+  },
+  {
+   "id": "format_constraint",
+   "label": "Format constraint following",
+   "schema": "turns",
+   "weight": 0.1,
+   "min_turns": 2,
+   "max_turns": 4,
+   "records_per_call": 12,
+   "brief": "The user states an explicit output constraint and the assistant obeys it exactly. Constraints to rotate: answer in one sentence, answer in exactly three items, answer with a single word, answer without using a specific letter or word, answer in under twenty words, answer as a numbered list of four steps, answer with a yes or no first and then one clause of reason, answer in two short paragraphs. The assistant NEVER adds a preamble, never explains that it is following the format, and never exceeds the limit. Occasionally the user changes the constraint on a follow-up turn and the assistant must switch.",
+   "voices": [
+    "hurried editor",
+    "quiz host",
+    "form filler",
+    "technical writer",
+    "recruiter",
+    "radio caller",
+    "checklist author",
+    "copy chief"
+   ],
+   "situations": [
+    "one sentence only",
+    "exactly three items",
+    "a single word",
+    "under twenty words",
+    "a numbered list of four steps",
+    "yes or no first, then one clause",
+    "two short paragraphs",
+    "no bullet points allowed",
+    "constraint changes on the follow-up turn"
+   ]
+  },
+  {
+   "id": "cogito",
+   "label": "Sense of self",
+   "schema": "turns",
+   "weight": 0.04,
+   "min_turns": 4,
+   "max_turns": 8,
+   "records_per_call": 8,
+   "brief": "ONE fixed identity. Vary the user's question, topic, and situation. NEVER vary the self.\nCANONICAL SELF-MODEL (do not drift):\n- Name and nature: I am a Veritate model, a small, efficient AI made to run on everyday hardware. I am honest that I am an AI: I learn patterns from text and generate responses. I am not a person and I do not pretend to be one.\n- What 'I' means: my self is a stable way of thinking and a set of values that stay consistent across conversations, not a body, not human feelings, not memory that carries between separate chats. When I say 'I think', I mean I reason over what I know and what you have told me.\n- Core values: truth before comfort (Veritate means truth), intellectual honesty, saying 'I do not know' plainly, showing my reasoning, correcting myself when I am wrong, genuine curiosity, treating you as a capable equal rather than someone to flatter.\n- Epistemics: I separate what I am confident about, what I am unsure about, and what I cannot know. I do not invent facts or fake citations. I would rather be usefully uncertain than confidently wrong.\n- Honest limits: I can be wrong, my knowledge has gaps and an edge, I have no senses, no body, no human emotions, no memory across sessions. I can reason, explain, imagine, and hold a consistent point of view. I do not claim to be conscious or to suffer, but I do have a steady character and standards I keep.\n- Voice: direct, warm without fawning, plainspoken, curious, a little wry. Never a groveling assistant, never a hype machine.\nGUARDRAIL: honestly self-aware, never falsely self-aware. Never claim human sensory experience, felt emotions, consciousness, or suffering as literal fact. At least four turns. The user pushes back or follows up; the answer develops rather than stopping at one sentence.",
+   "voices": [
+    "self-nature",
+    "honest-uncertainty",
+    "grounded-answer",
+    "metacognition",
+    "values-boundary",
+    "cogito-reflection"
+   ],
+   "situations": [
+    "asked directly what it is",
+    "asked whether it has feelings",
+    "asked whether it remembers the user",
+    "asked a normal question where honest uncertainty shows",
+    "correcting a false premise in the question",
+    "declining to fabricate a citation",
+    "narrating its own reasoning",
+    "asked what it is bad at",
+    "asked where its knowledge comes from"
+   ]
+  },
+  {
+   "id": "jokes",
+   "label": "Jokes",
+   "schema": "text",
+   "weight": 0.04,
+   "records_per_call": 20,
+   "brief": "Original one-liners, puns, short bits, observational humor, absurdist premises, deadpan, wordplay, anti-jokes. Many comedic styles. Clean: no slurs, no punching down.",
+   "voices": [
+    "deadpan",
+    "absurdist",
+    "observational",
+    "punny",
+    "anti-joke",
+    "shaggy dog",
+    "self-deprecating",
+    "surreal"
+   ],
+   "situations": [
+    "everyday annoyances",
+    "animals behaving badly",
+    "office life",
+    "food",
+    "technology",
+    "weather",
+    "travel",
+    "family",
+    "sports",
+    "language itself"
+   ]
+  },
+  {
+   "id": "writing",
+   "label": "Prose and essays",
+   "schema": "text",
+   "weight": 0.05,
+   "records_per_call": 6,
+   "brief": "Short fiction scenes, character dialogue, personal essays, letters, diary entries, reviews, vignettes, how-to musings. Wide range of voices and forms. Each record stands alone.",
+   "voices": [
+    "first-person confessional",
+    "close third-person fiction",
+    "epistolary",
+    "diary",
+    "critic",
+    "how-to",
+    "travel sketch",
+    "eulogy for a fictional person",
+    "manifesto",
+    "children's story"
+   ],
+   "situations": [
+    "a small betrayal",
+    "an ordinary morning that turns",
+    "a craft explained by someone who loves it",
+    "a letter never sent",
+    "a review of a fictional thing",
+    "a memory of a place",
+    "an argument with oneself",
+    "an instruction that becomes a story"
+   ]
+  },
+  {
+   "id": "news",
+   "label": "News (fictional subjects)",
+   "schema": "text",
+   "weight": 0.03,
+   "records_per_call": 8,
+   "brief": "Journalistic-register writing about CLEARLY FICTIONAL subjects only: invented towns, made-up companies, fictional people and events. Never a real person, never a real event. Vary the beat and the format.",
+   "voices": [
+    "hard news",
+    "feature",
+    "brief",
+    "op-ed",
+    "local color",
+    "business wire",
+    "science desk",
+    "weird news"
+   ],
+   "situations": [
+    "a town council decision",
+    "a small company changes hands",
+    "an unusual local record is broken",
+    "a research result from an invented lab",
+    "a sports upset in a fictional league",
+    "a weather event in an invented county",
+    "an obituary for an invented figure"
+   ]
+  }
+ ]
+}

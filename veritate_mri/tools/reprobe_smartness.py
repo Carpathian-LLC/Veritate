@@ -59,7 +59,7 @@ def hook_step_dir(name, step):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Re-run smartness-meter axes on historical checkpoints.")
-    ap.add_argument("name", help="model name, e.g. tinystories_1b_bf16_v1_mega")
+    ap.add_argument("name", help="model name, e.g. core_200m")
     ap.add_argument("--only", nargs="+", choices=list(AXIS_TO_FN.keys()),
                     help="run only the listed axes (default: all four)")
     ap.add_argument("--steps", nargs="+", type=int,

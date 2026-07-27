@@ -37,6 +37,9 @@ Validation lives inline: e.g., `device_name` capped at 15 characters at [setting
 | `api_key_request_count`          | Count of authed programmatic API requests since the key was last set/rotated |
 | `api_key_last_used_at`           | Unix seconds of the last authed programmatic API request (0 = never) |
 | `last_acknowledged_build`        | Build notices banner cutoff                                    |
+| `corpus_mix_max_epochs`          | Cap on how many times the mix planner may redraw any one corpus (see [mix_planner.md](mix_planner.md)) |
+| `corpus_mix_default_profile`     | Intent profile used when a mix request names none; empty = size-proportional weights |
+| `corpus_mix_profiles_path`       | Override path for the mix profiles JSON; empty = shipped `veritate_mri/data/corpus_mix_profiles.json` |
 
 ## Dependencies
 
