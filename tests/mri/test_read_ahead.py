@@ -147,3 +147,17 @@ def test_api_generate_ahead_is_gated_separately(monkeypatch):
                         lambda: {"api_read_ahead_enabled": True,
                                  "api_generate_ahead_enabled": False})
     assert backends_routes._ahead_allowed(read=False) is False
+
+
+def test_prefill_wraps_a_messages_body_in_the_chat_template():
+    """A client posts chat messages and this box renders the prefix, scaffold excluded."""
+    from routes import backends_routes, hybrid_routes
+    body = {"messages": [{"role": "user", "content": "what is the cap"}]}
+    assert backends_routes._chat_prefix_in(body) == \
+        hybrid_routes.render_local_open(body["messages"], system="")
+
+
+def test_prefill_reads_nothing_from_a_body_with_no_messages():
+    """A body carrying no messages leaves the raw-prompt path to answer for itself."""
+    from routes import backends_routes
+    assert backends_routes._chat_prefix_in({}) == ""

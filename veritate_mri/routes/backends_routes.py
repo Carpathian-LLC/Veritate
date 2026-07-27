@@ -784,6 +784,17 @@ def _ahead_allowed(read):
     return bool(cur.get("read_ahead_enabled")) if read else bool(cur.get("speculative_enabled"))
 
 
+def _chat_prefix_in(body):
+    """The open chat prefix for a `messages` body, rendered by the same template the
+    chat routes submit through, so a client never reproduces the scaffold itself. Empty
+    when the body carries no messages."""
+    from .hybrid_routes import _openai_messages_in, render_local_open
+    if not body.get("messages"):
+        return ""
+    conv, system = _openai_messages_in(body)
+    return render_local_open(conv, system)
+
+
 def _decode_params(temperature, top_k, ablate_layer=ABLATE_OFF, ablate_neuron=ABLATE_OFF,
                    addons_csv="", rep_window=REP_WINDOW_OFF, rep_penalty=REP_PENALTY_OFF,
                    no_repeat_ngram=NO_REPEAT_NGRAM_OFF):
@@ -1050,13 +1061,18 @@ def register(app):
     @app.route("/prefill", methods=["POST"])
     def prefill():
         """Read a prompt into the engine ahead of the request that will carry it. POST
-        `prompt` with the text typed so far, WITHOUT the closing chat scaffold, so it is
-        a strict prefix of the wire prompt the client will send: the engine's state cache
-        restores the longest matching prefix, and a diverging prompt just restores less.
-        Nothing is buffered and nothing is ever discarded. Omit `prompt` to stand down."""
+        `messages` (OpenAI-shaped, ending in the user turn being typed) and this box
+        renders the chat prefix itself; POST `prompt` instead to read raw text, WITHOUT
+        the closing chat scaffold. Either way what is read is a strict prefix of the wire
+        prompt the client will send: the engine's state cache restores the longest
+        matching prefix, and a diverging prompt just restores less. Nothing is buffered
+        and nothing is ever discarded. Omit both to stand down."""
         cfg = current_app.config
         body = request.get_json(silent=True) or {}
-        prompt = body.get("prompt") or ""
+        try:
+            prompt = body.get("prompt") or _chat_prefix_in(body)
+        except ValueError as e:
+            return ({"error": user_error(e, "bad prefill messages")}, 400)
         if not prompt:
             return speculate.read_stand_down()
         if not _ahead_allowed(read=True):

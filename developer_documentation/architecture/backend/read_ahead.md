@@ -19,6 +19,11 @@ strict prefix of the wire prompt the same text will produce on submit. The engin
 state cache ([state_cache.md](../../engine/state_cache.md)) restores the longest matching
 prefix, so a request whose prompt begins with what was read resumes from there.
 
+A chat client posts `messages` instead and the box renders the prefix through
+`render_local_open` in [hybrid_routes.py](../../../veritate_mri/routes/hybrid_routes.py),
+the same function `_render_local` builds the wire prompt from. Framing stays in the one
+module that owns it, so a client cannot get the scaffold wrong.
+
 ## Why it needs no prediction
 
 This is the distinction from [speculative_prefetch.md](speculative_prefetch.md), which
@@ -53,7 +58,7 @@ cycle on work that is not wasted.
   the prompt; that byte is discarded.
 - It never runs behind a held `sub.lock`: a held lock means a real request owns the
   engine. `_c_engine_stream` also calls `read_stand_down()` so no caller can be starved.
-- `POST /prefill` with `prompt` starts a read; an omitted prompt stands down.
+- `POST /prefill` with `prompt` or `messages` starts a read; omitting both stands down.
   `GET /backends` reports `c.read_ahead`.
 - Gated by `_ahead_allowed`, which splits the dashboard from programmatic callers. A
   caller presenting a bearer token is programmatic (the dashboard never sends one), so

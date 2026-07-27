@@ -56,8 +56,14 @@ MAX_NEW        = 256
 TEMPERATURE_DEFAULT = 0.7
 TOP_K_DEFAULT       = 40
 LOCAL_FACT_MIN_CHARS = 80   # below this a truncated fact is useless; drop it instead
-PROMPT_TMPL    = "context: {ctx}\n<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n"
-PLAIN_TMPL     = "<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n"
+# The scaffold closes the user turn and opens the assistant one. It follows the message,
+# so the open templates are what read-ahead sends and the wire templates are those plus
+# the scaffold, which keeps the two in step by construction.
+CHAT_CLOSE       = "<|im_end|>\n<|im_start|>assistant\n"
+PROMPT_OPEN_TMPL = "context: {ctx}\n<|im_start|>user\n{msg}"
+PLAIN_OPEN_TMPL  = "<|im_start|>user\n{msg}"
+PROMPT_TMPL    = PROMPT_OPEN_TMPL + CHAT_CLOSE
+PLAIN_TMPL     = PLAIN_OPEN_TMPL + CHAT_CLOSE
 STOP_MARKERS   = ("<|im_end|>", "<|endoftext|>", "<|im_start|>", "\ncontext:")
 _STOP_MARKER_PREFIXES = set()
 for _m in STOP_MARKERS:
@@ -241,6 +247,14 @@ def build_prompt(message, facts):
 
 def build_plain_prompt(message):
     return PLAIN_TMPL.format(msg=message)
+
+
+def build_open_prompt(message, facts):
+    return PROMPT_OPEN_TMPL.format(ctx=" ".join(facts), msg=message)
+
+
+def build_plain_open_prompt(message):
+    return PLAIN_OPEN_TMPL.format(msg=message)
 
 
 def collect(events):
@@ -489,11 +503,12 @@ def remote_models():
     return out
 
 
-def _render_local(messages, system):
-    """Byte-model prompt from a messages list: prior turns rendered with the
-    platform chat markers, the final user turn via build_prompt / build_plain_prompt.
-    A lone user turn with no system is identical to single-turn generation; a
-    non-empty system rides in as the final turn's `context:` block."""
+def render_local_open(messages, system):
+    """Byte-model prompt from a messages list, stopping at the end of the final user
+    message: prior turns rendered with the platform chat markers, the final turn via
+    build_open_prompt / build_plain_open_prompt. A non-empty system rides in as that
+    turn's `context:` block. This is what read-ahead reads, so it must remain a strict
+    prefix of _render_local for the same messages."""
     *prior, last = messages
     head = []
     for m in prior:
@@ -501,8 +516,16 @@ def _render_local(messages, system):
             head.append(f"<|im_start|>user\n{m['content']}<|im_end|>")
         else:
             head.append(f"<|im_start|>assistant\n{m['content']}<|im_end|>")
-    final = build_prompt(last["content"], [system]) if system else build_plain_prompt(last["content"])
+    final = (build_open_prompt(last["content"], [system]) if system
+             else build_plain_open_prompt(last["content"]))
     return ("\n".join(head) + "\n" + final) if head else final
+
+
+def _render_local(messages, system):
+    """The wire prompt: the open form plus the scaffold that ends the user turn and
+    opens the assistant one. A lone user turn with no system is identical to
+    single-turn generation."""
+    return render_local_open(messages, system) + CHAT_CLOSE
 
 
 def _system_text(kind, summary, facts):

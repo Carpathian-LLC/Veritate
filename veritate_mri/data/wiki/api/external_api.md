@@ -91,16 +91,17 @@ Byte-by-byte generation with per-byte telemetry. SSE.
 
 Read a prompt into the engine before the request that carries it arrives. Answering costs reading the prompt and then writing the reply; reading is the part that must finish before a single reply byte exists. Sending it early moves that cost off the request.
 
-- Body: `prompt`, the text so far, plus `temperature` and `top_k`. Omit `prompt` to stand down.
+- Body: either `messages` or `prompt`, plus `temperature` and `top_k`. Omit both to stand down.
+- **A chat client sends `messages`.** The same OpenAI-shaped array `/v1/chat/completions` takes, ending on the user turn being typed, and the box renders the chat prefix with the template it will submit through. A client that renders ChatML itself has to reproduce the box's framing exactly, and a client that gets it wrong sees no error, just no speedup.
 - Response: `{"reading": true, "read_bytes": 214, "stats": {"reads": 12, "bytes": 3324}}`. A `reason` field appears when the box declined (not allowed for this caller, C engine not loaded).
-- **Send a strict prefix of what you will submit.** For a chat-framed prompt that means the conversation plus the user header plus the text so far, and NOT the closing `<|im_end|>` scaffold: the scaffold sits after the text, so including it moves it on every update and matches nothing. The box restores the longest matching prefix, so a prompt that diverges simply restores less.
+- **A `prompt` body must be a strict prefix of what you will submit.** For a chat-framed prompt that means the conversation plus the user header plus the text so far, and NOT the closing `<|im_end|>` scaffold: the scaffold sits after the text, so including it moves it on every update and matches nothing. The box restores the longest matching prefix, so a prompt that diverges simply restores less.
 - Nothing is buffered and nothing is claimed. There is no id and no matching step: the next `/generate` carrying the prompt benefits automatically. A caller that never follows through has only paid for reading.
 - The box reads one prompt at a time; a new one supersedes it. A real request always wins the engine.
 - Controlled by **Settings, API access, API: work ahead of a request**. Allowed by default for API callers.
 
 Measured on a 200M model: a 552-byte prompt takes 857 ms to the first reply byte cold, and 136 ms when it was read ahead while being typed, for about 1 s of engine time spread over 106 s of typing.
 
-The intended client loop: debounce the input, and on each pause POST the prompt so far. Then submit normally. There is nothing else to do.
+The intended client loop: debounce the input, and on each pause POST the conversation with the draft as its last user turn. Then submit normally. There is nothing else to do.
 
 ## POST /prefetch
 

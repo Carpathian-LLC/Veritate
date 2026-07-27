@@ -86,6 +86,26 @@ def test_render_local_carries_system_as_a_context_block():
         hybrid_routes._render_local(SINGLE_TURN, system="You are a helper.")
 
 
+@pytest.mark.parametrize("messages", (SINGLE_TURN, MULTI_TURN))
+def test_render_local_open_is_a_strict_prefix_of_the_wire_prompt(messages):
+    """The open form read-ahead sends is a strict prefix of the prompt submit renders."""
+    wire = hybrid_routes._render_local(messages, system=None)
+    open_form = hybrid_routes.render_local_open(messages, system=None)
+    assert wire.startswith(open_form) and len(open_form) < len(wire)
+
+
+@pytest.mark.parametrize("messages", (SINGLE_TURN, MULTI_TURN))
+def test_render_local_open_ends_on_the_typed_text(messages):
+    """The open form stops at the user's text, so the scaffold never moves as it grows."""
+    assert hybrid_routes.render_local_open(messages, system=None).endswith(messages[-1]["content"])
+
+
+def test_render_local_open_carries_system_as_a_context_block():
+    """System text rides into the open form as the same context: block."""
+    assert "context: You are a helper." in \
+        hybrid_routes.render_local_open(SINGLE_TURN, system="You are a helper.")
+
+
 def _wrapchat_body():
     js_path = os.path.normpath(os.path.join(REPO_ROOT, "veritate_mri", "web", "index.js"))
     with open(js_path, encoding="utf-8") as f:
