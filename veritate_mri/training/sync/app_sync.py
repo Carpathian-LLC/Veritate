@@ -772,23 +772,42 @@ def pull_update(reload=False, force=False, ignore_training=False):
 
         post_etag, post_lm, _ = _etag_cached(url)
 
-        result = _extract_and_copy(tmp_path, REPO_DIR, DEFAULT_SKIP_DIRS)
-        if not result["ok"]:
-            logmod.error("http-updater", f"apply failed: {result['error']}")
+        src_root, incoming, err = _scan_incoming(tmp_path, temp_dir, DEFAULT_SKIP_DIRS)
+        if err:
+            logmod.error("http-updater", f"apply failed: {err}")
             _update_state({
                 "last_pull_ts":  time.time(),
                 "last_pull_ok":  False,
-                "last_pull_msg": result["error"],
+                "last_pull_msg": err,
             })
-            return {"ok": False, "error": result["error"]}
+            return {"ok": False, "error": err}
 
-        msg = f"synced {branch} ({result['copied']} files; {result['skipped']} preserved)"
+        # Only gate on modified/missing: those are the cases where pull would
+        # overwrite or fail to restore user work. "added" files are user-created
+        # and never touched by the updater (it only writes files present in
+        # the tarball), so they don't need to block the pull.
+        if not force:
+            edits = local_edits(incoming=incoming)
+            c = edits["counts"]
+            if edits["has_baseline"] and (c["modified"] > 0 or c["missing"] > 0):
+                msg = (f"local edits detected: {c['modified']} modified, "
+                       f"{c['missing']} missing. pass force=true to overwrite.")
+                logmod.warn("http-updater", msg)
+                return {
+                    "ok":             False,
+                    "error":          msg,
+                    "requires_force": True,
+                    "edits":          edits,
+                }
+
+        _copy_incoming(src_root, incoming, REPO_DIR)
+        msg = f"synced {branch} ({len(incoming)} files)"
         logmod.ok("http-updater", msg)
         # Persist the per-file SHA snapshot so the next pull can detect local
         # edits. Failure to write the baseline is non-fatal: the pull itself
         # succeeded.
         try:
-            _write_baseline(result.get("baseline") or {}, branch=branch)
+            _write_baseline(incoming, branch=branch)
         except OSError as e:
             logmod.warn("http-updater", f"baseline write failed (non-fatal): {e}")
         # The pull just made the local tree the remote tip, so the check-derived
@@ -846,8 +865,9 @@ def pull_update(reload=False, force=False, ignore_training=False):
                 _RELOAD_HOOK()
             except Exception as e:
                 logmod.error("http-updater", f"reload hook failed: {e}")
-        return {"ok": True, "status": status(), "copied": result["copied"], "skipped": result["skipped"]}
+        return {"ok": True, "status": status(), "copied": len(incoming)}
     finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
         try:
             os.unlink(tmp_path)
         except OSError:

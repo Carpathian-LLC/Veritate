@@ -35,6 +35,9 @@ WIRE_ENCODING = "latin-1"
 # A real request owns the engine for a whole generation. Wait that out instead of
 # dropping the draft; give up only if the engine never comes free.
 BUSY_POLL_S    = 0.05
+# Bytes a read-ahead generates. The engine stores its state cache at step 0, so one
+# byte is the cheapest way to make it read the prompt; the byte itself is discarded.
+READ_MAX_NEW   = 1
 BUSY_WAIT_MAX_S = 30.0
 
 # Why a job stopped, reported to the dashboard so a stalled rail is explainable.
@@ -48,6 +51,10 @@ _LOCK  = threading.Lock()
 _JOB   = None
 _NEXT_ID = 1
 _STATS = {"served": 0, "served_bytes": 0, "discarded": 0, "spent_bytes": 0}
+
+# Read-ahead. One job process-wide, same lock discipline as a draft.
+_READ  = None
+_READ_STATS = {"reads": 0, "bytes": 0}
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -204,3 +211,91 @@ def preview():
         job = _JOB
         out["text"] = job.reply_bytes().decode("utf-8", "replace") if job is not None else ""
         return out
+
+
+# ------------------------------------------------------------------------------------
+# Read-ahead
+#
+# Reading a prompt costs the engine ~1.8 ms per byte and has to happen before a single
+# reply byte can be written. Doing it while the user is still typing removes that wait
+# without predicting anything: the prompt read ahead is a strict PREFIX of the one they
+# will send, the engine's state cache restores the longest matching prefix, and a prompt
+# that diverges simply restores less. Nothing is ever discarded, because reading the
+# first N bytes is work the real request has to do regardless.
+#
+# Measured on chat_200m (M3 Ultra, 2026-07-27): a 552-byte wire prompt costs 940 ms cold
+# and 132 ms after read-ahead (7.1x), for 962 ms of engine time spread across 106 s of
+# typing (0.9% duty). Editing mid-message still leaves the prefix before the edit warm.
+
+class _Read:
+    def __init__(self, sub, prompt, params):
+        self.sub       = sub
+        self.prompt    = prompt
+        self.params    = dict(params)
+        self.cancelled = False
+        self.finished  = False
+
+
+def _run_read(job):
+    try:
+        if job.sub.lock.locked():
+            return
+        p = job.params
+        # One byte, untraced. The engine stores the state cache at step 0, so the byte
+        # is a side effect of the read and is thrown away.
+        for _ in job.sub.stream(job.prompt, p["temperature"], p["top_k"], READ_MAX_NEW,
+                                ablate_layer=p["ablate_layer"], ablate_neuron=p["ablate_neuron"],
+                                addons_csv=p["addons_csv"], rep_window=p["rep_window"],
+                                rep_penalty=p["rep_penalty"], no_repeat_ngram=p["no_repeat_ngram"],
+                                do_trace=False, compact=False, stop_sequences=()):
+            if job.cancelled:
+                break
+        with _LOCK:
+            if not job.cancelled:
+                _READ_STATS["reads"] += 1
+                _READ_STATS["bytes"] += len(job.prompt)
+    except Exception as e:
+        logmod.warn("speculate", f"read-ahead dropped: {type(e).__name__}: {e}")
+    finally:
+        job.finished = True
+
+
+def read_ahead(sub, prompt, params):
+    """Read `prompt` into the engine so a request carrying it as a prefix skips the
+    prefill. Supersedes any read in flight; re-posting the same prefix is a no-op."""
+    global _READ
+    with _LOCK:
+        cur = _READ
+        if cur is not None and not cur.cancelled and cur.sub is sub and cur.prompt == prompt:
+            return _read_status_locked()
+        if cur is not None:
+            cur.cancelled = True
+        _READ = _Read(sub, prompt, params)
+        job = _READ
+        out = _read_status_locked()
+    threading.Thread(target=_run_read, args=(job,), name="read-ahead", daemon=True).start()
+    return out
+
+
+def read_stand_down():
+    """A real request needs the engine. Stop reading ahead."""
+    global _READ
+    with _LOCK:
+        if _READ is not None:
+            _READ.cancelled = True
+        _READ = None
+        return _read_status_locked()
+
+
+def _read_status_locked():
+    job = _READ
+    return {
+        "reading":    job is not None and not job.cancelled and not job.finished,
+        "read_bytes": len(job.prompt) if job is not None else 0,
+        "stats":      dict(_READ_STATS),
+    }
+
+
+def read_status():
+    with _LOCK:
+        return _read_status_locked()

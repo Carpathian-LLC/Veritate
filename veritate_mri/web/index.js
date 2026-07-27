@@ -1959,20 +1959,29 @@ const CHAT_END_TAG       = "<|end|>";
 // conversation so far; without it the model answers every question as if it were
 // the first thing ever said to it.
 const CHAT_CONTEXT_REPLY_SHARE = 0.5;
+// Room held for the new question plus the assistant header when budgeting history.
+const CHAT_HEAD_RESERVE = 512;
 
 function _chatTurn(role, text) {
   const who = (role === "model") ? "assistant" : "user";
   return `${CHATML_IM_START}${who}\n${text}${CHATML_IM_END}\n`;
 }
 
-// The wire prompt: as many whole prior turns as the context window allows, newest
-// first, then the new question and the assistant header. Oldest turns drop first,
-// and a turn is never cut in half.
-function wrapChat(prompt) {
-  const head = `${CHATML_IM_START}user\n${prompt}${CHATML_IM_END}\n${CHATML_IM_START}assistant\n`;
+// The prompt WITHOUT the closing scaffold: history, the user header, and the text so
+// far. This is what read-ahead sends, and it is a strict prefix of the wire prompt the
+// same text will produce on submit, so the engine's state cache restores it. Sending
+// the closed form instead would put <|im_end|> after the text, moving it on every
+// keystroke and matching nothing.
+function wrapChatOpen(prompt) {
+  return _chatPast() + `${CHATML_IM_START}user\n${prompt}`;
+}
+
+// As many whole prior turns as the context window allows, newest first. Oldest turns
+// drop first and a turn is never cut in half.
+function _chatPast() {
   const seq = modelShape.seq;
-  if (seq < 1) return head;
-  let budget = Math.floor(seq * (1 - CHAT_CONTEXT_REPLY_SHARE)) - head.length;
+  if (seq < 1) return "";
+  let budget = Math.floor(seq * (1 - CHAT_CONTEXT_REPLY_SHARE)) - CHAT_HEAD_RESERVE;
   const msgs = loadChatHistory();
   const past = [];
   for (let i = msgs.length - 1; i >= 0 && budget > 0; i--) {
@@ -1981,7 +1990,13 @@ function wrapChat(prompt) {
     budget -= turn.length;
     past.unshift(turn);
   }
-  return past.join("") + head;
+  return past.join("");
+}
+
+// The wire prompt: the conversation so far, then the new question and the assistant
+// header.
+function wrapChat(prompt) {
+  return wrapChatOpen(prompt) + `${CHATML_IM_END}\n${CHATML_IM_START}assistant\n`;
 }
 // Cut markers, matched WITHOUT the closing bracket: a byte model reproduces a marker
 // approximately ("<|im_start|2018|"), and a mangled marker still ends the reply. Must
@@ -2913,7 +2928,9 @@ function _trailingWord(box) {
   return (words[words.length - 1] || "").toLowerCase().replace(/[^a-z']/g, "");
 }
 
-function _prefetchEnabled() {
+// "generate ahead" in the UI: writing the reply before submit, which needs a guess
+// that the question is finished. Distinct from read-ahead, which needs none.
+function _generateAheadOn() {
   return !!(settingsState.current && settingsState.current.speculative_enabled);
 }
 
@@ -2921,7 +2938,7 @@ function _prefetchEnabled() {
 // is off, the mode or backend cannot serve it, a generation owns the engine, or the
 // draft is not yet a question worth answering.
 function _prefetchWirePrompt() {
-  if (!_prefetchEnabled()) return "";
+  if (!_generateAheadOn()) return "";
   const mode = _genMode();
   if (mode === "agent") return "";
   if ($("backend").value !== "c") return "";
@@ -2983,6 +3000,7 @@ function _promptSent() {
   _prefetchSent  = "";
   _prefetchDraft = null;
   _lastDraftLen  = 0;
+  _readSent      = "";
   _prefetchPollStop();
 }
 
@@ -3066,6 +3084,7 @@ function _primeFire() {
 // Re-arm from the current state of the page. Called whenever something the draft
 // depends on moves: the setting, the mode, the backend, the end of a generation.
 function _primeSync() {
+  _readSent      = "";
   _prefetchSent  = "";
   _prefetchDraft = null;
   _prefetchPollStop();
@@ -3094,8 +3113,58 @@ $("prompt").addEventListener("input", () => {
   clearTimeout(_prefetchTimer);
   _prefetchTimer = setTimeout(_prefetchTick,
                               _draftDelayMs($("prompt").value, _lastDraftLen, _pauseBaseMs()));
+  clearTimeout(_readTimer);
+  _readTimer = setTimeout(_readTick, READ_DEBOUNCE_MS);
   _lastDraftLen = raw.length;
 });
+
+// ---- read-ahead ----
+// The engine reads the prompt while it is being typed, so the request that carries it
+// skips the prefill. Nothing is predicted: what is sent is a strict PREFIX of the wire
+// prompt the same text will produce, the state cache restores the longest match, and a
+// prompt that diverges simply restores less. A miss costs nothing, because reading the
+// first N bytes is work the real request has to do anyway.
+//
+// Measured (chat_200m, M3 Ultra): a 552-byte prompt costs 940 ms cold and 132 ms read
+// ahead (7.1x), for 962 ms of engine time across 106 s of typing (0.9% duty).
+const READ_DEBOUNCE_MS = 350;
+const READ_MIN_CHARS   = 12;
+let _readTimer = null;
+let _readSent  = "";
+
+function _readPrefix() {
+  if (!(settingsState.current && settingsState.current.read_ahead_enabled)) return "";
+  if ($("backend").value !== "c") return "";
+  if ($("go").dataset.generating === "1") return "";
+  const raw = $("prompt").value;
+  // Trailing whitespace would be re-read on the next keystroke for nothing.
+  const text = raw.replace(/\s+$/, "");
+  if (text.length < READ_MIN_CHARS) return "";
+  return (_genMode() === "autocomplete") ? text : wrapChatOpen(text);
+}
+
+function _readTick() {
+  const prefix = _readPrefix();
+  if (prefix === _readSent) return;
+  _readSent = prefix;
+  if (!prefix) return;
+  fetch("/prefill", { method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ prompt: prefix,
+                                             temperature: parseFloat($("temp").value),
+                                             top_k: parseInt($("topk").value, 10) }) })
+    .then(r => r.json())
+    .then(d => { if (_readSent === prefix) _renderReadAhead(d, prefix.length); })
+    .catch(() => {});
+}
+
+// Read-ahead has no state worth a panel: it either read some of the prompt or it did
+// not. One line under the composer, and only once there is something to say.
+function _renderReadAhead(d, chars) {
+  const el = $("readState");
+  if (!el) return;
+  el.textContent = (d && d.reason) ? d.reason : `read ahead: ${chars} characters`;
+  el.style.color = (d && d.reason) ? "var(--warm)" : "var(--dim)";
+}
 // Enter sends, shift+enter breaks the line: the composer hint promises it.
 $("prompt").addEventListener("keydown", (e) => {
   if (e.key !== "Enter" || e.shiftKey) return;
@@ -3116,12 +3185,79 @@ $("backend").addEventListener("change", _primeSync);
 // here would throw that structure away, so nothing here summarizes.
 const REC_GAP_MAX_MS  = 10000;   // longer than this is leaving the keyboard
 const REC_BAR_MIN_PCT = 4;
+// Slack for "is the strip scrolled to the end", so a rounding pixel does not stop it
+// following new bars.
+const REC_STICK_PX    = 8;
+const REC_BOX_MAX_PX  = 220;
+// What the keystroke did to the text. `ch` alone cannot carry this: on a delete the
+// box shrinks and its last character is whatever was already there, so a backspace
+// used to be recorded as if that character had just been typed.
+const REC_EDIT_INSERT  = "insert";
+const REC_EDIT_DELETE  = "delete";
+const REC_EDIT_REPLACE = "replace";
+const REC_DELETE_CH    = "\u232b";
 const REC_CTX_WORD     = "word";
 const REC_CTX_BOUNDARY = "boundary";
 const REC_CTX_CLAUSE   = "clause";
 const REC_CTX_SENTENCE = "sentence";
 const REC_CLAUSE_END   = /[,;:]["'”’)\]]?$/;
-const _rec = { keys: [], last: 0, t0: 0, prevLen: 0, question: 1 };
+// A recorded session survives a reload. Losing a sitting to a refresh costs the one
+// thing that cannot be regenerated: how someone actually typed.
+const REC_KEY         = "veritate_typing_session_v1";
+// Serializing on every keystroke would put an O(n) write inside the gap being timed
+// and corrupt the measurement it is saving. Persist once typing settles instead, plus
+// on every finish mark and on the way out.
+const REC_PERSIST_MS  = 600;
+const _rec = { keys: [], last: 0, t0: 0, prevLen: 0, prevBox: "", question: 1 };
+let _recPersistTimer = null;
+
+function _recPersist() {
+  clearTimeout(_recPersistTimer);
+  _recPersistTimer = null;
+  try {
+    localStorage.setItem(REC_KEY, JSON.stringify({
+      keys: _rec.keys, prevLen: _rec.prevLen, prevBox: _rec.prevBox,
+      question: _rec.question, box: $("calBox").value,
+    }));
+  } catch (_) {}
+}
+function _recPersistSoon() {
+  clearTimeout(_recPersistTimer);
+  _recPersistTimer = setTimeout(_recPersist, REC_PERSIST_MS);
+}
+function _recDrop() {
+  clearTimeout(_recPersistTimer);
+  _recPersistTimer = null;
+  try { localStorage.removeItem(REC_KEY); } catch (_) {}
+}
+
+// Restore a session left by a previous page. The clock origin is re-anchored so new
+// keystrokes continue the old timeline instead of restarting at zero, and `last` stays
+// unset so the first keystroke after the reload records no gap: the time spent away
+// from the keyboard is not something this person typed.
+function _recRestore() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(REC_KEY) || "null"); } catch (_) { return; }
+  if (!saved || !Array.isArray(saved.keys) || !saved.keys.length) return;
+  _rec.keys = saved.keys;
+  _rec.prevLen  = saved.prevLen || 0;
+  _rec.prevBox  = saved.prevBox || "";
+  _rec.question = saved.question || 1;
+  _rec.last = 0;
+  _rec.t0 = performance.now() - (saved.keys[saved.keys.length - 1].t || 0);
+  $("calBox").value = saved.box || "";
+  _recGrowBox();
+  _recStatus(`restored ${_rec.keys.length} keystrokes from before the reload`);
+}
+
+// Classify the edit from the caret position, which is where the change landed. Length
+// alone misreads a mid-text edit as an append.
+function _recEdit(prev, box, caret) {
+  const d = box.length - prev.length;
+  if (d > 0) return { kind: REC_EDIT_INSERT, ch: box.slice(Math.max(0, caret - d), caret), dlen: d };
+  if (d < 0) return { kind: REC_EDIT_DELETE, ch: REC_DELETE_CH, dlen: d };
+  return { kind: REC_EDIT_REPLACE, ch: box.slice(Math.max(0, caret - 1), caret), dlen: 0 };
+}
 
 function _recContext(box) {
   const raw = box.trim();
@@ -3140,7 +3276,12 @@ function _recScore() {
   const out = [];
   for (let i = 0; i < _rec.keys.length; i++) {
     const k = _rec.keys[i];
-    const still = (i + 1 < _rec.keys.length) ? _rec.keys[i + 1].gap : k.stillAfter;
+    // stillAfter is the measured stillness before the finish mark and always wins.
+    // Falling through to the next keystroke's gap reads the FIRST keystroke of the
+    // next question as this one's settle time, which scored every finish but the last
+    // against a number belonging to a different question.
+    const still = (k.stillAfter != null) ? k.stillAfter
+                : (i + 1 < _rec.keys.length) ? _rec.keys[i + 1].gap : null;
     const want = _draftEligible(k.box) ? _draftDelayMs(k.box, k.prevLen, base) : Infinity;
     out.push({ k, still, want, fires: (still != null && still >= want) });
   }
@@ -3150,8 +3291,10 @@ function _recScore() {
 function _recRender() {
   const { base, rows } = _recScore();
   const strip = $("calStrip");
+  const track = $("calTrack");
   const peak  = Math.max(base, ...rows.map(r => r.k.gap), 1);
-  strip.innerHTML = '<i id="calRule" class="gap-rule"></i>';
+  const atEnd = strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - REC_STICK_PX;
+  track.innerHTML = '<i id="calRule" class="gap-rule"></i>';
   for (const r of rows) {
     const bar = document.createElement("i");
     bar.className = "gap-bar" + (r.k.done ? " done" : r.fires ? " fires" : "");
@@ -3160,9 +3303,11 @@ function _recRender() {
               + (r.k.word ? ` after "${r.k.word}"` : "")
               + (r.k.done ? " · YOU FINISHED HERE" : "")
               + (r.fires ? ` · would start a draft (needed ${Math.round(r.want)} ms still)` : "");
-    strip.appendChild(bar);
+    track.appendChild(bar);
   }
   $("calRule").style.bottom = `${(base / peak) * 100}%`;
+  // Ride the newest end unless the reader has scrolled back to look at something.
+  if (atEnd) strip.scrollLeft = strip.scrollWidth;
   $("calAxisMax").textContent = `${Math.round(peak)} ms`;
 
   const done = rows.filter(r => r.k.done);
@@ -3186,19 +3331,81 @@ function _recRender() {
   const has = _rec.keys.length > 0;
   $("calSave").disabled = !has;
   $("calCopy").disabled = !has;
+  $("calUndo").disabled = !done.length;
 }
 
-// The whole session, raw. Shape is the tuning input: one record per keystroke.
+// The text of each question, taken from the box as it stood at the finish mark, plus
+// whatever is still being typed. Reading the session should not mean reassembling it
+// from a keystroke stream.
+function _recQuestions() {
+  const out = [];
+  for (const k of _rec.keys) if (k.done) out.push(k.box);
+  const open = $("calBox").value;
+  if (open.trim()) out.push(open);
+  return out;
+}
+
+function _recPctl(sorted, q) {
+  if (!sorted.length) return null;
+  return Math.round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))]);
+}
+
+// A convenience header over the records, never a replacement for them: the raw keys
+// stay, because the gap varies with where in the text it falls and any single number
+// here has already thrown that away.
+function _recStats() {
+  const gaps = _rec.keys.map(k => k.gap).sort((a, b) => a - b);
+  const byCtx = {};
+  for (const ctx of [REC_CTX_WORD, REC_CTX_BOUNDARY, REC_CTX_CLAUSE, REC_CTX_SENTENCE]) {
+    const g = _rec.keys.filter(k => k.ctx === ctx).map(k => k.gap).sort((a, b) => a - b);
+    if (!g.length) continue;
+    byCtx[ctx] = { n: g.length, min: Math.round(g[0]), p50: _recPctl(g, 0.5),
+                   p90: _recPctl(g, 0.9), max: Math.round(g[g.length - 1]) };
+  }
+  const { rows } = _recScore();
+  const edits = _rec.keys.filter(k => k.edit !== REC_EDIT_INSERT);
+  const lastEdit = edits.length ? _rec.keys.length - 1 - _rec.keys.lastIndexOf(edits[edits.length - 1]) : null;
+  return {
+    keystrokes: _rec.keys.length,
+    questions:  _rec.keys.filter(k => k.done).length,
+    edits:      { deletes: _rec.keys.filter(k => k.edit === REC_EDIT_DELETE).length,
+                  replaces: _rec.keys.filter(k => k.edit === REC_EDIT_REPLACE).length,
+                  keystrokes_since_last_edit: lastEdit },
+    seconds:    _rec.keys.length ? Math.round(_rec.keys[_rec.keys.length - 1].t / 100) / 10 : 0,
+    gap_ms:     { p50: _recPctl(gaps, 0.5), p90: _recPctl(gaps, 0.9),
+                  p95: _recPctl(gaps, 0.95), max: gaps.length ? Math.round(gaps[gaps.length - 1]) : null },
+    gap_ms_by_context: byCtx,
+    // How long this person sat still after finishing before saying so. The latency any
+    // draft rule has to beat, and the number a pause threshold has to fit under.
+    settle_before_enter_ms: _rec.keys.filter(k => k.done)
+      .map(k => k.stillAfter == null ? null : Math.round(k.stillAfter)),
+    scored_at_record: {
+      threshold_ms: Math.round(_pauseBaseMs()),
+      drafts_for_nothing: rows.filter(r => r.fires && !r.k.done).length,
+      finishes_caught: rows.filter(r => r.fires && r.k.done).length,
+    },
+  };
+}
+
+// The whole session. The text and stats ride at the top so it can be read; the
+// per-keystroke records below are the tuning input.
 function _recSession() {
   return {
     name: `${_isoStamp()}`,
     recorded_at: new Date().toISOString(),
+    text: _recQuestions(),
+    stats: _recStats(),
     threshold_ms_at_record: Math.round(_pauseBaseMs()),
     model_seq: modelShape.seq,
     keys: _rec.keys.map(k => ({
-      t: Math.round(k.t), gap: Math.round(k.gap), ch: k.ch, len: k.len,
+      t: Math.round(k.t), gap: Math.round(k.gap), ch: k.ch,
+      edit: k.edit, dlen: k.dlen, len: k.len,
       ctx: k.ctx, word: k.word, done: !!k.done,
       still_after: k.stillAfter == null ? null : Math.round(k.stillAfter),
+      // The exact text the rule saw. Rebuilding it from the ch stream is only
+      // approximate once edits are involved, and an approximate replay scores a rule
+      // the person never actually experienced.
+      box: k.box, prev_len: k.prevLen, question: k.question,
     })),
   };
 }
@@ -3226,28 +3433,50 @@ $("calBox").addEventListener("keydown", (e) => {
   }
   _rec.question += 1;
   $("calBox").value = "";
+  _recGrowBox();
   _rec.prevLen = 0;
+  _rec.prevBox = "";
   _rec.last = 0;
+  _recPersist();
   _recRender();
 });
 
 $("calBox").addEventListener("input", () => {
   const now = performance.now();
   if (!_rec.t0) _rec.t0 = now;
-  const box = $("calBox").value;
+  const el = $("calBox");
+  const box = el.value;
+  const edit = _recEdit(_rec.prevBox, box, el.selectionStart);
   const gap = _rec.last ? now - _rec.last : 0;
   if (_rec.last && gap < REC_GAP_MAX_MS) {
     _rec.keys.push({
-      t: now - _rec.t0, gap, ch: box.slice(-1) || "⌫", len: box.length,
-      ctx: _recContext(box), word: _trailingWord(box), box, prevLen: _rec.prevLen,
+      t: now - _rec.t0, gap, ch: edit.ch, edit: edit.kind, dlen: edit.dlen, len: box.length,
+      // ctx/word describe where the person was SITTING during the gap, so they come
+      // from the text before this keystroke. Taken after, a 900 ms reach for the next
+      // word lands on the first letter of that word and reads as a mid-word
+      // hesitation: the pauses that matter most get the one label that hides them.
+      ctx: _recContext(_rec.prevBox), word: _trailingWord(_rec.prevBox),
+      // box/prevLen are the state the draft rule saw, for replay.
+      box, prevLen: _rec.prevLen,
       question: _rec.question, done: false, stillAfter: null,
     });
     _recordTypingGap(gap);
   }
   _rec.last = now;
   _rec.prevLen = box.trim().length;
+  _rec.prevBox = box;
+  _recGrowBox();
+  _recPersistSoon();
   _recRender();
 });
+
+// Keep every typed line visible. The recorder is asking someone to type naturally, and
+// text scrolling out from under them is not natural.
+function _recGrowBox() {
+  const el = $("calBox");
+  el.style.height = "auto";
+  el.style.height = `${Math.min(REC_BOX_MAX_PX, el.scrollHeight)}px`;
+}
 
 $("calSave").addEventListener("click", () => {
   const body = _recSession();
@@ -3257,7 +3486,17 @@ $("calSave").addEventListener("click", () => {
     .then(r => r.json())
     .then(d => {
       if (d.error) { _recStatus(d.error, true); return; }
-      _recStatus(`saved as ${d.name}`);
+      // Only now is the session safe somewhere else, so only now is the local copy
+      // expendable. Clearing it starts a fresh session: leaving it in place made every
+      // later save re-contain the keystrokes already stored in an earlier file.
+      const n = _rec.keys.length;
+      _rec.keys.length = 0; _rec.last = 0; _rec.t0 = 0;
+      _rec.prevLen = 0; _rec.prevBox = ""; _rec.question = 1;
+      $("calBox").value = "";
+      _recGrowBox();
+      _recDrop();
+      _recStatus(`saved ${n} keystrokes as ${d.name}; recording fresh`);
+      _recRender();
       _recListSaved();
     })
     .catch(() => _recStatus("could not reach the server", true));
@@ -3270,12 +3509,43 @@ $("calCopy").addEventListener("click", () => {
     .catch(() => _recStatus("clipboard blocked: use save instead", true));
 });
 
+// An Enter pressed by accident mislabels the one thing the whole session is scored
+// against, so it has to be undoable. Un-marks the most recent finish and puts its text
+// back in the box, leaving the keystrokes themselves untouched.
+$("calUndo").addEventListener("click", () => {
+  for (let i = _rec.keys.length - 1; i >= 0; i--) {
+    if (!_rec.keys[i].done) continue;
+    const k = _rec.keys[i];
+    k.done = false;
+    k.stillAfter = null;
+    _rec.question = Math.max(1, _rec.question - 1);
+    $("calBox").value = k.box;
+    _rec.prevBox = k.box;
+    _rec.prevLen = k.box.trim().length;
+    _rec.last = 0;
+    _recGrowBox();
+    _recPersist();
+    _recRender();
+    _recStatus("un-marked the last finish");
+    return;
+  }
+  _recStatus("no finish mark to undo", true);
+});
+
 $("calReset").addEventListener("click", () => {
-  _rec.keys.length = 0; _rec.last = 0; _rec.t0 = 0; _rec.prevLen = 0; _rec.question = 1;
+  _rec.keys.length = 0; _rec.last = 0; _rec.t0 = 0;
+  _rec.prevLen = 0; _rec.prevBox = ""; _rec.question = 1;
   $("calBox").value = "";
+  _recGrowBox();
+  _recDrop();
   _recStatus("");
   _recRender();
 });
+
+// A reload, a tab close, or a tab switch must not be able to outrun the debounce.
+window.addEventListener("beforeunload", _recPersist);
+document.addEventListener("visibilitychange", () => { if (document.hidden) _recPersist(); });
+_recRestore();
 
 function _recListSaved() {
   fetch("/typing/samples").then(r => r.json()).then(d => {
@@ -11518,26 +11788,31 @@ function _sysPollTick() {
 
 // The feature buys latency with wasted generation, so the panel reports the trade:
 // bytes actually handed to a request against bytes written for drafts.
-function _renderSpeculativeStats(spec) {
+// Read-ahead has no waste to report: every byte it reads is a byte the reply needed
+// read. Generate-ahead does, so only it carries a ratio and only it can warn.
+function _renderSpeculativeStats(spec, read) {
   const host = $("speculativeStats");
   if (!host) return;
+  const parts = [];
+  const r = (read && read.stats) || null;
+  if (r && r.reads) parts.push(`read ahead: ${r.reads} prompts, ${r.bytes} bytes`);
   const st = (spec && spec.stats) || null;
-  if (!st || !st.spent_bytes) {
-    host.textContent = spec && spec.speculating ? "writing a draft now" : "no drafts written yet";
-    host.style.color = "var(--dim)";
-    return;
+  let warn = false;
+  if (st && st.spent_bytes) {
+    const rate = (st.served_bytes / st.spent_bytes) * 100;
+    warn = rate < 50;
+    parts.push(`generate ahead: ${st.served} used, ${st.discarded} thrown away `
+             + `(${rate.toFixed(0)}% of written bytes reached an answer)`);
   }
-  const rate = (st.served_bytes / st.spent_bytes) * 100;
-  host.textContent = `${st.served} used, ${st.discarded} thrown away \u00b7 `
-                   + `${st.served_bytes} of ${st.spent_bytes} written bytes reached an answer (${rate.toFixed(0)}%)`;
-  host.style.color = rate < 50 ? "var(--warm)" : "var(--dim)";
+  host.textContent = parts.join(" \u00b7 ");
+  host.style.color = warn ? "var(--warm)" : "var(--dim)";
 }
 
 function _renderWarmModels(memAvail) {
   const host = $("warmModelsList");
   if (!host) return;
   fetch("/backends").then(r => r.json()).then(d => {
-    _renderSpeculativeStats(d && d.c && d.c.speculative);
+    _renderSpeculativeStats(d && d.c && d.c.speculative, d && d.c && d.c.read_ahead);
     const list = (d && d.c && d.c.warm) || [];
     const pinned = (settingsState.current && settingsState.current.warm_models) || [];
     const sig = JSON.stringify(list.map(m => [m.name, m.bin_bytes, m.resident, m.active]))
@@ -11605,9 +11880,12 @@ function _applySettingsToUI(s) {
     if (wrap) wrap.classList.toggle("checked", r.checked);
   });
   $("idleSecs").value = s.pytorch_idle_unload_secs;
-  // Settings and the composer toggle drive the same key, so both read back from it.
+  // Every switch reads back from the server-stored settings, so a refresh, a new tab,
+  // or another machine on this box all show the same state.
+  $("readAheadEnable").checked   = !!s.read_ahead_enabled;
   $("speculativeEnable").checked = !!s.speculative_enabled;
-  $("prefetchEnable").checked    = !!s.speculative_enabled;
+  $("apiReadAhead").checked      = !!s.api_read_ahead_enabled;
+  $("apiGenerateAhead").checked  = !!s.api_generate_ahead_enabled;
   $("speculativeBytes").value      = s.speculative_bytes;
   $("speculativeChunkBytes").value = s.speculative_chunk_bytes;
   _primeSync();
@@ -12089,13 +12367,38 @@ function _refreshUpdateStatus() {
   fetch("/app/update_status").then(r => r.json()).then(_renderUpdateStatus).catch(() => {});
 }
 
+// List the files the incoming update would overwrite and ask before clobbering
+// them. The server builds this list after downloading the tarball, so every
+// entry is a real conflict with the version about to land.
+function _appUpdateConfirmOverwrite(edits) {
+  const c = (edits && edits.counts) || {};
+  const blockingTotal = (c.modified || 0) + (c.missing || 0);
+  const lines = [];
+  const cap = 15;  // don't overflow the alert dialog
+  for (const m of ((edits && edits.modified) || []).slice(0, cap)) lines.push(`  modified: ${m.path}`);
+  for (const m of ((edits && edits.missing)  || []).slice(0, cap)) lines.push(`  deleted:  ${m.path}`);
+  const more = blockingTotal > lines.length ? `\n  …and ${blockingTotal - lines.length} more` : "";
+  const addedNote = (c.added > 0)
+    ? `\n\n(${c.added} user-added file${c.added === 1 ? " is" : "s are"} present but not affected: the updater only overwrites files from the upstream tarball.)`
+    : "";
+  return confirm(
+    `${blockingTotal} local edit${blockingTotal === 1 ? "" : "s"} differ from the incoming update ` +
+    `(${c.modified || 0} modified · ${c.missing || 0} deleted):\n\n` +
+    lines.join("\n") + more + addedNote + `\n\n` +
+    `Updating will overwrite modified files with the upstream version ` +
+    `and restore any files you deleted.\n\n` +
+    `Click OK to overwrite local edits and update anyway, or Cancel to ` +
+    `back out and stash your changes.`
+  );
+}
+
 // Two-gate pull flow for the main platform updater. Matches the protections
 // the new plugin/model sync has:
 //   1. If a trainer is running, prompt before overwriting source files (the
 //      same Windows file-lock foot-gun that took out fortis).
-//   2. Hit /app/local_edits. If the user has modified, deleted, or added any
-//      tracked source files since the last pull, list them and require an
-//      explicit "force overwrite" confirm.
+//   2. POST the pull unforced. The server downloads first, then reports any
+//      file whose local bytes differ from the incoming version; list those and
+//      retry with force once the user confirms.
 // Both gates correspond to backend flags (ignore_training, force); the
 // dashboard only passes them when the user has acknowledged the dialog.
 function _appUpdatePullWithGuards() {
@@ -12119,43 +12422,9 @@ function _appUpdatePullWithGuards() {
     ignoreTraining = true;
   }
 
-  if (lab) { lab.textContent = "checking for local edits…"; lab.style.color = "var(--warm)"; }
   if (upb) upb.disabled = true;
 
-  fetch("/app/local_edits").then(r => r.json()).then(edits => {
-    // Gate 2: local edits to tracked source files.
-    let force = false;
-    if (edits && edits.ok && edits.has_baseline) {
-      const c = edits.counts || {};
-      // Only modified/missing block the pull: added files aren't touched.
-      const blockingTotal = (c.modified || 0) + (c.missing || 0);
-      if (blockingTotal > 0) {
-        const lines = [];
-        const cap = 15;  // don't overflow the alert dialog
-        for (const m of (edits.modified || []).slice(0, cap)) lines.push(`  modified: ${m.path}`);
-        for (const m of (edits.missing  || []).slice(0, cap)) lines.push(`  deleted:  ${m.path}`);
-        const more = blockingTotal > lines.length ? `\n  …and ${blockingTotal - lines.length} more` : "";
-        const addedNote = (c.added > 0)
-          ? `\n\n(${c.added} user-added file${c.added === 1 ? " is" : "s are"} present but not affected: the updater only overwrites files from the upstream tarball.)`
-          : "";
-        const ok = confirm(
-          `${blockingTotal} local edit${blockingTotal === 1 ? "" : "s"} detected since the last update ` +
-          `(${c.modified || 0} modified · ${c.missing || 0} deleted):\n\n` +
-          lines.join("\n") + more + addedNote + `\n\n` +
-          `Updating will overwrite modified files with the upstream version ` +
-          `and restore any files you deleted.\n\n` +
-          `Click OK to overwrite local edits and update anyway, or Cancel to ` +
-          `back out and stash your changes.`
-        );
-        if (!ok) {
-          if (lab) { lab.textContent = "update cancelled"; lab.style.color = "var(--dim)"; }
-          if (upb) upb.disabled = false;
-          return;
-        }
-        force = true;
-      }
-    }
-
+  const post = (force) => {
     if (lab) { lab.textContent = willReload ? "pulling + reloading…" : "pulling…"; lab.style.color = "var(--warm)"; }
     _lifecycleOverlayShow("updating");
     return fetch("/app/update_pull", {
@@ -12169,16 +12438,17 @@ function _appUpdatePullWithGuards() {
     }).then(r => r.json()).then(res => {
       if (res && res.status) _renderUpdateStatus(res.status);
       if (!(res && res.ok && willReload)) _lifecycleOverlayHide();
+      // Gate 2: real conflicts with the downloaded tarball.
+      if (res && res.requires_force && !force) {
+        if (_appUpdateConfirmOverwrite(res.edits)) return post(true);
+        if (lab) { lab.textContent = "update cancelled"; lab.style.color = "var(--dim)"; }
+        return;
+      }
       if (lab) {
         if (res && res.ok) {
           lab.textContent = willReload ? "pulled, reloading…" : "pulled";
           lab.style.color = "var(--data-pos)";
           if (willReload) _lifecycleWaitForServer(lab);
-        } else if (res && res.requires_force) {
-          // Server detected edits we didn't catch (e.g. race with another tab);
-          // surface the count and let the user retry with force.
-          lab.textContent = `local edits detected: retry to force overwrite`;
-          lab.style.color = "var(--accent)";
         } else if (res && res.training_active) {
           lab.textContent = `training active: stop it first`;
           lab.style.color = "var(--hot)";
@@ -12188,7 +12458,9 @@ function _appUpdatePullWithGuards() {
         }
       }
     });
-  })
+  };
+
+  post(false)
     .catch(e => { _lifecycleOverlayHide(); if (lab) { lab.textContent = _backendErrMsg(e); lab.style.color = "var(--hot)"; } })
     .finally(() => { if (upb) upb.disabled = false; _refreshUpdateStatus(); });
 }
@@ -14922,9 +15194,23 @@ document.addEventListener("DOMContentLoaded", () => {
     const v = Math.max(60, parseInt(idle.value, 10) || 600);
     _saveSettings({ pytorch_idle_unload_secs: v });
   });
-  const specEnable = $("speculativeEnable");
-  if (specEnable) specEnable.addEventListener("change", () => {
-    _saveSettings({ speculative_enabled: specEnable.checked });
+  // Both "ahead" switches live in the Generation tab now: they are generation
+  // controls, and splitting them across two tabs left one of them describing a
+  // behaviour the other had already replaced.
+  $("readAheadEnable").addEventListener("change", () => {
+    _saveSettings({ read_ahead_enabled: $("readAheadEnable").checked });
+    _readSent = "";
+    $("readState").textContent = "";
+  });
+  $("speculativeEnable").addEventListener("change", () => {
+    _saveSettings({ speculative_enabled: $("speculativeEnable").checked });
+    _primeSync();
+  });
+  $("apiReadAhead").addEventListener("change", () => {
+    _saveSettings({ api_read_ahead_enabled: $("apiReadAhead").checked });
+  });
+  $("apiGenerateAhead").addEventListener("change", () => {
+    _saveSettings({ api_generate_ahead_enabled: $("apiGenerateAhead").checked });
   });
   const specBytes = $("speculativeBytes");
   if (specBytes) specBytes.addEventListener("change", () => {

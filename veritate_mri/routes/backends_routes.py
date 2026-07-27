@@ -377,6 +377,7 @@ def _c_engine_stream(cfg, prompt, max_new, temperature=TEMPERATURE_DEFAULT, top_
     # take(); this covers every other caller so a speculative job can never hold the
     # subprocess lock against a user who is waiting on an answer.
     speculate.stand_down()
+    speculate.read_stand_down()
     model_path = cfg["C_MODEL"]
     exe        = cfg["C_EXE"]
     model_name = os.path.basename(os.path.dirname(model_path)) if model_path else "(random)"
@@ -672,6 +673,7 @@ def _backends_status_payload(cfg):
             "bins_available": bins_available,
             "warm":      _warm_status(cfg),
             "speculative": speculate.status(),
+            "read_ahead":  speculate.read_status(),
         },
     }
 
@@ -765,6 +767,21 @@ def _build_constraint(spec):
             raise ValueError(f"unknown stop preset {rest!r}; allowed: {sorted(_STOP_PRESETS)}")
         return StopOnConstraint(_STOP_PRESETS[rest])
     raise ValueError(f"unknown constrained spec: {spec!r}")
+
+
+def _is_api_caller():
+    """A caller presenting a bearer token is programmatic. The dashboard never sends
+    one, so this separates "what this box's own UI does" from "what a client may ask
+    it to do" without a second auth surface."""
+    return request.headers.get("Authorization", "").startswith("Bearer ")
+
+
+def _ahead_allowed(read):
+    """Whether the caller may have the engine work ahead of its request."""
+    cur = settings_mod.get()
+    if _is_api_caller():
+        return bool(cur.get("api_read_ahead_enabled" if read else "api_generate_ahead_enabled"))
+    return bool(cur.get("read_ahead_enabled")) if read else bool(cur.get("speculative_enabled"))
 
 
 def _decode_params(temperature, top_k, ablate_layer=ABLATE_OFF, ablate_neuron=ABLATE_OFF,
@@ -1005,8 +1022,8 @@ def register(app):
             return speculate.stand_down()
         cur = settings_mod.get()
         budget = int(cur.get("speculative_bytes") or 0)
-        if not cur.get("speculative_enabled") or budget < 1:
-            return {"speculating": False, "reason": "speculative prefetch is off",
+        if not _ahead_allowed(read=False) or budget < 1:
+            return {"speculating": False, "reason": "generate-ahead is off for this caller",
                     "stats": speculate.status()["stats"]}
         sub = cfg.get("C_SUBPROCESS")
         if sub is None:
@@ -1029,6 +1046,33 @@ def register(app):
                                _chat_stop_seq(prompt) or (),
                                _frame_builder(sub.shape),
                                compact=bool(cur.get("mri_compact_frames", False)))
+
+    @app.route("/prefill", methods=["POST"])
+    def prefill():
+        """Read a prompt into the engine ahead of the request that will carry it. POST
+        `prompt` with the text typed so far, WITHOUT the closing chat scaffold, so it is
+        a strict prefix of the wire prompt the client will send: the engine's state cache
+        restores the longest matching prefix, and a diverging prompt just restores less.
+        Nothing is buffered and nothing is ever discarded. Omit `prompt` to stand down."""
+        cfg = current_app.config
+        body = request.get_json(silent=True) or {}
+        prompt = body.get("prompt") or ""
+        if not prompt:
+            return speculate.read_stand_down()
+        if not _ahead_allowed(read=True):
+            return {"reading": False, "reason": "read-ahead is off for this caller",
+                    "stats": speculate.read_status()["stats"]}
+        sub = cfg.get("C_SUBPROCESS")
+        if sub is None:
+            return {"reading": False, "reason": "c engine not loaded",
+                    "stats": speculate.read_status()["stats"]}
+        try:
+            params = _decode_params(
+                body.get("temperature", TEMPERATURE_DEFAULT),
+                max(1, min(int(body.get("top_k", TOP_K_DEFAULT)), BYTE_VOCAB)))
+        except (TypeError, ValueError) as e:
+            return ({"error": user_error(e, "bad prefill param")}, 400)
+        return speculate.read_ahead(sub, prompt, params)
 
     @app.route("/generate")
     def generate():

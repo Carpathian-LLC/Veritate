@@ -40,37 +40,58 @@ Settings store at [settings.py](../../../veritate_mri/runtime/settings.py); see 
 - The provider dropdown appends "(connected)" per `_teacherIsConnected()`: API providers with a stored key, and local providers (Ollama, LM Studio, llama.cpp) whose server answers `POST /teacher/models` with at least one model. Local providers are probed on form hydrate (`_teacherProbeLocalProviders()`) and labels update in place when a probe lands.
 - Teacher `max_concurrency` (advanced box) is the parallel-request count synth fires. For local providers the backend clamps it to `LOCAL_MAX_CONCURRENCY` in `_resolve_concurrency` (teacher_routes.py) so a high global value never floods a single local GPU into an out-of-memory crash, regardless of `OLLAMA_NUM_PARALLEL`; no server-side parallelism tuning is needed. Cloud APIs take the value as-is. The field hydrates to the effective (capped) value via `_teacherEffectiveConc` so it never shows a number the backend silently overrides.
 
-## Answer while typing (speculative prefetch)
+## Typing recorder
 
-Two panels, both writing settings keys consumed by the Generation tab's prime rail
-([generation_tab.md](generation_tab.md)) and the `/prefetch` route
-([../backend/speculative_prefetch.md](../backend/speculative_prefetch.md)).
+Records how a person actually types, so the draft trigger can be tuned against real
+typing instead of an invented average. The generation-ahead controls it informs live in
+the Generation tab ([generation_tab.md](generation_tab.md)), not here: they are
+generation controls, and keeping a copy in Settings left one panel describing a
+behaviour the other had already replaced.
 
-**Controls.** `speculativeEnable` mirrors the composer's `prefetchEnable`: one
-`speculative_enabled` key, so either switch moves both. `speculative_bytes` caps a
-draft; `speculative_chunk_bytes` is the engine turn size, which bounds how long a
-real request can wait behind a draft already in flight. `speculativeStats` renders
-`served_bytes / spent_bytes` and warns under 50%, the point below which the feature
-is buying latency with a doubling of energy per served answer.
+**Typing recorder.** The evidence the draft trigger is tuned against. Type into
+`calBox`; every keystroke is recorded, and pressing Enter marks the keystroke you were
+finished on and starts the next question. That mark is the only label needed: it makes
+one keystroke a known "done" and every other one a known "not done", which turns
+tuning from taste into a scorable classification.
 
-**Typing calibrator.** `speculative_pause_ms` is how still the composer must be
-before it treats a prompt as a finished question; `0` tracks the typist's live
-median keystroke gap instead. The calibrator measures it: type into `calBox` and
-every keystroke gap is recorded, then replayed through `_draftDelayMs` and
-`_draftEligible` — the same two functions the composer runs, so the strip shows what
-would actually have happened rather than an illustration of it.
+Each record is `{t, gap, ch, len, ctx, word, done, still_after}`:
 
-- `#calStrip` draws one bar per gap, height proportional to the gap, against a dashed
-  rule at the current threshold. Bars crossing the rule are the pauses that would
-  start a draft, so state is carried by height as well as color (`--dim` ordinary,
-  `--cool` fires; validated CVD dE 24.1 / normal 25.8 against the panel surface).
-  Each bar's `title` gives its gap and, when it fires, the delay it had to beat.
-- `_calRecommendMs` returns `clamp(p90_gap * CAL_HEADROOM, PREFETCH_PAUSE_MIN_MS,
-  PREFETCH_PAUSE_MAX_MS)`: a threshold clearing this typist's ordinary between-word
-  gaps with headroom. "use this" writes it; "back to auto" writes 0.
-- The calibrator and the composer feed ONE rolling sample (`_recordTypingGap`).
-  Keeping separate lists made calibration measure a copy of the threshold it was
-  supposed to move.
-- With under three samples `_typingMedianMs` falls back to `PREFETCH_PAUSE_MIN_MS /
-  PREFETCH_PAUSE_FACTOR`, i.e. the floor. Falling back to the ceiling made the first
-  question of every session wait the longest, which is backwards.
+- `ctx` / `word` describe where the person was **sitting during the gap**, so they come
+  from the text BEFORE that keystroke. Taken after, a long reach for the next word
+  lands on that word's first letter and is labelled `word` (mid-word hesitation) when
+  it was really a `boundary` pause: the pauses that matter most would get the one
+  label that hides them. `ctx` is `word` / `boundary` / `clause` / `sentence`.
+- `box` / `prevLen` are the state the draft rule saw, kept for replay.
+- `still_after` on a labelled keystroke is how long the person sat still before
+  declaring the question finished: the latency a draft has to beat.
+
+`_recScore` replays the session through `_draftDelayMs` and `_draftEligible` — the same
+two functions the composer runs — and reports two numbers: how many labelled questions
+would have started a draft, and how many drafts would have been generated mid-question
+for nothing. Any rule change is scored the same way against the same recording.
+
+**Nothing here summarizes.** No median, no percentile, no recommendation, no
+self-applied threshold. Typing speed is not one number: the gap varies systematically
+with where in the text it falls, and collapsing that to an average destroys the only
+structure that separates "pausing mid-sentence" from "finished". The session is handed
+back raw via `save session` (POST `/typing/samples`, stored under
+`data/typing_samples/`, see [../backend/typing_samples.md](../backend/typing_samples.md))
+or `copy raw json`.
+
+`#calStrip` draws one bar per gap against a dashed rule at the current threshold:
+`--dim` ordinary, `--cool` would start a draft, `--highlight` the keystroke you pressed
+Enter on. State is carried by height as well as color (validated: worst CVD dE 21.6,
+normal 25.8 against the panel surface). Each bar's `title` gives its gap, character,
+context, trailing word, and the delay it had to beat.
+
+`speculative_pause_ms` is the threshold the rule currently uses; `0` tracks the
+typist's live median keystroke gap. The recorder and the composer feed ONE rolling
+sample (`_recordTypingGap`). With under three samples `_typingMedianMs` falls back to
+`PREFETCH_PAUSE_MIN_MS / PREFETCH_PAUSE_FACTOR`, the floor: falling back to the ceiling
+made the first question of every session wait the longest, which is backwards.
+
+`undo last finish` un-marks the most recent Enter and puts its text back in the box,
+leaving the keystrokes untouched: an Enter pressed by accident otherwise mislabels the
+one keystroke the whole session is scored against. `save session` clears the recorder
+and starts fresh, because leaving it in place made every later save re-contain the
+keystrokes already stored in an earlier file.

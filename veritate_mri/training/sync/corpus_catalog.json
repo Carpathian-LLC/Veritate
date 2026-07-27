@@ -658,6 +658,25 @@
    "recommended_min_params": 0,
    "recommended_max_params": null,
    "coming_soon": true
+  },
+  {
+   "stem": "veritate_sft",
+   "label": "Veritate SFT dialogue",
+   "family": "carpathian",
+   "topic": "chat",
+   "description": "Dialogue-only SFT set: conversation, carryover, comprehension, format-constraint, cogito. Prose genres excluded on purpose.",
+   "format": "zip_bundle",
+   "train_url": "https://api.carpathian.ai/cos/PLACEHOLDER/veritate_sft.zip",
+   "size_train": 11850751,
+   "size_val": 254830,
+   "sha256_train": "5088d349372c4692064aa8d20eaed10ade2f17f7ea7f0d57d95936c6e962ca76",
+   "sha256_val": "e8c9c47e1acd891e8c54e3371c722c7f835285a4450f7fe99e3ae9ced8b3c075",
+   "trained_modes": [
+    "chat"
+   ],
+   "recommended_min_params": 0,
+   "recommended_max_params": null,
+   "coming_soon": true
   }
  ]
 }

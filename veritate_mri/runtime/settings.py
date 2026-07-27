@@ -70,6 +70,18 @@ DEFAULTS = {
     # question, in ms. 0 tracks the typist's live median keystroke gap; a positive
     # value is a threshold measured by the Settings typing calibrator.
     "speculative_pause_ms": 0,
+    # Read-ahead: read the prompt being typed into the engine so the request that
+    # carries it skips the prefill. On by default: it predicts nothing, and the work is
+    # what the real request has to do anyway, so a miss costs nothing.
+    # See routes/backends_routes POST /prefill.
+    "read_ahead_enabled": True,
+    # Whether a programmatic caller (one presenting a bearer token) may have the box
+    # work ahead of its request. Separate from the dashboard's own switches: this box
+    # runs a single stateful engine, so a client working ahead is a client holding it.
+    # Reading ahead is work the request must do anyway; generating ahead can be
+    # discarded entirely, so it is off.
+    "api_read_ahead_enabled": True,
+    "api_generate_ahead_enabled": False,
     "hud_enabled": False,
     "hud_position": "top",
     "hud_detailed": False,
@@ -110,6 +122,10 @@ DEFAULTS = {
     "corpus_compose_chunk_bytes": 1048576,
     "corpus_compose_val_ratio": 0.005,
     "corpus_compose_seed": 20260727,
+    # Native trainer size -> shape table. Empty means the shipped
+    # veritate_mri/data/trainer_sizes.json; point it at your own file to add or
+    # retune shapes without touching code.
+    "trainer_sizes_path": "",
     "teacher_provider": "",
     "teacher_model": "",
     "teacher_base_url": "",
@@ -273,7 +289,8 @@ def _validate(patch):
         v = patch["corpus_compose_val_ratio"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < 1:
             raise ValueError("corpus_compose_val_ratio must be in [0, 1)")
-    for skey in ("corpus_mix_default_profile", "corpus_mix_profiles_path"):
+    for skey in ("corpus_mix_default_profile", "corpus_mix_profiles_path",
+                 "trainer_sizes_path"):
         if skey in patch:
             v = patch[skey]
             if v is None:
@@ -299,6 +316,9 @@ def _validate(patch):
         if not ok:
             raise ValueError(f"speculative_pause_ms must be 0 (auto) or an integer "
                              f"{SPECULATIVE_PAUSE_MS_MIN}..{SPECULATIVE_PAUSE_MS_MAX}")
+    for bkey in ("read_ahead_enabled", "api_read_ahead_enabled", "api_generate_ahead_enabled"):
+        if bkey in patch:
+            patch[bkey] = bool(patch[bkey])
     if "warm_models" in patch:
         v = patch["warm_models"]
         if v is None:

@@ -41,6 +41,32 @@ Top to bottom inside the prompt panel: control bar, transcript, streaming turn, 
 - The `.timeline.live-scrub` bar (`#timelineRow`, live + scrubber) is `position: fixed` at the viewport bottom ([index.css](../../../veritate_mri/web/index.css)) and appears only once frames exist. Generate / stop live in the composer.
 - `.composer` holds `#primeRail`, the textarea, and the actions. Enter sends, shift+enter breaks the line. `#chatClear` wipes the transcript for this device and is hidden in autocomplete.
 
+### The two "ahead" controls
+
+Both live in `#aheadRow` under Advanced, and they are not variants of one feature:
+
+| | needs a guess? | cost of a miss | default |
+|---|---|---|---|
+| `readAheadEnable` | no | nothing | on |
+| `speculativeEnable` | yes, that typing has finished | the whole reply | off |
+
+`speculativeBytes` / `speculativeChunkBytes` apply only to generate-ahead.
+`#speculativeStats` reports read-ahead's volume and generate-ahead's served-against-spent
+ratio; only the latter can warn, because only the latter can waste.
+
+### Read-ahead
+
+While the prompt is typed, `_readTick` posts the text so far to `/prefill` on a
+`READ_DEBOUNCE_MS` debounce. What it sends is `wrapChatOpen(text)` — history plus the
+user header plus the text, WITHOUT the closing scaffold — because that is a strict
+prefix of the `wrapChat(text)` the same text produces on submit, and only a prefix
+restores from the engine's state cache. `wrapChat` is defined as `wrapChatOpen` plus the
+scaffold so the two cannot drift.
+
+No finish detection is involved and nothing is discarded on a miss: see
+[../backend/read_ahead.md](../backend/read_ahead.md). `#readState` reports how much of
+the prompt has been read. On by default (`read_ahead_enabled`).
+
 ### Answer while typing (`#primeRail`)
 
 The composer's prime rail is the client half of [../backend/speculative_prefetch.md](../backend/speculative_prefetch.md). `#prefetchEnable` and the Settings toggle write the same `speculative_enabled` key.

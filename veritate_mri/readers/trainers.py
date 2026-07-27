@@ -46,34 +46,33 @@ RESERVED_DIRS = {"corpus", "common", "__pycache__", ".git", "node_modules"}
 NATIVE_TRAINER_ID   = "native/trainer"
 NATIVE_TRAINER_PATH = os.path.normpath(os.path.join(paths.MRI_ROOT, "training", "native_trainer.py"))
 
-# Single owner of the size -> shape table (rule 20). The manifest below offers
-# exactly these sizes and native_trainer.py resolves --size against the same
+# Single owner of the size -> shape table (rule 20), and it is DATA, not code:
+# veritate_mri/data/trainer_sizes.json, or any path the user puts in the
+# trainer_sizes_path setting. native_trainer.py resolves --size against the same
 # dict, so the offered set can never drift from the supported set.
-NATIVE_SIZES = {
-    "5m":   {"layers":  6, "hidden":  256, "ffn":  1024, "heads":  4, "params":      5000000},
-    "7m":   {"layers":  8, "hidden":  256, "ffn":  1024, "heads":  4, "params":      7000000},
-    "10m":  {"layers":  8, "hidden":  320, "ffn":  1280, "heads":  8, "params":     10000000},
-    "20m":  {"layers":  8, "hidden":  512, "ffn":  2048, "heads":  8, "params":     20000000},
-    "30m":  {"layers": 10, "hidden":  512, "ffn":  2048, "heads":  8, "params":     31000000},
-    "50m":  {"layers": 10, "hidden":  640, "ffn":  2560, "heads": 10, "params":     50000000},
-    "70m":  {"layers": 12, "hidden":  640, "ffn":  2560, "heads": 10, "params":     70000000},
-    "80m":  {"layers": 12, "hidden":  768, "ffn":  3072, "heads": 12, "params":     85000000},
-    "85m":  {"layers": 12, "hidden":  768, "ffn":  3072, "heads": 12, "params":     85000000},
-    "120m": {"layers": 12, "hidden":  896, "ffn":  3584, "heads": 14, "params":    115000000},
-    "160m": {"layers": 12, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    162000000},
-    "200m": {"layers": 16, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    202000000},
-    "350m": {"layers": 24, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    330000000},
-    "400m": {"layers": 24, "hidden": 1280, "ffn":  5120, "heads": 20, "params":    472000000},
-    "800m": {"layers": 28, "hidden": 1536, "ffn":  6144, "heads": 24, "params":    793000000},
-    "1b3":  {"layers": 24, "hidden": 2048, "ffn":  8192, "heads": 16, "params":   1300000000},
-    "2b":   {"layers": 24, "hidden": 2560, "ffn": 10240, "heads": 20, "params":   2700000000},
-    "3b":   {"layers": 32, "hidden": 2560, "ffn": 10240, "heads": 32, "params":   2900000000},
-    "4b5":  {"layers": 36, "hidden": 3200, "ffn": 12800, "heads": 25, "params":   4400000000},
-    "7b":   {"layers": 32, "hidden": 4096, "ffn": 18432, "heads": 32, "params":   7000000000},
-    "13b":  {"layers": 40, "hidden": 5120, "ffn": 21504, "heads": 40, "params":  13000000000},
-    "30b":  {"layers": 60, "hidden": 6656, "ffn": 26624, "heads": 52, "params":  32000000000},
-    "50b":  {"layers": 64, "hidden": 8192, "ffn": 32768, "heads": 64, "params":  52000000000},
-}
+TRAINER_SIZES_FILE    = "trainer_sizes.json"
+SETTING_SIZES_PATH    = "trainer_sizes_path"
+SIZES_KEY             = "sizes"
+
+
+def native_sizes_path():
+    try:
+        from runtime import settings as _settings
+        override = (_settings.get().get(SETTING_SIZES_PATH) or "").strip()
+    except Exception:
+        override = ""
+    if override:
+        return override
+    return os.path.join(paths.MRI_ROOT, "data", TRAINER_SIZES_FILE)
+
+
+def load_native_sizes():
+    """Size -> shape table, read fresh so an edit lands without a restart."""
+    with open(native_sizes_path(), encoding="utf-8") as f:
+        return json.load(f)[SIZES_KEY]
+
+
+NATIVE_SIZES = load_native_sizes()
 
 NATIVE_DEFAULT_SIZE  = "85m"
 NATIVE_DEFAULT_SEQ   = 1024

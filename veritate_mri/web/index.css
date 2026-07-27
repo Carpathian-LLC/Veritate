@@ -143,8 +143,25 @@
   .composer:focus-within { border-color: var(--accent); }
   .composer #prompt { border: 0; background: transparent; padding: 2px 0; margin: 0; min-height: 52px; }
   .composer #prompt:focus { outline: none; }
-  .composer-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+  .composer-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+  .composer-sep { width: 1px; align-self: stretch; min-height: 18px; background: var(--line); }
   .composer-hint { font-size: 10.5px; color: var(--dim); }
+
+  /* Hover tip. The native title attribute takes a second to appear and cannot hold a
+     sentence worth reading, and these two switches are exactly the controls a person
+     needs explained before touching them. */
+  .tip { position: relative; }
+  .tip::after {
+    content: attr(data-tip);
+    position: absolute; bottom: calc(100% + 10px); left: 0;
+    width: 280px; padding: 8px 10px; z-index: 40;
+    background: #0d1118; border: 1px solid var(--line); border-radius: 4px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .55);
+    color: var(--soft); font-size: 10.5px; line-height: 1.55; white-space: normal;
+    opacity: 0; visibility: hidden; transform: translateY(3px);
+    transition: opacity .12s ease-out, transform .12s ease-out, visibility .12s;
+  }
+  .tip:hover::after, .tip:focus-within::after { opacity: 1; visibility: visible; transform: none; }
   .prime-toggle { display: inline-flex; align-items: center; gap: 5px; margin: 0; font-size: 10.5px; cursor: pointer; }
   .composer-clear { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--dim); border-radius: 3px; padding: 3px 8px; font: inherit; font-size: 10.5px; cursor: pointer; }
   .composer-clear:hover { color: var(--text); border-color: var(--dim); }
@@ -199,14 +216,28 @@
   .gap-key-fire { background: var(--cool); }
   .gap-key-done { background: var(--highlight); }
   .gap-key-rule { width: 12px; height: 0; border-top: 2px dashed var(--warm); border-radius: 0; }
-  .gap-strip { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 68px; padding: 0 1px; background: #06070a; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
-  .gap-strip i.gap-bar { flex: 1 1 0; min-width: 2px; max-width: 14px; border-radius: 2px 2px 0 0; background: var(--dim); }
+  /* Bars are a fixed width and the strip scrolls: flexing them to fit silently clips
+     everything past the container, so a long session loses exactly the keystrokes just
+     recorded. Nothing is hidden; the view rides at the newest end. */
+  .gap-strip { height: 68px; background: #06070a; border: 1px solid var(--line); border-radius: 3px; overflow-x: auto; overflow-y: hidden; }
+  .gap-track { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 100%; min-width: 100%; padding: 0 1px; }
+  .gap-strip i.gap-bar { flex: 0 0 4px; border-radius: 2px 2px 0 0; background: var(--dim); }
   .gap-strip i.gap-bar.fires { background: var(--cool); }
   /* the keystroke you pressed Enter on: the label the whole session is scored against */
   .gap-strip i.gap-bar.done { background: var(--highlight); }
   .gap-rule { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed var(--warm); pointer-events: none; }
   .gap-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--dim); margin-top: 3px; }
-  #calBox { width: 100%; }
+  /* Grows with what is typed: a recorder whose input scrolls out of sight hides the
+     text whose timing it is capturing. */
+  #calBox { width: 100%; max-height: 220px; overflow-y: auto; resize: none; }
+
+  .ahead-opt { display: flex; align-items: flex-start; gap: 8px; margin: 0; cursor: pointer; }
+  .ahead-opt input { margin-top: 2px; accent-color: var(--accent); flex: none; }
+  .ahead-opt b { color: var(--text); font-weight: 600; }
+  .ahead-opt i { color: var(--warm); font-style: normal; font-size: 10px; margin-left: 4px; }
+  .ahead-opt em { display: block; font-style: normal; color: var(--dim); font-size: 10.5px; line-height: 1.5; margin-top: 2px; }
+  .ahead-toggle { display: inline-flex; align-items: center; gap: 5px; margin: 0; font-size: 10.5px; cursor: pointer; white-space: nowrap; }
+  .ahead-toggle input { accent-color: var(--accent); }
 
   /* advanced */
   #advancedWrap { margin-top: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; }

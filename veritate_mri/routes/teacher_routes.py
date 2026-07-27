@@ -728,6 +728,20 @@ def register(app):
         fam_dir, counts = _write_families(output_dir, spec)
         if not counts:
             return {"error": "no authored records in job"}, 400
+        # An SFT corpus is not a pretrain corpus: standalone-prose genres (jokes,
+        # writing, news) carry no user turn, so training on them teaches the model
+        # to write rather than to answer. `genres` selects which families go in.
+        want = body.get("genres")
+        if want is not None:
+            if not isinstance(want, list) or not all(isinstance(g, str) for g in want):
+                return {"error": "genres must be a list of genre ids"}, 400
+            unknown = [g for g in want if g not in counts]
+            if unknown:
+                return {"error": f"job has no records for genre(s): {', '.join(sorted(unknown))}. "
+                                 f"available: {', '.join(sorted(counts))}"}, 400
+            counts = {g: n for g, n in counts.items() if g in want}
+            if not counts:
+                return {"error": "genres selected nothing"}, 400
         dist_dir = os.path.join(output_dir, AUTHORING_DIST_DIR)
         manifest = build_sft_bins(
             stem, fam_dir, dist_dir, sorted(f"{g}.jsonl" for g in counts),

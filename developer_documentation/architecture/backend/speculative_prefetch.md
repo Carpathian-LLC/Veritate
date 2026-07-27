@@ -10,6 +10,10 @@ Owned by [speculate.py](../../../veritate_mri/inference/speculate.py). The route
 surface and the flush live in
 [backends_routes.py](../../../veritate_mri/routes/backends_routes.py).
 
+> Generates the **reply** ahead, which requires knowing the user has finished typing.
+> For reading the **prompt** ahead, which requires knowing nothing and wastes nothing,
+> see [read_ahead.md](read_ahead.md). Read-ahead is on by default; this is not.
+
 ## what it is
 
 One job process-wide, holding a draft prompt, the sampling params it was

@@ -248,10 +248,16 @@
         <div class="composer-actions">
           <button id="go" class="go">generate</button>
           <button id="stop" disabled>stop</button>
-          <label class="prime-toggle" title="Answer the question while you are still typing it. Pause and the engine runs ahead; pressing generate keeps those bytes instead of starting over.">
-            <input type="checkbox" id="prefetchEnable"> answer while typing
+          <span class="composer-sep"></span>
+          <label class="ahead-toggle tip" data-tip="The engine reads your prompt while you type it, so the reply starts writing the moment you press generate instead of after a pause. It guesses nothing, and reading your prompt is work the reply needs done anyway, so nothing is ever wasted.">
+            <input type="checkbox" id="readAheadEnable" checked> read ahead
           </label>
-          <span class="composer-hint">enter sends · shift+enter for a new line</span>
+          <label class="ahead-toggle tip" data-tip="The engine writes the reply before you press generate, guessing you have finished typing. When the guess is right the answer is already there; when it is wrong the whole reply is thrown away. Only worth it if your pause before sending is clearly longer than your pauses while thinking.">
+            <input type="checkbox" id="speculativeEnable"> generate ahead
+          </label>
+          <span class="composer-sep"></span>
+          <span class="composer-hint">enter sends &middot; shift+enter for a new line</span>
+          <span id="readState" class="composer-hint"></span>
           <button id="chatClear" class="composer-clear" title="Clear the transcript on this device">clear chat</button>
         </div>
       </div>
@@ -294,6 +300,18 @@
         <label title="Ablate this neuron index. -1 disables.">
           abl N <input type="number" id="ablNeuron" value="-1" step="1" min="-1" style="width:70px">
         </label>
+      </div>
+      <div id="aheadRow" class="adv-row" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:11px;color:var(--dim)">
+        <span class="adv-key" title="Sizing for generate ahead. Read ahead has nothing to size: it reads what you typed.">ahead</span>
+        <label title="A draft stops here if the model has not finished its answer first.">
+          write at most
+          <input type="number" id="speculativeBytes" min="1" max="4096" step="64" value="1024" style="width:76px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+        </label>
+        <label title="How long a real request can wait behind a draft turn already in flight.">
+          in turns of
+          <input type="number" id="speculativeChunkBytes" min="1" max="256" step="8" value="32" style="width:66px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+        </label>
+        <span id="speculativeStats" class="stat" style="font-size:10px;color:var(--dim)"></span>
       </div>
       <div id="decodeRow" class="adv-row" style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:11px;color:var(--dim)">
         <span class="adv-key" title="Decode speed mode + output shape constraint.">decode</span>
@@ -1701,28 +1719,6 @@
           </div>
 
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
-            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Answer while typing</div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Pause while typing a question and the Veritate engine starts writing the reply. Press generate and the answer opens on the bytes it already wrote instead of starting from nothing. Editing the question throws the draft away, so a reply is never stale, but the work spent on it is lost. Applies to the loaded C-engine model in chat and autocomplete; the Generation tab carries the same switch.</div>
-            <label class="opt" style="max-width:none;flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin-top:2px">
-              <input type="checkbox" id="speculativeEnable">
-              <span class="opt-title" style="margin:0;font-size:11.5px">Answer while typing</span>
-            </label>
-            <div class="inline" style="gap:6px;margin-top:4px">
-              <span class="meta" style="font-size:10.5px">write at most</span>
-              <input type="number" id="speculativeBytes" min="1" max="4096" step="64" value="1024" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 6px;font:inherit;border-radius:3px;font-size:11px">
-              <span class="meta" style="font-size:10.5px">bytes per draft</span>
-            </div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">The draft stops here if the model has not finished its answer first. Higher gets more of a long answer ready; lower wastes less on drafts you never send.</div>
-            <div class="inline" style="gap:6px">
-              <span class="meta" style="font-size:10.5px">in turns of</span>
-              <input type="number" id="speculativeChunkBytes" min="1" max="256" step="8" value="32" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 6px;font:inherit;border-radius:3px;font-size:11px">
-              <span class="meta" style="font-size:10.5px">bytes</span>
-            </div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">How long a real request can wait behind a draft turn already in flight. Smaller reacts faster when you press generate; larger spends less time re-reading what it already wrote.</div>
-            <div id="speculativeStats" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:2px"></div>
-          </div>
-
-          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Typing recorder</div>
             <div class="meta" style="font-size:10.5px;color:var(--dim)">Type questions here the way you normally would, pauses and typos included. <b>Press Enter when a question is finished</b> and it starts the next one. That keypress is the only label the data needs: it marks which keystroke you were actually done on, so every other keystroke is a known not-done. Every keystroke is recorded with its gap, its character, and where in the text it fell, and the whole session is handed back raw.</div>
             <textarea id="calBox" rows="2" placeholder="type a question, press Enter, type another" style="font-size:13px;line-height:1.5;min-height:52px"></textarea>
@@ -1737,7 +1733,7 @@
                   <i class="gap-key gap-key-rule"></i>current threshold
                 </span>
               </figcaption>
-              <div id="calStrip" class="gap-strip"><i id="calRule" class="gap-rule"></i></div>
+              <div id="calStrip" class="gap-strip"><div id="calTrack" class="gap-track"><i id="calRule" class="gap-rule"></i></div></div>
               <div class="gap-axis"><span id="calAxisMax">0 ms</span><span id="calAxisN">no keystrokes yet</span></div>
             </figure>
 
@@ -1746,6 +1742,7 @@
             <div class="inline" style="gap:8px;flex-wrap:wrap">
               <button id="calSave" disabled>save session</button>
               <button id="calCopy" disabled>copy raw json</button>
+              <button id="calUndo" disabled title="Un-mark the last Enter if you pressed it by accident">undo last finish</button>
               <button id="calReset">reset</button>
               <span id="calStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
             </div>
@@ -1964,6 +1961,27 @@
                 </label>
               </div>
               <div class="desc" style="margin-top:4px;font-size:10.5px;color:var(--dim);line-height:1.4">Optional add-on modules that sit alongside the dashboard and integrate through its published REST API. Add or remove them from the extension library.</div>
+            </div>
+
+            <div id="apiAheadRow" style="border:1px solid var(--line);border-radius:3px;padding:8px 10px;font-size:11px;grid-column:1/-1">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span style="color:var(--text);font-weight:600;letter-spacing:.03em">API: work ahead of a request</span>
+              </div>
+              <div class="desc" style="margin-top:4px;font-size:10.5px;color:var(--dim);line-height:1.4">Whether programmatic callers may have this box start work before they send the real request. The dashboard's own switches sit next to its generate button and are not affected by these. Both are for one caller at a time: this box runs a single stateful engine, so a client working ahead is a client holding it.</div>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+                <label class="ahead-opt">
+                  <input type="checkbox" id="apiReadAhead">
+                  <span><b>allow <code>POST /prefill</code></b>
+                    <em>The caller streams the prompt as it is built and the engine reads it, so the request that follows skips the prefill. Reading is work that request has to do anyway, so a caller that never follows through costs only the reading. Safe to leave on.</em>
+                  </span>
+                </label>
+                <label class="ahead-opt">
+                  <input type="checkbox" id="apiGenerateAhead">
+                  <span><b>allow <code>POST /prefetch</code></b> <i>experimental</i>
+                    <em>The caller has the engine write a reply to a prompt it has not sent yet, then claims it with <code>prefetch_id</code>. A claim that never comes discards a whole generation, so an unattended caller can burn the engine on replies nobody reads. Off unless you know the client claims what it asks for.</em>
+                  </span>
+                </label>
+              </div>
             </div>
 
             <div id="apiKeyRow" style="border:1px solid var(--line);border-radius:3px;padding:8px 10px;font-size:11px;grid-column:1/-1">
