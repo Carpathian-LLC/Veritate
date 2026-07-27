@@ -28,9 +28,7 @@ import re
 import time
 
 import torch
-
 from readers import paths
-
 
 DEFAULT_DATA = os.path.join(paths.EVAL_SAMPLES_ROOT, "ifeval_sample.json")
 
@@ -51,7 +49,7 @@ def _generate(model, prompt_bytes: bytes, max_new: int = 256,
     if ids.size(1) == 0:
         ids = torch.zeros((1, 1), dtype=torch.long)
     ids = ids.to(device)
-    max_seq = getattr(model, "seq", 512)
+    max_seq = model.seq
     model.eval()
     out_bytes = bytearray()
     with torch.no_grad():
@@ -105,7 +103,7 @@ def run_ifeval(model, data_path: str = DEFAULT_DATA,
         raise FileNotFoundError(
             f"IFEval data not found at {data_path}. See README.md for download instructions."
         )
-    with open(data_path, "r", encoding="utf-8") as f:
+    with open(data_path, encoding="utf-8") as f:
         blob = json.load(f)
     items = blob["items"]
     if limit is not None:
@@ -133,7 +131,7 @@ def run_ifeval(model, data_path: str = DEFAULT_DATA,
             kwargs = {k: v for k, v in rule.items() if k != "name"}
             checker = CHECKERS.get(name)
             if checker is None:
-                # Unknown rule — count as fail so the report flags the missing
+                # Unknown rule: count as fail so the report flags the missing
                 # checker rather than silently passing.
                 ok = False
                 rule_results.append({"name": name, "status": "no_checker"})

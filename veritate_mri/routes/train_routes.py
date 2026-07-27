@@ -13,8 +13,8 @@
 import json
 
 from flask import Response
-
-from readers import checkpoints, corpus as corpus_reader, models
+from readers import checkpoints, models
+from readers import corpus as corpus_reader
 from training import train_stream as train_stream_mod
 
 # ------------------------------------------------------------------------------------
@@ -40,7 +40,7 @@ def register(app):
 
     @app.route("/corpus/<path:stem>/usage")
     def corpus_usage(stem):
-        if ".." in stem or stem.startswith("/") or stem.startswith("\\"):
+        if ".." in stem or stem.startswith(("/", "\\")):
             return ("bad stem", 400)
         data = corpus_reader.usage(stem)
         if data is None:

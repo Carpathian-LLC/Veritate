@@ -48,7 +48,6 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, REPO_ROOT)
 
 import corpus_filters  # noqa: E402
-
 from readers import paths  # noqa: E402
 from training import mix_planner  # noqa: E402
 from training.sync import corpus_sync  # noqa: E402
@@ -105,7 +104,7 @@ def _selection(mix_arg, profile):
     if not mix_arg:
         return mix_planner.profile_stems(profile), None
     if os.path.isfile(mix_arg):
-        with open(mix_arg, "r", encoding=ENCODING) as f:
+        with open(mix_arg, encoding=ENCODING) as f:
             mix = json.load(f)
         return list(mix), {k: float(v) for k, v in mix.items()}
     parsed = multicorpus.parse_spec(mix_arg)

@@ -74,6 +74,91 @@ TIER_PYTHON_RANGE = {
     TIER_WINDOWS_X86: ((3, 11), (3, 13)),
 }
 
+# Homebrew installs under a different prefix per Mac arch. Both the manual
+# install hint and the post-`brew install` probe resolve through this table.
+BREW_PREFIX_BY_TIER = {
+    TIER_MAC_ARM:   "/opt/homebrew",
+    TIER_MAC_INTEL: "/usr/local",
+}
+BREW_PYTHON_TEMPLATE = "{prefix}/opt/python@{tag}/bin/python{tag}"
+
+# On-disk locations where an interpreter for a given tier may already exist.
+# Formatted with tag (e.g. "3.12"), ver_nodot ("312"), home, program_files,
+# local_appdata. Rule 34c: every supported tier has an entry; a missing tier
+# silently degrades to PATH-only lookup.
+_LINUX_PYTHON_TEMPLATES = (
+    "/usr/bin/python{tag}",
+    "/usr/local/bin/python{tag}",
+    "{home}/.local/bin/python{tag}",
+)
+PYTHON_PATH_TEMPLATES_BY_TIER = {
+    TIER_MAC_ARM: (
+        "/opt/homebrew/opt/python@{tag}/bin/python{tag}",
+        "/opt/homebrew/bin/python{tag}",
+        "/Library/Frameworks/Python.framework/Versions/{tag}/bin/python{tag}",
+    ),
+    TIER_MAC_INTEL: (
+        "/usr/local/opt/python@{tag}/bin/python{tag}",
+        "/usr/local/bin/python{tag}",
+        "/Library/Frameworks/Python.framework/Versions/{tag}/bin/python{tag}",
+    ),
+    TIER_LINUX_X86:   _LINUX_PYTHON_TEMPLATES,
+    TIER_LINUX_ARM:   _LINUX_PYTHON_TEMPLATES,
+    TIER_WINDOWS_X86: (
+        "{program_files}\\Python{ver_nodot}\\python.exe",
+        "{local_appdata}\\Programs\\Python\\Python{ver_nodot}\\python.exe",
+    ),
+}
+# Version-manager layouts, searched on every tier (a Windows box can hold a
+# uv-managed cpython, a Mac can hold a pyenv build).
+PYTHON_GLOB_TEMPLATES = (
+    "{home}/.pyenv/versions/{tag}.*/bin/python{tag}",
+    "{home}/.local/share/uv/python/cpython-{tag}.*/bin/python{tag}",
+    "{home}/.local/share/uv/python/cpython-{tag}.*/python.exe",
+    "{home}/Library/Application Support/uv/python/cpython-{tag}.*/bin/python{tag}",
+    "{home}/.asdf/installs/python/{tag}.*/bin/python{tag}",
+)
+ENV_PROGRAM_FILES        = "ProgramFiles"
+ENV_LOCALAPPDATA         = "LOCALAPPDATA"
+WIN_PROGRAM_FILES_FALLBACK = r"C:\Program Files"
+WIN_LOCALAPPDATA_FALLBACK  = r"~\AppData\Local"
+
+UV_INSTALL_PS1   = "https://astral.sh/uv/install.ps1"
+UV_INSTALL_SH    = "https://astral.sh/uv/install.sh"
+UV_BIN_CANDIDATES = ("~/.local/bin/uv", "~/.cargo/bin/uv")
+
+# GPU probe surface. Duplicated from veritate_core/plugin/deps.py because the
+# bootstrap phase runs under the system python before any venv exists and must
+# stay stdlib-only with no package imports.
+DRM_SYSFS_ROOT     = "/sys/class/drm"
+DRM_DEVICE_SUBDIR  = "device"
+DRM_VENDOR_FILE    = "vendor"
+PCI_VENDOR_NVIDIA  = "0x10de"
+PCI_VENDOR_AMD     = "0x1002"
+DEV_NVIDIA0        = "/dev/nvidia0"
+DEV_NVIDIACTL      = "/dev/nvidiactl"
+DEV_KFD            = "/dev/kfd"
+LIBCUDA_SONAME     = "libcuda.so.1"
+NVCUDA_DLL         = "nvcuda"
+PS_VIDEO_CONTROLLER_QUERY = ("(Get-CimInstance Win32_VideoController | "
+                             "Select-Object -ExpandProperty Name) -join '|'")
+NVIDIA_NAME_TOKENS = ("nvidia", "geforce", "rtx", "gtx", "quadro", "tesla")
+
+BIND_HOST             = "0.0.0.0"
+DASHBOARD_URL_TEMPLATE = "http://localhost:{port}"
+PORT_PROBE_TIMEOUT_S  = 0.5
+PORT_WAIT_TIMEOUT_S   = 10.0
+PORT_POLL_INTERVAL_S  = 0.25
+PROC_TERM_GRACE_S     = 3.0
+PROC_KILL_GRACE_S     = 2.0
+CMDLINE_PREVIEW_CHARS = 80
+
+INTERPRETER_PROBE_TIMEOUT_S = 15
+PY_LAUNCHER_TIMEOUT_S       = 10
+GPU_PROBE_TIMEOUT_S         = 10
+POWERSHELL_TIMEOUT_S        = 8
+TORCH_VERIFY_TIMEOUT_S      = 60
+
 # ------------------------------------------------------------------------------------
 # Bootstrap phase (runs under system python)
 
@@ -91,12 +176,13 @@ def _detect_tier() -> str:
 
 def _tier_install_hint(tier: str, py_max: tuple) -> str:
     pmaj, pmin = py_max
-    if tier == TIER_MAC_ARM:
-        return f"brew install python@{pmaj}.{pmin} && /opt/homebrew/opt/python@{pmaj}.{pmin}/bin/python{pmaj}.{pmin} {os.path.abspath(__file__)}"
-    if tier == TIER_MAC_INTEL:
-        return f"brew install python@{pmaj}.{pmin} && /usr/local/opt/python@{pmaj}.{pmin}/bin/python{pmaj}.{pmin} {os.path.abspath(__file__)}"
-    if tier == TIER_LINUX_X86 or tier == TIER_LINUX_ARM:
-        return f"sudo apt install python{pmaj}.{pmin} python{pmaj}.{pmin}-venv  (or distro equivalent), then run with python{pmaj}.{pmin}"
+    if tier in BREW_PREFIX_BY_TIER:
+        tag = f"{pmaj}.{pmin}"
+        py = BREW_PYTHON_TEMPLATE.format(prefix=BREW_PREFIX_BY_TIER[tier], tag=tag)
+        return f"brew install python@{tag} && {py} {os.path.abspath(__file__)}"
+    if tier in (TIER_LINUX_X86, TIER_LINUX_ARM):
+        return (f"sudo apt install python{pmaj}.{pmin} python{pmaj}.{pmin}-venv  (or distro equivalent), "
+                f"then run with python{pmaj}.{pmin}")
     if tier == TIER_WINDOWS_X86:
         return f"install Python {pmaj}.{pmin} from python.org and re-launch via start.bat"
     return ""
@@ -134,7 +220,7 @@ def _interpreter_version(py_path: str) -> "tuple | None":
     try:
         out = subprocess.check_output(
             [py_path, "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
-            text=True, stderr=subprocess.DEVNULL, timeout=15,
+            text=True, stderr=subprocess.DEVNULL, timeout=INTERPRETER_PROBE_TIMEOUT_S,
         ).strip()
         maj_s, min_s = out.split(".", 1)
         return (int(maj_s), int(min_s))
@@ -145,43 +231,18 @@ def _interpreter_version(py_path: str) -> "tuple | None":
 def _candidate_python_paths(tier: str, version: tuple) -> list:
     """Common on-disk locations where Python X.Y may already be installed."""
     maj, mn = version
-    tag = f"{maj}.{mn}"
-    home = os.path.expanduser("~")
-    paths: list = []
-
-    if tier == TIER_MAC_ARM:
-        paths += [
-            f"/opt/homebrew/opt/python@{tag}/bin/python{tag}",
-            f"/opt/homebrew/bin/python{tag}",
-            f"/Library/Frameworks/Python.framework/Versions/{tag}/bin/python{tag}",
-        ]
-    elif tier == TIER_MAC_INTEL:
-        paths += [
-            f"/usr/local/opt/python@{tag}/bin/python{tag}",
-            f"/usr/local/bin/python{tag}",
-            f"/Library/Frameworks/Python.framework/Versions/{tag}/bin/python{tag}",
-        ]
-    elif tier in (TIER_LINUX_X86, TIER_LINUX_ARM):
-        paths += [
-            f"/usr/bin/python{tag}",
-            f"/usr/local/bin/python{tag}",
-            f"{home}/.local/bin/python{tag}",
-        ]
-    elif tier == TIER_WINDOWS_X86:
-        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
-        local_appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser(r"~\AppData\Local"))
-        ver_nodot = f"{maj}{mn}"
-        paths += [
-            f"{program_files}\\Python{ver_nodot}\\python.exe",
-            f"{local_appdata}\\Programs\\Python\\Python{ver_nodot}\\python.exe",
-        ]
-
+    fields = {
+        "tag":       f"{maj}.{mn}",
+        "ver_nodot": f"{maj}{mn}",
+        "home":      os.path.expanduser("~"),
+        "program_files": os.environ.get(ENV_PROGRAM_FILES, WIN_PROGRAM_FILES_FALLBACK),
+        "local_appdata": os.environ.get(ENV_LOCALAPPDATA,
+                                        os.path.expanduser(WIN_LOCALAPPDATA_FALLBACK)),
+    }
+    paths = [t.format(**fields) for t in PYTHON_PATH_TEMPLATES_BY_TIER.get(tier, ())]
     # Cross-platform: pyenv, uv-managed, asdf
-    paths += sorted(glob.glob(f"{home}/.pyenv/versions/{tag}.*/bin/python{tag}"))
-    paths += sorted(glob.glob(f"{home}/.local/share/uv/python/cpython-{tag}.*/bin/python{tag}"))
-    paths += sorted(glob.glob(f"{home}/.local/share/uv/python/cpython-{tag}.*/python.exe"))
-    paths += sorted(glob.glob(f"{home}/Library/Application Support/uv/python/cpython-{tag}.*/bin/python{tag}"))
-    paths += sorted(glob.glob(f"{home}/.asdf/installs/python/{tag}.*/bin/python{tag}"))
+    for tmpl in PYTHON_GLOB_TEMPLATES:
+        paths += sorted(glob.glob(tmpl.format(**fields)))
     return paths
 
 
@@ -202,7 +263,7 @@ def _find_existing_python(tier: str, py_min: tuple, py_max: tuple) -> "str | Non
             try:
                 out = subprocess.check_output(
                     ["py", f"-{tag}", "-c", "import sys; print(sys.executable)"],
-                    text=True, stderr=subprocess.DEVNULL, timeout=10,
+                    text=True, stderr=subprocess.DEVNULL, timeout=PY_LAUNCHER_TIMEOUT_S,
                 ).strip()
                 if out:
                     candidates.append(out)
@@ -230,8 +291,7 @@ def _install_python_via_pkg_mgr(tier: str, py_target: tuple) -> "str | None":
             subprocess.check_call(["brew", "install", f"python@{tag}"])
         except subprocess.CalledProcessError:
             return None
-        prefix = "/opt/homebrew" if tier == TIER_MAC_ARM else "/usr/local"
-        cand = f"{prefix}/opt/python@{tag}/bin/python{tag}"
+        cand = BREW_PYTHON_TEMPLATE.format(prefix=BREW_PREFIX_BY_TIER[tier], tag=tag)
         if os.path.exists(cand):
             return cand
         return shutil.which(f"python{tag}")
@@ -253,7 +313,7 @@ def _install_python_via_pkg_mgr(tier: str, py_target: tuple) -> "str | None":
     if tier in (TIER_LINUX_X86, TIER_LINUX_ARM):
         # sudo -n: don't prompt. If passwordless sudo isn't available we silently
         # fall through to the uv fallback instead of blocking the launcher.
-        cmd: "list | None" = None
+        cmd: list | None = None
         if shutil.which("apt-get"):
             cmd = ["sudo", "-n", "apt-get", "install", "-y",
                    f"python{tag}", f"python{tag}-venv", f"python{tag}-dev"]
@@ -287,20 +347,16 @@ def _install_python_via_uv(py_target: tuple) -> "str | None":
             if os.name == "nt":
                 subprocess.check_call([
                     "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                    "-Command", "irm https://astral.sh/uv/install.ps1 | iex",
+                    "-Command", f"irm {UV_INSTALL_PS1} | iex",
                 ])
             else:
                 subprocess.check_call(
-                    "curl -LsSf https://astral.sh/uv/install.sh | sh",
+                    f"curl -LsSf {UV_INSTALL_SH} | sh",
                     shell=True,
                 )
         except subprocess.CalledProcessError:
             return None
-        for cand in [
-            os.path.expanduser("~/.local/bin/uv"),
-            os.path.expanduser("~/.cargo/bin/uv"),
-            shutil.which("uv"),
-        ]:
+        for cand in [os.path.expanduser(p) for p in UV_BIN_CANDIDATES] + [shutil.which("uv")]:
             if cand and os.path.exists(cand):
                 uv = cand
                 break
@@ -343,6 +399,25 @@ def _self_heal_python(tier: str, py_min: tuple, py_max: tuple) -> "str | None":
     return None
 
 
+def _drm_vendor_present(vendor_id: str) -> bool:
+    """True when any Linux DRM device reports PCI `vendor_id`."""
+    try:
+        entries = os.listdir(DRM_SYSFS_ROOT)
+    except OSError:
+        return False
+    for entry in entries:
+        vend = os.path.join(DRM_SYSFS_ROOT, entry, DRM_DEVICE_SUBDIR, DRM_VENDOR_FILE)
+        if not os.path.isfile(vend):
+            continue
+        try:
+            with open(vend) as f:
+                if f.read().strip().lower() == vendor_id:
+                    return True
+        except OSError:
+            pass
+    return False
+
+
 def _has_nvidia_gpu() -> bool:
     """True when a usable NVIDIA GPU is present. Cross-checks several signals so
     a machine with a working GPU + driver but a missing `nvidia-smi` on PATH
@@ -359,7 +434,8 @@ def _has_nvidia_gpu() -> bool:
     if shutil.which("nvidia-smi"):
         try:
             out = subprocess.check_output(
-                ["nvidia-smi", "-L"], text=True, stderr=subprocess.DEVNULL, timeout=10,
+                ["nvidia-smi", "-L"], text=True, stderr=subprocess.DEVNULL,
+                timeout=GPU_PROBE_TIMEOUT_S,
             )
             if "GPU" in out:
                 return True
@@ -371,53 +447,40 @@ def _has_nvidia_gpu() -> bool:
         try:
             import ctypes
             try:
-                ctypes.WinDLL("nvcuda")
+                ctypes.WinDLL(NVCUDA_DLL)
                 return True
             except OSError:
                 pass
         except Exception:
             pass
-        if shutil.which("powershell") or shutil.which("pwsh"):
-            ps = shutil.which("pwsh") or shutil.which("powershell")
+        ps = shutil.which("pwsh") or shutil.which("powershell")
+        if ps:
             try:
                 out = subprocess.check_output(
-                    [ps, "-NoProfile", "-Command",
-                     "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join '|'"],
-                    text=True, stderr=subprocess.DEVNULL, timeout=8,
+                    [ps, "-NoProfile", "-Command", PS_VIDEO_CONTROLLER_QUERY],
+                    text=True, stderr=subprocess.DEVNULL, timeout=POWERSHELL_TIMEOUT_S,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 low = out.lower()
-                if any(tok in low for tok in ("nvidia", "geforce", "rtx", "gtx", "quadro", "tesla")):
+                if any(tok in low for tok in NVIDIA_NAME_TOKENS):
                     return True
             except Exception:
                 pass
         return False
     # (4) Linux: several corroborating signals; any one is sufficient.
     if plat.startswith("linux"):
-        if os.path.exists("/dev/nvidia0") or os.path.exists("/dev/nvidiactl"):
+        if os.path.exists(DEV_NVIDIA0) or os.path.exists(DEV_NVIDIACTL):
             return True
         try:
             import ctypes
             try:
-                ctypes.CDLL("libcuda.so.1")
+                ctypes.CDLL(LIBCUDA_SONAME)
                 return True
             except OSError:
                 pass
         except Exception:
             pass
-        drm = "/sys/class/drm"
-        try:
-            for entry in os.listdir(drm):
-                vend = os.path.join(drm, entry, "device", "vendor")
-                if os.path.isfile(vend):
-                    try:
-                        with open(vend, "r") as f:
-                            if f.read().strip().lower() == "0x10de":
-                                return True
-                    except OSError:
-                        pass
-        except OSError:
-            pass
+        return _drm_vendor_present(PCI_VENDOR_NVIDIA)
     return False
 
 
@@ -429,24 +492,11 @@ def _has_amd_gpu() -> bool:
     `/sys/class/drm/*/device/vendor`."""
     if not sys.platform.startswith("linux"):
         return False
-    if os.path.exists("/dev/kfd"):
+    if os.path.exists(DEV_KFD):
         return True
     if shutil.which("rocm-smi") or shutil.which("rocminfo"):
         return True
-    drm = "/sys/class/drm"
-    try:
-        for entry in os.listdir(drm):
-            vend = os.path.join(drm, entry, "device", "vendor")
-            if os.path.isfile(vend):
-                try:
-                    with open(vend, "r") as f:
-                        if f.read().strip().lower() == "0x1002":
-                            return True
-                except OSError:
-                    pass
-    except OSError:
-        pass
-    return False
+    return _drm_vendor_present(PCI_VENDOR_AMD)
 
 
 def _torch_index_url(tier: str) -> "str | None":
@@ -477,7 +527,7 @@ def _verify_torch_cuda(py: str) -> bool:
             [py, "-c",
              "import torch,sys; "
              "print(int(bool(torch.cuda.is_available()) and (torch.version.cuda or '') != ''))"],
-            text=True, stderr=subprocess.DEVNULL, timeout=60,
+            text=True, stderr=subprocess.DEVNULL, timeout=TORCH_VERIFY_TIMEOUT_S,
         ).strip()
         return out.endswith("1")
     except Exception:
@@ -524,10 +574,10 @@ def _ensure_venv_and_deps() -> None:
         print(f"[veritate] re-executing under {better}")
         env = os.environ.copy()
         env[PY_REEXEC_ENV] = "1"
-        argv = [better, str(Path(__file__).resolve())] + sys.argv[1:]
+        argv = [better, str(Path(__file__).resolve()), *sys.argv[1:]]
         try:
             os.execve(better, argv, env)
-        except OSError as e:
+        except OSError:
             # Some shells (e.g. cmd.exe with .exe handlers) prefer spawn over exec.
             rc = subprocess.call(argv, env=env)
             sys.exit(rc)
@@ -637,7 +687,7 @@ def _reexec_under_venv() -> "int":
     env = os.environ.copy()
     env[LAUNCH_PHASE_ENV] = "1"
     env[TIER_ENV] = _detect_tier()
-    args = [str(_venv_python()), str(Path(__file__).resolve())] + sys.argv[1:]
+    args = [str(_venv_python()), str(Path(__file__).resolve()), *sys.argv[1:]]
     try:
         return subprocess.call(args, env=env, cwd=str(HERE))
     except KeyboardInterrupt:
@@ -656,8 +706,8 @@ def _open_browser_after_delay(url: str, delay: float) -> None:
     threading.Thread(target=_go, daemon=True).start()
 
 
-def _wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
-    """Block until a fresh bind on (0.0.0.0, port) succeeds, or timeout.
+def _wait_for_port_free(port: int, timeout: float = PORT_WAIT_TIMEOUT_S) -> bool:
+    """Block until a fresh bind on (BIND_HOST, port) succeeds, or timeout.
     Used on relaunch to defeat the race where the parent's socket is still in
     TIME_WAIT when the child tries to start serving. connect-probes don't help
     here — TIME_WAIT blocks bind() but no listener is accepting connects."""
@@ -667,13 +717,13 @@ def _wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
         s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
         try:
             s.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
-            s.bind(("0.0.0.0", port))
+            s.bind((BIND_HOST, port))
             s.close()
             return True
         except OSError:
             try: s.close()
             except OSError: pass
-            time.sleep(0.25)
+            time.sleep(PORT_POLL_INTERVAL_S)
     return False
 
 
@@ -706,17 +756,17 @@ def _reclaim_orphan_on_port(port: int) -> int:
         is_ours = (here_str in cmd) or (cwd == here_str)
         if not is_ours:
             print(f"[veritate] port {port} held by foreign PID {pid} "
-                  f"({cmd[:80]}); not killing", flush=True)
+                  f"({cmd[:CMDLINE_PREVIEW_CHARS]}); not killing", flush=True)
             continue
         print(f"[veritate] reclaiming port {port} from orphan Veritate PID {pid}",
               flush=True)
         try:
             proc.terminate()
             try:
-                proc.wait(timeout=3.0)
+                proc.wait(timeout=PROC_TERM_GRACE_S)
             except psutil.TimeoutExpired:
                 proc.kill()
-                proc.wait(timeout=2.0)
+                proc.wait(timeout=PROC_KILL_GRACE_S)
             reclaimed += 1
         except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
             print(f"[veritate] could not kill PID {pid}: {e}", flush=True)
@@ -755,9 +805,9 @@ def _launch_dashboard() -> int:
         os.environ.pop(MINIMAL_ENV, None)
 
     sys.path.insert(0, str(HERE / "veritate_mri"))
-    from readers   import paths       as paths_mod      # noqa: E402
-    from runtime   import logs        as logmod         # noqa: E402
-    from training  import build_runner                  # noqa: E402
+    from readers import paths as paths_mod
+    from runtime import logs as logmod
+    from training import build_runner
 
     logmod.info("veritate", f"detected {paths_mod.current_os()}/{paths_mod.current_arch()}")
     logmod.info("veritate", f"engine binary path: {paths_mod.engine_binary_path()}")
@@ -772,9 +822,10 @@ def _launch_dashboard() -> int:
                                 "heartbeat stays active; training read-only views remain available.")
 
     if not args.no_browser:
-        _open_browser_after_delay(f"http://localhost:{args.port}", BROWSER_DELAY_S)
+        _open_browser_after_delay(DASHBOARD_URL_TEMPLATE.format(port=args.port),
+                                  BROWSER_DELAY_S)
 
-    relaunch_cmd = [sys.executable, os.path.abspath(__file__)] + sys.argv[1:]
+    relaunch_cmd = [sys.executable, os.path.abspath(__file__), *sys.argv[1:]]
     sys.argv = [sys.argv[0],
                 "--model",   args.model,
                 "--port",    str(args.port),
@@ -783,11 +834,11 @@ def _launch_dashboard() -> int:
         sys.argv += ["--step", str(args.step)]
     sys.argv += rest
 
-    import app as mri_app  # noqa: E402
+    import app as mri_app
     mri_app.app.config["LAUNCH_CMD"] = relaunch_cmd
-    if not _wait_for_port_free(args.port, timeout=0.5):
+    if not _wait_for_port_free(args.port, timeout=PORT_PROBE_TIMEOUT_S):
         _reclaim_orphan_on_port(args.port)
-        if not _wait_for_port_free(args.port, timeout=10.0):
+        if not _wait_for_port_free(args.port, timeout=PORT_WAIT_TIMEOUT_S):
             msg = f"port {args.port} still bound after reclaim attempt — aborting launch"
             logmod.error("veritate", msg)
             print(f"[veritate] {msg}", flush=True)

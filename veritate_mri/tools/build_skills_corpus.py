@@ -402,8 +402,7 @@ def _passages_from_record(rng, record):
 def _iter_passages(rng, source):
     for path in _source_files(source):
         for record in _iter_records(path):
-            for passage in _passages_from_record(rng, record):
-                yield passage
+            yield from _passages_from_record(rng, record)
 
 
 def _position_bucket(idx, total):
@@ -462,7 +461,7 @@ def _answer(rng, span):
     return rng.choice(ANSWER_WRAPPERS).format(span=span)
 
 
-def grounded_example(rng, passage, pool, counts, emitted):
+def grounded_example(rng, passage, _pool, counts, emitted):
     spans = _unique_spans(passage)
     if not spans:
         return None
@@ -475,7 +474,7 @@ def grounded_example(rng, passage, pool, counts, emitted):
             passage, key, _position_bucket(idx, len(passage)))
 
 
-def novel_string_example(rng, passage, pool, counts, emitted):
+def novel_string_example(rng, passage, _pool, counts, emitted):
     noun, builder = rng.choice(SURFACE_BUILDERS)
     surface = builder(rng)
     if surface in passage:
@@ -486,7 +485,7 @@ def novel_string_example(rng, passage, pool, counts, emitted):
     at = {POSITION_BUCKETS[0]: 0,
           POSITION_BUCKETS[1]: len(sents) // 2,
           POSITION_BUCKETS[2]: len(sents)}[bucket]
-    context = " ".join(sents[:at] + [carrier] + sents[at:])
+    context = " ".join([*sents[:at], carrier, *sents[at:]])
     fields = {"noun": noun, "cloze": carrier.replace(surface, CLOZE_BLANK, 1)}
     key = _pick_template(rng, NOVEL_QUESTIONS, fields, counts, emitted)
     if key is None:
@@ -495,7 +494,7 @@ def novel_string_example(rng, passage, pool, counts, emitted):
             context, key, bucket)
 
 
-def honest_miss_example(rng, passage, pool, counts, emitted):
+def honest_miss_example(rng, passage, _pool, counts, emitted):
     open_probes = [p for p in MISS_PROBES if not p[1].search(passage)]
     if not open_probes:
         return None
@@ -531,7 +530,7 @@ def distractor_example(rng, passage, pool, counts, emitted):
     if key is None:
         return None
     slot = rng.randrange(len(others) + 1)
-    parts = others[:slot] + [passage] + others[slot:]
+    parts = [*others[:slot], passage, *others[slot:]]
     return (DISTRACTOR_QUESTIONS[key].format(**fields), _answer(rng, span),
             DISTRACTOR_JOIN.join(parts), key, _position_bucket(idx, len(passage)))
 

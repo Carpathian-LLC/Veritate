@@ -30,13 +30,43 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+# Bound by Brain.__init__ so this module imports on a host without torch installed.
+torch = None
+F     = None
 
 FFN_BUCKET_TARGET = 256
 ATTN_TOP_POS      = 6
 NEXT_CANDIDATES   = 12
 NEURON_TOP_K      = 8
 MEMORY_TOP_N      = 5
+MEMORY_ENTRIES_PER_NEURON = 3
+MEMORY_TEXT_CAP   = 120
 INFO_FLOW_TOP     = 8
+
+# Decode-path defaults. Single owner for the sampling knobs: every backend
+# signature and every route query-param default reads them from here so the
+# pytorch and C paths cannot drift apart.
+TEMPERATURE_DEFAULT        = 0.7
+TOP_K_DEFAULT              = 40
+MAX_NEW_DEFAULT            = 200
+ADAPTIVE_THRESHOLD_DEFAULT = 0.8
+# Repetition control is opt-in: absent params leave it off, so autocomplete and
+# the C-vs-PyTorch parity path stay unchanged. The "on" values live in
+# inference/decode/repetition.py as REP_*_DEFAULT.
+REP_WINDOW_OFF      = 0
+REP_PENALTY_OFF     = 0.0
+NO_REPEAT_NGRAM_OFF = 0
+
+# Fast-decode modes exposed by stream_fast. MTP_MODES need a model that
+# supports multi-token-prediction decode.
+FAST_MODE_KV         = "kv"
+FAST_MODE_MTP        = "mtp"
+FAST_MODE_MTP_VERIFY = "mtp-verify"
+FAST_MODE_ADAPTIVE   = "adaptive"
+FAST_MODE_LOOKAHEAD  = "lookahead"
+FAST_MTP_MODES   = (FAST_MODE_MTP, FAST_MODE_MTP_VERIFY)
+FAST_VALID_MODES = (FAST_MODE_KV, FAST_MODE_MTP, FAST_MODE_MTP_VERIFY,
+                    FAST_MODE_ADAPTIVE, FAST_MODE_LOOKAHEAD)
 
 # prompt/n-gram lookahead decode: suffix-match length to trigger a draft, and the
 # max bytes drafted per step. A longer match keeps false drafts (novel text) rare;
@@ -94,7 +124,7 @@ def load_memory(path):
     if not path or not os.path.isfile(path):
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             blob = json.load(f)
         return blob.get("neurons", {})
     except Exception as e:
@@ -104,13 +134,12 @@ def load_memory(path):
 
 class Brain:
     def __init__(self, checkpoint, threads=1, memory=None):
+        global torch, F
         import torch
         import torch.nn.functional as F
         repo_root = os.path.normpath(os.path.join(HERE, "..", ".."))
         sys.path.insert(0, repo_root)
         from veritate_core.load import load_from_state_dict
-        globals()["torch"] = torch
-        globals()["F"] = F
         torch.set_num_threads(threads)
         s = torch.load(checkpoint, map_location="cpu", weights_only=True, mmap=True)
         cfg = {}
@@ -329,7 +358,7 @@ class Brain:
         candidates = []
         for w in windows:
             for L in range(2, min(8, len(w) + 1)):  # up to 7-grams
-                for i in range(0, len(w) - L + 1):
+                for i in range(len(w) - L + 1):
                     sub = w[i:i + L]
                     if sub in seen:
                         continue
@@ -382,16 +411,17 @@ class Brain:
             }
         return None
 
-    def label_for(self, layer, neuron_id):
+    def label_for(self, _layer, _neuron_id):
         return None
 
     def neuron_byte_affinity(self, layer, neuron_id, top_k=5):
         """Top + and - bytes that this neuron writes toward when it fires."""
         row = self.byte_direction[layer][neuron_id]  # (vocab,)
         vals, idx = torch.topk(row, k=top_k)
-        pos = [{"b": int(i), "w": round(float(v), 4)} for v, i in zip(vals.tolist(), idx.tolist())]
+        pos = [{"b": int(i), "w": round(float(v), 4)} for v, i in zip(vals.tolist(), idx.tolist(), strict=True)]
         vals_n, idx_n = torch.topk(-row, k=top_k)
-        neg = [{"b": int(i), "w": round(-float(v), 4)} for v, i in zip(vals_n.tolist(), idx_n.tolist())]
+        neg = [{"b": int(i), "w": round(-float(v), 4)}
+               for v, i in zip(vals_n.tolist(), idx_n.tolist(), strict=True)]
         return {"pos": pos, "neg": neg, "all": [round(float(x), 5) for x in row.tolist()]}
 
     def neuron_predecessors(self, layer, neuron_id, top_k=10):
@@ -416,9 +446,9 @@ class Brain:
                 per_layer.append(contribs)
             flat = torch.cat(per_layer)  # (layer * ffn,)
             ffn_n = m.ffn
-            vals, idx = torch.topk(flat.abs(), min(top_k, flat.numel()))
+            _, idx = torch.topk(flat.abs(), min(top_k, flat.numel()))
         out = []
-        for v_abs, i in zip(vals.tolist(), idx.tolist()):
+        for i in idx.tolist():
             L_prev = i // ffn_n
             n = i % ffn_n
             c = float(flat[i])
@@ -447,9 +477,9 @@ class Brain:
                 per_layer.append(overlaps)
             flat = torch.cat(per_layer)
             ffn_n = m.ffn
-            vals, idx = torch.topk(flat.abs(), min(top_k, flat.numel()))
+            _, idx = torch.topk(flat.abs(), min(top_k, flat.numel()))
         out = []
-        for v_abs, i in zip(vals.tolist(), idx.tolist()):
+        for i in idx.tolist():
             L_offset = i // ffn_n
             L_post = layer + 1 + L_offset
             n = i % ffn_n
@@ -517,14 +547,16 @@ class Brain:
                 if not entries:
                     continue
                 weight = n["v"]
-                for e in entries[:3]:
+                for e in entries[:MEMORY_ENTRIES_PER_NEURON]:
                     text = e["text"]
                     scores[text] = scores.get(text, 0.0) + weight * e["score"]
         ranked = sorted(scores.items(), key=lambda x: -x[1])[:MEMORY_TOP_N]
-        return [{"text": t[:120], "score": round(s, 2)} for t, s in ranked]
+        return [{"text": t[:MEMORY_TEXT_CAP], "score": round(s, 2)} for t, s in ranked]
 
-    def stream(self, prompt, temperature=0.7, top_k_sample=40, max_new=200, addons_chain=None,
-               constraint=None, rep_window=0, rep_penalty=0.0, no_repeat_ngram=0):
+    def stream(self, prompt, temperature=TEMPERATURE_DEFAULT, top_k_sample=TOP_K_DEFAULT,
+               max_new=MAX_NEW_DEFAULT, addons_chain=None, constraint=None,
+               rep_window=REP_WINDOW_OFF, rep_penalty=REP_PENALTY_OFF,
+               no_repeat_ngram=NO_REPEAT_NGRAM_OFF):
         from inference.decode.repetition import RepetitionController
         m = self.model
         seq = m.seq
@@ -532,7 +564,7 @@ class Brain:
         if not prompt:
             prompt = " "
         prompt_bytes = prompt.encode("utf-8")
-        ids = torch.tensor([b for b in prompt_bytes], dtype=torch.long, device=self.device).unsqueeze(0)
+        ids = torch.tensor(list(prompt_bytes), dtype=torch.long, device=self.device).unsqueeze(0)
         if ids.size(1) >= seq:
             ids = ids[:, -(seq - 1):]
 
@@ -594,7 +626,7 @@ class Brain:
                 ffn_argmax.append(base64.b64encode(bytes(bucket_argmax.to(torch.uint8).cpu().numpy())).decode("ascii"))
                 v, idx = torch.topk(act, NEURON_TOP_K)
                 top_entries = []
-                for x, i in zip(v.tolist(), idx.tolist()):
+                for x, i in zip(v.tolist(), idx.tolist(), strict=True):
                     e = {"id": int(i), "v": round(float(x), 3)}
                     lbl = self.label_for(L, int(i))
                     if lbl is not None:
@@ -622,7 +654,7 @@ class Brain:
             flow_v, flow_i = torch.topk(attn_to_pos, min(INFO_FLOW_TOP, T))
             flow_max = float(attn_to_pos.max().clamp(min=1e-9))
             info_flow = [{"p": int(p), "w": round(float(x) / flow_max, 3)}
-                         for x, p in zip(flow_v.tolist(), flow_i.tolist())]
+                         for x, p in zip(flow_v.tolist(), flow_i.tolist(), strict=True)]
 
             res_norms, contributions = [], []
             for L in range(m.layers):
@@ -638,13 +670,13 @@ class Brain:
                 p = F.softmax(lens_logits, dim=-1)
                 top_p, top_i = torch.topk(p, 3)
                 lens.append([{"b": int(b), "p": round(float(pp), 3)}
-                             for pp, b in zip(top_p.tolist(), top_i.tolist())])
+                             for pp, b in zip(top_p.tolist(), top_i.tolist(), strict=True)])
 
             probs = F.softmax(last_logits, dim=-1)
             entropy_bits = float(-(probs * (probs + 1e-12).log2()).sum())
             cv, ci = torch.topk(probs, NEXT_CANDIDATES)
             candidates = [{"b": int(b), "p": round(float(pp), 3)}
-                          for pp, b in zip(cv.tolist(), ci.tolist())]
+                          for pp, b in zip(cv.tolist(), ci.tolist(), strict=True)]
 
             scaled = last_logits / max(temperature, 1e-6)
             if addons_chain is not None and len(addons_chain) > 0:
@@ -758,9 +790,11 @@ class Brain:
     # The default stream() above is still the canonical path the dashboard
     # uses; this is opt-in via /generate?fast=kv|mtp.
 
-    def stream_fast(self, prompt, mode="kv", temperature=0.7, top_k_sample=40,
-                    max_new=200, addons_chain=None, constraint=None,
-                    adaptive_threshold=0.8, rep_window=0, rep_penalty=0.0, no_repeat_ngram=0):
+    def stream_fast(self, prompt, mode=FAST_MODE_KV, temperature=TEMPERATURE_DEFAULT,
+                    top_k_sample=TOP_K_DEFAULT, max_new=MAX_NEW_DEFAULT, addons_chain=None,
+                    constraint=None, adaptive_threshold=ADAPTIVE_THRESHOLD_DEFAULT,
+                    rep_window=REP_WINDOW_OFF, rep_penalty=REP_PENALTY_OFF,
+                    no_repeat_ngram=NO_REPEAT_NGRAM_OFF):
         from inference.decode.repetition import RepetitionController
         m = self.model
         seq = m.seq
@@ -784,13 +818,12 @@ class Brain:
                     constraint.step(int(_b) & 0xff)
 
         has_mtp = m.supports_mtp_decode()
-        mtp_modes = ("mtp", "mtp-verify")
-        valid_modes = ("kv", "mtp", "mtp-verify", "adaptive", "lookahead")
-        if mode in mtp_modes and not has_mtp:
-            yield {"kind": "error", "message": f"fast={mode} requires a model with multi-token-prediction decode support"}
+        if mode in FAST_MTP_MODES and not has_mtp:
+            yield {"kind": "error",
+                   "message": f"fast={mode} requires a model with multi-token-prediction decode support"}
             return
-        if mode not in valid_modes:
-            yield {"kind": "error", "message": f"unknown fast mode: {mode!r}. Allowed: {', '.join(valid_modes)}."}
+        if mode not in FAST_VALID_MODES:
+            yield {"kind": "error", "message": f"unknown fast mode: {mode!r}. Allowed: {', '.join(FAST_VALID_MODES)}."}
             return
 
         yield {
@@ -802,23 +835,23 @@ class Brain:
             "fast_mode": mode,
             "prompt": prompt,
             "prompt_bytes": list(prompt_bytes),
-            "adaptive_threshold": adaptive_threshold if mode == "adaptive" else None,
+            "adaptive_threshold": adaptive_threshold if mode == FAST_MODE_ADAPTIVE else None,
         }
 
-        if mode == "kv":
+        if mode == FAST_MODE_KV:
             yield from self._stream_fast_kv(prompt_bytes, temperature, top_k_sample,
                                             max_new, addons_chain, constraint, rep)
-        elif mode == "adaptive":
+        elif mode == FAST_MODE_ADAPTIVE:
             yield from self._stream_fast_adaptive(prompt_bytes, temperature, top_k_sample,
                                                   max_new, addons_chain, constraint, rep,
                                                   threshold=adaptive_threshold)
-        elif mode == "mtp":
+        elif mode == FAST_MODE_MTP:
             yield from self._stream_fast_mtp(prompt_bytes, temperature, top_k_sample,
                                              max_new, addons_chain, constraint, rep)
-        elif mode == "mtp-verify":
+        elif mode == FAST_MODE_MTP_VERIFY:
             yield from self._stream_fast_mtp_verify(prompt_bytes, temperature, top_k_sample,
                                                     max_new, addons_chain, constraint, rep)
-        elif mode == "lookahead":
+        elif mode == FAST_MODE_LOOKAHEAD:
             yield from self._stream_fast_lookahead(prompt_bytes, temperature, top_k_sample,
                                                    max_new, addons_chain, constraint, rep)
 
@@ -974,7 +1007,7 @@ class Brain:
 
         Addons + constraint apply to head-0 only (the verified-canonical
         path). Heads 1..K-1 sample under the same logit pipeline so their
-        proposals are still constraint-aware — but the verifier rejects them
+        proposals are still constraint-aware: but the verifier rejects them
         if they don't match head-0's argmax. Greedy verification (argmax)
         is used for the head-0 reference to preserve byte-exactness.
         """
@@ -1009,11 +1042,11 @@ class Brain:
                 return
 
             # Draft the next K-1 bytes from heads 1..K-1, also under the
-            # constraint+addons pipeline. These are SPECULATIVE — they're
+            # constraint+addons pipeline. These are SPECULATIVE: they're
             # only committed if pass-2 head-0 agrees.
             drafts = [nxt0]
             if K > 1:
-                # We need to NOT mutate the constraint while sampling drafts —
+                # We need to NOT mutate the constraint while sampling drafts:
                 # those bytes might not be accepted. Snapshot + restore.
                 snap = _snapshot_constraint(constraint)
                 # Temporarily step constraint forward by nxt0 so subsequent
@@ -1205,7 +1238,7 @@ class Brain:
             final-layer output (canonical forward).
 
         S44 measured ~32% mean compute savings on the 85M with this policy.
-        This is NOT byte-exact vs full-depth decode — the early-exit logits
+        This is NOT byte-exact vs full-depth decode: the early-exit logits
         come from an intermediate residual that wasn't trained to produce
         the final distribution. Quality regression depends on threshold.
         Use mode='kv' for byte-exact decode; this mode trades quality for
@@ -1237,7 +1270,7 @@ class Brain:
                     lens_logits = m.project_byte0(last_residual)[0, 0]
                     probs = F.softmax(lens_logits, dim=-1)
                     top1 = float(probs.max())
-                    if top1 >= threshold and L + 1 < m.layers:
+                    if top1 >= threshold and m.layers > L + 1:
                         exit_layer = L + 1
                         final_logits = lens_logits
                         break

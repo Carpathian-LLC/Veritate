@@ -119,7 +119,7 @@ async function withLoading(el, fn, opts) {
   finally { setLoading(el, false); }
 }
 
-// Inline pulse dot for polling-style refreshes — signals activity without
+// Inline pulse dot for polling-style refreshes: signals activity without
 // flickering a full overlay every tick.
 function setBusyDot(el, on) {
   const node = (typeof el === "string") ? $(el) : el;
@@ -128,10 +128,10 @@ function setBusyDot(el, on) {
 }
 
 // Fill `el` with skeleton placeholders. kind:
-//   "lines"  — n horizontal bars (default)
-//   "rows"   — n label+bar pairs
-//   "blocks" — n stacked rectangles
-//   "grid"   — auto-fill grid of small blocks
+//   "lines":   n horizontal bars (default)
+//   "rows":    n label+bar pairs
+//   "blocks":  n stacked rectangles
+//   "grid":    auto-fill grid of small blocks
 // Stamps data-skel so clearSkeleton knows to wipe its own placeholder html.
 function showSkeleton(el, kind, count) {
   const node = (typeof el === "string") ? $(el) : el;
@@ -229,26 +229,86 @@ function regionRamp(t, layer) {
   return `rgb(${r},${g},${b})`;
 }
 
-let _layerCount = 12;
+// Shape of the loaded model, filled from /meta and from the generate-stream
+// meta frame. Zero means "not known yet": callers omit the affected control,
+// caption, or plot rather than assume some other model's dimensions.
+const modelShape = { layers: 0, hidden: 0, ffn: 0, ffn_buckets: 0, vocab: 0, seq: 0 };
 const FFN_LEGEND_IDS = ["ffnRegionLegend", "ffnRegionLegendL"];
+
+// Depth regions, in order. One table, so every panel that tints or names a
+// layer band draws from the same palette and the same wording.
+const REGIONS = [
+  { name: "sensory",     band: "b-sense", row: "region-sense",  tone: "cool", hex: "#5dc8ff", rgb: [93, 200, 255] },
+  { name: "association", band: "b-assoc", row: "region-assoc",  tone: "warm", hex: "#ffae5d", rgb: [255, 174, 93] },
+  { name: "output",      band: "b-out",   row: "region-output", tone: "hot",  hex: "#ff5d5d", rgb: [255, 93, 93] },
+];
+
+function setModelShape(m) {
+  for (const k of Object.keys(modelShape)) {
+    const v = parseInt(m[k], 10);
+    if (Number.isFinite(v) && v > 0) modelShape[k] = v;
+  }
+  setLayerCount(modelShape.layers);
+  applyShapeText();
+}
+
 function setLayerCount(n) {
-  if (!n || n < 1) return;
-  _layerCount = n;
-  _buildFfnLegend(n);
-  const abl = $("ablLayer");
-  if (abl) abl.max = String(n - 1);
+  modelShape.layers = n > 0 ? (n | 0) : 0;
+  _buildFfnLegend(modelShape.layers);
+  applyShapeControls();
 }
+
+// Numeric inputs whose ceiling is a model dimension. No cap until the shape is
+// known, so a stale bound can never clamp a larger model's valid range.
+function applyShapeControls() {
+  const setMax = (id, v) => {
+    const el = $(id);
+    if (!el) return;
+    if (v > 0) el.max = String(v);
+    else el.removeAttribute("max");
+  };
+  setMax("ablLayer",     modelShape.layers - 1);
+  setMax("ablNeuron",    modelShape.ffn - 1);
+  setMax("topk",         modelShape.vocab);
+  setMax("genRepWindow", modelShape.seq);
+}
+
+// Explainer prose carries the loaded model's numbers via data-shape spans.
+// data-shape-when hides a clause whose number is not known yet.
+function applyShapeText() {
+  document.querySelectorAll("[data-shape]").forEach(el => {
+    const v = modelShape[el.dataset.shape] || 0;
+    el.textContent = v > 0 ? v.toLocaleString() : (el.dataset.unknown || "");
+  });
+  document.querySelectorAll("[data-shape-when]").forEach(el => {
+    el.style.display = (modelShape[el.dataset.shapeWhen] || 0) > 0 ? "" : "none";
+  });
+}
+
+// The one depth split. Every sensory / association / output bucket in the
+// dashboard resolves here, so a layer count that is not a multiple of three
+// cannot land in different bands in different panels.
 function _regionBounds(n) {
-  const s = Math.max(1, Math.round(n / 3));
-  return { sense_end: s - 1, assoc_end: n - s - 1, total: n };
+  const t = Math.max(0, n | 0);
+  if (t < 1) return { sense_end: -1, assoc_end: -1, total: 0 };
+  const s = Math.max(1, Math.round(t / 3));
+  return { sense_end: s - 1, assoc_end: Math.max(s - 1, t - s - 1), total: t };
 }
+
+function regionOf(layer, total) {
+  const b = _regionBounds(total);
+  if (layer <= b.sense_end) return REGIONS[0];
+  if (layer <= b.assoc_end) return REGIONS[1];
+  return REGIONS[2];
+}
+
 function _buildFfnLegend(n) {
   const b = _regionBounds(n);
   const range = (a, c) => a === c ? `L${a}` : `L${a}&ndash;L${c}`;
-  const html = `
+  const html = b.total < 1 ? "" : `
     <span class="leg b-sense"><b>${range(0, b.sense_end)} sensory</b><span class="range">cool blue</span><em>raw byte features, surface patterns</em></span>
     <span class="leg b-assoc"><b>${range(b.sense_end + 1, b.assoc_end)} association</b><span class="range">warm orange</span><em>concepts, syntax, semantics</em></span>
-    <span class="leg b-out"><b>${range(b.assoc_end + 1, n - 1)} output</b><span class="range">hot red</span><em>commits to a specific next byte</em></span>
+    <span class="leg b-out"><b>${range(b.assoc_end + 1, b.total - 1)} output</b><span class="range">hot red</span><em>commits to a specific next byte</em></span>
   `;
   for (const id of FFN_LEGEND_IDS) {
     const el = $(id);
@@ -257,10 +317,15 @@ function _buildFfnLegend(n) {
 }
 
 function regionLabel(layer) {
-  const b = _regionBounds(_layerCount);
-  if (layer <= b.sense_end) return { name: "sensory", cls: "b-sense" };
-  if (layer <= b.assoc_end) return { name: "association", cls: "b-assoc" };
-  return { name: "output", cls: "b-out" };
+  const r = regionOf(layer, modelShape.layers);
+  return { name: r.name, cls: r.band };
+}
+
+// Vocab size for a training run: the run's own config.json first, the loaded
+// model second. Zero when neither is available.
+function runVocab(config) {
+  const c = config || {};
+  return ((c.shape && c.shape.vocab) || c.vocab || modelShape.vocab || 0) | 0;
 }
 
 function glyphFor(b) {
@@ -382,7 +447,7 @@ function drawSaturation(c, ctx, sat) {
     ctx.font = "12px ui-monospace,monospace";
     ctx.fillText("post-GELU saturation not measured for this checkpoint.", 12, 22);
     ctx.fillStyle = "#6f7480"; ctx.font = "11px ui-monospace,monospace";
-    ctx.fillText("Per-token frames are absent — only probe-step neuron snapshots exist.", 12, 42);
+    ctx.fillText("Per-token frames are absent: only probe-step neuron snapshots exist.", 12, 42);
     ctx.fillText("To populate: re-run training with dump_generation enabled (Rule 4 dumps).", 12, 60);
     return;
   }
@@ -394,7 +459,7 @@ function drawSaturation(c, ctx, sat) {
   if (maxSat <= 0) {
     ctx.fillStyle = "#10241a"; ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = "#5dff9b"; ctx.font = "13px ui-monospace,monospace";
-    ctx.fillText("0% across all " + L + " layers — no INT8 clipping pressure", 14, 26);
+    ctx.fillText("0% across all " + L + " layers: no INT8 clipping pressure", 14, 26);
     ctx.fillStyle = "#a8e8be"; ctx.font = "11px ui-monospace,monospace";
     ctx.fillText("post-GELU activations all sit inside the ±3.97 INT8 budget.", 14, 48);
     ctx.fillText("This is the QAT happy path: quantization is essentially free here.", 14, 66);
@@ -623,11 +688,11 @@ function drawLetterMs(c, ctx, allFrames, currentIdx, allBytes, promptLen) {
 
 function updateLetterStats(frames, idx, generatedBs) {
   if (idx < 0 || idx >= frames.length) {
-    $("lsByte").textContent = "—";
-    $("lsMs").textContent = "—";
-    $("lsSurp").textContent = "—";
-    $("lsEnt").textContent = "—";
-    $("lsFrame").textContent = "—";
+    $("lsByte").textContent = "-";
+    $("lsMs").textContent = "-";
+    $("lsSurp").textContent = "-";
+    $("lsEnt").textContent = "-";
+    $("lsFrame").textContent = "-";
     return;
   }
   const f = frames[idx];
@@ -638,8 +703,8 @@ function updateLetterStats(frames, idx, generatedBs) {
   else if (b === 9) ch = "→";
   $("lsByte").textContent = `${ch}  (0x${b.toString(16).padStart(2,"0")})`;
   $("lsMs").textContent   = f.fwd_ms.toFixed(2) + " ms";
-  $("lsSurp").textContent = f.surprise_bits != null ? f.surprise_bits.toFixed(2) : "—";
-  $("lsEnt").textContent  = f.entropy_bits != null ? f.entropy_bits.toFixed(2) : "—";
+  $("lsSurp").textContent = f.surprise_bits != null ? f.surprise_bits.toFixed(2) : "-";
+  $("lsEnt").textContent  = f.entropy_bits != null ? f.entropy_bits.toFixed(2) : "-";
   $("lsFrame").textContent = `${idx + 1} / ${frames.length}`;
 }
 
@@ -652,7 +717,7 @@ function drawTelemetry(c, ctx, allFrames, currentIdx) {
   const N = allFrames.length;
   const padL = 36, padT = 8, padB = 18;
   const plotW = w - padL - 8, plotH = h - padT - padB;
-  // The background — gridlines, three series sweeps, axis labels — depends only
+  // The background (gridlines, three series sweeps, axis labels) depends only
   // on allFrames and the canvas size, not on currentIdx. Cache it in an
   // offscreen canvas keyed by (frames identity, W, H). On scrub only the cursor
   // moves, so we blit the cache and redraw the cursor.
@@ -769,22 +834,6 @@ function drawList(elId, vals, cls) {
   $(elId).innerHTML = html;
 }
 
-// Region bucket for a layer index. Depth-relative: first third = sensory,
-// middle third = association, last third = output. Falls back to the legacy
-// 12-layer split (the only model size when these names were coined) when
-// totalLayers is omitted so old call sites keep working.
-function regionRowClass(layer, totalLayers) {
-  const t = totalLayers | 0;
-  if (t > 0) {
-    if (layer < t / 3)       return "region-sense";
-    if (layer < (2 * t) / 3) return "region-assoc";
-    return "region-output";
-  }
-  if (layer <= 3) return "region-sense";
-  if (layer <= 8) return "region-assoc";
-  return "region-output";
-}
-
 function renderLabelPill(label, opts) {
   if (!label || !label.category) return "";
   const cat = label.category;
@@ -793,18 +842,18 @@ function renderLabelPill(label, opts) {
   let titleHint = `${cat} pattern`;
   if (cat === "single") {
     inner = `'${escapeTape(trig || "?")}'`;
-    titleHint = `single byte detector — peaks land on '${trig}'`;
+    titleHint = `single byte detector: peaks land on '${trig}'`;
   } else if (cat === "word") {
     inner = `&ldquo;${escapeTape(trig || "")}&rdquo;`;
-    titleHint = `word detector — peaks land inside '${trig}'`;
+    titleHint = `word detector: peaks land inside '${trig}'`;
   } else if (cat === "bigram" || cat === "trigram" || cat === "4gram" || cat === "5gram" || cat === "6gram" || cat === "7gram") {
     // n-gram substring near peak
     inner = `~${escapeTape(trig || "")}`;
-    titleHint = `${cat} pattern — '${trig}' near peak`;
+    titleHint = `${cat} pattern: '${trig}' near peak`;
   } else {
     // class label (vowel / consonant / digit / punct / whitespace)
     inner = cat;
-    titleHint = `byte-class detector — peak bytes are ${cat}`;
+    titleHint = `byte-class detector: peak bytes are ${cat}`;
   }
   const confStr = (opts && opts.showConf && label.confidence != null)
     ? `<span class="conf">${Math.round(label.confidence * 100)}%</span>`
@@ -825,7 +874,7 @@ function drawDlaTable(elId, entries) {
     <th>contrib</th>
   </tr></thead><tbody>`;
   for (const e of entries) {
-    const cls = regionRowClass(e.layer, _layerCount);
+    const cls = regionOf(e.layer, modelShape.layers).row;
     const cclass = e.contrib >= 0 ? "contrib-pos" : "contrib-neg";
     const labelPill = e.label ? renderLabelPill(e.label) : "";
     html += `<tr class="${cls}" data-layer="${e.layer}" data-neuron="${e.neuron}">
@@ -866,8 +915,8 @@ function ablateAndRegen(layer, neuron) {
 function drawDecisionTrace(suffix, frame) {
   const pickedByteEl = $("dlaPickedByte" + suffix);
   const argmaxByteEl = $("dlaArgmaxByte" + suffix);
-  if (pickedByteEl) pickedByteEl.textContent = frame.byte != null ? glyphFor(frame.byte).txt + " (0x" + frame.byte.toString(16).padStart(2,"0") + ")" : "—";
-  if (argmaxByteEl) argmaxByteEl.textContent = frame.argmax_byte != null ? glyphFor(frame.argmax_byte).txt + " (0x" + frame.argmax_byte.toString(16).padStart(2,"0") + ")" : "—";
+  if (pickedByteEl) pickedByteEl.textContent = frame.byte != null ? glyphFor(frame.byte).txt + " (0x" + frame.byte.toString(16).padStart(2,"0") + ")" : "-";
+  if (argmaxByteEl) argmaxByteEl.textContent = frame.argmax_byte != null ? glyphFor(frame.argmax_byte).txt + " (0x" + frame.argmax_byte.toString(16).padStart(2,"0") + ")" : "-";
   drawDlaTable("dlaPickedTable" + suffix, frame.dla_picked || []);
   drawDlaTable("dlaArgmaxTable" + suffix, frame.dla_argmax || []);
   if (suffix === "") drawDlaCand(frame);
@@ -927,7 +976,7 @@ function drawConfidence(frame, allFrames, currentIdx) {
   const valEl = $("confValue");
   const conf = (frame && typeof frame.confidence === "number") ? frame.confidence : null;
   if (valEl) {
-    if (conf == null) valEl.innerHTML = `<span style="color:var(--dim)">confidence data not present — generate a token</span>`;
+    if (conf == null) valEl.innerHTML = `<span style="color:var(--dim)">confidence data not present: generate a token</span>`;
     else valEl.innerHTML = `confidence: <b style="color:${confColor(conf)}">${(conf * 100).toFixed(1)}%</b>`;
   }
   // big bar
@@ -1017,7 +1066,7 @@ function drawDecisiveness(c, ctx, decisiveness) {
   ctx.fillStyle = "#06070a"; ctx.fillRect(0, 0, w, h);
   if (!decisiveness || !decisiveness.length) {
     ctx.fillStyle = "#6f7480"; ctx.font = "11px ui-monospace,monospace";
-    ctx.fillText("decisiveness data not present — generate a token", 10, 18);
+    ctx.fillText("decisiveness data not present: generate a token", 10, 18);
     return;
   }
   const L = decisiveness.length;
@@ -1084,7 +1133,7 @@ function drawLens(elId, lens, finalByte) {
     if (p > peakP) { peakP = p; peakL = l; }
   }
 
-  const HIGHLIGHT = "#f0d65a"; // gold — matches --highlight, used here as "this row matches sampled byte"
+  const HIGHLIGHT = "#f0d65a"; // gold: matches --highlight, used here as "this row matches sampled byte"
   const finalGlyph = finalByte != null ? glyphFor(finalByte) : null;
   let header = "";
   if (finalGlyph) {
@@ -1095,14 +1144,14 @@ function drawLens(elId, lens, finalByte) {
     </div>`;
   }
 
-  // region band labels — bounds scale with the model's layer count.
+  // region band labels: bounds scale with the model's layer count.
   // Width flex values match each band's actual layer count so the labels
   // sit above the right rows for 12-layer, 28-layer, etc.
   const _rbLens   = _regionBounds(lens.length);
   const _senseN   = _rbLens.sense_end + 1;
   const _assocN   = _rbLens.assoc_end - _rbLens.sense_end;
   const _outN     = lens.length - _rbLens.assoc_end - 1;
-  const _range    = (a, c) => a === c ? `L${a}` : `L${a}–L${c}`;
+  const _range    = (a, c) => a === c ? `L${a}` : `L${a}-L${c}`;
   const regionBand = `<div style="display:flex;font-size:9px;letter-spacing:.12em;color:var(--dim);margin-bottom:4px;padding-left:30px">
     <span style="flex:${_senseN};color:var(--cool)">${_range(0, _rbLens.sense_end)} SENSORY</span>
     <span style="flex:${_assocN};color:var(--warm)">${_range(_rbLens.sense_end + 1, _rbLens.assoc_end)} ASSOCIATION</span>
@@ -1514,13 +1563,6 @@ function resetHallucination() {
   });
 })();
 
-function _coactRegionClass(layer, totalLayers) {
-  const t = totalLayers || 12;
-  if (layer < t / 3)       return "cool";
-  if (layer < (2 * t) / 3) return "warm";
-  return "hot";
-}
-
 function resetLiveCoact() {
   coactState.pairs.clear();
   coactState.nFrames = 0;
@@ -1564,8 +1606,8 @@ function updateLiveCoact(frame) {
     const [pa, pb] = k.split("|");
     const [La, na] = pa.split(":").map(Number);
     const [Lb, nb] = pb.split(":").map(Number);
-    const ra = _coactRegionClass(La, layers);
-    const rb = _coactRegionClass(Lb, layers);
+    const ra = regionOf(La, layers).tone;
+    const rb = regionOf(Lb, layers).tone;
     const w  = (count / maxCount) * 100;
     return `<div class="pair">
       <span class="nid ${ra}" data-layer="${La}" data-neuron="${na}">L${La}·n${na}</span>
@@ -1587,7 +1629,7 @@ function render(frame) {
   if (!frame) return;
   highlightAsciiByte(frame.byte);
   const hasMri = Array.isArray(frame.ffn_full) && frame.ffn_full.length > 0;
-  if (hasMri && frame.ffn_full.length !== _layerCount) setLayerCount(frame.ffn_full.length);
+  if (hasMri && frame.ffn_full.length !== modelShape.layers) setLayerCount(frame.ffn_full.length);
   if (hasMri) {
     drawFfn(cFfn, ctxFfn, frame.ffn_full);
     drawTopNeurons(cTop, ctxTop, frame.ffn_top);
@@ -1643,7 +1685,7 @@ function setMeta(m) {
   }
   meta = m;
   promptBytes = m.prompt_bytes || [];
-  if (m.layers) setLayerCount(m.layers);
+  setModelShape(m);
   const prec = m.precision || "FP32";
   const precColor = prec.startsWith("QAT") ? "var(--warm)" : "var(--data-pos)";
   const cDir = m.c_model_dir || (m.c_model || null);
@@ -1836,7 +1878,7 @@ function _applyModeAvailability() {
 }
 
 // Caps change on disk while a run trains (chat SFT flips in_progress -> trained);
-// poll caps only — never rebuild the picker — so chat enables without a reload.
+// poll caps only, never rebuild the picker, so chat enables without a reload.
 function pollModeCaps() {
   if (document.hidden) return;
   fetch("/pytorch-models").then(r => r.ok ? r.json() : null).then(d => {
@@ -1859,7 +1901,7 @@ function showRagEmpty(reason) {
   wrap.style.display = "";
   const hits = $("ragHits");
   if (hits) hits.innerHTML = `<div style="${EMPTY_PALE}">${_esc(reason)}</div>`;
-  const meta = $("ragPanelMeta"); if (meta) meta.textContent = "—";
+  const meta = $("ragPanelMeta"); if (meta) meta.textContent = "-";
   const pre  = $("ragPrefix"); if (pre) pre.textContent = "";
 }
 function renderRagEvent(ev) {
@@ -1892,10 +1934,10 @@ function showAgentEmpty(reason) {
   wrap.style.display = "";
   const tl = $("agentTimeline");
   if (tl) tl.innerHTML = `<div style="${EMPTY_PALE}">${_esc(reason)}</div>`;
-  const meta = $("agentPanelMeta"); if (meta) meta.textContent = "—";
+  const meta = $("agentPanelMeta"); if (meta) meta.textContent = "-";
 }
 
-// ---- chat framing (platform chat markers — same contract as /hybrid/chat) ----
+// ---- chat framing (platform chat markers, same contract as /hybrid/chat) ----
 // Frames are literal byte sequences the chat-trained model learned in SFT.
 // vocab=256, so these are just bytes, not special tokens. Current chat models
 // (chat_v1/v2/v3 corpora) train on <|user|>/<|assistant|>/<|end|>; ChatML
@@ -2059,7 +2101,7 @@ function _resetGenButton() {
   if (typeof _GenThink !== "undefined") _GenThink.stop();
 }
 
-// Generation "thinking" typewriter — same typing feel as the Ask Aki loader,
+// Generation "thinking" typewriter: same typing feel as the Ask Aki loader,
 // scoped to the inline panel under the prompt. Uses identical char/hold/pause
 // constants so the two indicators look and pace the same.
 const _GenThink = (() => {
@@ -2228,7 +2270,7 @@ $("go").addEventListener("click", async () => {
       } catch (_) {}
       await _pollBackends();
       if (!backendsState.pytorch.loaded) {
-        const err = backendsState.lastError || "model failed to load — pick a model from the dropdown and try again";
+        const err = backendsState.lastError || "model failed to load: pick a model from the dropdown and try again";
         _GenThink.showError(`PyTorch not loaded: ${err}`);
         _resetGenButton();
         return;
@@ -2269,7 +2311,7 @@ $("go").addEventListener("click", async () => {
     const checkedTools = Array.from(document.querySelectorAll(".agentTool"))
       .filter(cb => cb.checked).map(cb => cb.dataset.tool);
     if (checkedTools.length === 0) {
-      // agent with no tools selected — still readable in history, but warn
+      // agent with no tools selected, still readable in history, but warn
       showAgentEmpty("No tools selected. Check one in Advanced → tools to let the model use them, or switch to chat / autocomplete mode.");
     } else {
       const fsRoot = (($("agentFsRoot") || { value: "" }).value || "").trim();
@@ -2303,7 +2345,7 @@ $("go").addEventListener("click", async () => {
         }
         if (ev.kind === "stop") {
           agentStreamEnded = true;
-          // Agent loop ran but never emitted an answer — the underlying model
+          // Agent loop ran but never emitted an answer: the underlying model
           // likely isn't agent-trained (its outputs don't parse into Thought/
           // Action/Answer). Tell the user instead of leaving them blank.
           if (!agentGotAnswer) {
@@ -2327,7 +2369,7 @@ $("go").addEventListener("click", async () => {
         // Only surface a transport error if the stream never reached a
         // graceful end. A clean server-side close also fires onerror.
         if (!agentStreamEnded && generatedBytes.length === 0) {
-          _GenThink.showError("agent stream failed — re-check backend/model selection");
+          _GenThink.showError("agent stream failed: re-check backend/model selection");
           _pollBackends();
         }
         _resetGenButton();
@@ -2463,7 +2505,7 @@ $("go").addEventListener("click", async () => {
       const cNotLoaded = (backend === "c") && !(backendsState.c && backendsState.c.loaded);
       const msg = cNotLoaded
         ? "C engine not loaded."
-        : "generation stream failed — re-check backend/model selection";
+        : "generation stream failed: re-check backend/model selection";
       const actions = cNotLoaded ? _cEngineActionsHtml() : "";
       _GenThink.showError(msg, actions);
       _pollBackends();
@@ -2622,19 +2664,21 @@ var _trainStreamCount = 0;
 window.addEventListener("hashchange", () => activateTab(location.hash.slice(1)));
 setTimeout(() => activateTab(location.hash.slice(1)), 0);
 
-// keep the max-bytes hint in sync with the prompt length. the C engine caps at
-// its compiled V_SEQ; read the loaded model's seq from /meta (hybrid-class bins
-// are built at 1024) and fall back to 1024 rather than the old hardcoded 256.
-function _cSeqCap() {
-  const s = (typeof meta !== "undefined" && meta && meta.seq) ? parseInt(meta.seq, 10) : 0;
-  return s > 0 ? s : 1024;
-}
+// keep the max-bytes hint in sync with the prompt length. the cap is the loaded
+// model's sequence length minus the prompt. no model, no guess: the hint says so
+// and the field stays uncapped.
 function updateMaxHint() {
-  const C_SEQ = _cSeqCap();
+  const seq = modelShape.seq;
+  const maxnew = $("maxnew");
+  if (seq < 1) {
+    $("maxHint").textContent = "engine cap: seq unknown until a model is loaded";
+    maxnew.removeAttribute("max");
+    return;
+  }
   const promptBs = (new TextEncoder().encode($("prompt").value)).length;
-  const cap = Math.max(0, C_SEQ - promptBs);
-  $("maxHint").textContent = `engine cap: ${cap} bytes (V_SEQ=${C_SEQ} − ${promptBs} prompt)`;
-  $("maxnew").max = String(cap);
+  const cap = Math.max(0, seq - promptBs);
+  $("maxHint").textContent = `engine cap: ${cap} bytes (seq ${seq} minus ${promptBs} prompt)`;
+  maxnew.max = String(cap);
 }
 $("prompt").addEventListener("input", updateMaxHint);
 updateMaxHint();
@@ -2719,7 +2763,7 @@ function refreshPytorchModels() {
     // reload (the picker was gated on backend-switch before this async fetch).
     if (typeof _applyModeAvailability === "function") _applyModeAvailability();
   }).catch(err => {
-    fillSelectFallback("cModel", `endpoint missing — restart server (${err.message || err})`);
+    fillSelectFallback("cModel", `endpoint missing: restart server (${err.message || err})`);
   });
 }
 
@@ -2761,7 +2805,7 @@ function refreshCModels() {
     sel.disabled = false;
     refreshQatWarning();
   }).catch(err => {
-    fillSelectFallback("cModel", `endpoint missing — restart server (${err.message || err})`);
+    fillSelectFallback("cModel", `endpoint missing: restart server (${err.message || err})`);
   });
 }
 
@@ -2850,7 +2894,7 @@ $("backend").addEventListener("change", () => {
   if (typeof _applyModeAvailability === "function") _applyModeAvailability();
 });
 
-// "follow latest" — poll /c-models every 15s; if a fresher mtime than what's
+// "follow latest": poll /c-models every 15s; if a fresher mtime than what's
 // active appears, switch automatically. lets new training exports go live with
 // no manual action.
 let followLatestActiveMtime = 0;
@@ -2875,13 +2919,13 @@ $("followLatest").addEventListener("change", () => {
   if ($("followLatest").checked) pollFollowLatest();
 });
 
-// Generation tab preferences — persist controls across page refreshes so the
+// Generation tab preferences: persist controls across page refreshes so the
 // user doesn't lose backend choice, model pick, prompt, temp/top_k, RAG corpus,
 // tool selection, etc. on every reload.
 const _GenPrefs = (() => {
   const KEY = "veritate.genPrefs.v1";
   // [elementId, attribute]. cModel is restored in a second pass because its
-  // option list is fetched async. Prompt textarea is deliberately omitted —
+  // option list is fetched async. Prompt textarea is deliberately omitted:
   // it's transient input, not a preference.
   const FIELDS = [
     ["backend", "value"],
@@ -2984,7 +3028,7 @@ fetch("/meta").then(r => r.json()).then(m => {
     opt.disabled = false;
     opt.textContent = "Veritate";
   } else {
-    opt.textContent = "Veritate (not built — run build.bat)";
+    opt.textContent = "Veritate (not built, run build.bat)";
   }
   if ((m.checkpoint || m.c_model_dir) && !meta) {
     setMeta({
@@ -3022,7 +3066,7 @@ const learningState = {
   framesByStep: {},            // ckpt key -> { meta, frames }
   currentFrame: 0,             // token index within selected checkpoint
   promptBytes: [],
-  _epoch: 0,                   // monotonic counter — drops stale selectCheckpoint awaits
+  _epoch: 0,                   // monotonic counter: drops stale selectCheckpoint awaits
 };
 
 function ckptKey(c) { return (c.stage || "default") + ":" + c.step; }
@@ -3057,7 +3101,7 @@ function renderOutputEvolution() {
       sub.textContent = `${n} snapshots of the same brain learning to write`;
     } else {
       const labels = stages.map(s => s.label || s.name).join(" + ");
-      sub.textContent = `${n} snapshots across ${stages.length} stages — ${labels}`;
+      sub.textContent = `${n} snapshots across ${stages.length} stages: ${labels}`;
     }
   }
   // group ckpts by stage
@@ -3211,7 +3255,7 @@ async function ensureLearningLoaded() {
     }
   }
   // No timeline is available yet (training hasn't landed its first hook dump).
-  // Bail before the timeline.json fetch — otherwise it hits /timeline.json
+  // Bail before the timeline.json fetch: otherwise it hits /timeline.json
   // with no name prefix and 404s on every Learning-tab poll.
   if (!learningTimelinePathPrefix) {
     const el = $("learningStatus");
@@ -3224,7 +3268,7 @@ async function ensureLearningLoaded() {
   // Sequenced skeletons for every panel the Models-tab loader fills. The
   // render_* / draw* paths below all replace innerHTML when they finish, which
   // wipes whichever skeleton was stamped here. Panels still show their normal
-  // "no data" message when the run has nothing to render — that's the post-
+  // "no data" message when the run has nothing to render: that's the post-
   // load empty state, not the pre-load placeholder.
   showSkeleton("ckptOutputs", "blocks", 3);
   showSkeleton("learnCoactInfo", "lines", 2);
@@ -3257,7 +3301,7 @@ async function ensureLearningLoaded() {
     const tlEntry = learningTimelinesByName[learningTimelineName] || {};
     // Only fire the warning when the backend reports zero hook steps. A
     // model with some hooks (e.g. probe + lens but no generation yet) is
-    // not "hookless" — those panels will still render.
+    // not "hookless": those panels will still render.
     const noHooksWarn = (tlEntry.has_hooks === false)
       ? `<div class="meta" style="margin-top:8px;padding:8px 10px;border:1px solid var(--warm);border-radius:3px;color:var(--warm);font-size:11.5px;line-height:1.45">
           <b>No hook artifacts for this model yet.</b> Checkpoints (.pt) are present but the per-step probe / lens / classroom / generation dumps were not written. Either training has not reached its first save_checkpoint yet, or this trainer has not been ported to the <code>hook_spec()</code> contract (see developer_documentation/hooks/contract.md). Outputs / quant-KL / classroom panels will stay empty until hooks land.
@@ -3376,7 +3420,7 @@ function renderLearning() {
   renderResponseInto($("responseL"), learningState.promptBytes, generatedBs, idx, false);
   $("frameLabelL").textContent = `${idx + 1} / ${data.frames.length}`;
   updateScrubTape("scrubTapeL", data.frames, idx, learningState.promptBytes);
-  if (Array.isArray(frame.ffn_full) && frame.ffn_full.length && frame.ffn_full.length !== _layerCount) {
+  if (Array.isArray(frame.ffn_full) && frame.ffn_full.length && frame.ffn_full.length !== modelShape.layers) {
     setLayerCount(frame.ffn_full.length);
   }
   drawFfn(cFfnL, ctxFfnL, frame.ffn_full);
@@ -3454,8 +3498,8 @@ function regionDescription(layerNum) {
   // Bounds scale with the current model's layer count (1/3 sensory, 1/3
   // association, 1/3 output). The descriptive text adapts the cited layer
   // range so the tooltip never claims "L0-L3" on a 28-layer model.
-  const b = _regionBounds(_layerCount);
-  const rng = (a, c) => a === c ? `L${a}` : `L${a}–L${c}`;
+  const b = _regionBounds(modelShape.layers);
+  const rng = (a, c) => a === c ? `L${a}` : `L${a}-L${c}`;
   if (layerNum <= b.sense_end) {
     return {
       cls: "b-sense",
@@ -3473,15 +3517,12 @@ function regionDescription(layerNum) {
   return {
     cls: "b-out",
     name: "prefrontal / output",
-    blurb: `<b>${rng(b.assoc_end + 1, _layerCount - 1)} commit to the next byte.</b> They project all the accumulated context into a specific byte prediction. A neuron firing here votes hard for or against specific bytes; this is where the actual choice gets made.`,
+    blurb: `<b>${rng(b.assoc_end + 1, modelShape.layers - 1)} commit to the next byte.</b> They project all the accumulated context into a specific byte prediction. A neuron firing here votes hard for or against specific bytes; this is where the actual choice gets made.`,
   };
 }
 
 function regionChipClass(layerNum) {
-  const b = _regionBounds(_layerCount);
-  if (layerNum <= b.sense_end) return "region-sense";
-  if (layerNum <= b.assoc_end) return "region-assoc";
-  return "region-output";
+  return regionOf(layerNum, modelShape.layers).row;
 }
 
 function renderStatsStrip(stats, currentActivation) {
@@ -3825,10 +3866,9 @@ cFfn.addEventListener("click", (e) => {
   const layer = Math.floor(y / cellH);
   const bucket = Math.floor((x - padL) / cellW);
   if (layer < 0 || layer >= L || bucket < 0 || bucket >= B) return;
-  const ds = frame.ffn_downsample || 12;
-  const argmaxInBucket = frame.ffn_argmax[layer][bucket];
-  const neuronId = bucket * ds + argmaxInBucket;
-  showNeuronModal(layer, neuronId);
+  const ds = frame.ffn_downsample;
+  if (!ds) return;
+  showNeuronModal(layer, bucket * ds + frame.ffn_argmax[layer][bucket]);
 });
 cTop.addEventListener("click", (e) => {
   if (currentFrame < 0) return;
@@ -3847,7 +3887,7 @@ cTop.addEventListener("click", (e) => {
   showNeuronModal(layer, n.id, n.v);
 });
 
-// learning tab click handlers — same pattern but read from learningState
+// learning tab click handlers: same pattern but read from learningState
 function currentLearningFrame() {
   if (!learningState.meta) return null;
   const ck = learningState.meta.checkpoints[learningState.ckptIdx];
@@ -3869,10 +3909,9 @@ cFfnL.addEventListener("click", (e) => {
   const layer = Math.floor(y / cellH);
   const bucket = Math.floor((x - padL) / cellW);
   if (layer < 0 || layer >= L || bucket < 0 || bucket >= B) return;
-  const ds = frame.ffn_downsample || 12;
-  const argmaxInBucket = frame.ffn_argmax[layer][bucket];
-  const neuronId = bucket * ds + argmaxInBucket;
-  showNeuronModal(layer, neuronId);
+  const ds = frame.ffn_downsample;
+  if (!ds) return;
+  showNeuronModal(layer, bucket * ds + frame.ffn_argmax[layer][bucket]);
 });
 cTopL.addEventListener("click", (e) => {
   const frame = currentLearningFrame();
@@ -3997,12 +4036,12 @@ async function loadTrainCsv() {
     if (!r.ok) throw new Error("HTTP " + r.status);
     const text = await r.text();
     if (text === trainLastText) {
-      $("runCsvStatus").textContent = `(no change at ${new Date().toLocaleTimeString()} — run: ${trainSelectedRun})`;
+      $("runCsvStatus").textContent = `(no change at ${new Date().toLocaleTimeString()}, run: ${trainSelectedRun})`;
       return;
     }
     trainLastText = text;
     parseAndRenderTrain(text);
-    $("runCsvStatus").textContent = `loaded ${new Date().toLocaleTimeString()} — run: ${trainSelectedRun}`;
+    $("runCsvStatus").textContent = `loaded ${new Date().toLocaleTimeString()}, run: ${trainSelectedRun}`;
   } catch (e) {
     $("runCsvStatus").textContent = "error: " + e.message;
   }
@@ -4112,7 +4151,7 @@ function plotTrainSeries(canvas, ctx, series, opts) {
     const fitted = Math.max(dataMax * pad, dataMax + 0.02);
     if (fitted < yMax) yMax = fitted;
   }
-  // optional x bounds — used to reserve x-axis room for future checkpoints
+  // optional x bounds: used to reserve x-axis room for future checkpoints
   // so the chart layout doesn't shift each time a probe lands.
   if (typeof opts.xMinFloor === "number") xMin = Math.min(xMin, opts.xMinFloor);
   if (typeof opts.xMaxCeil  === "number") xMax = Math.max(xMax, opts.xMaxCeil);
@@ -4314,7 +4353,7 @@ function renderTrainPlateau(valPoints) {
     warming:    { what: "Not enough val measurements yet to judge a trend.",                                          act: "" },
     improving:  { what: "Val loss is dropping consistently across the last 4 evals.",                                  act: "Keep training." },
     bouncing:   { what: "Val is moving up and down with no clear direction.",                                          act: "Often a local minimum. Lower LR a bit, or keep going to see if average drifts down." },
-    slowing:    { what: "Val is trending down at a small rate (slope between 0.5% and 2% per eval). Normal late-training behavior — the bulk of learning is done; remaining gains come from polish.", act: "Keep training. Cosine LR decay is doing its job. Stop early only if val starts curving back up." },
+    slowing:    { what: "Val is trending down at a small rate (slope between 0.5% and 2% per eval). Normal late-training behavior: the bulk of learning is done; remaining gains come from polish.", act: "Keep training. Cosine LR decay is doing its job. Stop early only if val starts curving back up." },
     plateau:    { what: "Val has flatlined across 4 evals. Diminishing returns.",                                      act: "Stop training, or sharply cool LR for one more pass to extract a final 1-3%." },
     regressing: { what: "Val loss is rising on average.",                                                              act: "Lower LR. If it persists, restart from the last good checkpoint. Check for overfitting." },
   };
@@ -4324,7 +4363,7 @@ function renderTrainPlateau(valPoints) {
   // real plateau. Override the advice text accordingly so the panel doesn't
   // tell users to stop training when they're 5% of the way through their
   // data budget. The state badge (color + label) still reflects the raw
-  // slope verdict — only the prose under it changes.
+  // slope verdict: only the prose under it changes.
   const lastVal = valPoints.length ? valPoints[valPoints.length - 1] : null;
   const latestStep = lastVal ? lastVal.x : 0;
   const tpp = _trTokPerParam(latestStep);
@@ -4338,13 +4377,13 @@ function renderTrainPlateau(valPoints) {
   // data to absorb. "improving" / "warming" advice doesn't change with
   // exposure since "keep training" is already the right call.
   if (exposureStage === "early") {
-    notes.plateau    = { what: `Val has flatlined, but tokens-per-param is only ${tpp.toFixed(2)} — far below the ~20 Chinchilla-optimal ratio. This is almost certainly a saddle in an undertrained model, not real convergence.`, act: "Keep training. The current LR is likely too high for fine progress at this scale — let the cosine schedule keep cooling it. Don't stop." };
-    notes.regressing = { what: `Val is ticking up, but tokens-per-param is only ${tpp.toFixed(2)}. With this little data exposure, real overfitting is very unlikely — more probable causes are eval-set noise (bump eval_iters) or LR still too hot.`, act: "Keep training. Watch over the next 4-6 evals; if the rise is consistent, lower LR rather than stop." };
-    notes.bouncing   = { what: `Val is noisy and tokens-per-param is only ${tpp.toFixed(2)}. Normal early-training behavior — the loss surface is rough and the model is still finding its footing.`, act: "Keep training. Consider bumping eval_iters for a cleaner val signal." };
+    notes.plateau    = { what: `Val has flatlined, but tokens-per-param is only ${tpp.toFixed(2)}, far below the ~20 Chinchilla-optimal ratio. This is almost certainly a saddle in an undertrained model, not real convergence.`, act: "Keep training. The current LR is likely too high for fine progress at this scale. Let the cosine schedule keep cooling it. Don't stop." };
+    notes.regressing = { what: `Val is ticking up, but tokens-per-param is only ${tpp.toFixed(2)}. With this little data exposure, real overfitting is very unlikely: more probable causes are eval-set noise (bump eval_iters) or LR still too hot.`, act: "Keep training. Watch over the next 4-6 evals; if the rise is consistent, lower LR rather than stop." };
+    notes.bouncing   = { what: `Val is noisy and tokens-per-param is only ${tpp.toFixed(2)}. Normal early-training behavior: the loss surface is rough and the model is still finding its footing.`, act: "Keep training. Consider bumping eval_iters for a cleaner val signal." };
     notes.slowing    = { what: `Val is improving slowly. Tokens-per-param is only ${tpp.toFixed(2)} (well below Chinchilla-optimal ~20), so the slowdown is unlikely to be true diminishing returns yet.`, act: "Keep training. Slow gains will compound with more data exposure." };
   } else if (exposureStage === "mid") {
-    notes.plateau    = { what: `Val has flatlined. Tokens-per-param is ${tpp.toFixed(2)} — meaningful training but not yet Chinchilla-optimal (~20). Could be a saddle or could be early convergence.`, act: "Probably keep training another ~1-2x your current step count and reassess. Sharply cooling LR now is an option if you need to ship soon." };
-    notes.regressing = { what: `Val is rising on average. Tokens-per-param is ${tpp.toFixed(2)} — overfitting is possible but not the most likely cause this early.`, act: "Lower LR. If the rise persists for 4+ more evals, consider rolling back to the last good checkpoint." };
+    notes.plateau    = { what: `Val has flatlined. Tokens-per-param is ${tpp.toFixed(2)}, meaningful training but not yet Chinchilla-optimal (~20). Could be a saddle or could be early convergence.`, act: "Probably keep training another ~1-2x your current step count and reassess. Sharply cooling LR now is an option if you need to ship soon." };
+    notes.regressing = { what: `Val is rising on average. Tokens-per-param is ${tpp.toFixed(2)}: overfitting is possible but not the most likely cause this early.`, act: "Lower LR. If the rise persists for 4+ more evals, consider rolling back to the last good checkpoint." };
   }
 
   const c = colors[r.state] || colors.warming;
@@ -4501,7 +4540,7 @@ function renderTrain(allRows) {
 }
 
 // ============================================================
-// CLASSROOM DASHBOARD — tier 1 panels
+// CLASSROOM DASHBOARD: tier 1 panels
 // ============================================================
 //
 // state cached per-run. probe + lens fetched once per checkpoint, never re-polled.
@@ -4518,7 +4557,7 @@ const cReadingCompHardT = $("cReadingCompHardT"), ctxReadingCompHardT = cReading
 const cReadingCompEasyL = $("cReadingCompEasyL"), ctxReadingCompEasyL = cReadingCompEasyL.getContext("2d");
 const cReadingCompHardL = $("cReadingCompHardL"), ctxReadingCompHardL = cReadingCompHardL.getContext("2d");
 
-// classroom panel refs — one set per tab. render functions key off these.
+// classroom panel refs: one set per tab. render functions key off these.
 const classroomRefsT = {
   sizeMeterId: "trainSizeMeter",
   lensDriftId: "trainLensDrift",
@@ -4604,7 +4643,7 @@ const classroomStateL = makeClassroomState();   // learning tab
 
 // `>>> 0` coerces the bitwise-OR result to unsigned. Without it, any byte with
 // the high bit set (b[o+3] >= 0x80) makes the implicit int32 cast in `|` return
-// a negative number — most painfully, 0xFFFFFFFF (the ZIP64 sentinel) came back
+// a negative number: most painfully, 0xFFFFFFFF (the ZIP64 sentinel) came back
 // as -1, so the ZIP64 detection check `=== 0xFFFFFFFF` never matched.
 function _u32le(b, o) { return (b[o] | (b[o+1]<<8) | (b[o+2]<<16) | (b[o+3]*0x1000000)) >>> 0; }
 function _u16le(b, o) { return b[o] | (b[o+1]<<8); }
@@ -4674,7 +4713,7 @@ async function parse_npz(buf) {
       // Manually pump the decompressor so we can keep the already-decoded
       // bytes when WebKit/Safari throws the spurious "Extra bytes past the
       // end" error at end-of-stream. numpy's deflate streams trip that error
-      // even though the bit count is correct — Python's zlib decompresses
+      // even though the bit count is correct: Python's zlib decompresses
       // them cleanly with no leftover bytes.
       const ds = new DecompressionStream("deflate-raw");
       const writer = ds.writable.getWriter();
@@ -4698,7 +4737,7 @@ async function parse_npz(buf) {
       })();
       try {
         await writer.write(payload);
-      } catch (_) { /* same tolerance — the read side will report real errors */ }
+      } catch (_) { /* same tolerance: the read side will report real errors */ }
       try { await writer.close(); } catch (_) {}
       await drainLoop;
       const merged = new Uint8Array(uncompSize || total);
@@ -4924,20 +4963,6 @@ function render_size_meter(refs, run, cfg) {
     </table>`;
 }
 
-function _prune_region_class(layer, totalLayers) {
-  const t = totalLayers || 1;
-  if (layer < t / 3)       return "region-sense";
-  if (layer < (2 * t) / 3) return "region-assoc";
-  return "region-output";
-}
-
-function _prune_region_chip(layer, totalLayers) {
-  const c = _prune_region_class(layer, totalLayers);
-  if (c === "region-sense")  return "cool";
-  if (c === "region-assoc")  return "warm";
-  return "hot";
-}
-
 function _prune_verdict(keep) {
   if (keep <= 0.30) return { cls: "aggressive", label: "prune hard" };
   if (keep <= 0.55) return { cls: "moderate",   label: "prune" };
@@ -4988,9 +5013,9 @@ function render_pruning_report(refs, r) {
 
   let rowsHtml = "";
   for (const e of r.per_layer) {
-    const region = _prune_region_class(e.layer, layers);
-    const regionLabel = region === "region-sense" ? "sense" :
-                        region === "region-assoc" ? "association" : "output";
+    const reg = regionOf(e.layer, layers);
+    const region = reg.row;
+    const regionLabel = reg.name;
     const v = _prune_verdict(e.keep);
     const pct = (e.alive_frac * 100).toFixed(0);
     rowsHtml += `<div class="row ${region}">
@@ -5008,7 +5033,7 @@ function render_pruning_report(refs, r) {
     const v = _prune_verdict(keep);
     const widthLbl = `${Math.round(keep * 100)}% width`;
     const chips = planByKeep[kk].map(e => {
-      const chipCls = _prune_region_chip(e.layer, layers);
+      const chipCls = regionOf(e.layer, layers).tone;
       return `<span class="chip ${chipCls}">layer ${e.layer}</span>`;
     }).join("");
     planTableHtml += `<tr><td class="action ${v.cls}">${widthLbl}</td><td>${chips}</td></tr>`;
@@ -5054,7 +5079,7 @@ function render_pruning_report(refs, r) {
       const d = await resp.json();
       if (d.ok) {
         st.className = "status ok";
-        st.textContent = `wrote trainers/${d.plugin_id}/ — open the Training tab to run it`;
+        st.textContent = `wrote trainers/${d.plugin_id}/, open the Training tab to run it`;
       } else {
         st.className = "status err";
         st.textContent = `failed: ${d.error || "unknown"}`;
@@ -5074,10 +5099,10 @@ function render_pruning_report(refs, r) {
 // colored swatch, its display name, and a one-sentence "what does UP mean?"
 // summary. Same colors as the canvas (kept in lockstep below).
 const CONFEVO_LEGEND_ITEMS = [
-  { color: "#5dc8ff", label: "margin",            tip: "gap between top byte and runner-up — UP = top byte pulls farther ahead" },
-  { color: "#ffae5d", label: "entropy",           tip: "1 − H(p)/log₂V — UP = probability mass concentrates on fewer bytes" },
-  { color: "#5dff9b", label: "lens-consistency",  tip: "fraction of layers that already agree with the final prediction — UP = decision lands earlier in the stack" },
-  { color: PALETTE.purple, label: "residual-stab",     tip: "smoothness of how the residual grows layer to layer — UP = stack commits steadily instead of in jumps" },
+  { color: "#5dc8ff", label: "margin",            tip: "gap between top byte and runner-up. UP = top byte pulls farther ahead" },
+  { color: "#ffae5d", label: "entropy",           tip: "1 − H(p)/log₂V. UP = probability mass concentrates on fewer bytes" },
+  { color: "#5dff9b", label: "lens-consistency",  tip: "fraction of layers that already agree with the final prediction. UP = decision lands earlier in the stack" },
+  { color: PALETTE.purple, label: "residual-stab",     tip: "smoothness of how the residual grows layer to layer. UP = stack commits steadily instead of in jumps" },
 ];
 
 function _renderConfEvoLegend(canvasId) {
@@ -5086,8 +5111,8 @@ function _renderConfEvoLegend(canvasId) {
   el.innerHTML = CONFEVO_LEGEND_ITEMS.map(it =>
     `<span title="${it.tip}" style="display:inline-flex;align-items:center;gap:5px">
       <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${it.color}"></span>
-      <span style="color:var(--text)">${it.label}</span>
-      <span style="color:var(--dim)">— ${it.tip}</span>
+      <span style="color:var(--text)">${it.label}:</span>
+      <span style="color:var(--dim)">${it.tip}</span>
     </span>`
   ).join("");
 }
@@ -5097,19 +5122,19 @@ function render_confidence_evo(refs, run, steps, confByStep) {
   if (refs.confCanvas && refs.confCanvas.id) _renderConfEvoLegend(refs.confCanvas.id);
   const have = steps.filter(s => s.lens && confByStep[s.step]);
   // Update the hover/status line so the user can tell "no data" from "data
-  // missing for some reason" — used to silently render an empty chart.
+  // missing for some reason": used to silently render an empty chart.
   const hoverEl = refs.confCanvas && refs.confCanvas.id ? $(refs.confCanvas.id + "Hover") : null;
   if (hoverEl) {
     const total = steps.length;
     const withLens = steps.filter(s => s.lens).length;
     if (total === 0) {
-      hoverEl.textContent = "no checkpoints yet — chart fills in as training progresses";
+      hoverEl.textContent = "no checkpoints yet: chart fills in as training progresses";
     } else if (withLens === 0) {
-      hoverEl.textContent = `${total} checkpoint${total === 1 ? "" : "s"} but none have lens.npz — dump suite may be skipping lens`;
+      hoverEl.textContent = `${total} checkpoint${total === 1 ? "" : "s"} but none have lens.npz: dump suite may be skipping lens`;
     } else if (have.length < withLens) {
       hoverEl.textContent = `${have.length}/${withLens} lens files loaded successfully (check console for fetch errors)`;
     } else {
-      hoverEl.textContent = `${have.length} checkpoint${have.length === 1 ? "" : "s"} plotted — hover to inspect`;
+      hoverEl.textContent = `${have.length} checkpoint${have.length === 1 ? "" : "s"} plotted, hover to inspect`;
     }
   }
   if (have.length === 0) {
@@ -5124,7 +5149,7 @@ function render_confidence_evo(refs, run, steps, confByStep) {
   const maxAbs = margin.reduce((m, p) => Math.max(m, Math.abs(p.y)), 1);
   const marginN = margin.map(p => ({ x: p.x, y: p.y / maxAbs }));
   // Pass `dots: true` so a single-checkpoint chart still shows visible dots
-  // (the line-only path needs >=2 points to draw anything — that previously
+  // (the line-only path needs >=2 points to draw anything: that previously
   // made early-training runs look broken).
   plotTrainSeries(refs.confCanvas, refs.confCtx, [
     { points: marginN,     color: "#5dc8ff", lw: 1.5, dots: true },
@@ -5143,7 +5168,7 @@ function render_lens_drift(refs, run, steps, lensByStep) {
   }
   const layers = lensByStep[have[0].step].lens_rows.length;
 
-  // Printable / control byte glyph. Kept short — one visible character — so
+  // Printable / control byte glyph. Kept short (one visible character) so
   // the heatmap cells stay tight and the column reads like a single column of
   // letters instead of a wall of metadata.
   function byte_glyph(b) {
@@ -5184,7 +5209,7 @@ function render_lens_drift(refs, run, steps, lensByStep) {
 
   // Final-layer top-1 per checkpoint = the byte the model actually committed
   // to at that step. We highlight the first layer up the stack whose top-1
-  // matches — the "commit row". Gold means the decision was made early.
+  // matches: the "commit row". Gold means the decision was made early.
   const commitedByStep = {};
   for (const s of have) {
     const final = lensByStep[s.step].lens_rows[layers - 1];
@@ -5201,15 +5226,6 @@ function render_lens_drift(refs, run, steps, lensByStep) {
     commitRowByStep[s.step] = firstHit;
   }
 
-  // Layer-region tint: sensory (cool) → association (warm) → output (hot).
-  // Matches the legend used elsewhere in the dashboard so users can carry the
-  // same region intuition over.
-  function regionRGB(L) {
-    const t = layers || 1;
-    if (L < t / 3)       return [93, 200, 255];    // cool — sensory
-    if (L < 2 * t / 3)   return [255, 174, 93];    // warm — association
-    return [255, 93, 93];                          // hot  — output
-  }
   function cellBg(p, rgb) {
     // background opacity rises with confidence. low confidence = nearly black.
     const a = Math.max(0.05, Math.min(0.9, p * 0.95));
@@ -5233,7 +5249,7 @@ function render_lens_drift(refs, run, steps, lensByStep) {
   }
   // Body rows: one per layer.
   for (let L = 0; L < layers; L++) {
-    const rgb = regionRGB(L);
+    const rgb = regionOf(L, layers).rgb;
     html += `<div style="font-size:10px;color:rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.85);padding:0 4px;display:flex;align-items:center;justify-content:flex-end;font-weight:600">L${L}</div>`;
     for (const s of have) {
       const info = cellInfo(lensByStep[s.step].lens_rows[L]);
@@ -5252,9 +5268,9 @@ function render_lens_drift(refs, run, steps, lensByStep) {
 
   // Legend strip below the grid.
   html += `<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font-size:10.5px;color:var(--dim)">
-    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgb(93,200,255);vertical-align:middle"></span> L0–L${Math.floor(layers/3)-1} sensory</span>
-    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgb(255,174,93);vertical-align:middle"></span> L${Math.floor(layers/3)}–L${Math.floor(2*layers/3)-1} association</span>
-    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgb(255,93,93);vertical-align:middle"></span> L${Math.floor(2*layers/3)}–L${layers-1} output</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgb(93,200,255);vertical-align:middle"></span> L0-L${Math.floor(layers/3)-1} sensory</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgb(255,174,93);vertical-align:middle"></span> L${Math.floor(layers/3)}-L${Math.floor(2*layers/3)-1} association</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgb(255,93,93);vertical-align:middle"></span> L${Math.floor(2*layers/3)}-L${layers-1} output</span>
     <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;border:1.5px solid #ffd54a;vertical-align:middle"></span> commit row (top-1 first matches final layer)</span>
     <span style="color:var(--dim)">cell brightness = top-1 probability</span>
   </div>`;
@@ -5336,6 +5352,15 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
     plotTrainSeries(canvas, ctx, []);
     return;
   }
+  // Fluency % is ppl on a log scale between random (ppl = vocab size) and the
+  // checkpoint's own fluent reference. Without the vocab there is no scale.
+  const vocab = runVocab(config);
+  if (vocab < 1) {
+    root.innerHTML = `<span class="meta">this run's config does not record the vocabulary size, so band fluency has no scale.</span>`;
+    plotTrainSeries(canvas, ctx, []);
+    return;
+  }
+  const LOG_RANDOM = Math.log(vocab);
 
   // legend: chips matching the trajectory line colors. lives above the chart
   // so the user can match band names to lines at a glance.
@@ -5354,7 +5379,7 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   let html = "";
   // disclaimer: this metric is a register-NLL fluency proxy, not comprehension.
   // FKGL targets the syntactic shape of prose (sentence length, syllables),
-  // not cognitive difficulty — formulaic PhD-abstract phrasing can score
+  // not cognitive difficulty: formulaic PhD-abstract phrasing can score
   // *lower* ppl than short high-entropy Pre-K sentences. Low ppl on a band
   // means the model has seen prose like that, not that it understands it.
   html += `<div class="desc" style="margin:0 0 10px;padding:8px 10px;border-left:3px solid var(--warm);background:rgba(255,170,80,0.06);font-size:11.5px;line-height:1.45">
@@ -5366,7 +5391,7 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   </div>`;
   // ladder rows: every band, with state badge + ppl + gap-to-fluent. corpus
   // source is folded into the leftmost cell so the eval-text origin sits next
-  // to its score — band labels alone don't explain ppl, the corpus does. A
+  // to its score: band labels alone don't explain ppl, the corpus does. A
   // colored swatch matches the band's trajectory line for quick eye linkage.
   // Per-checkpoint fluent threshold: probe writes ppl_threshold = floor * 1.5
   // where floor = best band ppl (clamped). Older checkpoints lacking the field
@@ -5374,7 +5399,7 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   const fluentPpl = gradeFluentPpl(latest);
   const emergingPpl = gradeEmergingPpl(latest);
   if (typeof latest.ppl_threshold === "number" && typeof latest.ppl_floor === "number") {
-    html += `<div class="desc" style="margin:0 0 10px;font-size:11px;color:var(--dim)">Reference line for this checkpoint: <b style="color:var(--text)">ppl ${fluentPpl.toFixed(2)}</b> (model floor ${latest.ppl_floor.toFixed(2)} &times; ${(latest.ppl_threshold_factor || GRADE_EMERGING_FACTOR).toFixed(2)}). Bands above ppl ${GRADE_PPL_CEILING} are clamped &mdash; that's the random-output ceiling. ppl 1.0 = perfect, ppl 256 = random.</div>`;
+    html += `<div class="desc" style="margin:0 0 10px;font-size:11px;color:var(--dim)">Reference line for this checkpoint: <b style="color:var(--text)">ppl ${fluentPpl.toFixed(2)}</b> (model floor ${latest.ppl_floor.toFixed(2)} &times; ${(latest.ppl_threshold_factor || GRADE_EMERGING_FACTOR).toFixed(2)}). Bands above ppl ${GRADE_PPL_CEILING} are clamped &mdash; that's the random-output ceiling. ppl 1.0 = perfect, ppl ${vocab} = random.</div>`;
   }
   html += `<div style="display:grid;grid-template-columns:150px minmax(120px, 280px) 200px;gap:6px 12px;font-size:11.5px;align-items:center">`;
   for (const g of GRADE_ORDER) {
@@ -5396,19 +5421,19 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
     }
     const ppl = e.ppl;
     // Color encodes distance from the per-checkpoint reference, but the label
-    // no longer reads as a competence verdict — it's a quick "this band is
+    // no longer reads as a competence verdict: it's a quick "this band is
     // ahead/at/behind the run-wide reference" tint. Numbers below carry the
     // actual signal.
     const belowRef     = ppl < fluentPpl && ppl < GRADE_PPL_CEILING;
     const nearRef      = !belowRef && ppl < emergingPpl && ppl < GRADE_PPL_CEILING;
-    const LOG_RANDOM = Math.log(256), LOG_FLUENT = Math.log(fluentPpl);
+    const LOG_FLUENT = Math.log(fluentPpl);
     const fluencyPct = Math.max(2, Math.min(100, ((LOG_RANDOM - Math.log(Math.max(ppl, 1))) / (LOG_RANDOM - LOG_FLUENT)) * 100));
     const color = belowRef ? "#5dff9b" : (nearRef ? "var(--warm)" : "var(--hot)");
     const pplColor = belowRef ? "#5dff9b" : (nearRef ? "var(--warm)" : "var(--hot)");
     const deltaTxt = belowRef
       ? `<span class="meta">${(fluentPpl - ppl).toFixed(2)} below ref</span>`
       : `<span class="meta">+${(ppl - fluentPpl).toFixed(2)} over ref</span>`;
-    const pplCell = `<div style="text-align:right" title="ppl = exp(mean cross-entropy per byte). ${(Math.log2(Math.max(ppl,1))).toFixed(2)} bits/byte. ppl 1.0 = perfect, ppl 256 = random.">ppl <b style="color:${pplColor};font-size:13px">${ppl.toFixed(2)}</b> ${deltaTxt}</div>`;
+    const pplCell = `<div style="text-align:right" title="ppl = exp(mean cross-entropy per byte). ${(Math.log2(Math.max(ppl,1))).toFixed(2)} bits/byte. ppl 1.0 = perfect, ppl ${vocab} = random.">ppl <b style="color:${pplColor};font-size:13px">${ppl.toFixed(2)}</b> ${deltaTxt}</div>`;
     html += `${labelCell}
       ${renderProgressBar(fluencyPct, color, [{ pct: 91, opacity: 0.28 }])}
       ${pplCell}`;
@@ -5420,20 +5445,18 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
   // trajectory: per-band fluency % over checkpoints. UP = better. converts
   // each ppl into the same log-scale 0..100% the ladder bars use, so the
   // bar pct and the trajectory share an identical y-axis scale. every band
-  // is anchored at (step 0, fluency 0) — random init = ppl ~256 = 0% — so
+  // is anchored at (step 0, fluency 0): random init scores 0%, so
   // all lines depart from the same origin and the chart shows a journey
   // toward fluent rather than auto-fitting around the first measurement.
   // x-axis is reserved out to total_steps from the manifest, so future
   // checkpoints land at predictable positions rather than reshuffling the
   // axis each time. threshold lines at 91 (emerging) and 100 (fluent).
-  const LOG_RANDOM_T = Math.log(256);
   // Trajectory uses each checkpoint's own fluent threshold so the y-axis
   // 100%-line tracks the model's evolving "fluent" definition.
   const fluencyOfRecord = (ppl, record) => {
-    const fluent = gradeFluentPpl(record);
-    const denom = LOG_RANDOM_T - Math.log(fluent);
+    const denom = LOG_RANDOM - Math.log(gradeFluentPpl(record));
     return Math.max(0, Math.min(100,
-      ((LOG_RANDOM_T - Math.log(Math.max(ppl, 1))) / denom) * 100
+      ((LOG_RANDOM - Math.log(Math.max(ppl, 1))) / denom) * 100
     ));
   };
   const bandSeries = GRADE_ORDER.map(g => ({ g, points: [{ x: 0, y: 0 }] }));
@@ -5613,7 +5636,7 @@ function render_score_axis(axisName, refs, axisSteps, axisByStep, haveCheckpoint
   root.innerHTML = html;
 }
 
-// concept categories. derived from training/checkpoint_probe.py::CONCEPTS — any
+// concept categories. derived from training/checkpoint_probe.py::CONCEPTS, any
 // concept added there but missing from a group will still show in the heatmap
 // detail at the bottom; only the grouped strips are categorised.
 const CONCEPT_GROUPS = [
@@ -5771,16 +5794,8 @@ function openConceptModal(name, conceptsSteps, conceptsByStep, latest) {
     const maxAbsV = Math.max(...topN.map(n => Math.abs(n.v))) || 1;
     const maxLayer = Math.max(...topN.map(n => n.layer));
     const totalLayers = maxLayer + 1;
-    // Depth-relative regions: first third = sensory, middle = association,
-    // last = output. Works for any layer count, not just the legacy 12.
-    const layerColor = L => {
-      const cls = regionRowClass(L, totalLayers);
-      return cls === "region-sense" ? "#5dc8ff" : cls === "region-assoc" ? "var(--warm)" : "var(--hot)";
-    };
-    const layerRegion = L => {
-      const cls = regionRowClass(L, totalLayers);
-      return cls === "region-sense" ? "sense" : cls === "region-assoc" ? "association" : "output";
-    };
+    const layerColor  = L => regionOf(L, totalLayers).hex;
+    const layerRegion = L => regionOf(L, totalLayers).name;
     let bars = "";
     for (let L = 0; L <= maxLayer; L++) {
       const n = perLayer[L];
@@ -5791,10 +5806,9 @@ function openConceptModal(name, conceptsSteps, conceptsByStep, latest) {
       const h = Math.max(2, Math.round((Math.abs(n.v) / maxAbsV) * 32));
       bars += `<div title="L${L} ${layerRegion(L)} &middot; neuron n=${n.id} act=${n.v}" style="width:20px;height:46px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center"><div style="width:14px;height:${h}px;background:${layerColor(L)};border-radius:1px"></div><div class="meta" style="font-size:9px;margin-top:2px">L${L}</div></div>`;
     }
-    // Region thirds: first third sense, middle association, last output. Print the
-    // actual layer ranges instead of baking the legacy 12-layer split into the copy.
-    const senseHi = Math.max(0, Math.ceil(totalLayers / 3) - 1);
-    const assocHi = Math.max(senseHi + 1, Math.ceil((2 * totalLayers) / 3) - 1);
+    const _rbC    = _regionBounds(totalLayers);
+    const senseHi = _rbC.sense_end;
+    const assocHi = _rbC.assoc_end;
     const lastL   = totalLayers - 1;
     body += `
       <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--line)">
@@ -5938,10 +5952,11 @@ function render_concepts(refs, run, conceptsSteps, conceptsByStep, haveCheckpoin
 // the caveat tells them why.
 
 // Each metric: id, label, blurb, "good" direction, soft target, formatter,
-// and `score(v)` -> [0..1] where 1 = ideal, 0 = baseline / untrained. The
-// score function is what the trajectory chart plots, so all lines share the
+// and `score(v, vocab)` -> [0..1] where 1 = ideal, 0 = baseline / untrained.
+// The score function is what the trajectory chart plots, so all lines share the
 // same y-axis and each line starts at (step 0, score 0) to mirror how the
 // reading-level chart anchors every band at fluency=0% at the random-init.
+const WH_IDEAL_SELF_PPL = 1.5;
 const WRITING_METRICS = [
   { id: "distinct_3",        label: "vocabulary variety",
     blurb: "fraction of unique 3-word groups in the generation. low = the model is repeating phrases (mode collapse).",
@@ -5965,11 +5980,11 @@ const WRITING_METRICS = [
     score: v => v == null ? null : Math.max(0, Math.min(1, (v + 1) / 2)) },
   { id: "self_ppl",          label: "self-perplexity",
     blurb: "model's perplexity on its own generation. low = the model 'stands behind' what it just wrote; rising over training would mean it's drifting off-distribution from itself.",
-    higher: false, target: 2.0,  fmt: v => v == null ? "—" : v.toFixed(2),
-    // log-scale: ppl 256 (random) -> 0, ppl 1.5 -> 1.
-    score: v => {
-      if (v == null) return null;
-      const LOG_RANDOM = Math.log(256), LOG_IDEAL = Math.log(1.5);
+    higher: false, target: 2.0,  fmt: v => v == null ? "-" : v.toFixed(2),
+    // log-scale: ppl at the vocab size (random) -> 0, ppl 1.5 -> 1.
+    score: (v, vocab) => {
+      if (v == null || !(vocab > 0)) return null;
+      const LOG_RANDOM = Math.log(vocab), LOG_IDEAL = Math.log(WH_IDEAL_SELF_PPL);
       const s = (LOG_RANDOM - Math.log(Math.max(v, 1))) / (LOG_RANDOM - LOG_IDEAL);
       return Math.max(0, Math.min(1, s));
     }},
@@ -6035,7 +6050,7 @@ function _whTile(m, v, prevV, prevStep) {
   return `<div title="${escapeHtml(m.blurb)}" style="background:rgba(255,255,255,.03);padding:8px 10px;border-left:3px solid ${tone};border-radius:4px;display:flex;flex-direction:column;gap:3px">
     <div class="meta" style="font-size:10.5px;display:flex;align-items:center;gap:5px">${swatch}<span>${m.label}</span></div>
     <div style="display:flex;align-items:baseline;gap:6px">
-      <b style="color:${tone};font-size:16px;line-height:1">${v == null ? "—" : m.fmt(v)}</b>${trend}
+      <b style="color:${tone};font-size:16px;line-height:1">${v == null ? "-" : m.fmt(v)}</b>${trend}
     </div>
     <div class="meta" style="font-size:10px;color:var(--dim)">target ${arrow} ${m.target}</div>
   </div>`;
@@ -6079,6 +6094,7 @@ function render_writing_health(refs, run, writingSteps, writingByStep, haveCheck
   // observer at load) so it re-fits crisply on resize instead of stretching.
   const metricById = {};
   for (const m of WRITING_METRICS) metricById[m.id] = m;
+  const vocab = runVocab(config);
   const series = WH_TRAJ_METRICS.map(id => {
     const m = metricById[id];
     if (!m || typeof m.score !== "function") return null;
@@ -6086,7 +6102,7 @@ function render_writing_health(refs, run, writingSteps, writingByStep, haveCheck
     for (const step of writingSteps) {
       const r = writingByStep[step];
       if (!r || !r.aggregate) continue;
-      const s = m.score(r.aggregate[id]);
+      const s = m.score(r.aggregate[id], vocab);
       if (s == null) continue;
       points.push({ x: step, y: s });
     }
@@ -6343,7 +6359,7 @@ async function loadClassroomFor(state, refs, run) {
   if (refs.reasoningLevelId) showSkeleton(refs.reasoningLevelId,"rows",  3);
   if (refs.writingHealthId) showSkeleton(refs.writingHealthId, "rows",   3);
   if (refs.readingCompId)   showSkeleton(refs.readingCompId,   "rows",   3);
-  // config.json — best-effort
+  // config.json: best-effort
   try {
     const r = await fetch(`/run/${encodeURIComponent(run)}/config?` + Date.now(), { cache: "no-store" });
     if (r.ok) state.config = await r.json();
@@ -6358,7 +6374,7 @@ async function loadClassroomFor(state, refs, run) {
     if (r.ok) { const d = await r.json(); steps = d.steps || []; }
   } catch (e) {}
   state.steps = steps;
-  // classroom index — grades + concepts. independent of probes.
+  // classroom index: grades + concepts. independent of probes.
   let classroomItems = [];
   try {
     const r = await fetch(`/run/${encodeURIComponent(run)}/classroom?` + Date.now(), { cache: "no-store" });
@@ -6401,11 +6417,9 @@ async function loadClassroomFor(state, refs, run) {
       catch (e) { console.warn("probe fetch", s.step, e); }
     }));
     // lens npz files, one per step
-    // Tolerate flat config (vocab at top level) and the nested cfg.shape form;
-    // fall back to byte-vocab (256) only when neither is present.
-    const V = (state.config && ((state.config.shape && state.config.shape.vocab) || state.config.vocab)) || 256;
+    const V = runVocab(state.config);
     await Promise.all(steps.map(async s => {
-      if (!s.lens) return;
+      if (!s.lens || V < 1) return;
       try {
         const lens = await classroomFetchLens(run, s.lens);
         state.lensByStep[s.step] = lens;
@@ -6442,7 +6456,7 @@ async function loadClassroomFor(state, refs, run) {
   state.loaded = true;
 }
 
-// thin wrappers — the existing call sites stay unchanged.
+// thin wrappers: the existing call sites stay unchanged.
 function loadClassroomForRun(run)      { return loadClassroomFor(classroomState,  classroomRefsT, run); }
 function loadClassroomForLearning(run) {
   const p = loadClassroomFor(classroomStateL, classroomRefsL, run);
@@ -6524,7 +6538,7 @@ function _deepEvalRenderResults(results) {
     const acc = r.acc;
     const col = _deepEvalSuiteColor(acc);
     const bg  = _deepEvalSuiteBg(acc);
-    const accPct = (acc == null) ? "—" : `${(acc * 100).toFixed(1)}%`;
+    const accPct = (acc == null) ? "-" : `${(acc * 100).toFixed(1)}%`;
     const stepLbl = (r.step == null) ? "?" : r.step;
     const baselineLbl = (isMMLU || isHellaSwag) ? "chance 25%" : "rule-based pass rate";
     const elapsedStr = (r.elapsed_s == null) ? "" : `${Number(r.elapsed_s).toFixed(1)}s`;
@@ -6732,11 +6746,42 @@ async function runDeepEval() {
   await refreshDeepEvalForRun(run);
 }
 
+// rebuild the graded eval sets the checkpoint probes score against. server-side
+// job; POST claims it, GET reports the result of the last run.
+async function rebuildEvalSets() {
+  const btn = document.getElementById("evalSetsRebuild");
+  const statusEl = document.getElementById("evalSetsStatus");
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.innerHTML = `<span style="color:var(--accent)">rebuilding eval sets…</span>`;
+  try {
+    const r = await fetch("/eval_sets", { method: "POST" });
+    if (!r.ok) throw new Error(((await r.json()) || {}).error || r.statusText);
+    let done = null;
+    for (let i = 0; i < 120 && !done; i++) {
+      await new Promise((res) => setTimeout(res, 1000));
+      const s = await (await fetch("/eval_sets?" + Date.now(), { cache: "no-store" })).json();
+      if (!s.running) done = s;
+    }
+    if (done && done.error) throw new Error(done.error);
+    const n = done ? (done.builders || []).length : 0;
+    if (statusEl) statusEl.innerHTML = `<span style="color:#5dff9b">eval sets rebuilt &middot; ${n} builders</span>`;
+  } catch (e) {
+    if (statusEl) statusEl.innerHTML = `<span style="color:var(--hot)">error: ${String(e.message || e)}</span>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function _bindDeepEvalControls() {
   const btn = document.getElementById("deepEvalRun");
   if (btn && !btn.dataset._deepEvalBound) {
     btn.dataset._deepEvalBound = "1";
     btn.addEventListener("click", () => { runDeepEval(); });
+  }
+  const setsBtn = document.getElementById("evalSetsRebuild");
+  if (setsBtn && !setsBtn.dataset._evalSetsBound) {
+    setsBtn.dataset._evalSetsBound = "1";
+    setsBtn.addEventListener("click", () => { rebuildEvalSets(); });
   }
 }
 if (typeof document !== "undefined") {
@@ -6783,7 +6828,7 @@ function stopTrainPolling() {
   if (trainClassroomTimer) { clearInterval(trainClassroomTimer); trainClassroomTimer = null; }
 }
 
-// hover inspector — show value at cursor x
+// hover inspector: show value at cursor x
 function attachHoverInspect(canvas, infoElId, seriesLabels, fmt) {
   const info = $(infoElId);
   fmt = fmt || (v => v.toFixed(4));
@@ -6832,6 +6877,7 @@ function injectDetails() {
     el.appendChild(tpl.content.cloneNode(true));
     el.dataset.injected = "1";
   });
+  applyShapeText();
 }
 
 // ---- ascii reference ----
@@ -6855,7 +6901,7 @@ function buildAscii() {
   el.innerHTML = html;
 }
 buildAscii();
-_buildFfnLegend(_layerCount);
+_buildFfnLegend(modelShape.layers);
 
 let _asciiCurrentByte = -1;
 function highlightAsciiByte(b) {
@@ -6961,20 +7007,13 @@ const _canvasResizeObserver = new ResizeObserver(() => {
 document.querySelectorAll("canvas").forEach(c => _canvasResizeObserver.observe(c));
 
 // ============================================================
-// CLASSROOM DASHBOARD — tier 2 panels (Learning tab only)
+// CLASSROOM DASHBOARD: tier 2 panels (Learning tab only)
 // ============================================================
 
 const cCoactL    = $("cCoactL"),    ctxCoactL    = cCoactL.getContext("2d");
 const cSurpriseL = $("cSurpriseL"), ctxSurpriseL = cSurpriseL.getContext("2d");
 
 const tier2State = { run: null, coact: {}, surprise: null };
-
-function regionColorL(layer) {
-  const t = 12;
-  if (layer < t / 3)       return "#5dc8ff";
-  if (layer < (2 * t) / 3) return "#ffae5d";
-  return "#ff5d5d";
-}
 
 async function fetchTier2Coact(run, step) {
   if (tier2State.coact[step] !== undefined) return tier2State.coact[step];
@@ -7017,8 +7056,12 @@ function drawCoactL(d) {
       if (n.layer > layerMax) layerMax = n.layer;
       if (n.neuron > neuronMax) neuronMax = n.neuron;
     }
-    if (neuronMax < 1) neuronMax = 3072;
-    const xS = nid => padL + (nid / neuronMax) * plotW;
+    // x axis spans this run's FFN width when its config is loaded, so neuron
+    // ids sit at the same position across checkpoints. Otherwise it spans the
+    // widest id actually present.
+    const runFfn = ((classroomStateL.config || {}).shape || {}).ffn || 0;
+    const xMax = runFfn > 0 ? runFfn - 1 : neuronMax;
+    const xS = nid => padL + (xMax > 0 ? (nid / xMax) * plotW : 0);
     const yS = L => padT + (layerMax > 0 ? (L / layerMax) * plotH : plotH * 0.5);
     ctxCoactL.strokeStyle = "#171b24"; ctxCoactL.lineWidth = 1;
     for (let L = 0; L <= layerMax; L++) {
@@ -7046,7 +7089,7 @@ function drawCoactL(d) {
     const nodePixels = [];
     for (const n of d.nodes) {
       const cx = xS(n.neuron), cy = yS(n.layer);
-      ctxCoactL.fillStyle = regionColorL(n.layer);
+      ctxCoactL.fillStyle = regionOf(n.layer, layerMax + 1).hex;
       ctxCoactL.beginPath(); ctxCoactL.arc(cx, cy, 2.4, 0, 6.3); ctxCoactL.fill();
       nodePixels.push({ x: cx, y: cy, layer: n.layer, neuron: n.neuron });
     }
@@ -7232,7 +7275,7 @@ async function renderTier2ForLearning() {
   // Stamp skeletons over the tier-2 panels' status lines while fetches are in
   // flight. The canvases stay hidden until data arrives; drawCoactL/drawSurpriseL
   // either re-show the canvas + write a real status line, or write a no-data
-  // status line — both paths replace the skeleton.
+  // status line: both paths replace the skeleton.
   cCoactL.style.display = "none";
   const coactHover = $("cCoactLHover");
   if (coactHover) coactHover.style.display = "none";
@@ -7281,7 +7324,7 @@ function _renderBackendState() {
     lbl.innerHTML = `<span class="spinner"></span><b style="color:var(--warm)">${detail}</b>`;
     return;
   }
-  // C backend with zero exported .bin files — surface the real cause clearly.
+  // C backend with zero exported .bin files: surface the real cause clearly.
   // "not loaded" with no exported model is just confusing; the user has to know
   // to go to Training → export to .bin before anything will work.
   if (which === "c" && !s.loaded && s.bins_available === 0) {
@@ -7396,7 +7439,7 @@ function _applyGenerateGate() {
   if (which === "c") {
     if (!s.loaded && s.bins_available === 0) {
       block = true;
-      title = "no exported .bin — Training → export to .bin first";
+      title = "no exported .bin: Training → export to .bin first";
     }
   }
   if (block && !generating) {
@@ -7482,7 +7525,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const which = sel.value;
     const s = d[which];
     // skip the load round-trip when c is selected but nothing has been
-    // exported yet — there is nothing the server can load, and the
+    // exported yet: there is nothing the server can load, and the
     // backend-state line is already showing the "no exported model" hint.
     if (which === "c" && s && s.bins_available === 0) return;
     if (s && !s.loaded && !s.pending) _toggleBackend(which, "load");
@@ -7519,7 +7562,7 @@ function _trBuildInput(a) {
   const def  = a.default !== undefined ? a.default : "";
   const t    = a.type;
   // Inputs sized by their grid cell (see .trArgsGrid CSS in _trRenderForm).
-  // No min-widths here — they would prevent the responsive layout from
+  // No min-widths here: they would prevent the responsive layout from
   // collapsing on narrow viewports.
   const inputBase = "background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:2px;width:100%;box-sizing:border-box;min-width:0";
   if (t === "bool") {
@@ -7636,7 +7679,7 @@ function _trUpdateComposedName() {
 //   total  = (static + acts) × 1.15  (PyTorch overhead pad)
 //
 // Bytes-per-param is always 16 for AdamW (fp32 weights + fp32 grads + fp32 m
-// + fp32 v) — autocast keeps weights/grads/optim in fp32 even when the
+// + fp32 v): autocast keeps weights/grads/optim in fp32 even when the
 // forward path runs in bf16. Earlier versions used 14 for bf16, which was
 // wrong and made the estimate read low. With 8-bit AdamW (MEGA only),
 // optimizer state drops to 2 bytes/param, total becomes 10.
@@ -7655,7 +7698,7 @@ function _trUpdateComposedName() {
 // Budget for the red/yellow warning comes from saved system_specs.json:
 // discrete GPU -> sum of vram_total. Integrated / unified memory (Apple
 // Silicon, integrated Intel) -> ram_total × 0.7 (leaves room for OS + other
-// processes). The estimate caps as a *warning*, not a guarantee — real
+// processes). The estimate caps as a *warning*, not a guarantee: real
 // usage varies with sequence packing, KV cache, M3 adapter slot table,
 // MoE routing, QAT fake-quant overhead, and PyTorch fragmentation.
 // Active plugin's shape table. Each plugin's manifest.json declares its own
@@ -7689,7 +7732,7 @@ function _trResolvedSize() {
 // ---------------------------------------------------------------
 // Trainer form schema. The dashboard owns labels, helps, types,
 // choices, and required-flags. Plugin manifests only carry preset
-// values via manifest.defaults — see trainers/<id>/manifest.json.
+// values via manifest.defaults: see trainers/<id>/manifest.json.
 // Keyed by manifest.flow. Field order = render order.
 // ---------------------------------------------------------------
 const TRAINER_SCHEMA = {
@@ -7809,11 +7852,11 @@ const WIKI_SETTING_PAGES = {
 // new plugin renders correctly without a dashboard code change.
 function _trArgsForPlugin(p) {
   // Schema is the SOURCE OF TRUTH for which fields render. Manifest defaults
-  // ONLY pre-fill values — they never decide visibility, and they never
+  // ONLY pre-fill values: they never decide visibility, and they never
   // summon form fields the schema didn't list. If a plugin needs a knob on
   // the form, add it to TRAINER_SCHEMA. Manifest fields the schema doesn't
   // know about are still honored by the plugin process (its argparse reads
-  // manifest defaults at startup) — they just don't render as form rows.
+  // manifest defaults at startup): they just don't render as form rows.
   // Result: continue tabs show only relevant training-loop knobs, scratch
   // tabs show shape + loop knobs, no ghost rows from shape args that are
   // locked on continue.
@@ -7986,8 +8029,8 @@ function _trUpdateVramEstimate() {
   let badgeColor = "var(--data-pos)", budgetLine = "", verdict = "fits comfortably";
   if (budget) {
     const ratio = est.total / budget.bytes;
-    if (ratio >= 1.0)       { badgeColor = "var(--hot)";      verdict = "WILL NOT FIT — reduce batch / seq, enable activation checkpointing, or pick a smaller model"; }
-    else if (ratio >= 0.92) { badgeColor = "var(--hot)";      verdict = "very tight — likely OOM during training spikes"; }
+    if (ratio >= 1.0)       { badgeColor = "var(--hot)";      verdict = "WILL NOT FIT: reduce batch / seq, enable activation checkpointing, or pick a smaller model"; }
+    else if (ratio >= 0.92) { badgeColor = "var(--hot)";      verdict = "very tight: likely OOM during training spikes"; }
     else if (ratio >= 0.75) { badgeColor = "var(--warm)";     verdict = "tight but workable"; }
     else if (ratio >= 0.45) { badgeColor = "var(--data-pos)"; verdict = "fits comfortably"; }
     else                    { badgeColor = "var(--data-pos)"; verdict = "lots of headroom"; }
@@ -8066,8 +8109,8 @@ function _autoTuneRenderSysprobe(s) {
                                     + (g.vram_total_gb ? ` (${g.vram_total_gb} GB)` : "")).join("<br>");
   // When sysprobe finds no torch device we distinguish between "GPU is here
   // but torch is CPU-only" (fixable via Restart) and "no GPU on this box at
-  // all". The sysprobe payload doesn't know about the hardware inventory —
-  // that lives in _sysSpecsCache — so we combine the two here.
+  // all". The sysprobe payload doesn't know about the hardware inventory:
+  // that lives in _sysSpecsCache, so we combine the two here.
   let gpuLine;
   if (gpu) {
     gpuLine = gpu;
@@ -8127,7 +8170,7 @@ function _autoTuneCleanup() {
 // with the CUDA torch build), the modal runs the bench once per device
 // SEQUENTIALLY and caches each result under system_specs.measured.per_device
 // so a re-open shows both without re-running. Rule 34c: never assume a
-// CPU-only box — check `_sysSpecsCache.deps.torch.cuda_available` before
+// CPU-only box: check `_sysSpecsCache.deps.torch.cuda_available` before
 // deciding which devices are actually usable.
 function _autoTuneAvailableDevices() {
   const caps = (_sysSpecsCache && _sysSpecsCache.capabilities) || {};
@@ -8168,16 +8211,16 @@ function _autoTuneStart() {
         _autoTuneState.sysprobe = d.sysprobe;
         _autoTuneRenderSysprobe(d.sysprobe);
       } else {
-        _autoTuneLine("sysprobe failed (" + (d.error || "unknown") + ") — proceeding to bench.", "var(--warm)");
+        _autoTuneLine("sysprobe failed (" + (d.error || "unknown") + "), proceeding to bench.", "var(--warm)");
       }
       _autoTuneLine("device queue: " + _autoTuneState.deviceQueue.join(", "), "var(--dim)");
       _autoTuneRunNextDevice(id, plugin);
     })
-    .catch(e => { _autoTuneLine("sysprobe failed: " + e + " — proceeding to bench.", "var(--warm)"); _autoTuneRunNextDevice(id, plugin); });
+    .catch(e => { _autoTuneLine("sysprobe failed: " + e + ", proceeding to bench.", "var(--warm)"); _autoTuneRunNextDevice(id, plugin); });
 }
 
 // Sequentially bench each device in _autoTuneState.deviceQueue. For each
-// device, first check the specs cache — if we already have a saved result
+// device, first check the specs cache: if we already have a saved result
 // (per_device[<device>]) for the same shape, skip the run and reuse it. When
 // the queue is exhausted, hand off to _autoTuneFinishAll to pick the
 // recommendation (the fastest usable device wins).
@@ -8237,7 +8280,7 @@ function _autoTuneShowInstall(pkg) {
     .then(d => {
       _autoTuneState.installing = false;
       if (d.ok) {
-        $("autoTuneInstallStatus").textContent = "installed via " + (d.method || "pip") + " — restarting benchmark...";
+        $("autoTuneInstallStatus").textContent = "installed via " + (d.method || "pip") + ", restarting benchmark...";
         setTimeout(() => { $("autoTuneInstall").style.display = "none"; _autoTuneState.missing_pkg = null; _autoTuneStart(); }, 900);
       } else if (d.needs_elevation) {
         $("autoTuneInstallStatus").innerHTML = `<span style="color:var(--hot)">install needs admin rights. Open a terminal as admin and run: <code>pip install ${pkg}</code></span>`;
@@ -8263,7 +8306,7 @@ function _autoTuneSubscribe(id) {
     const miss = AUTO_TUNE_MISSING_RE.exec(e.msg);
     if (miss && !_autoTuneState.missing_pkg) {
       _autoTuneState.missing_pkg = miss[1];
-      _autoTuneLine(`missing dep detected: ${miss[1]} — auto-installing.`, "var(--warm)");
+      _autoTuneLine(`missing dep detected: ${miss[1]}, auto-installing.`, "var(--warm)");
     }
     const benchLine = e.msg.startsWith("bench: ");
     _autoTuneLine(benchLine ? e.msg.slice(7) : e.msg, benchLine ? undefined : "var(--dim)");
@@ -8278,7 +8321,7 @@ function _autoTuneSubscribe(id) {
           _autoTuneLine("missing dependency: " + _autoTuneState.missing_pkg + ". Try restarting the server to fix missing software.", "var(--hot)");
           _autoTuneShowInstall(_autoTuneState.missing_pkg);
         } else {
-          _autoTuneLine("benchmark ended without a result — check the Logs tab. Try restarting the server to fix missing software.", "var(--hot)");
+          _autoTuneLine("benchmark ended without a result: check the Logs tab. Try restarting the server to fix missing software.", "var(--hot)");
         }
       }
     }).catch(() => {});
@@ -8413,14 +8456,14 @@ function _autoTuneFinishAll(plugin) {
   _autoTuneState.recs = recs;
   $("autoTuneRam").textContent      = best.mem_ceiling_gb.toFixed(1) + " GB used at batch " + best.max_batch + " (" + best.device + ")";
   $("autoTuneMaxBatch").textContent = String(best.max_batch);
-  $("autoTuneBestBatch").textContent = recs ? String(recs.best.batch) : "—";
-  $("autoTuneTokS").textContent     = recs ? Math.round(recs.best.tok_per_s).toLocaleString() + " tok/s" : "—";
-  $("autoTuneTier").textContent     = TIER_LABELS[best.tier] || best.tier || "—";
+  $("autoTuneBestBatch").textContent = recs ? String(recs.best.batch) : "-";
+  $("autoTuneTokS").textContent     = recs ? Math.round(recs.best.tok_per_s).toLocaleString() + " tok/s" : "-";
+  $("autoTuneTier").textContent     = TIER_LABELS[best.tier] || best.tier || "-";
   if (recs) {
     const timeNote = recs.hours != null
       ? ` At this speed, ${recs.totalSteps.toLocaleString()} steps would take ~${recs.hours.toFixed(1)} h.` : "";
     const pagedNote = PAGED_TIERS.has(best.tier)
-      ? `<br><span style="color:var(--warm)">This size only fits by paging the optimizer to NVMe, so each step is disk-bound — the tok/s above already reflects that. Bigger batches amortize the disk cost.</span>`
+      ? `<br><span style="color:var(--warm)">This size only fits by paging the optimizer to NVMe, so each step is disk-bound: the tok/s above already reflects that. Bigger batches amortize the disk cost.</span>`
       : "";
     // Comparison line when multiple devices were measured.
     const others = devices.filter(d => d !== best.device).map(d => {
@@ -8428,7 +8471,7 @@ function _autoTuneFinishAll(plugin) {
       return `${d}: batch ${r.max_batch}, ${Math.round(r.tok_per_s).toLocaleString()} tok/s`;
     });
     const compareNote = others.length
-      ? `<br><span style="color:var(--dim)">also measured: ${others.join(" · ")} — winner picked for throughput.</span>`
+      ? `<br><span style="color:var(--dim)">also measured: ${others.join(" · ")}, winner picked for throughput.</span>`
       : "";
     $("autoTuneRecs").innerHTML =
       `Recommended (${best.device}): <b>batch ${recs.batch}</b> at <b>lr ${recs.lr}</b>` +
@@ -8436,9 +8479,9 @@ function _autoTuneFinishAll(plugin) {
       (recs.args.use_act_ckpt ? `, activation checkpointing on` : "") +
       (recs.args.precision ? `, precision ${recs.args.precision}` : "") +
       (recs.args.qat_enabled === false ? `, QAT off` : "") +
-      `.${timeNote}<br><span style="color:var(--dim)">Bigger batches fit (up to ${best.max_batch}) but measured slower — the recommendation is the throughput sweet spot.</span>${pagedNote}${compareNote}`;
+      `.${timeNote}<br><span style="color:var(--dim)">Bigger batches fit (up to ${best.max_batch}) but measured slower: the recommendation is the throughput sweet spot.</span>${pagedNote}${compareNote}`;
   } else {
-    $("autoTuneRecs").textContent = "no usable measurements — see the log above.";
+    $("autoTuneRecs").textContent = "no usable measurements: see the log above.";
   }
   $("autoTuneResults").style.display = "";
 }
@@ -8446,7 +8489,7 @@ function _autoTuneFinishAll(plugin) {
 function _autoTuneShowInfeasible(result) {
   _autoTuneState.recs = null;
   $("autoTuneResults").style.display = "none";
-  const gb = (x) => (x == null ? "—" : Math.round(x).toLocaleString() + " GB");
+  const gb = (x) => (x == null ? "-" : Math.round(x).toLocaleString() + " GB");
   const optLine = result.optimizer_gb
     ? ` + optimizer ${gb(result.optimizer_gb)}` : "";
   $("autoTuneInfeasibleBody").innerHTML =
@@ -8466,11 +8509,11 @@ function _autoTuneApply() {
   // Any missing precondition now surfaces as an inline message so the state
   // is visible instead of the button eating the click.
   if (!plugin) {
-    if (status) { status.textContent = "no trainer selected — pick one on the Training tab first."; status.style.color = "var(--hot)"; }
+    if (status) { status.textContent = "no trainer selected: pick one on the Training tab first."; status.style.color = "var(--hot)"; }
     return;
   }
   if (!recs || !result) {
-    if (status) { status.textContent = "no benchmark result to apply — run the benchmark first."; status.style.color = "var(--hot)"; }
+    if (status) { status.textContent = "no benchmark result to apply: run the benchmark first."; status.style.color = "var(--hot)"; }
     return;
   }
   if (status) { status.textContent = "saving..."; status.style.color = "var(--warm)"; }
@@ -8489,7 +8532,7 @@ function _autoTuneApply() {
       }
       // Push the recommended values into the trainer's form. Wrapped in
       // try/catch so a single field-write failure doesn't kill the success
-      // message — the tune was saved server-side regardless.
+      // message: the tune was saved server-side regardless.
       try {
         if (trainState.selected && trainState.selected.id === plugin.id) {
           Object.entries(recs.args).forEach(([k, v]) => _trSetArgVal(k, v));
@@ -8500,7 +8543,7 @@ function _autoTuneApply() {
       }
       fetch("/sys/specs").then(r => r.json()).then(s => { if (s && s.platform) { _sysSpecsCache = s; _renderSysSpecs(s); } }).catch(() => {});
       if (status) {
-        const suffix = d.saved === false ? " (server accepted no changes — values may already match)" : "";
+        const suffix = d.saved === false ? " (server accepted no changes, values may already match)" : "";
         status.textContent = "saved for this machine. Future runs start from these values." + suffix;
         status.style.color = "var(--data-pos)";
       }
@@ -8675,7 +8718,7 @@ function _trApplyResumeConfig(modelName) {
 
 // Highlight the trainer picker red when the resumed model's size is not in
 // the selected plugin's manifest.sizes (e.g. 80m plugin picked for an 85m
-// model — the trainer would crash with "unknown size: 85m" otherwise).
+// model: the trainer would crash with "unknown size: 85m" otherwise).
 function _trCheckSizeMismatch() {
   const picker = document.getElementById("trainPicker");
   if (!picker) return;
@@ -8698,7 +8741,7 @@ function _trCheckSizeMismatch() {
 }
 
 // Save/restore the in-form values keyed by plugin id + flow. This is the
-// "browser storage so they don't lose progress" piece — flipping to settings
+// "browser storage so they don't lose progress" piece: flipping to settings
 // to install a corpus is a round-trip, not a discard.
 function _trFormStorageKey() {
   const p = trainState.selected;
@@ -8716,7 +8759,7 @@ function _trSaveFormState() {
     out[name] = (el.type === "checkbox") ? !!el.checked : el.value;
   });
   try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), values: out })); }
-  catch (_e) { /* quota exceeded — silently drop, this is a convenience */ }
+  catch (_e) { /* quota exceeded: silently drop, this is a convenience */ }
 }
 
 function _trRestoreFormState() {
@@ -9878,9 +9921,9 @@ function _synthPollOnce() {
       const reasons = Object.keys(sum);
       if (f > 0 && reasons.length) {
         const top = reasons.map(k => `${k} x${sum[k]}`).slice(0, 3).join("; ");
-        txt += ` — ${top}`;
+        txt += `. ${top}`;
       } else if (f > 0 && s.last_error) {
-        txt += ` — ${s.last_error}`;
+        txt += `. ${s.last_error}`;
       }
       line.textContent = txt;
       line.style.color = s.aborted ? "var(--hot)" : (running ? "var(--warm)" : (f > c ? "var(--hot)" : "var(--data-pos)"));
@@ -9999,6 +10042,7 @@ function _trShowRagPanel(show) {
 // Live counters are in real units (records, MB, rejects by reason) and the
 // distinct-5-gram ratio is surfaced with a loud warning under the floor.
 const TEACHER_AUTHOR_SPEC = "/teacher/authoring/spec";
+const TEACHER_AUTHOR_IMPORT = "/teacher/authoring/import";
 const TEACHER_AUTHOR_START = "/teacher/authoring/start";
 const TEACHER_AUTHOR_BUILD = "/teacher/authoring/build";
 const AUTHOR_JOB_STORE = "vt:training:author_job";
@@ -10027,6 +10071,69 @@ function _authorLoadSpec() {
     _authorRenderGenres(spec);
     return spec;
   }).catch(() => {});
+}
+
+function _authorRenderImportResult(d) {
+  const box = $("authorImportResult");
+  if (!box) return;
+  box.style.display = "block";
+  const fileRows = (d.files || []).map(f => {
+    const reasons = Object.keys(f.rejected || {});
+    const rejLine = reasons.length
+      ? reasons.map(k => `${_trEsc(k)} x${f.rejected[k]}`).join(", ")
+      : "none";
+    return `<div style="margin-top:6px"><b>${_trEsc(f.file)}</b>: ${f.accepted} accepted` +
+           `<br><span style="color:var(--dim)">rejected: ${rejLine}</span></div>`;
+  }).join("");
+  const ratioPct = ((d.ngram_ratio === undefined ? 1 : d.ngram_ratio) * 100).toFixed(1);
+  const floorPct = ((d.ngram_floor || 0) * 100).toFixed(1);
+  const ratioLine = d.ngram_below_floor
+    ? `<div class="author-warn" style="margin-top:8px">Repetition warning: only <b>${ratioPct}%</b> of five-word ` +
+      `sequences across everything imported into this job are unique, below the floor of <b>${floorPct}%</b>. ` +
+      `Widen the source material before building; do not train on this as it stands.</div>`
+    : `<div style="margin-top:8px;color:var(--dim)">wording variety: <b>${ratioPct}%</b> (floor ${floorPct}%)</div>`;
+  box.innerHTML =
+    `<div><b>${d.accepted_total}</b> record(s) imported into job <code>${_trEsc(d.job_id)}</code></div>` +
+    fileRows + ratioLine +
+    `<div class="author-handoff" style="margin-top:10px"><b>Next step</b>: this job is now selected as the ` +
+    `destination above. Enter a corpus name below and click <b>Build corpus</b>, which packs the accepted ` +
+    `records into train/val bins, zips them, and registers a placeholder catalog entry. Upload that zip to ` +
+    `COS, paste the returned link over the PLACEHOLDER <code>train_url</code> for this stem in ` +
+    `<code>corpus_catalog.json</code>, and clear its <code>coming_soon</code> flag to release the corpus.</div>`;
+}
+
+function _authorImport() {
+  const stat = $("authorImportStatus");
+  const dirInput = $("authorImportDir");
+  const dir = (dirInput && dirInput.value || "").trim();
+  if (!dir) { if (stat) { stat.textContent = "give a source directory"; stat.style.color = "var(--hot)"; } return; }
+  if (stat) { stat.textContent = "importing..."; stat.style.color = "var(--warm)"; }
+  const body = { source_dir: dir };
+  const dest = ($("authorJobSelect") || {}).value || "";
+  if (dest) body.job_id = dest;
+  fetch(TEACHER_AUTHOR_IMPORT, { method: "POST", headers: { "Content-Type": "application/json" },
+                                 body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) {
+        if (stat) { stat.textContent = "error: " + ((d && d.error) || "failed"); stat.style.color = "var(--hot)"; }
+        return;
+      }
+      if (stat) { stat.textContent = `imported ${d.accepted_total} record(s)`; stat.style.color = "var(--data-pos)"; }
+      authorState.jobId = d.job_id;
+      _authorStore(d.job_id);
+      _authorRenderImportResult(d);
+      _synthLoadJobs().then(() => {
+        _authorFillJobs();
+        const sel = $("authorJobSelect");
+        if (sel) sel.value = d.job_id;
+      });
+      if (d.accepted_total > 0) {
+        const build = $("authorBuildRow");
+        if (build) build.style.display = "block";
+      }
+    })
+    .catch(e => { if (stat) { stat.textContent = _backendErrMsg(e); stat.style.color = "var(--hot)"; } });
 }
 
 function _authorSelectedGenres() {
@@ -10311,6 +10418,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (synthStop) synthStop.addEventListener("click", _synthStopJob);
   const synthBuild = $("synthBuildBtn");
   if (synthBuild) synthBuild.addEventListener("click", _synthBuild);
+  const authorImportBtn = $("authorImportBtn");
+  if (authorImportBtn) authorImportBtn.addEventListener("click", _authorImport);
   const authorStart = $("authorStartBtn");
   if (authorStart) authorStart.addEventListener("click", _authorStart);
   const authorStop = $("authorStopBtn");
@@ -10501,7 +10610,7 @@ function _syncBackendOption(binaryPresent) {
       }
     }
   } else {
-    opt.textContent = "Veritate (not built — run build.bat)";
+    opt.textContent = "Veritate (not built, run build.bat)";
     _backendOptSynced = false;
   }
 }
@@ -10546,7 +10655,7 @@ document.addEventListener("DOMContentLoaded", () => {
 const settingsState = { loaded: false, current: null, saving: false };
 
 function _fmtBytes(n) {
-  if (n == null) return "—";
+  if (n == null) return "-";
   const u = ["B","KB","MB","GB","TB"];
   let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
@@ -10615,7 +10724,7 @@ function _renderHud(snap) {
   const gpuFmt = hotGpu ? _fmtTemp(hotGpu.temp_c) : null;
   if (gpuFmt == null) {
     $("hudGpuTempFill").style.width = "0%";
-    $("hudGpuTempVal").textContent = "—";
+    $("hudGpuTempVal").textContent = "-";
     $("hudGpuTempDetail").textContent = gpus.length ? "no temp telemetry" : "no GPU";
   } else {
     $("hudGpuTempFill").style.width = Math.max(0, Math.min(100, (hotGpu.temp_c - 30) / (95 - 30) * 100)) + "%";
@@ -10660,23 +10769,23 @@ function _renderSysmetrics(snap) {
   const procCpu = (snap.process_cpu_pct || 0).toFixed(1);
   const memUsedSys = _fmtBytes(snap.sys_mem_used);
   const memTotalSys = _fmtBytes(snap.sys_mem_total);
-  const memPct = snap.sys_mem_total ? (snap.rss_bytes / snap.sys_mem_total * 100).toFixed(1) : "—";
+  const memPct = snap.sys_mem_total ? (snap.rss_bytes / snap.sys_mem_total * 100).toFixed(1) : "-";
   let html = "";
   html += `<div class="group cpu"><h4>CPU</h4>
     <div class="row"><span class="k">system</span><span class="v">${sysCpu}% across ${snap.cpu_count} cores</span></div>
     <div class="row"><span class="k">dashboard process</span><span class="v">${procCpu}%</span></div></div>`;
-  html += `<div class="group mem"><h4>Memory — this process</h4>
+  html += `<div class="group mem"><h4>Memory: this process</h4>
     <div class="row"><span class="k">RSS</span><span class="v">${_fmtBytes(snap.rss_bytes)}</span></div>
     <div class="row"><span class="k">% of system</span><span class="v">${memPct}%</span></div>
     <div class="row"><span class="k">system used</span><span class="v">${memUsedSys} / ${memTotalSys}</span></div></div>`;
   const gpus = snap.gpus || [];
   if (gpus.length) {
     for (const g of gpus) {
-      const load = g.load_pct == null ? "—" : g.load_pct.toFixed(0) + "%";
+      const load = g.load_pct == null ? "-" : g.load_pct.toFixed(0) + "%";
       const vram = (g.vram_used != null && g.vram_total != null)
         ? _fmtBytes(g.vram_used) + " / " + _fmtBytes(g.vram_total)
-        : (g.vram_total != null ? "— / " + _fmtBytes(g.vram_total) : "—");
-      html += `<div class="group gpu"><h4>${g.integrated ? "iGPU" : "GPU"} — ${g.vendor || "?"}</h4>
+        : (g.vram_total != null ? "- / " + _fmtBytes(g.vram_total) : "-");
+      html += `<div class="group gpu"><h4>${g.integrated ? "iGPU" : "GPU"}: ${g.vendor || "?"}</h4>
         <div class="row"><span class="k">name</span><span class="v" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${g.name}">${g.name}</span></div>
         <div class="row"><span class="k">load</span><span class="v">${load}</span></div>
         <div class="row"><span class="k">VRAM</span><span class="v">${vram}</span></div></div>`;
@@ -10694,8 +10803,8 @@ function _renderSysmetrics(snap) {
 // Restart-time dep repair. The full flow lives on the Reload Python button:
 // click Restart → we FIRST detect missing deps, install them sequentially
 // (with a live pip log tailing into the overlay via /logs/stream), THEN
-// trigger the actual server restart. No install ever fires on Detect Hardware
-// — Detect only inspects. Kills the check→restart→check loop that came from
+// trigger the actual server restart. No install ever fires on Detect Hardware.
+// Detect only inspects. Kills the check→restart→check loop that came from
 // firing installs during the wait-for-server phase.
 //
 // Log tail: pip lines emitted by deps.py via logmod.info("deps", ...) come
@@ -10722,7 +10831,7 @@ function _lifecycleDepsAttachLogStream() {
 }
 
 // Build the missing-deps queue from a /sys/detect response. Ordered so the
-// heavy install (torch) runs first — a failure there aborts the queue rather
+// heavy install (torch) runs first: a failure there aborts the queue rather
 // than wasting time on smaller pieces. Priority: CUDA > ROCm > CPU-only helpers.
 // The two torch flavors are mutually exclusive (the box either has NVIDIA or
 // AMD, and the backend flags only one at a time), but the queue treats them as
@@ -10753,10 +10862,10 @@ function _renderHudPreview(snap) {
   if (statusEl) {
     // Show the notice only when the CPU package temperature is unreadable.
     // GPU temps come from nvidia-smi independently and are typically fine
-    // even when the CPU sensor helper isn't installed — no reason to warn
+    // even when the CPU sensor helper isn't installed: no reason to warn
     // about them.
     if (snap && snap.available && snap.cpu_temp_c == null) {
-      statusEl.innerHTML = '<span style="color:var(--dim)">CPU temperature sensor unavailable on this host. Restart the dashboard to install the sensor helper — the Restart button queues the install and picks it up on the next boot.</span>';
+      statusEl.innerHTML = '<span style="color:var(--dim)">CPU temperature sensor unavailable on this host. Restart the dashboard to install the sensor helper: the Restart button queues the install and picks it up on the next boot.</span>';
       statusEl.style.display = "";
     } else {
       statusEl.style.display = "none";
@@ -10776,7 +10885,7 @@ function _renderHudPreview(snap) {
   const gpus = snap.gpus || [];
   if (!gpus.length) { $("hudPreviewGpu").textContent = "none detected"; return; }
   const parts = gpus.map(g => {
-    const load = g.load_pct == null ? "—" : Math.round(g.load_pct) + "%";
+    const load = g.load_pct == null ? "-" : Math.round(g.load_pct) + "%";
     const vram = (g.vram_used != null && g.vram_total != null)
       ? _fmtBytes(g.vram_used) + "/" + _fmtBytes(g.vram_total)
       : (g.vram_total != null ? _fmtBytes(g.vram_total) : "");
@@ -10834,7 +10943,7 @@ function _renderWarmModels(memAvail) {
       if (memAvail) {
         txt += " of " + _fmtBytes(memAvail) + " available";
         over = sum > memAvail;
-        if (over) txt += "  — exceeds available memory; models may not all stay resident";
+        if (over) txt += ", exceeds available memory; models may not all stay resident";
       }
       sumEl.textContent = txt;
       sumEl.style.color = over ? "var(--warm)" : "var(--dim)";
@@ -11384,7 +11493,7 @@ function _appUpdatePullWithGuards() {
     let force = false;
     if (edits && edits.ok && edits.has_baseline) {
       const c = edits.counts || {};
-      // Only modified/missing block the pull — added files aren't touched.
+      // Only modified/missing block the pull: added files aren't touched.
       const blockingTotal = (c.modified || 0) + (c.missing || 0);
       if (blockingTotal > 0) {
         const lines = [];
@@ -11393,7 +11502,7 @@ function _appUpdatePullWithGuards() {
         for (const m of (edits.missing  || []).slice(0, cap)) lines.push(`  deleted:  ${m.path}`);
         const more = blockingTotal > lines.length ? `\n  …and ${blockingTotal - lines.length} more` : "";
         const addedNote = (c.added > 0)
-          ? `\n\n(${c.added} user-added file${c.added === 1 ? " is" : "s are"} present but not affected — the updater only overwrites files from the upstream tarball.)`
+          ? `\n\n(${c.added} user-added file${c.added === 1 ? " is" : "s are"} present but not affected: the updater only overwrites files from the upstream tarball.)`
           : "";
         const ok = confirm(
           `${blockingTotal} local edit${blockingTotal === 1 ? "" : "s"} detected since the last update ` +
@@ -11434,10 +11543,10 @@ function _appUpdatePullWithGuards() {
         } else if (res && res.requires_force) {
           // Server detected edits we didn't catch (e.g. race with another tab);
           // surface the count and let the user retry with force.
-          lab.textContent = `local edits detected — retry to force overwrite`;
+          lab.textContent = `local edits detected: retry to force overwrite`;
           lab.style.color = "var(--accent)";
         } else if (res && res.training_active) {
-          lab.textContent = `training active — stop it first`;
+          lab.textContent = `training active: stop it first`;
           lab.style.color = "var(--hot)";
         } else {
           lab.textContent = `failed: ${(res && res.error) || "unknown"}`;
@@ -11522,7 +11631,7 @@ function _lifecycleOverlayHide() {
 
 // Tabs that depend on the pytorch brain or analytics/sync threads being
 // alive. In minimal mode the server's eager-load + sync threads are skipped,
-// so these tabs render but their backend calls return empty/inert — hide
+// so these tabs render but their backend calls return empty/inert: hide
 // them so the UI doesn't pretend they work.
 const MINIMAL_HIDE_TABS = ["generation", "wiki", "learning"];
 
@@ -11606,7 +11715,7 @@ function _lifecycleWaitForServer(_label) {
     fetch("/sys_metrics", { cache: "no-store" })
       .then(r => r.ok ? r.json() : Promise.reject("not ok"))
       .then(() => {
-        _lifecycleSetOverlayStatus("restarting", "server is back — reloading page…", "var(--data-pos)");
+        _lifecycleSetOverlayStatus("restarting", "server is back, reloading page…", "var(--data-pos)");
         setTimeout(() => location.reload(), 600);
       })
       .catch(() => {
@@ -11622,7 +11731,7 @@ function _lifecycleWaitForServer(_label) {
         if (elapsed > 6) {
           _lifecycleSetOverlayStatus(
             "installing dependencies",
-            "the launcher is running pip during boot — first-time CUDA installs can take a few minutes. (" + elapsed.toFixed(0) + "s)",
+            "the launcher is running pip during boot: first-time CUDA installs can take a few minutes. (" + elapsed.toFixed(0) + "s)",
             "var(--warm)"
           );
         } else {
@@ -11684,7 +11793,7 @@ function _lifecycleShowOverlayError(msg) {
   const s = $("lifecycleOverlayStatus");
   if (s) {
     const safe = String(msg).replace(/</g, "&lt;");
-    // Dismiss button — without it, the full-screen overlay covers the app
+    // Dismiss button: without it, the full-screen overlay covers the app
     // (pointer events blocked, body.overflow:hidden) and the user has to
     // hard-reload the browser to escape a failed install.
     s.innerHTML =
@@ -11718,7 +11827,7 @@ function _lifecycleRestart() {
       _lifecyclePhaseInstallDeps(queue, 0);
     })
     .catch(() => {
-      // Detect failed; still attempt the restart — most likely a transient
+      // Detect failed; still attempt the restart: most likely a transient
       // network hiccup, not a real dep problem.
       _lifecyclePhaseRestartServer();
     });
@@ -11726,7 +11835,7 @@ function _lifecycleRestart() {
 
 // Phase 2: install the queued deps sequentially, tailing pip output live.
 // On success moves to phase 3 (server restart). On failure surfaces a clear
-// "Try restarting the server to fix missing software" hint — the launcher's
+// "Try restarting the server to fix missing software" hint: the launcher's
 // boot pip is the fallback when the runtime install can't get permissions.
 function _lifecyclePhaseInstallDeps(queue, idx) {
   if (idx >= queue.length) {
@@ -11755,7 +11864,7 @@ function _lifecyclePhaseInstallDeps(queue, idx) {
     if (item.index_url) body.index_url = item.index_url;
   }
   const name = item.pkg || item.helper || "dependency";
-  // A failed install never blocks the restart — the launcher's boot-time
+  // A failed install never blocks the restart: the launcher's boot-time
   // install has the right scope to fix anything we couldn't. Record the
   // failure and keep the queue moving so the user still gets a restart.
   const skipWith = (reason) => {
@@ -11774,7 +11883,7 @@ function _lifecyclePhaseInstallDeps(queue, idx) {
       if (d.ok || d.unsupported) {
         _lifecyclePhaseInstallDeps(queue, idx + 1);
       } else if (d.needs_elevation) {
-        skipWith("needs elevation — launcher will retry at boot");
+        skipWith("needs elevation, launcher will retry at boot");
       } else {
         skipWith(d.error || d.stderr || d.stdout || "install failed");
       }
@@ -11864,9 +11973,9 @@ function _lifecycleKill() {
 // Branch-switch confirm modal. Triggered when the user picks a different
 // channel while a training run is active. Resolves to "cancel", "keep", or
 // "full":
-//   cancel — no-op, revert the radio selection
-//   keep   — switch the branch on disk but leave the running training alone
-//   full   — kill training, switch, fully reload the app
+//   cancel:  no-op, revert the radio selection
+//   keep:    switch the branch on disk but leave the running training alone
+//   full:    kill training, switch, fully reload the app
 function _branchSwitchConfirm(targetChannel) {
   return new Promise(resolve => {
     const backdrop = document.createElement("div");
@@ -11880,8 +11989,8 @@ function _branchSwitchConfirm(targetChannel) {
           A training run is active. Switching channels replaces the code on disk with whatever is on the target branch. Two options:
         </p>
         <ul style="font-size:12px;line-height:1.5;color:var(--soft);margin:0 0 14px;padding-left:18px">
-          <li><b style="color:var(--hot)">FULLY reset</b> — kills the training subprocess, the C engine, and the PyTorch backend, switches the branch, then reloads the entire app. Uncheckpointed training progress is lost; saved checkpoints on disk survive.</li>
-          <li><b style="color:var(--warm)">not kill training</b> — switches the branch on disk but leaves the running training process alone. Training keeps using the old code in memory; the dashboard sees the new branch on next reload. Risky if the new branch changes a checkpoint format your run depends on.</li>
+          <li><b style="color:var(--hot)">FULLY reset</b>: kills the training subprocess, the C engine, and the PyTorch backend, switches the branch, then reloads the entire app. Uncheckpointed training progress is lost; saved checkpoints on disk survive.</li>
+          <li><b style="color:var(--warm)">not kill training</b>: switches the branch on disk but leaves the running training process alone. Training keeps using the old code in memory; the dashboard sees the new branch on next reload. Risky if the new branch changes a checkpoint format your run depends on.</li>
         </ul>
         <p style="color:var(--soft);font-size:12px;margin:0 0 6px">Type <b style="color:var(--warm)">switch</b> to arm the buttons:</p>
         <input id="switchConfirmInput" type="text" autocomplete="off" spellcheck="false"
@@ -12145,7 +12254,7 @@ function _trainersCheckTrigger() {
 
 // Returns the running model name if a trainer is active, else "".
 // Used to gate destructive operations (plugin/model downloads) that overwrite
-// files the trainer holds open — on Windows this kills the run with a file-lock
+// files the trainer holds open: on Windows this kills the run with a file-lock
 // error; on POSIX the process keeps the old inode but the next restart picks up
 // the new (possibly incompatible) code.
 function _activeTrainingName() {
@@ -12170,7 +12279,7 @@ function _trainersUpdateTrigger() {
   const lab = $("trainersSyncStatus");
   if (btn) btn.disabled = true;
   if (lab) { lab.textContent = "syncing…"; lab.style.color = "var(--warm)"; }
-  // Bulk "safe" sync: pass no actions dict — server applies default policy
+  // Bulk "safe" sync: pass no actions dict, server applies default policy
   // (install missing + update clean-but-outdated; skip modified/conflict).
   fetch("/trainers/git/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
     .then(r => r.json())
@@ -12214,7 +12323,7 @@ const SYNC_STATE_META = {
   missing:          { color: "var(--highlight)", badge: "↓ missing",     title: "in remote but not on disk" },
   update_available: { color: "var(--highlight)", badge: "↑ update",      title: "local matches last sync; remote has changed" },
   modified:         { color: "var(--highlight)", badge: "✏ modified",    title: "you edited this file; remote unchanged" },
-  conflict:         { color: "var(--data-pos)", badge: "⚠ conflict",     title: "you edited AND remote moved — review before forcing" },
+  conflict:         { color: "var(--data-pos)", badge: "⚠ conflict",     title: "you edited AND remote moved: review before forcing" },
   orphan:           { color: "var(--dim)",      badge: "○ orphan",       title: "tracked locally but no longer in remote" },
 };
 
@@ -12249,7 +12358,7 @@ function _syncSplitPath(p) {
   return { parent: p.slice(0, i), file: p.slice(i + 1) };
 }
 
-// Build the per-row HTML — the action buttons depend on the file's state.
+// Build the per-row HTML: the action buttons depend on the file's state.
 // `scope` is "plugins" or "models". The buttons fire _syncFilesAction.
 //
 // Layout is intentionally two-line so long paths can never slip past the
@@ -12261,7 +12370,7 @@ function _syncFileRowHtml(scope, row) {
   const sp = _syncSplitPath(row.path);
   const sizeBadge = "";
   const sizeText = row.size ? `${_syncFmtBytes(row.size)}` : "";
-  // SHAs are debug info — hide inline, expose via tooltip on the state badge.
+  // SHAs are debug info: hide inline, expose via tooltip on the state badge.
   const shaTip = [
     row.remote_sha ? `remote ${_syncShortSha(row.remote_sha)}` : "",
     row.local_sha  ? `local ${_syncShortSha(row.local_sha)}`   : "",
@@ -12341,7 +12450,7 @@ function _syncRenderPanel(scope, data) {
   </div>`;
 
   if (totalActionable === 0 && totalRisky === 0) {
-    header += `<div style="color:var(--data-pos);font-size:10.5px;margin-bottom:6px">All files are in sync — nothing to do.</div>`;
+    header += `<div style="color:var(--data-pos);font-size:10.5px;margin-bottom:6px">All files are in sync, nothing to do.</div>`;
   } else if (totalRisky > 0) {
     header += `<div style="color:var(--highlight);font-size:10.5px;margin-bottom:6px">⚠ ${totalRisky} file${totalRisky === 1 ? "" : "s"} require an explicit decision (force overwrite or adopt local).</div>`;
   }
@@ -12365,7 +12474,7 @@ function _syncRenderPanel(scope, data) {
 }
 
 // Concrete, contextual confirm. Shows which plugin/model the file belongs to,
-// its size, and exactly what will change — so the user reads what they're
+// its size, and exactly what will change, so the user reads what they're
 // about to overwrite BEFORE clicking OK, not after.
 function _syncConfirmDestructive(scope, action, path, row) {
   const sp = _syncSplitPath(path);
@@ -12524,40 +12633,6 @@ const CORPUS_TOPICS = [
   { id: "special_sft", label: "Special SFT",      blurb: "abstention, chit-chat, and other targeted SFT layers" },
 ];
 
-// Fallback family/topic for legacy entries (missing family/topic in catalog).
-// Prefer the catalog fields; this table only fires when they're absent.
-const CORPUS_STEM_FAMILY_FALLBACK = {
-  chat_50mb: "carpathian", chat_500mb: "carpathian", chat_5gb: "carpathian",
-  agent_15mb: "carpathian", agent_150mb: "carpathian", agent_1500mb: "carpathian",
-  mcp_docs: "carpathian", mcp_15mb: "carpathian", mcp_150mb: "carpathian", mcp_1500mb: "carpathian",
-  crypto: "carpathian", stocks: "carpathian",
-  py_code_100mb: "carpathian", py_code_1gb: "carpathian",
-  js_code_100mb: "carpathian", js_code_1gb: "carpathian",
-  html_code_50mb: "carpathian", css_code_3mb: "carpathian", code_qa_100mb: "carpathian",
-  mixed_code_raw_200mb: "carpathian", mixed_code_files_200mb: "carpathian",
-  mixed_code_edu_200mb: "carpathian", mixed_code_qa_200mb: "carpathian",
-  code_textbook_v1: "carpathian", sft_idk: "carpathian",
-  shakespeare: "public", fineweb_edu: "public",
-  wikitext103: "public", enwik8: "public", pg19: "public",
-  openwebtext10g: "public", the_pile: "public",
-  slimpajama627b: "public", redpajama_v2: "public",
-};
-const CORPUS_STEM_TOPIC_FALLBACK = {
-  chat_50mb: "chat", chat_500mb: "chat", chat_5gb: "chat",
-  agent_15mb: "agent", agent_150mb: "agent", agent_1500mb: "agent",
-  mcp_docs: "mcp", mcp_15mb: "mcp", mcp_150mb: "mcp", mcp_1500mb: "mcp",
-  crypto: "market", stocks: "market",
-  py_code_100mb: "code", py_code_1gb: "code",
-  js_code_100mb: "code", js_code_1gb: "code",
-  html_code_50mb: "code", css_code_3mb: "code", code_qa_100mb: "code",
-  mixed_code_raw_200mb: "code", mixed_code_files_200mb: "code",
-  mixed_code_edu_200mb: "code", mixed_code_qa_200mb: "code",
-  code_textbook_v1: "code", sft_idk: "special_sft",
-  shakespeare: "knowledge", fineweb_edu: "knowledge",
-  wikitext103: "knowledge", enwik8: "knowledge", pg19: "knowledge",
-  openwebtext10g: "knowledge", the_pile: "knowledge",
-  slimpajama627b: "knowledge", redpajama_v2: "knowledge",
-};
 const CORPUS_MODE_TOPIC = { chat: "chat", agent: "agent", autocomplete: "code" };
 // Left indent for a row's secondary lines, so they line up under the label
 // past the mix checkbox + status dot.
@@ -12567,20 +12642,15 @@ const CORPUS_ROW_INDENT = "45px";
 // entries hosted on COS, so no coming-soon placeholders are needed.
 const CORPUS_MARKET_PLACEHOLDERS = [];
 
+// Family and topic come from the catalog. Custom user sources carry neither,
+// so they default to "carpathian" (sorts first) and to whatever mode they were
+// installed for.
 function _corpusFamilyOf(c) {
-  if (c.family) return c.family;
-  const byStem = CORPUS_STEM_FAMILY_FALLBACK[c.stem];
-  if (byStem) return byStem;
-  // Custom user sources default to "carpathian" so they show up first; users
-  // installing external URLs typically want them near the top.
-  return "carpathian";
+  return c.family || "carpathian";
 }
 function _corpusTopicOf(c) {
   if (c.topic) return c.topic;
-  const byStem = CORPUS_STEM_TOPIC_FALLBACK[c.stem];
-  if (byStem) return byStem;
-  const modes = c.trained_modes || [];
-  for (const m of modes) { if (CORPUS_MODE_TOPIC[m]) return CORPUS_MODE_TOPIC[m]; }
+  for (const m of (c.trained_modes || [])) { if (CORPUS_MODE_TOPIC[m]) return CORPUS_MODE_TOPIC[m]; }
   return "knowledge";
 }
 
@@ -12635,7 +12705,7 @@ function _corpusRenderCatalog(data) {
       parts.push(`<span style="color:var(--data-pos)">${n} corpora (local + remote catalog merged)</span>`);
     } else {
       const err = (data.catalog_status && data.catalog_status.error) || "unknown error";
-      parts.push(`<span style="color:var(--hot)">remote catalog unreachable: ${_corpusEsc(err)}</span> <span style="color:var(--warm)">— using local catalog only.</span>`);
+      parts.push(`<span style="color:var(--hot)">remote catalog unreachable: ${_corpusEsc(err)},</span> <span style="color:var(--warm)">using local catalog only.</span>`);
     }
     if (data.hf_required && !data.hf_available) {
       const probe = data.hf_probe || {};
@@ -12645,7 +12715,7 @@ function _corpusRenderCatalog(data) {
       parts.push(
         `<span style="color:var(--hot)">HuggingFace 'datasets' library not importable in <code>${exe}</code>${why}.</span>` +
         ` <button id="corpusInstallDepsBtn" type="button" class="go" style="font-size:11px;padding:3px 10px">Install required packages</button>` +
-        ` <span style="color:var(--dim)">— or run manually: <code>${_corpusEsc(cmd)}</code></span>`
+        ` <span style="color:var(--dim)">or run manually: <code>${_corpusEsc(cmd)}</code></span>`
       );
     }
     statusEl.innerHTML = parts.join("<br>");
@@ -12658,17 +12728,17 @@ function _corpusRenderCatalog(data) {
           const res = await fetch("/corpus/library/install_deps", { method: "POST" });
           const out = await res.json();
           if (out.ok) {
-            installBtn.textContent = "Installed — refreshing…";
+            installBtn.textContent = "Installed, refreshing…";
             setTimeout(() => location.reload(), 800);
           } else {
             installBtn.disabled = false;
-            installBtn.textContent = "Install failed — see console";
+            installBtn.textContent = "Install failed: see console";
             console.error("install_deps failed:", out);
             alert("Install failed (exit " + out.returncode + "). See browser console for full stderr.");
           }
         } catch (e) {
           installBtn.disabled = false;
-          installBtn.textContent = "Install failed — see console";
+          installBtn.textContent = "Install failed: see console";
           console.error(e);
         }
       });
@@ -12700,7 +12770,7 @@ function _corpusRenderCatalog(data) {
     const parts = [
       `<div style="font-weight:700;font-size:12.5px;color:var(--text);letter-spacing:.04em;text-transform:uppercase;margin:14px 0 4px;padding:0 8px;border-bottom:1px solid var(--line)">` +
       `${_corpusEsc(famLabel)}` +
-      (famBlurb ? ` <span class="meta" style="font-weight:400;font-size:10px;color:var(--dim);letter-spacing:0;text-transform:none">— ${_corpusEsc(famBlurb)}</span>` : "") +
+      (famBlurb ? ` <span class="meta" style="font-weight:400;font-size:10px;color:var(--dim);letter-spacing:0;text-transform:none">(${_corpusEsc(famBlurb)})</span>` : "") +
       `</div>`
     ];
     let anyRows = false;
@@ -12879,7 +12949,7 @@ function _corpusRefreshCatalog() {
   corpusLibState.inflight = true;
   // Cold load: stamp a skeleton so the catalog area doesn't read as empty
   // while the upstream fetch is in flight. Background refresh (poll while an
-  // install is running) keeps the existing list visible — corpusLibState.catalog
+  // install is running) keeps the existing list visible: corpusLibState.catalog
   // is non-null in that case.
   if (!corpusLibState.catalog) showSkeleton("corpusList", "blocks", 5);
   fetch("/corpus/library/catalog")
@@ -13079,7 +13149,12 @@ const corpusMixState = {
   accepted: null,    // spec handed to the Training tab
   profiles: {},      // id -> { label, blurb } from the server
   profileNote: "",   // plain-language state of the profile list
+  compose: null,     // last /corpus/mix/compose/status body while a compose runs
 };
+
+const CORPUS_MIX_COMPOSE_URL    = "/corpus/mix/compose";
+const CORPUS_MIX_COMPOSE_STATUS = "/corpus/mix/compose/status";
+const CORPUS_MIX_COMPOSE_POLL_MS = 1000;
 
 function _corpusMixEntry(stem) {
   const cat = corpusLibState.catalog;
@@ -13324,8 +13399,126 @@ function _corpusMixPlanHtml() {
   out.push(`<button class="action" type="button" id="corpusMixAcceptBtn" style="border-color:var(--accent);color:var(--accent)">use this mix for training</button>`);
   out.push(`</div>`);
 
+  out.push(_corpusMixComposeFormHtml());
   if (corpusMixState.accepted) out.push(_corpusMixHandoffHtml());
   return out.join("");
+}
+
+// Two ways to use a plan. "use this mix" hands the trainer a spec string and the
+// sources stay separate files. "compose" writes the plan out as ONE corpus on
+// disk: slower and it costs the bytes, but the result is a single file with a
+// single checksum, which is what a run you intend to reproduce later wants.
+function _corpusMixComposeFormHtml() {
+  const busy = corpusMixState.compose && corpusMixState.compose.state === "running";
+  return [
+    `<div class="mix-head" style="margin-top:10px">Or compose it into one file</div>`,
+    `<div class="mix-note">This copies every source into a single <code>&lt;name&gt;_train.bin</code> plus a matching val file, shuffled together in chunks so the sources interleave instead of sitting in blocks. Train and val are drawn from separate regions of each source, so they never share a byte. You get one checksum for the whole corpus. It writes the full planned size to disk, so make sure you have the room.</div>`,
+    `<div class="inline" style="gap:6px;flex-wrap:wrap;margin-top:6px">`,
+    `<input type="text" id="corpusMixComposeStem" placeholder="new corpus name" ${busy ? "disabled" : ""} style="width:180px">`,
+    `<button class="action" type="button" id="corpusMixComposeBtn" ${busy ? "disabled" : ""}>` +
+    `${busy ? "composing..." : "compose into one file"}</button>`,
+    `</div>`,
+    _corpusMixComposeStatusHtml(),
+  ].join("");
+}
+
+function _corpusMixComposeStatusHtml() {
+  const c = corpusMixState.compose;
+  if (!c || c.state === "idle") return "";
+  if (c.state === "running") {
+    const done = c.bytes_written || 0;
+    const all  = c.bytes_total || 0;
+    const pct  = all > 0 ? (100 * done / all) : 0;
+    return `<div class="mix-note">Writing <b>${_corpusEsc(c.stem || "")}</b>: ` +
+           `${_corpusMixFmtBytes(done)} of ${all > 0 ? _corpusMixFmtBytes(all) : "?"}` +
+           `${all > 0 ? ` (${pct.toFixed(1)}%)` : ""}. ${_corpusEsc(c.phase || "")}. ` +
+           `Leave this tab open or come back later, it keeps running on the server.</div>`;
+  }
+  if (c.state === "error") {
+    return `<div class="mix-todo">Compose failed: ${_corpusEsc(c.error || "unknown error")}. ` +
+           `Nothing was handed to the trainer.</div>`;
+  }
+  const r = c.result || {};
+  return [
+    `<div class="mix-head">Composed: ${_corpusEsc(r.stem || "")}</div>`,
+    `<div class="mix-note">Train ${_corpusMixFmtBytes(r.train_bytes || 0)}, ` +
+    `val ${_corpusMixFmtBytes(r.val_bytes || 0)}. ` +
+    `Your next step: open the <b>Training</b> tab and put <code>${_corpusEsc(r.stem || "")}</code> ` +
+    `in the "training data file" field. It is one corpus now, so it needs no mix spec.</div>`,
+    `<div class="mix-spec"><code>sha256 train ${_corpusEsc(r.sha256_train || "")}</code></div>`,
+  ].join("");
+}
+
+function _corpusMixFmtBytes(n) {
+  if (!(n > 0)) return "0 B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
+  return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
+}
+
+// The request body plan and compose share: compose runs the same plan the
+// preview showed, so the file on disk is the split the user actually approved.
+function _corpusMixPlanBody() {
+  if (!corpusMixState.picked.length) {
+    _corpusMixNote("pick at least one corpus from the list below first.", "var(--warm)");
+    return null;
+  }
+  const target = _corpusMixTargetBytes();
+  if (!target) {
+    _corpusMixNote("set a total training size above zero.", "var(--warm)");
+    return null;
+  }
+  const modelEl = $("corpusMixModel");
+  return {
+    stems:        corpusMixState.picked.slice(),
+    target_bytes: target,
+    profile:      _corpusMixProfileValue(),
+    max_epochs:   _corpusMixEpochCap() || null,
+    model_params: parseInt((modelEl && modelEl.value) || "", 10) || null,
+  };
+}
+
+function _corpusMixCompose() {
+  const stemEl = $("corpusMixComposeStem");
+  const stem = (stemEl && stemEl.value.trim().toLowerCase()) || "";
+  if (!/^[a-z0-9_]+$/.test(stem)) {
+    _corpusMixNote("give the composed corpus a name first (lowercase letters, digits, underscores).", "var(--warm)");
+    return;
+  }
+  const body = _corpusMixPlanBody();
+  if (!body) return;
+  body.stem = stem;
+  _corpusMixNote("composing: the server is writing the corpus now.", "var(--dim)");
+  fetch(CORPUS_MIX_COMPOSE_URL, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.ok === false) {
+        corpusMixState.compose = { state: "error", error: (d && d.error) || "compose refused" };
+        _corpusMixRender();
+        return;
+      }
+      corpusMixState.compose = { state: "running", stem, bytes_written: 0, bytes_total: 0 };
+      _corpusMixRender();
+      _corpusMixComposePoll();
+    })
+    .catch(e => {
+      corpusMixState.compose = { state: "error", error: String(e) };
+      _corpusMixRender();
+    });
+}
+
+function _corpusMixComposePoll() {
+  fetch(CORPUS_MIX_COMPOSE_STATUS)
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (!d) return;
+      corpusMixState.compose = d;
+      _corpusMixRender();
+      if (d.state === "running") setTimeout(_corpusMixComposePoll, CORPUS_MIX_COMPOSE_POLL_MS);
+    })
+    .catch(() => setTimeout(_corpusMixComposePoll, CORPUS_MIX_COMPOSE_POLL_MS));
 }
 
 function _corpusMixHandoffHtml() {
@@ -13422,6 +13615,8 @@ function _corpusMixRender() {
     if (acc) acc.addEventListener("click", _corpusMixAccept);
     const cp = $("corpusMixCopyBtn");
     if (cp) cp.addEventListener("click", _corpusMixCopySpec);
+    const comp = $("corpusMixComposeBtn");
+    if (comp) comp.addEventListener("click", _corpusMixCompose);
   }
   const btn = $("corpusMixPlanBtn");
   if (btn) btn.disabled = corpusMixState.planning || !corpusMixState.picked.length;
@@ -13432,19 +13627,8 @@ function _corpusMixPlanRequest() {
     _corpusMixNote("pick at least one corpus from the list below first.", "var(--warm)");
     return;
   }
-  const target = _corpusMixTargetBytes();
-  if (!target) {
-    _corpusMixNote("set a total training size above zero.", "var(--warm)");
-    return;
-  }
-  const modelEl = $("corpusMixModel");
-  const body = {
-    stems:        corpusMixState.picked.slice(),
-    target_bytes: target,
-    profile:      _corpusMixProfileValue(),
-    max_epochs:   _corpusMixEpochCap() || null,
-    model_params: parseInt((modelEl && modelEl.value) || "", 10) || null,
-  };
+  const body = _corpusMixPlanBody();
+  if (!body) return;
   corpusMixState.planning = true;
   corpusMixState.planError = null;
   corpusMixState.accepted = null;
@@ -13706,7 +13890,7 @@ function _mktInstall(id) {
   mktState.busy.add(id); _mktRender(mktState.catalog);
   fetch("/extensions/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
     .then(r => r.json()).then(res => {
-      if (res.ok) _mktNote("Installed — restart the dashboard to activate.", "var(--data-pos)");
+      if (res.ok) _mktNote("Installed, restart the dashboard to activate.", "var(--data-pos)");
       else _mktNote(res.error || "Install failed.", "var(--warm)");
     })
     .catch(() => _mktNote("Install failed. Try again.", "var(--hot)"))
@@ -13718,7 +13902,7 @@ function _mktUninstall(id) {
   mktState.busy.add(id); _mktRender(mktState.catalog);
   fetch("/extensions/uninstall", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
     .then(r => r.json()).then(res => {
-      if (res.ok) _mktNote("Uninstalled — restart the dashboard to apply.", "var(--data-pos)");
+      if (res.ok) _mktNote("Uninstalled, restart the dashboard to apply.", "var(--data-pos)");
       else _mktNote(res.error || "Uninstall failed.", "var(--warm)");
     })
     .catch(() => _mktNote("Uninstall failed. Try again.", "var(--hot)"))
@@ -13843,7 +14027,7 @@ function _trCorpusSizeWarning() {
   if (minP != null && params < minP) {
     msg = `Heads up: <b>${_corpusEsc(entry.label)}</b> is large for a ${size} model (~${_corpusFmtParams(params)} params). Recommended starting size is ${_corpusFmtParams(minP)}+ params. The model may underfit and waste compute reading bytes it can't memorize.`;
   } else if (maxP != null && params > maxP) {
-    msg = `Heads up: <b>${_corpusEsc(entry.label)}</b> is small for a ${size} model (~${_corpusFmtParams(params)} params). Recommended ceiling is ${_corpusFmtParams(maxP)} params. Bigger models will overfit fast on this corpus — consider a larger corpus or a smaller model.`;
+    msg = `Heads up: <b>${_corpusEsc(entry.label)}</b> is small for a ${size} model (~${_corpusFmtParams(params)} params). Recommended ceiling is ${_corpusFmtParams(maxP)} params. Bigger models will overfit fast on this corpus: consider a larger corpus or a smaller model.`;
   }
   if (!msg) { warnEl.style.display = "none"; return; }
   warnEl.innerHTML = msg;
@@ -13954,16 +14138,16 @@ function _applyDevicePrefCapabilities() {
     if (!need) return;
     const capOk = !!(caps && caps[need]);
     // Preserve any prior suffix we tacked on: strip and re-add so re-detects
-    // don't accumulate "— unsupported — unsupported".
-    const baseText = (opt.textContent || "").split(" — ")[0];
+    // don't accumulate ": unsupported: unsupported".
+    const baseText = (opt.textContent || "").split(": ")[0];
     opt.textContent = baseText;
     opt.disabled = !capOk;
     if (!capOk) {
       disabled_labels.push(baseText.split(" (")[0].trim());
       if (need === "can_use_cuda" && gpuPresentButTorchBlind) {
-        opt.textContent = baseText + " — PyTorch is CPU-only, restart to install CUDA build";
+        opt.textContent = baseText + ": PyTorch is CPU-only, restart to install CUDA build";
       } else {
-        opt.textContent = baseText + " — unsupported on this host";
+        opt.textContent = baseText + ": unsupported on this host";
       }
     } else {
       enabled_labels.push(baseText.split(" (")[0].trim());
@@ -14159,7 +14343,7 @@ document.addEventListener("DOMContentLoaded", () => {
         _applyDevicePrefCapabilities();
         // Detect is inspection-only. If the snapshot shows something needs
         // installing (needs_torch_cuda etc.) the fix happens on the Restart
-        // button — that flow installs missing deps first, THEN restarts.
+        // button: that flow installs missing deps first, THEN restarts.
       })
       .catch(() => {})
       .finally(() => { detectBtn.disabled = false; detectBtn.textContent = prev; });
@@ -14671,7 +14855,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // ---- live training stream (v8 tier 4 receiver) ----
 // Auto-subscribe to /train_stream when the training tab is active. The brain-scan
-// feed and status pill reveal themselves only when frames actually arrive — silent
+// feed and status pill reveal themselves only when frames actually arrive: silent
 // when the trainer isn't publishing, no buttons, no extra panel.
 // (_trainStreamEvt and _trainStreamCount are hoisted near activateTab.)
 
@@ -15203,7 +15387,7 @@ window.ai_fail = _AI.fail;
   function _bodyHasRealText(body) {
     const txt = (body.textContent || "");
     if (/\d/.test(txt)) return true;
-    const cleaned = txt.replace(/[\s–—\-:]+/g, "");
+    const cleaned = txt.replace(/[\s\u2013\u2014\-:]+/g, "");
     if (cleaned.length === 0) return false;
     if (/^(confidence|letter|ms|surprise|uncertainty|frame|model|step|loss)+$/i.test(cleaned)) return false;
     return cleaned.length > 8;

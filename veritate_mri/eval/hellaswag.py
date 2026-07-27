@@ -24,7 +24,6 @@ from readers import paths
 
 from .score import score_sequence
 
-
 # ------------------------------------------------------------------------------------
 # Constants
 
@@ -42,7 +41,7 @@ def run_hellaswag(model, data_path: str = DEFAULT_DATA,
         raise FileNotFoundError(
             f"HellaSwag data not found at {data_path}. See README.md for download instructions."
         )
-    with open(data_path, "r", encoding="utf-8") as f:
+    with open(data_path, encoding="utf-8") as f:
         blob = json.load(f)
     items = blob["items"]
     if limit is not None:

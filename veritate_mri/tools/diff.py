@@ -26,7 +26,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "..")))
 from veritate_core.model import Veritate
 
-
 # ------------------------------------------------------------------------------------
 # Constants
 
@@ -73,7 +72,7 @@ def load_c_trace(path):
         final_act     = np.frombuffer(f.read(hidden),              dtype=np.int8)
         prompt_bytes  = np.frombuffer(f.read(real_len),            dtype=np.uint8)
         # 5 trace_predictions @ 8 bytes each
-        top_preds_raw = f.read(5 * 8)
+        f.read(5 * 8)
         has_attention = struct.unpack("<B", f.read(1))[0]
         attention = None
         if has_attention:
@@ -103,9 +102,9 @@ def pytorch_trace(checkpoint, prompt, real_len_pad=V_SEQ):
     sd = state["model"]
     del state  # drops optimizer state (~8 GB on 1B) before model construction
     model = Veritate(
-        vocab=cfg.get("vocab", 256), hidden=cfg.get("hidden", 768),
-        layers=cfg.get("layers", 12), ffn=cfg.get("ffn", 3072),
-        heads=cfg.get("heads", 12), seq=cfg.get("seq", 256),
+        vocab=cfg.get("vocab", V_VOCAB), hidden=cfg.get("hidden", V_HIDDEN),
+        layers=cfg.get("layers", V_LAYERS), ffn=cfg.get("ffn", V_FFN),
+        heads=cfg.get("heads", V_HEADS), seq=cfg.get("seq", V_SEQ),
     )
     model.load_state_dict(sd, strict=False)
     del sd
@@ -187,7 +186,8 @@ def diff_traces(c, py, pos=None, scale=ACTIVATION_INT8_SCALE):
     if pos is None:
         pos = real_len - 1   # last real position
     print(f"# diff at position {pos} (real_len={real_len})")
-    print(f"# {'layer':>6} {'stage':>14} {'cos_dist':>12} {'rms_fp':>12} {'c_norm':>10} {'py_norm':>10} {'max_abs_diff_fp':>16}")
+    print(f"# {'layer':>6} {'stage':>14} {'cos_dist':>12} {'rms_fp':>12} {'c_norm':>10} {'py_norm':>10} "
+          f"{'max_abs_diff_fp':>16}")
 
     for L in range(V_LAYERS):
         # residual_pre: C int16 -> fp by /scale; PyTorch fp32
@@ -230,7 +230,7 @@ def main():
     print(f"# pytorch trace from {args.checkpoint}")
     py = pytorch_trace(args.checkpoint, args.prompt)
 
-    print(f"# loading C trace")
+    print("# loading C trace")
     c = load_c_trace(args.out)
     assert c["real_len"] == py["real_len"], f"real_len mismatch: c={c['real_len']} py={py['real_len']}"
 

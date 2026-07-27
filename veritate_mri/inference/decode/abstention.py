@@ -25,8 +25,8 @@
 # Imports
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -72,7 +72,7 @@ class AbstentionGate:
     an internal buffer of the first warmup_bytes bytes until decision() != undecided,
     then either flush the buffer (proceed) or replace with config.template (abstain)."""
 
-    def __init__(self, config: Optional[AbstentionConfig] = None):
+    def __init__(self, config: AbstentionConfig | None = None):
         self.config = config or AbstentionConfig()
         self._top1_probs: list[float] = []
         self._buffer:     bytearray  = bytearray()
@@ -111,8 +111,8 @@ class AbstentionGate:
 # Post-hoc backstop (no per-byte telemetry available)
 
 def apply_post_hoc(response_bytes: bytes,
-                   top1_probs: Optional[Iterable[float]] = None,
-                   config: Optional[AbstentionConfig] = None) -> bytes:
+                   top1_probs: Iterable[float] | None = None,
+                   config: AbstentionConfig | None = None) -> bytes:
     """Offline decision on a completed response. Prefers per-byte telemetry when
     the caller can supply it (top1_probs of the first warmup_bytes bytes);
     otherwise falls back to two heuristics: response length + repetition ratio

@@ -28,11 +28,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .model import (VOCAB_BYTE_LEVEL, ACT_DEFAULT, REG_DEFAULT, Block, RMSNorm,
-                    QuantLinear)
-from .model_recurrent import RecurrentBlock
-from .model_moe import MoEFFN
 from . import qat as _qat
+from .model import ACT_DEFAULT, REG_DEFAULT, VOCAB_BYTE_LEVEL, Block, QuantLinear, RMSNorm
+from .model_moe import MoEFFN
+from .model_recurrent import STATE_RULE_DEFAULT, RecurrentBlock
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -40,7 +39,10 @@ from . import qat as _qat
 PATCH_STRIDE  = 4
 N_LOCAL_ENC   = 2
 N_LOCAL_DEC   = 2
+GLOBAL_MIXER_ATTN      = "attn"
 GLOBAL_MIXER_RECURRENT = "recurrent"
+GLOBAL_FFN_DENSE       = "dense"
+GLOBAL_FFN_MOE         = "moe"
 UTF8_CONT_LO  = 0x80
 UTF8_CONT_HI  = 0xBF
 LOOP_MAX      = 4
@@ -65,8 +67,8 @@ def _boundary_table():
 class VeritatePatched(nn.Module):
     def __init__(self, vocab, hidden, layers, ffn, heads, seq,
                  activation=ACT_DEFAULT, capture_l1=False, reg_mode=REG_DEFAULT,
-                 global_mixer="attn", global_loops=1, global_ffn="dense",
-                 state_rule="gla"):
+                 global_mixer=GLOBAL_MIXER_ATTN, global_loops=1, global_ffn=GLOBAL_FFN_DENSE,
+                 state_rule=STATE_RULE_DEFAULT):
         super().__init__()
         if vocab != VOCAB_BYTE_LEVEL:
             raise ValueError(f"vocab must be {VOCAB_BYTE_LEVEL} (byte-level only), got {vocab}")
@@ -94,7 +96,7 @@ class VeritatePatched(nn.Module):
         self.slot_pos_emb = nn.Embedding(self.slots, hidden)
         glob_cls = RecurrentBlock if global_mixer == GLOBAL_MIXER_RECURRENT else Block
         def mk(cls):
-            kw = dict(activation=activation, capture_l1=capture_l1, reg_mode=reg_mode)
+            kw = {"activation": activation, "capture_l1": capture_l1, "reg_mode": reg_mode}
             if cls is RecurrentBlock:
                 kw["state_rule"] = state_rule
             return cls(hidden, ffn, heads, **kw)
@@ -111,7 +113,7 @@ class VeritatePatched(nn.Module):
         # (bool advanced indexing showed transient index corruption there).
         self.register_buffer("boundary", _boundary_table().float().unsqueeze(-1), persistent=False)
 
-        if global_ffn == "moe":
+        if global_ffn == GLOBAL_FFN_MOE:
             for blk in self.blocks[N_LOCAL_ENC:N_LOCAL_ENC + self.glob_layers]:
                 blk.ff = MoEFFN(hidden, ffn, activation=activation,
                                 capture_l1=capture_l1, reg_mode=reg_mode)

@@ -16,7 +16,7 @@ Trainers import the surface from `veritate_core.plugin`:
 from veritate_core.plugin import save, paths, model, qat, hardware, mem_planner, mem_executor, bench, get_teacher_client
 ```
 
-`save`, `paths`, `model`, `qat`, `hardware`, `mem_planner`, `mem_executor`, and `bench` are the namespaces in this contract. `get_teacher_client(provider=None, model=None)` returns a configured teacher-model `Client` for distillation, or `None` when no `teacher_provider` is set in settings. Nothing else in the parent repo is callable from a trainer.
+`save`, `paths`, `model`, `qat`, `hardware`, `mem_planner`, `mem_executor`, and `bench` are the namespaces in this contract. `get_teacher_client(provider_override=None, model_override=None)` returns a configured teacher-model `Client` for distillation, or `None` when no `teacher_provider` is set in settings. Nothing else in the parent repo is callable from a trainer.
 
 ## hardware
 
@@ -40,7 +40,7 @@ Total addressable RAM. On Apple Silicon this is the unified pool the GPU and CPU
 
 ## mem_planner
 
-Size-adaptive training-memory planner. Decides whether a run fits in unified memory and which offload tier to engage. Full reference: [documentation/platform/mem_planner.md](../platform/mem_planner.md).
+Size-adaptive training-memory planner. Decides whether a run fits in unified memory and which offload tier to engage. Full reference: [developer_documentation/platform/mem_planner.md](../platform/mem_planner.md).
 
 ### `mem_planner.plan_training_memory(param_count, hidden, layers, ffn, batch, seq, dtype="bf16", budget_bytes=None) -> MemoryPlan`
 
@@ -48,7 +48,7 @@ Size-adaptive training-memory planner. Decides whether a run fits in unified mem
 
 ## bench
 
-Measured memory/throughput benchmark powering the dashboard's Auto tune. Full reference: [documentation/platform/bench.md](../platform/bench.md).
+Measured memory/throughput benchmark powering the dashboard's Auto tune. Full reference: [developer_documentation/platform/bench.md](../platform/bench.md).
 
 ### `bench.run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=None) -> dict`
 
@@ -56,7 +56,7 @@ Ramps batch size on the already-built model with throwaway synthetic batches unt
 
 ## mem_executor
 
-Applies a `MemoryPlan` to a model. Full reference: [documentation/platform/mem_executor.md](../platform/mem_executor.md).
+Applies a `MemoryPlan` to a model. Full reference: [developer_documentation/platform/mem_executor.md](../platform/mem_executor.md).
 
 ### `mem_executor.apply_plan(model, plan) -> AppliedPlan`
 
@@ -111,7 +111,9 @@ Failures inside individual dump functions are logged and swallowed; the checkpoi
 
 Field schemas for every artifact live in [hooks/contract.md](../hooks/contract.md).
 
-### `save.append_train_row(name, step, split, loss, *, lr=None, grad_norm=None, tok_per_s=None, wall_s=None, seed=None)`
+### `save.append_train_row(name, step, split, loss, lr=None, grad_norm=None, tok_per_s=None, wall_s=None, seed=None)`
+
+Every parameter is positional-or-keyword; there is no `*` marker.
 
 Appends one row to `models/<name>/train.csv`. Writes the header if the file is new. Cheap, called every log step. The dashboard's loss, throughput, learning-rate, and gradient-norm charts all read from this one file.
 
@@ -134,7 +136,7 @@ When resuming from `step_<N>.pt`, removes rows where `step > N` from `train.csv`
 
 Builds the canonical model dir name from a human label and a size token. The label is slugified (lowercased, non-alnum collapsed to `_`); size is lowercased and stripped. Example: `compose_name("Chatty Otter", "85m")` returns `"chatty_otter_85m"`.
 
-Legacy 4-arg form `compose_name(corpus, size, precision, version)` returning `"<corpus_leaf>_<size>_<precision>_<version>"` is kept for older trainers. New trainers use the 2-arg form.
+A 4-arg form `compose_name(corpus, size, precision, version)` returning `"<corpus_leaf>_<size>_<precision>_<version>"` is also supported. New trainers use the 2-arg form.
 
 ### `save.hash_corpus(stem) -> dict`
 
@@ -317,7 +319,7 @@ Every trainer's manifest declares these three keys:
 |---|---|---|---|
 | `size` | string | `"80m"` | the single key of the manifest's `sizes` table. One trainer = one size; the dashboard derives it from the trainer selection and the trainer's argparse default applies on launch. |
 | `precision` | string | `"bf16"` | training precision. `"bf16"` or `"fp32"`. |
-| `version` | string | `"v1"` | version tag for legacy `compose_name`. `v1`, `v1a`, `v2`, ... |
+| `version` | string | `"v1"` | version tag for the 4-arg `compose_name` form. `v1`, `v1a`, `v2`, ... |
 
 ### common training-loop knobs
 
@@ -374,9 +376,9 @@ For trainers whose FFN is replaced with N independent experts and a router.
 
 ## reserved manifest flags
 
-A subset of `defaults` keys are reserved: their meaning, dashboard treatment, and downstream side-effects are fixed across trainers. Don't invent near-synonyms (e.g. `int8_qat`, `quantize`) — use the reserved key. The reservation gives one consistent checkbox on the dashboard, one field name in `config.json`, and one signal for downstream consumers (the engine wiring, the bin-picker warning, the exporter).
+A subset of `defaults` keys are reserved: their meaning, dashboard treatment, and downstream side-effects are fixed across trainers. Don't invent near-synonyms (e.g. `int8_qat`, `quantize`); use the reserved key. The reservation gives one consistent checkbox on the dashboard, one field name in `config.json`, and one signal for downstream consumers (the engine wiring, the bin-picker warning, the exporter).
 
-`qat_enabled` is the authoritative QAT signal across the platform. `save.save` mirrors `training_args.qat_enabled` to a top-level `qat_enabled` key in `config.json` on every save; consumers read it via `readers.config.qat_enabled(name)` (which accepts either location) rather than re-parsing `training_args`. The bin's `act_boost` field is a magnitude heuristic and is not authoritative: legitimately QAT-trained checkpoints can still export with `act_boost > 1` when embeddings are small, so the engine subprocess spawns with `VERITATE_ALLOW_HIGH_ACT_BOOST=1` and the dashboard suppresses the act_boost warning when `qat_enabled` is true.
+`qat_enabled` is the authoritative QAT signal across the platform. `save.save` mirrors `training_args.qat_enabled` to a top-level `qat_enabled` key in `config.json` on every save; consumers read it via `readers.config.qat_enabled(name)` (which accepts either location) rather than re-parsing `training_args`. The bin's `act_boost` field is a magnitude heuristic and is not authoritative: QAT-trained checkpoints can export with `act_boost > 1` when embeddings are small, so the engine subprocess spawns with `VERITATE_ALLOW_HIGH_ACT_BOOST=1` and the dashboard suppresses the act_boost warning when `qat_enabled` is true.
 
 | key | type | required behavior when set true | dashboard treatment | downstream contract |
 |---|---|---|---|---|
@@ -482,7 +484,7 @@ Adds the adapter cluster on top of the minimum surface:
   "kind": "trainer",
   "flow": ["scratch", "continue"],
   "defaults": {
-    "size": "1b",
+    "size": "1b3",
     "precision": "bf16",
     "version": "v1",
     "quant_mode": "ternary",

@@ -13,7 +13,6 @@
 import time
 
 from flask import current_app, request
-
 from readers import checkpoints, models
 from runtime import ai_assist as ai_assist_mod
 from runtime import logs as logmod
@@ -66,7 +65,8 @@ def register(app):
                 except Exception as e:
                     cfg["BRAIN_LAST_ERROR"] = user_error(e)
                     if isinstance(e, RuntimeError) and "PyTorch inference is not enabled" in str(e):
-                        logmod.warn("backends", f"pytorch backend skipped for {name}: non-vanilla architecture (use C engine)")
+                        logmod.warn("backends", f"pytorch backend skipped for {name}: "
+                                                "non-vanilla architecture (use C engine)")
                     else:
                         logmod.error("backends", f"pytorch eager load on settings flip failed: {type(e).__name__}: {e}")
             return out

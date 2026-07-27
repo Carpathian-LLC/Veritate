@@ -15,15 +15,14 @@ import threading
 import time
 
 from .protocol import (
-    Capabilities,
-    Job,
-    JobRequirements,
-    capabilities_satisfy,
-    JOB_STATUS_PENDING,
     JOB_STATUS_ASSIGNED,
-    JOB_STATUS_RUNNING,
     JOB_STATUS_DONE,
     JOB_STATUS_FAILED,
+    JOB_STATUS_PENDING,
+    JOB_STATUS_RUNNING,
+    Capabilities,
+    Job,
+    capabilities_satisfy,
 )
 
 # ------------------------------------------------------------------------------------

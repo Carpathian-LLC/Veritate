@@ -10,7 +10,6 @@
 # Imports:
 
 from flask import current_app
-
 from runtime import lifecycle
 
 # ------------------------------------------------------------------------------------

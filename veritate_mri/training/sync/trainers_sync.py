@@ -33,7 +33,9 @@ import urllib.request
 from readers import paths
 from runtime import logs as logmod
 from runtime import net
+
 from training import trainer_runner as plugin_runner
+
 from . import sync_common as sc
 
 _SSL_CTX = net.ssl_context()
@@ -45,6 +47,12 @@ REPO_OWNER         = "Carpathian-LLC"
 REPO_NAME          = "Veritate-Trainers"
 DEFAULT_BRANCH     = "main"
 DOWNLOAD_TIMEOUT_S = 120
+
+# GitHub endpoints. Named so a mirror / enterprise host is a one-line change.
+GITHUB_API_BASE      = "https://api.github.com"
+GITHUB_CODELOAD_BASE = "https://codeload.github.com"
+TARBALL_URL_FMT      = "{codeload}/{owner}/{repo}/tar.gz/refs/heads/{branch}"
+BRANCHES_URL_FMT     = "{api}/repos/{owner}/{repo}/branches"
 
 DEFAULT_REMOTE_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}.git"
 
@@ -62,15 +70,16 @@ _LAST = {"ok": None, "message": "", "finished_at": None, "action": None}
 # HTTP
 
 def _tarball_url(branch):
-    return f"https://codeload.github.com/{REPO_OWNER}/{REPO_NAME}/tar.gz/refs/heads/{branch}"
+    return TARBALL_URL_FMT.format(codeload=GITHUB_CODELOAD_BASE, owner=REPO_OWNER,
+                                  repo=REPO_NAME, branch=branch)
 
 
 def _branches_api_url():
-    return f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/branches"
+    return BRANCHES_URL_FMT.format(api=GITHUB_API_BASE, owner=REPO_OWNER, repo=REPO_NAME)
 
 
 class _EmptyRemote(Exception):
-    """Raised when the upstream repo exists but has no branches yet — i.e. it's
+    """Raised when the upstream repo exists but has no branches yet: i.e. it's
     a placeholder. UI treats this as 'no trainers published yet', not as an
     error to surface."""
 
@@ -78,7 +87,7 @@ class _EmptyRemote(Exception):
 def _remote_has_no_branches():
     """Probe the GitHub branches API. Returns True iff the repo is reachable
     and its branch list is empty. Any other outcome (network failure, repo
-    missing, non-empty list) returns False — caller falls back to the original
+    missing, non-empty list) returns False: caller falls back to the original
     error path."""
     req = urllib.request.Request(_branches_api_url(),
                                  headers={"User-Agent": "veritate-mri/sync",
@@ -124,7 +133,7 @@ def _strip_top_dir(name):
 
 def _parse_tarball(data):
     """Return dict {rel_path: (sha256, bytes)} for every file in the tarball.
-    Bytes are held in memory — plugin tarballs are small (< 5 MB typically)."""
+    Bytes are held in memory: plugin tarballs are small (< 5 MB typically)."""
     files = {}
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
         for member in tar.getmembers():
@@ -171,7 +180,7 @@ def _record(action, ok, message):
 # Public API
 
 def status():
-    """Lightweight status — does not hit the network. Returns last known sync info."""
+    """Lightweight status: does not hit the network. Returns last known sync info."""
     state = sc.load_state(PLUGINS_DIR)
     return {
         "exists":             os.path.isdir(PLUGINS_DIR),
@@ -271,7 +280,7 @@ def sync(actions=None, branch=None):
         try:
             remote = _fetch_remote_files(branch, use_cache=False)
         except _EmptyRemote:
-            msg = "remote repo has no published trainers yet — nothing to sync"
+            msg = "remote repo has no published trainers yet: nothing to sync"
             logmod.info("plugins-sync", msg)
             _record("sync", True, msg)
             return {"ok": True, "empty_remote": True, "message": msg, "status": status()}

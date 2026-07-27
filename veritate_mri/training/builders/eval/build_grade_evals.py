@@ -21,6 +21,11 @@ import re
 import sys
 from pathlib import Path
 
+_MRI_ROOT = str(Path(__file__).resolve().parents[3])
+if _MRI_ROOT not in sys.path:
+    sys.path.insert(0, _MRI_ROOT)
+
+from readers import paths  # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -74,24 +79,23 @@ def fk_scores(text: str):
 
 
 def main() -> int:
-    here = Path(__file__).resolve().parent
-    sources = here.parent / "grade_eval" / "sources"
-    targets = here.parent / "grade_eval"
+    sources = Path(paths.GRADE_EVAL_SOURCES_ROOT)
     if not sources.exists():
         print(f"sources directory missing: {sources}", file=sys.stderr)
         return 1
     short = []
     drift = []
-    print(f"{'band':8s} {'bytes':>7s} {'FKGL':>6s} {'target':>7s} {'gap':>5s} {'words':>6s} {'sents':>6s} {'ASL':>5s} {'ASW':>5s}  status")
+    print(f"{'band':8s} {'bytes':>7s} {'FKGL':>6s} {'target':>7s} {'gap':>5s} {'words':>6s} {'sents':>6s} {'ASL':>5s} "
+          f"{'ASW':>5s}  status")
     print("-" * 88)
     for level in LEVELS:
-        src = sources / f"grade_{level}_source.txt"
+        src = Path(paths.grade_source_path(level))
         if not src.exists():
             print(f"  missing source: {src.name}")
             continue
         text = src.read_text(encoding="utf-8").lstrip("﻿").replace("\r\n", "\n")
         data = text.encode("utf-8")
-        out = targets / f"grade_{level}_eval.bin"
+        out = Path(paths.grade_eval_path(level))
         out.write_bytes(data)
 
         size_flag = ""
@@ -103,7 +107,7 @@ def main() -> int:
         if scored is None:
             print(f"{level:8s} {len(data):>7d} (no FK)")
             continue
-        fkgl, fre, w, s, asl, asw = scored
+        fkgl, _fre, w, s, asl, asw = scored
         target = FK_TARGETS[level]
         # prek is special: anything <=0 is fine since FKGL bottoms at ~ -3
         if level == "prek":
@@ -114,7 +118,8 @@ def main() -> int:
         if not on_target:
             drift.append((level, fkgl, target))
         gap = fkgl - target
-        print(f"{level:8s} {len(data):>7d} {fkgl:6.2f} {target:>7.1f} {gap:>+5.1f} {w:>6d} {s:>6d} {asl:>5.1f} {asw:>5.2f}  {status}{size_flag}")
+        print(f"{level:8s} {len(data):>7d} {fkgl:6.2f} {target:>7.1f} {gap:>+5.1f} {w:>6d} {s:>6d} {asl:>5.1f} "
+              f"{asw:>5.2f}  {status}{size_flag}")
 
     rc = 0
     if short:

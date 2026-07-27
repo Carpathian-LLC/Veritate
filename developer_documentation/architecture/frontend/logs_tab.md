@@ -6,7 +6,7 @@ Engine build status, system metrics snapshot (CPU, memory, GPU, temperatures), a
 
 ## How it works
 
-Markup at [index.html:1219–1265](../../../veritate_mri/web/index.html#L1219).
+Markup at [index.html:1219-1265](../../../veritate_mri/web/index.html#L1219).
 
 - `loadEngineStatus()` fetches `/engine/status` to display build state (built? for which platform? latest version?).
 - `_renderSysmetrics(snap)` ([index.js:8960](../../../veritate_mri/web/index.js#L8960)) renders the latest system snapshot (CPU usage, memory pressure, GPU activity, temperatures).

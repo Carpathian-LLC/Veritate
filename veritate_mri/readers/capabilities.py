@@ -114,7 +114,7 @@ def _read_raw(name):
     if not os.path.isfile(p):
         return None
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return None
@@ -156,8 +156,9 @@ def modes_for_corpus(spec):
     corpora), so the caller can fall back to the trainer's declared tier."""
     if not isinstance(spec, str) or not spec.strip():
         return ()
-    from veritate_core.plugin import multicorpus
     from training.sync import corpus_sync
+
+    from veritate_core.plugin import multicorpus
     by_stem = {}
     for e in corpus_sync._load_local_catalog():
         modes = e.get("trained_modes")

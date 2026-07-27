@@ -44,7 +44,7 @@ def _load_jsonl(path):
     {"user","assistant"} single-turn or {"turns":[{"role","content"},...]}
     multi-turn. Empty/whitespace lines are skipped; malformed lines raise."""
     out = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line_no, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -52,7 +52,7 @@ def _load_jsonl(path):
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError as e:
-                raise ValueError(f"{path}:{line_no}: invalid JSON: {e}")
+                raise ValueError(f"{path}:{line_no}: invalid JSON: {e}") from e
             if "turns" in obj:
                 turns = obj["turns"]
                 if not isinstance(turns, list) or not turns:
@@ -177,7 +177,8 @@ def _parse_args():
     ap.add_argument("--license-text", default="# Veritate SFT Corpus\n\nFor use with Veritate models only.\n")
     ap.add_argument("--seed", type=int, default=20260718)
     ap.add_argument("--val-ratio", type=float, default=0.05)
-    ap.add_argument("--corpus-dir", default="", help="Optional: also install bins here for the trainer's stem resolver.")
+    ap.add_argument("--corpus-dir", default="",
+                    help="Optional: also install bins here for the trainer's stem resolver.")
     return ap.parse_args()
 
 

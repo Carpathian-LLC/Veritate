@@ -17,12 +17,12 @@ Markup in [index.html](../../../veritate_mri/web/index.html): a `<details id="co
 
 ## Dependencies
 
-- `POST /corpus/mix/plan` — weights, per-source arithmetic, warnings ([corpus_routes.py](../../../veritate_mri/routes/corpus_routes.py)).
-- `GET /corpus/mix/profiles` — intent profile list. Optional; the panel degrades with an explanation when missing.
-- `GET /corpus/library/catalog` — labels, sizes, family/topic, installed state, live `progress`.
-- `POST /corpus/library/install` — via `_corpusInstallTrigger`.
-- `GET /settings` — `corpus_mix_default_profile`, `corpus_mix_max_epochs`.
-- `GET /trainers` — `manifest.sizes[*].params` for the model dropdown.
+- `POST /corpus/mix/plan`: weights, per-source arithmetic, warnings ([corpus_routes.py](../../../veritate_mri/routes/corpus_routes.py)).
+- `GET /corpus/mix/profiles`: intent profile list. Optional; the panel degrades with an explanation when missing.
+- `GET /corpus/library/catalog`: labels, sizes, family/topic, installed state, live `progress`.
+- `POST /corpus/library/install`: via `_corpusInstallTrigger`.
+- `GET /settings`: `corpus_mix_default_profile`, `corpus_mix_max_epochs`.
+- `GET /trainers`: `manifest.sizes[*].params` for the model dropdown.
 
 ## Pitfalls
 
@@ -30,4 +30,4 @@ Markup in [index.html](../../../veritate_mri/web/index.html): a `<details id="co
 - The profile list is fetched once per page load; a transient failure leaves only the saved default plus `other...` until reload.
 - The rate control overwrites itself from any live download while the field is not focused. That is deliberate (measured beats typed) but it will replace a hand-entered number.
 - `_corpusMixMissing` excludes `coming_soon` picks because they cannot be downloaded; they are called out separately in the consequences block and still block a launch.
-- Element ids and the no-hardcoded-profiles rule are guarded by [tests/mri/test_corpus_catalog_shape.py](../../../tests/mri/test_corpus_catalog_shape.py).
+- Element ids and the no-hardcoded-profiles rule are guarded by [tests/corpus/test_corpus_catalog_shape.py](../../../tests/corpus/test_corpus_catalog_shape.py).

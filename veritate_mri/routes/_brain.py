@@ -16,18 +16,26 @@ import os
 # Deferred to `load_pytorch_brain` so dashboard startup, settings, and other
 # routes that only touch resolve_*/list helpers do not pay the torch tax. In
 # minimal mode the brain never loads, so torch never imports.
-from readers import bin as binr, checkpoints, engine, models, paths, train_csv
+from readers import bin as binr
+from readers import checkpoints, engine, models, paths, train_csv
 from runtime import logs as logmod
 
 # ------------------------------------------------------------------------------------
 # Constants
 
+AUTO_MODEL = "auto"
+NEURON_MEMORY_NAME = "neuron_memory.json"
+NON_VANILLA_MARKER = "PyTorch inference is not enabled"
 
 # ------------------------------------------------------------------------------------
 # Functions
 
+def neuron_memory_path(name):
+    return os.path.join(paths.model_dir(name), NEURON_MEMORY_NAME)
+
+
 def resolve_pytorch_model(name):
-    if name == "auto":
+    if name == AUTO_MODEL:
         candidates = []
         for n in models.list_models():
             if checkpoints.list_steps(n):
@@ -53,13 +61,12 @@ def load_pytorch_brain(name, step, threads):
 
     def _try(n, s):
         ck = checkpoints.path_for(n, s)
-        mp = os.path.join(paths.model_dir(n), "neuron_memory.json")
-        return Brain(ck, threads=threads, memory=load_memory(mp))
+        return Brain(ck, threads=threads, memory=load_memory(neuron_memory_path(n)))
 
     try:
         return (_try(name, step), name, int(step))
     except RuntimeError as e:
-        if "PyTorch inference is not enabled" not in str(e):
+        if NON_VANILLA_MARKER not in str(e):
             raise
         original_exc = e
         original_name = name
@@ -82,7 +89,7 @@ def load_pytorch_brain(name, step, threads):
             logmod.warn("backends", f"pytorch: '{original_name}' is non-vanilla; auto-fell-back to '{n}' step {s}")
             return (brain, n, int(s))
         except RuntimeError as e2:
-            if "PyTorch inference is not enabled" in str(e2):
+            if NON_VANILLA_MARKER in str(e2):
                 continue
             raise
     raise original_exc

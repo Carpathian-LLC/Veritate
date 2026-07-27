@@ -17,7 +17,6 @@
 # Imports
 
 import argparse
-import os
 import random
 
 # ------------------------------------------------------------------------------------
@@ -42,7 +41,7 @@ TEXTURES = ["soft", "hard", "hot", "cold", "wet", "dry", "old", "new"]
 SURFACES = ["table", "chair", "box", "floor", "bed", "shelf", "mat"]
 SPATIAL = ["on", "under", "in", "near", "behind"]
 ANIMATE = ["the dog", "the cat", "the girl", "the boy", "the bird", "the man", "the woman"]
-# (base, present, past)
+# triples of base, present, past
 ACTIONS = [
     ("chase", "chases", "chased"), ("see", "sees", "saw"), ("hold", "holds", "held"),
     ("push", "pushes", "pushed"), ("follow", "follows", "followed"),
@@ -68,16 +67,16 @@ S2_OBJECTS = [
     ("cow", "animal", "a"), ("frog", "animal", "a"), ("horse", "animal", "a"), ("mouse", "animal", "a"),
     ("sheep", "animal", "a"), ("duck", "animal", "a"), ("goat", "animal", "a"), ("bee", "animal", "a"),
 ]
-S2_COLORS = COLORS + ["orange", "purple", "grey", "pink", "silver", "golden"]
-S2_SIZES = SIZES + ["huge", "tiny", "wide", "narrow", "heavy", "light"]
-S2_TEXTURES = TEXTURES + ["smooth", "rough", "sharp", "clean", "dirty", "shiny", "sticky", "empty"]
+S2_COLORS = [*COLORS, "orange", "purple", "grey", "pink", "silver", "golden"]
+S2_SIZES = [*SIZES, "huge", "tiny", "wide", "narrow", "heavy", "light"]
+S2_TEXTURES = [*TEXTURES, "smooth", "rough", "sharp", "clean", "dirty", "shiny", "sticky", "empty"]
 S2_PLACES = [
     "kitchen", "garden", "attic", "porch", "barn", "hallway", "meadow", "cellar",
     "library", "beach", "bridge", "market", "yard", "pond", "tower", "path",
 ]
-S2_SURFACES = SURFACES + ["bench", "cart", "ledge", "crate", "stool", "windowsill", "step", "rug"]
-S2_SPATIAL = SPATIAL + ["beside", "above", "below", "between", "against", "beyond"]
-# (phrase, pronoun, possessive)
+S2_SURFACES = [*SURFACES, "bench", "cart", "ledge", "crate", "stool", "windowsill", "step", "rug"]
+S2_SPATIAL = [*SPATIAL, "beside", "above", "below", "between", "against", "beyond"]
+# triples of phrase, pronoun, possessive
 S2_ANIMATE = [
     ("the dog", "it", "its"), ("the cat", "it", "its"), ("the girl", "she", "her"),
     ("the boy", "he", "his"), ("the bird", "it", "its"), ("the man", "he", "his"),
@@ -86,13 +85,14 @@ S2_ANIMATE = [
     ("the teacher", "they", "their"), ("the gardener", "they", "their"), ("the singer", "they", "their"),
     ("the tailor", "they", "their"), ("the miller", "they", "their"), ("the hunter", "they", "their"),
 ]
-S2_ACTIONS = ACTIONS + [
+S2_ACTIONS = [
+    *ACTIONS,
     ("watch", "watches", "watched"), ("lift", "lifts", "lifted"), ("drop", "drops", "dropped"),
     ("wash", "washes", "washed"), ("paint", "paints", "painted"), ("catch", "catches", "caught"),
     ("pull", "pulls", "pulled"), ("greet", "greets", "greeted"), ("feed", "feeds", "fed"),
     ("draw", "draws", "drew"), ("count", "counts", "counted"), ("mend", "mends", "mended"),
 ]
-# (base, present, past) — three-role verbs: subject, theme, recipient
+# (base, present, past): three-role verbs: subject, theme, recipient
 S2_DITRANS = [
     ("give", "gives", "gave"), ("show", "shows", "showed"), ("send", "sends", "sent"),
     ("hand", "hands", "handed"), ("pass", "passes", "passed"), ("bring", "brings", "brought"),
@@ -109,7 +109,7 @@ PARTICIPLES = {
 # anywhere only one surface is named).
 S2_SPATIAL_ONE = [r for r in S2_SPATIAL if r != "between"]
 # Blocks that emit a "Who <verb> the <object>?" question must NOT draw that
-# object from the animals, because animals are also ANIMATE entities — an
+# object from the animals, because animals are also ANIMATE entities: an
 # accidental match then leaks a held-out (subject, object) pair's answer into
 # training. Measured before this guard: 7/91 held-out WHO answers leaked.
 S2_THINGS = [o for o in S2_OBJECTS if o[1] != "animal"]
@@ -153,7 +153,7 @@ def naming_block(rng, obj):
 
 
 def property_block(rng, obj):
-    name, _, art = obj
+    name, _, _art = obj
     color = rng.choice(COLORS)
     size = rng.choice(SIZES)
     tex = rng.choice(TEXTURES)
@@ -183,8 +183,8 @@ def spatial_block(rng, obj):
     return " ".join(lines)
 
 
-def action_block(rng, subj, obj_a, verb, questions=True):
-    base, pres, past = verb
+def action_block(subj, obj_a, verb, questions=True):
+    base, pres, _past = verb
     # Four surface forms of ONE event so subject/object roles cannot be guessed
     # from position: active, passive, subject-question, object-question. When
     # questions=False (held-out pair) only the two declarative forms are shown,
@@ -210,7 +210,7 @@ def holdout_verb_map(frac):
 def test_items(verbmap):
     items = []
     for (s, o) in sorted(verbmap):
-        base, pres, past = verbmap[(s, o)]
+        base, pres, _past = verbmap[(s, o)]
         items.append({
             "decl": f"{_cap(s)} {pres} {o}.",
             "who_q": f"Who {pres} {o}?",
@@ -249,7 +249,7 @@ def s2_naming_block(rng, obj):
 
 
 def s2_property_block(rng, obj):
-    name, _, art = obj
+    name, _, _art = obj
     c1, c2 = rng.sample(S2_COLORS, 2)
     size = rng.choice(S2_SIZES)
     tex = rng.choice(S2_TEXTURES)
@@ -282,18 +282,18 @@ def s2_negation_block(rng, obj):
 
 
 def s2_count_block(rng, obj):
-    name, cat, _ = obj
+    name, _cat, _ = obj
     n, word = rng.choice(S2_NUMBERS)
     place = rng.choice(S2_PLACES)
-    m, mword = rng.choice([x for x in S2_NUMBERS if x[0] != n])
+    _m, mword = rng.choice([x for x in S2_NUMBERS if x[0] != n])
     return (
         f"There are {word} {name}s in the {place}. {_cap(mword)} more {name}s are outside. "
         f"How many {name}s are in the {place}? {_cap(word)}."
     )
 
 
-def s2_ditransitive_block(rng, subj, theme, recip, verb, questions=True):
-    base, pres, past = verb
+def s2_ditransitive_block(subj, theme, recip, verb, questions=True):
+    base, pres, _past = verb
     decl = (f"{_cap(subj)} {pres} the {theme} to {recip}. "
             f"The {theme} is {_pp(verb)} to {recip} by {subj}. ")
     if not questions:
@@ -374,13 +374,13 @@ def build_stream_s2(target_bytes, verbmap=None):
         total += len(b)
         subj, o = rng.sample(ents, 2)
         if (subj, o) in held:
-            b = action_block(rng, subj, o, held[(subj, o)], questions=False)
+            b = action_block(subj, o, held[(subj, o)], questions=False)
         else:
-            b = action_block(rng, subj, o, rng.choice(S2_ACTIONS))
+            b = action_block(subj, o, rng.choice(S2_ACTIONS))
         blocks.append(b)
         total += len(b)
         s, r = rng.sample(ents, 2)
-        b = s2_ditransitive_block(rng, s, rng.choice(S2_THINGS)[0], r,
+        b = s2_ditransitive_block(s, rng.choice(S2_THINGS)[0], r,
                                   rng.choice(S2_DITRANS))
         blocks.append(b)
         total += len(b)
@@ -406,11 +406,11 @@ def build_stream(target_bytes, verbmap=None):
             o = rng.choice(ANIMATE)
         if (subj, o) in held:
             # held-out pair: declarative-only, with its designated verb
-            blocks.append(action_block(rng, subj, o, held[(subj, o)], questions=False))
-            blocks.append(action_block(rng, subj, o, held[(subj, o)], questions=False))
+            blocks.append(action_block(subj, o, held[(subj, o)], questions=False))
+            blocks.append(action_block(subj, o, held[(subj, o)], questions=False))
         else:
-            blocks.append(action_block(rng, subj, o, rng.choice(ACTIONS)))
-            blocks.append(action_block(rng, subj, o, rng.choice(ACTIONS)))
+            blocks.append(action_block(subj, o, rng.choice(ACTIONS)))
+            blocks.append(action_block(subj, o, rng.choice(ACTIONS)))
         if rng.random() < 0.4:
             blocks.append(narrative_block(rng))
         total += len(b) + 200

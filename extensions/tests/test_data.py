@@ -23,14 +23,15 @@ for _p in (os.path.join(REPO, "veritate_mri"), REPO):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from extensions import registry
 from extensions import data as ext_data
+from extensions import registry
 
 # ------------------------------------------------------------------------------------
 # Tests
 
 def test_download_extracts_single_archive(tmp_path, monkeypatch):
-    """download() pulls the dataset's single tar.gz from its catalog url and extracts the CSVs into installed/<id>/data/extension_data/<source>."""
+    """download() pulls the dataset's single tar.gz from its catalog url and extracts
+    the CSVs into installed/<id>/data/extension_data/<source>."""
     can = str(tmp_path / "canonical")
     inst = str(tmp_path / "installed")
     ext = os.path.join(can, "foo")

@@ -3,7 +3,7 @@
 Platform pipeline that authors an original conversational and reading corpus with the configured
 teacher model and gates every record before it lands on disk. Unlike the seed-driven synth flow
 (one prompt in, one sample out), one authoring call returns a JSONL batch, so corpus volume is a
-byte target the user sets rather than a hand-enumerated prompt file.
+byte target set on the dashboard panel rather than a hand-enumerated prompt file.
 
 ## what it is
 
@@ -15,7 +15,7 @@ byte target the user sets rather than a hand-enumerated prompt file.
 | routes | `veritate_mri/routes/teacher_routes.py` |
 | bin packer | `veritate_mri/tools/build_sft_corpus.py` |
 | dashboard panel | `#authorPanel` in `veritate_mri/web/index.html`, `_author*` in `index.js` |
-| tests | `tests/mri/test_corpus_authoring.py` |
+| tests | `tests/corpus/test_corpus_authoring.py` |
 
 Nothing about the recipe is a code literal. Genres, voice pools, situations, briefs, the prompt
 template, the banned-phrase list, the character rewrites, and every quality threshold live in
@@ -33,9 +33,22 @@ template, the banned-phrase list, the character rewrites, and every quality thre
    `{"id": "<prompt>#<k>", "record": {...}}`, and gate stats ride along in `state.json`.
 4. `RecordGate.__call__` (`authoring.py:228`) parses the reply line by line and applies the gates
    below in order. It runs on the SynthJob main thread only and is not thread safe.
-5. `POST /teacher/authoring/build` splits accepted records into per-genre family JSONL, packs them
+5. `POST /teacher/authoring/import` (`teacher_routes.py::teacher_authoring_import_route`) is the
+   entry point for externally-authored (non-teacher, e.g. agent-written) records: a directory of
+   `*.jsonl` files where each line is a bare `{genre, voice, turns|text}` record with no `id` or
+   `record` wrapper. It seeds a `RecordGate` from any existing `samples.jsonl` in the target job
+   (`gate.seed_from_file`), then for every record looks up its own `genre` field against the spec
+   (`authoring_mod.genre_by_id`, rejecting and reporting an unknown genre rather than dropping it
+   silently) and runs it through the SAME `RecordGate.__call__` teacher output goes through. Accepted
+   records are appended to `samples.jsonl` as `{"id": "import_<file_stem>_<line_no>", "record": {...}}`;
+   the id is deterministic from the source file and line number, so re-importing the same directory
+   into the same job adds nothing (the gate's content-based dedup rejects the repeat as an exact or
+   near duplicate). The response carries per-file accepted/rejected-by-reason counts plus the
+   corpus-wide `ngram_ratio` / `ngram_below_floor` from `gate.stats()`.
+6. `POST /teacher/authoring/build` splits accepted records into per-genre family JSONL, packs them
    with `build_sft_corpus.build()`, zips both bins at zip top level, and appends a `coming_soon`
-   `zip_bundle` entry to `corpus_catalog.json` with a PLACEHOLDER `train_url`.
+   `zip_bundle` entry to `corpus_catalog.json` with a PLACEHOLDER `train_url`. This step is identical
+   whether the job's `samples.jsonl` came from a teacher run, an import, or both.
 
 ## gates
 

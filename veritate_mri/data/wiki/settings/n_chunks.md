@@ -1,23 +1,36 @@
 ---
-title: TBPTT Chunks Per Step
-summary: How many chunks of text each step covers; more chunks means more bytes learned per step without raising memory.
-tags: training, settings
+title: chunks per step
+date: 2026-07-27
+tags: [settings, training]
+summary: How many back-to-back sequence-length chunks make up one training step.
 ---
 
-# TBPTT Chunks Per Step
+# chunks per step (n_chunks)
 
-Each training step processes a long sequence in pieces called chunks. **n_chunks** sets how many chunks a single step marches through, which means **how many bytes of text the model learns from per step**. More chunks = more text covered each step. TBPTT is short for "truncated backpropagation through time," the method of learning across a long sequence a piece at a time.
+The number of consecutive `seq`-byte chunks the model walks through before the optimizer updates the weights.
 
-## Why it matters
+## what it does
 
-Covering more bytes per step lets the model move through the corpus faster and see longer stretches of context in one go. It is a way to do more per step.
+The data loader draws rows that are `seq * n_chunks` bytes wide. The training step walks that row one `seq`-wide chunk at a time, accumulating loss, then takes a single optimizer step for the whole row.
 
-## Weak-hardware angle (the pleasant surprise)
+Bytes consumed per step:
 
-- Raising n_chunks does **not** raise memory. It processes chunks in sequence, so you get more bytes per step for free on the memory side.
-- The knob that controls memory is a different one: **bptt_window**, which sets how many chunks stay live for the backward pass. If you want to grow context while watching memory, raise n_chunks and keep bptt_window small.
+```
+bytes per step = batch_size * seq * n_chunks
+```
 
-## When to change it
+This is the knob that raises bytes per step without raising peak memory. Memory is governed by `bptt_window`, which controls how many chunks are held live at once. Raising `n_chunks` costs time per step, not memory.
 
-- Raise n_chunks to push more bytes through each step, especially when you have plenty of data and want to move through it faster.
-- Keep an eye on **bptt_window** (not this knob) if memory is your constraint.
+The width is computed in `trainers/common/vanilla_trainer.py::run` as `total_chunk_len = seq * n_chunks`, and the walk happens in `chunked_step` in the same module.
+
+## range and default
+
+Any integer of 1 or more.
+
+Manifest defaults: 4 for `veritate_10m` and `veritate_200m`, 2 for `veritate_80m`, `veritate_400m`, and `veritate_800m`, 1 for `veritate_1b3` and every larger trainer.
+
+## when to change it
+
+Raise it on a memory-tight box to get more data through per optimizer step when batch size cannot go any higher. The optimizer runs once per step regardless, so a higher value also amortizes optimizer overhead across more bytes.
+
+Leave it at 1 when batch size already saturates the device.

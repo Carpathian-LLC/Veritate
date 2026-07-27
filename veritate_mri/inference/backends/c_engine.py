@@ -7,9 +7,11 @@
 # - persistent c-engine subprocess running `veritate.exe chat_traced`. one process
 #   per server, reused across requests. binary frame parser yields per-token raw
 #   activation slices for the orchestration layer to convert into mri json frames.
-# - protocol mirrors engine/src/main.c chat_traced_loop:
-#     stdin  text:  "<temp> <top_k> <max_new>\n<prompt>\n"
+# - protocol mirrors veritate_engine/v1/src/main.c chat_traced_loop:
+#     stdin  text:  "<temp> <top_k> <max_new> ... [stop_csv]\n<prompt>\n"
 #     stdout binary: TFRM frame per token, TEND marker per turn.
+# - passing stop sequences lets the engine end the turn itself, so a turn reaches
+#   TEND instead of being abandoned and drained. Omitting them is still valid.
 # - shape (layers, hidden, ffn, heads, seq, vocab) is read from the bin header at
 #   subprocess spawn. all per-frame buffer sizes derive from it. supports any
 #   model, not just the 80M fixed shape.
@@ -46,6 +48,24 @@ VERITATE_MODEL_MAGIC = b"VRTE"
 HEADER_BYTES         = 32
 HEADER_FMT           = "<4sIIIIIII"
 STATE_CACHE_DIRNAME  = "state_cache"
+# Wire escape for an embedded newline on the line-based prompt protocol. MUST
+# stay in lockstep with veritate_engine/v1/src/main.c, which maps it back
+# before framing the prompt. Changing one side silently desyncs the engine.
+NEWLINE_WIRE_ESCAPE  = "\x01"
+CARRIAGE_RETURN      = "\r"
+NEWLINE              = "\n"
+# Stop sequences ride the header as one comma-separated token, newlines escaped
+# the same way the prompt line escapes them. The engine ends the turn on a match
+# and emits TEND, so a caller never has to abandon a live generator. An engine
+# built before the field ignores it and generates to max_new as it always did.
+STOP_SEQ_SEP         = ","
+STOP_SEQ_NONE        = "-"
+STOP_SEQ_MAX         = 8     # VERITATE_MAX_STOPS in main.c
+STOP_SEQ_MAX_LEN     = 31    # VERITATE_MAX_STOP_LEN - 1 in main.c
+# How coarsely an over-long prompt's head cut is quantized, as a fraction of the
+# payload cap. Larger divisor means a finer cut and less wasted context, but the
+# anchor moves more often and each move costs a full prefill.
+PROMPT_ANCHOR_DIVISOR = 8
 # v13 batched prefill width (VERITATE_PREFILL_BATCH). Amortizes the local-block
 # weight streaming across the chunk; bitwise-identical to sequential prefill
 # (tests/engine/test_prefill_batch.py). 32 measured best on the i7-9700T.
@@ -62,6 +82,14 @@ CONFIDENCE_BYTES    = 5 * 4
 # we kill + respawn instead.
 DRAIN_MAX_FRAMES    = 4096
 DRAIN_WALL_S        = 2.0
+PROC_KILL_WAIT_S    = 3
+
+RESPAWN_REASON_DEFAULT    = "pipe desync"
+RESPAWN_REASON_UNCLEAN    = "previous turn did not end on TEND"
+RESPAWN_REASON_DRAIN_SLOW = f"drain exceeded {DRAIN_WALL_S:g}s"
+RESPAWN_REASON_DRAIN_LONG = f"drain exceeded {DRAIN_MAX_FRAMES} frames"
+RESPAWN_REASON_BAD_MARKER = "unrecognized frame marker"
+RESPAWN_REASON_EOF        = "stdout closed mid-frame"
 # A stream holds self.lock for the whole generation to serialize the one stateful
 # subprocess. If an SSE client vanishes while its generator is suspended at a
 # yield inside the lock, that generator is never closed and the lock is never
@@ -83,7 +111,8 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 # chat_traced_loop reads the prompt with fgets(prompt_line, seq + PROMPT_FGETS_BUFSIZE).
 # fgets stores at most (size - 1) chars incl the newline, so the payload (bytes before
 # '\n') caps at seq + PROMPT_FGETS_BUFSIZE - 2. A longer line leaves residue in stdin
-# and permanently desyncs the persistent subprocess; clamp the tail (newest bytes).
+# and permanently desyncs the persistent subprocess, so it is cut at an anchored
+# offset (_anchor_prompt) rather than simply tail-clamped.
 PROMPT_FGETS_BUFSIZE = 4
 
 DLA_DTYPE = np.dtype([
@@ -252,7 +281,7 @@ class CTracedSubprocess:
         # enable engine-side addons. per-request addon selection from the
         # dashboard is python-only today; the C subprocess holds whatever
         # chain it had at spawn time. Restart the C backend in the dashboard
-        # to pick up an env-var change. spec: documentation/addons/c_engine_port.md.
+        # to pick up an env-var change. spec: developer_documentation/addons/c_engine_port.md.
         self.proc = subprocess.Popen(
             [self.exe, "chat_traced"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -303,10 +332,42 @@ class CTracedSubprocess:
         if self.proc is None or self.proc.poll() is not None:
             self._spawn()
 
+    @staticmethod
+    def _anchor_prompt(prompt_bytes, max_payload):
+        """Cut an over-long prompt at a quantized offset from its start.
+
+        A plain tail clamp keeps the newest max_payload bytes, so every turn shifts
+        the prompt's first byte and the engine's prefix state cache misses, forcing a
+        full prefill (measured: 27ms per prompt byte). Quantizing how much is dropped
+        holds the cut at one absolute offset across many turns, so the surviving prefix
+        stays byte-identical and the cache hits. The cut only advances when the overflow
+        crosses the next stride, costing up to one stride of extra context in exchange."""
+        overflow = len(prompt_bytes) - max_payload
+        if overflow <= 0:
+            return prompt_bytes
+        stride = max(1, max_payload // PROMPT_ANCHOR_DIVISOR)
+        drop = ((overflow + stride - 1) // stride) * stride
+        return prompt_bytes[drop:]
+
+    @staticmethod
+    def _stop_token(stop_sequences):
+        """Header token for the engine's stop-sequence field. Sequences carrying a
+        comma or a character the line protocol cannot express are dropped: the
+        engine then generates to max_new, which is the pre-stop-sequence behavior."""
+        out = []
+        for s in stop_sequences or ():
+            s = str(s)
+            if not s or STOP_SEQ_SEP in s or len(s) > STOP_SEQ_MAX_LEN:
+                continue
+            out.append(s.replace(CARRIAGE_RETURN, "").replace(NEWLINE, NEWLINE_WIRE_ESCAPE))
+            if len(out) == STOP_SEQ_MAX:
+                break
+        return STOP_SEQ_SEP.join(out) if out else STOP_SEQ_NONE
+
     def stream(self, prompt, temperature, top_k, max_new,
                ablate_layer=-1, ablate_neuron=-1, addons_csv="",
                rep_window=0, rep_penalty=0.0, no_repeat_ngram=0, do_trace=True,
-               compact=False):
+               compact=False, stop_sequences=()):
         # Acquire the per-generation lock. A live generation refreshes
         # _last_frame_time on every frame; reclaim only when the holder has gone
         # silent for STREAM_LOCK_TIMEOUT_S (truly wedged, e.g. an abandoned SSE
@@ -344,23 +405,22 @@ class CTracedSubprocess:
             # Force a fresh proc if the previous request did not end on a clean
             # TEND: a protocol-desynced but alive engine survives _ensure_alive.
             if not self._last_clean:
-                self._kill_and_respawn()
+                self._kill_and_respawn(RESPAWN_REASON_UNCLEAN)
             self._last_clean = False
-            # newlines ride the line-based protocol as 0x01; chat_traced maps
-            # them back so chat-template prompts keep their trained framing.
-            p = prompt.replace("\r", "").replace("\n", "\x01")
+            # newlines ride the line-based protocol as NEWLINE_WIRE_ESCAPE;
+            # chat_traced maps them back so chat-template prompts keep their
+            # trained framing.
+            p = prompt.replace(CARRIAGE_RETURN, "").replace(NEWLINE, NEWLINE_WIRE_ESCAPE)
             # fgets(prompt_line, seq+4) stores <= seq+3 chars incl '\n'; payload caps at
-            # seq+2. tail-clamp keeps the newest bytes so an over-long line can't leave
-            # residue and desync the subprocess (engine also drains residue defensively).
-            # generation budget is seq - prompt_len with no window slide, so also
-            # reserve reply room; reserve caps at seq//2 so a pathological max_new
-            # cannot wipe out the context.
+            # seq+2. an over-long line must be cut so it cannot leave residue and desync
+            # the subprocess (engine also drains residue defensively). generation budget
+            # is seq - prompt_len with no window slide, so also reserve reply room;
+            # reserve caps at seq//2 so a pathological max_new cannot wipe out the context.
             prompt_bytes = p.encode("latin-1", "replace")
             seq = self.shape["seq"]
             max_payload = min(seq + PROMPT_FGETS_BUFSIZE - 2,
                               seq - min(int(max_new), seq // 2))
-            if len(prompt_bytes) > max_payload:
-                prompt_bytes = prompt_bytes[-max_payload:]
+            prompt_bytes = self._anchor_prompt(prompt_bytes, max_payload)
             # addons token: empty -> use whatever chain was set at spawn time
             # (env var path); "-" -> clear any prior chain; otherwise comma-
             # separated id list. token must contain no whitespace.
@@ -372,15 +432,19 @@ class CTracedSubprocess:
             # compact is only meaningful with tracing on; the engine emits TFRC v9
             # (reduced) frames when both are set, else the raw TFRM v8 frames.
             use_compact = bool(compact and do_trace)
+            # stop token ends the turn engine-side on a marker, so this stream reaches
+            # TEND instead of being abandoned mid-generation and drained.
+            stop_token = self._stop_token(stop_sequences)
             header = (f"{float(temperature):.4f} {int(top_k)} {int(max_new)} "
                       f"{int(ablate_layer)} {int(ablate_neuron)} {csv_token} "
                       f"{int(rep_window)} {float(rep_penalty):.4f} {int(no_repeat_ngram)} "
-                      f"{1 if do_trace else 0} {1 if use_compact else 0}\n").encode("ascii")
+                      f"{1 if do_trace else 0} {1 if use_compact else 0} "
+                      f"{stop_token}\n").encode("ascii")
             try:
                 self.proc.stdin.write(header)
                 self.proc.stdin.write(prompt_bytes + b"\n")
                 self.proc.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
+            except (BrokenPipeError, OSError):
                 # subprocess died mid-write. respawn and retry once.
                 self._spawn()
                 try:
@@ -388,7 +452,7 @@ class CTracedSubprocess:
                     self.proc.stdin.write(prompt_bytes + b"\n")
                     self.proc.stdin.flush()
                 except (BrokenPipeError, OSError) as e2:
-                    raise RuntimeError(f"chat_traced respawn failed: {e2!r}")
+                    raise RuntimeError(f"chat_traced respawn failed: {e2!r}") from e2
                 # _spawn() set _last_clean=True (correct for a fresh proc awaiting
                 # its first request). We're now mid-request on that proc, so
                 # restore the "True only after confirmed TEND" invariant; else
@@ -417,7 +481,7 @@ class CTracedSubprocess:
                         if my_epoch != self._epoch:
                             return  # our proc was killed by a reclaim; not ours to respawn
                         logmod.error("c_engine", "stdout closed mid-frame; respawning")
-                        self._kill_and_respawn(); respawned = True
+                        self._kill_and_respawn(RESPAWN_REASON_EOF); respawned = True
                         raise RuntimeError("chat_traced stdout closed mid-frame; subprocess respawned")
                     if marker == b"TEND":
                         _read_exact(my_proc.stdout, 4)
@@ -431,7 +495,7 @@ class CTracedSubprocess:
                             if my_epoch != self._epoch:
                                 return
                             logmod.error("c_engine", "stdout closed mid-fast-frame; respawning")
-                            self._kill_and_respawn(); respawned = True
+                            self._kill_and_respawn(RESPAWN_REASON_EOF); respawned = True
                             raise RuntimeError("chat_traced stdout closed mid-fast-frame; subprocess respawned")
                         pos, real_len = struct.unpack("<II", rest[:8])
                         t_read1 = time.perf_counter_ns()
@@ -456,7 +520,7 @@ class CTracedSubprocess:
                         logmod.error("c_engine",
                                      f"bad frame marker {marker!r} (expected TFRM/TFRC/TEND); "
                                      f"killing+respawning subprocess to clear pipe desync")
-                        self._kill_and_respawn(); respawned = True
+                        self._kill_and_respawn(RESPAWN_REASON_BAD_MARKER); respawned = True
                         raise RuntimeError(
                             f"chat_traced pipe desync (got {marker!r}); subprocess respawned, "
                             "retry the request"
@@ -467,7 +531,7 @@ class CTracedSubprocess:
                         if my_epoch != self._epoch:
                             return
                         logmod.error("c_engine", "stdout closed mid-header; respawning")
-                        self._kill_and_respawn(); respawned = True
+                        self._kill_and_respawn(RESPAWN_REASON_EOF); respawned = True
                         raise RuntimeError("chat_traced stdout closed mid-header; subprocess respawned")
                     pos, real_len = struct.unpack("<II", rest[:8])
                     byte = rest[8]
@@ -479,7 +543,7 @@ class CTracedSubprocess:
                         if my_epoch != self._epoch:
                             return
                         logmod.error("c_engine", "stdout closed mid-payload; respawning")
-                        self._kill_and_respawn(); respawned = True
+                        self._kill_and_respawn(RESPAWN_REASON_EOF); respawned = True
                         raise RuntimeError("chat_traced stdout closed mid-payload; subprocess respawned")
                     t_read1 = time.perf_counter_ns()
 
@@ -503,7 +567,7 @@ class CTracedSubprocess:
 
                     yield parsed
             finally:
-                # Skip if reclaimed (epoch moved) — the subprocess is no longer
+                # Skip if reclaimed (epoch moved): the subprocess is no longer
                 # ours. Skip the drain after a respawn too: the pipe is already
                 # fresh+idle, so draining it would block on a read that never
                 # returns (the fresh proc emits nothing until the next request).
@@ -517,20 +581,21 @@ class CTracedSubprocess:
         finally:
             my_lock.release()
 
-    def _kill_and_respawn(self):
-        """Hard-kill the subprocess and start a fresh one. Used when the pipe is
-        confirmed desynced (bad frame marker) the read offset is unrecoverable,
-        so a clean restart is the only safe path."""
+    def _kill_and_respawn(self, reason=RESPAWN_REASON_DEFAULT):
+        """Hard-kill the subprocess and start a fresh one. The read offset is
+        unrecoverable once the pipe is out of step, so a clean restart is the only
+        safe path. `reason` names the actual caller: a respawn discards the engine's
+        in-memory prefix state, so a misattributed one hides a real cost."""
         try:
             if self.proc is not None:
                 self.proc.kill()
-                self.proc.wait(timeout=3)
+                self.proc.wait(timeout=PROC_KILL_WAIT_S)
         except Exception:
             pass
         self.proc = None
         try:
             self._spawn()
-            logmod.ok("c_engine", "subprocess respawned after pipe desync")
+            logmod.ok("c_engine", f"subprocess respawned: {reason}")
         except Exception as e:
             logmod.error("c_engine", f"respawn failed: {e}")
             raise
@@ -544,7 +609,7 @@ class CTracedSubprocess:
         try:
             for _ in range(DRAIN_MAX_FRAMES):
                 if time.time() > deadline:
-                    self._kill_and_respawn()
+                    self._kill_and_respawn(RESPAWN_REASON_DRAIN_SLOW)
                     return
                 marker = _read_exact(self.proc.stdout, 4)
                 if marker is None: return
@@ -558,7 +623,7 @@ class CTracedSubprocess:
                     if _read_exact(self.proc.stdout, pbytes) is None: return
                 else:
                     return
-            self._kill_and_respawn()
+            self._kill_and_respawn(RESPAWN_REASON_DRAIN_LONG)
         except Exception:
             return
 
@@ -573,19 +638,27 @@ class CTracedSubprocess:
         attn           = self._buf_attn
         lens_logits    = self._buf_lens_logits
         for L in range(layers):
-            residual_pre[L]  = np.frombuffer(buf, dtype=np.int16, count=hidden, offset=off); off += self._res_bytes_per_layer
-            residual_post[L] = np.frombuffer(buf, dtype=np.int16, count=hidden, offset=off); off += self._res_bytes_per_layer
-            ffn_neurons[L]   = np.frombuffer(buf, dtype=np.int8,  count=ffn,    offset=off); off += self._ffn_bytes_per_layer
-            attn_q     = np.frombuffer(buf, dtype=np.int8,    count=heads * seq, offset=off).reshape(heads, seq); off += self._attn_q_bytes_per_layer
-            attn_scale = np.frombuffer(buf, dtype=np.float32, count=heads,       offset=off);                     off += self._attn_scale_bytes_per_layer
+            residual_pre[L]  = np.frombuffer(buf, dtype=np.int16, count=hidden, offset=off)
+            off += self._res_bytes_per_layer
+            residual_post[L] = np.frombuffer(buf, dtype=np.int16, count=hidden, offset=off)
+            off += self._res_bytes_per_layer
+            ffn_neurons[L]   = np.frombuffer(buf, dtype=np.int8,  count=ffn,    offset=off)
+            off += self._ffn_bytes_per_layer
+            attn_q     = np.frombuffer(buf, dtype=np.int8,    count=heads * seq, offset=off).reshape(heads, seq)
+            off += self._attn_q_bytes_per_layer
+            attn_scale = np.frombuffer(buf, dtype=np.float32, count=heads,       offset=off)
+            off += self._attn_scale_bytes_per_layer
             attn[L] = attn_q.astype(np.float32) * attn_scale[:, None]
-            lens_logits[L]   = np.frombuffer(buf, dtype=np.int32, count=vocab,  offset=off); off += self._lens_bytes_per_layer
+            lens_logits[L]   = np.frombuffer(buf, dtype=np.int32, count=vocab,  offset=off)
+            off += self._lens_bytes_per_layer
         final_act = np.frombuffer(buf, dtype=np.int8, count=hidden, offset=off).copy(); off += hidden
         logits    = np.frombuffer(buf, dtype=np.int32, count=vocab, offset=off).copy(); off += vocab * 4
         decisiveness = np.frombuffer(buf, dtype=np.float32, count=layers, offset=off).copy(); off += layers * 4
         bd_scale     = np.frombuffer(buf, dtype=np.float32, count=layers, offset=off).copy(); off += layers * 4
-        dla_picked = np.frombuffer(buf, dtype=DLA_DTYPE, count=DLA_TOPK, offset=off).copy(); off += DLA_TOPK * DLA_ENTRY_BYTES
-        dla_argmax = np.frombuffer(buf, dtype=DLA_DTYPE, count=DLA_TOPK, offset=off).copy(); off += DLA_TOPK * DLA_ENTRY_BYTES
+        dla_picked = np.frombuffer(buf, dtype=DLA_DTYPE, count=DLA_TOPK, offset=off).copy()
+        off += DLA_TOPK * DLA_ENTRY_BYTES
+        dla_argmax = np.frombuffer(buf, dtype=DLA_DTYPE, count=DLA_TOPK, offset=off).copy()
+        off += DLA_TOPK * DLA_ENTRY_BYTES
         conf = np.frombuffer(buf, dtype=np.float32, count=5, offset=off); off += CONFIDENCE_BYTES
         cand_count = int(np.frombuffer(buf, dtype=np.uint16, count=1, offset=off)[0]); off += 2
         cand_bytes = np.frombuffer(buf, dtype=np.uint8, count=CAND_TOPK, offset=off).copy(); off += CAND_TOPK
@@ -639,12 +712,14 @@ class CTracedSubprocess:
         flow_count = int(np.frombuffer(buf, dtype=np.uint8, count=1, offset=off)[0]); off += 1
         info_flow  = np.frombuffer(buf, dtype=FLOW_DTYPE, count=INFO_FLOW_TOPK, offset=off).copy()
         off += INFO_FLOW_TOPK * FLOW_DTYPE.itemsize
-        # trailer — identical layout to _parse_frame's tail, minus final_act.
+        # trailer: identical layout to _parse_frame's tail, minus final_act.
         logits       = np.frombuffer(buf, dtype=np.int32,   count=vocab,  offset=off).copy(); off += vocab * 4
         decisiveness = np.frombuffer(buf, dtype=np.float32, count=layers, offset=off).copy(); off += layers * 4
         bd_scale     = np.frombuffer(buf, dtype=np.float32, count=layers, offset=off).copy(); off += layers * 4
-        dla_picked = np.frombuffer(buf, dtype=DLA_DTYPE, count=DLA_TOPK, offset=off).copy(); off += DLA_TOPK * DLA_ENTRY_BYTES
-        dla_argmax = np.frombuffer(buf, dtype=DLA_DTYPE, count=DLA_TOPK, offset=off).copy(); off += DLA_TOPK * DLA_ENTRY_BYTES
+        dla_picked = np.frombuffer(buf, dtype=DLA_DTYPE, count=DLA_TOPK, offset=off).copy()
+        off += DLA_TOPK * DLA_ENTRY_BYTES
+        dla_argmax = np.frombuffer(buf, dtype=DLA_DTYPE, count=DLA_TOPK, offset=off).copy()
+        off += DLA_TOPK * DLA_ENTRY_BYTES
         conf = np.frombuffer(buf, dtype=np.float32, count=5, offset=off); off += CONFIDENCE_BYTES
         cand_count = int(np.frombuffer(buf, dtype=np.uint16, count=1, offset=off)[0]); off += 2
         cand_bytes = np.frombuffer(buf, dtype=np.uint8, count=CAND_TOPK, offset=off).copy(); off += CAND_TOPK

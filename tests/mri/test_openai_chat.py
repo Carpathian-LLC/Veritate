@@ -16,22 +16,16 @@
 # Imports:
 
 import json
-import os
-import sys
-
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-if os.path.join(REPO_ROOT, "veritate_mri") not in sys.path:
-    sys.path.insert(0, os.path.join(REPO_ROOT, "veritate_mri"))
 
 from flask import Flask, Response
-
 from routes import hybrid_routes as H
 
 # ------------------------------------------------------------------------------------
 # Constants
 
-ANSWER       = "Hello there friend"
-LOCAL_ANSWER = "Hello there friend, streamed byte by byte now."
+ANSWER          = "Hello there friend"
+LOCAL_ANSWER    = "Hello there friend, streamed byte by byte now."
+CHATML_IM_END   = "<|im_end|>"
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -75,57 +69,92 @@ def _content_deltas(resp):
     return out
 
 
-def test_non_stream_envelope(monkeypatch):
-    """stream:false returns an OpenAI chat.completion with the assistant answer."""
-    r = _client(monkeypatch).post("/v1/chat/completions",
-                                  json={"model": "m", "messages": [{"role": "user", "content": "hi"}]})
-    body = r.get_json()
-    assert body["object"] == "chat.completion"
+def _done_frame(monkeypatch):
+    r = _client(monkeypatch).post("/hybrid/chat/stream", json={"model": "m", "message": "hi"})
+    return _hybrid_frames(r)[-1]
+
+
+def test_non_stream_object_is_chat_completion(monkeypatch):
+    """stream:false returns an object of type chat.completion."""
+    assert _post_chat(monkeypatch)["object"] == "chat.completion"
+
+
+def test_non_stream_carries_assistant_message(monkeypatch):
+    """stream:false returns the assistant answer in choices[0].message."""
+    body = _post_chat(monkeypatch)
     assert body["choices"][0]["message"] == {"role": "assistant", "content": ANSWER}
-    assert body["choices"][0]["finish_reason"] == "stop"
 
 
-def test_non_stream_usage_present(monkeypatch):
-    """The usage block carries approximate prompt/completion/total token counts."""
-    r = _client(monkeypatch).post("/v1/chat/completions",
-                                  json={"model": "m", "messages": [{"role": "user", "content": "hi"}]})
-    u = r.get_json()["usage"]
+def test_non_stream_finish_reason_is_stop(monkeypatch):
+    """stream:false reports finish_reason stop."""
+    assert _post_chat(monkeypatch)["choices"][0]["finish_reason"] == "stop"
+
+
+def test_non_stream_usage_totals_add_up(monkeypatch):
+    """The usage block's total_tokens equals prompt plus completion tokens."""
+    u = _post_chat(monkeypatch)["usage"]
     assert u["total_tokens"] == u["prompt_tokens"] + u["completion_tokens"]
 
 
-def test_stream_is_sse_with_done(monkeypatch):
-    """A buffered (cloud) stream returns text/event-stream ending with a stop chunk then [DONE]."""
-    r = _client(monkeypatch).post("/v1/chat/completions",
-                                  json={"model": "m", "stream": True,
-                                        "messages": [{"role": "user", "content": "hi"}]})
-    assert "text/event-stream" in r.content_type
-    frames = [f for f in r.get_data(as_text=True).split("\n\n") if f.strip()]
-    assert '"object": "chat.completion.chunk"' in frames[0]
-    assert '"finish_reason": "stop"' in frames[-2]
-    assert frames[-1] == "data: [DONE]"
+def test_stream_content_type_is_sse(monkeypatch):
+    """A buffered stream responds with content type text/event-stream."""
+    assert "text/event-stream" in _post_chat_stream(monkeypatch).content_type
+
+
+def test_stream_first_frame_is_a_chunk(monkeypatch):
+    """A buffered stream's first frame is a chat.completion.chunk."""
+    assert '"object": "chat.completion.chunk"' in _sse_frames(_post_chat_stream(monkeypatch))[0]
+
+
+def test_stream_penultimate_frame_finishes_with_stop(monkeypatch):
+    """A buffered stream's penultimate frame carries finish_reason stop."""
+    assert '"finish_reason": "stop"' in _sse_frames(_post_chat_stream(monkeypatch))[-2]
+
+
+def test_stream_terminates_with_done_sentinel(monkeypatch):
+    """A buffered stream's last frame is the [DONE] sentinel."""
+    assert _sse_frames(_post_chat_stream(monkeypatch))[-1] == "data: [DONE]"
 
 
 def test_stream_content_reassembles(monkeypatch):
     """Concatenating a buffered stream's content deltas reproduces the full answer."""
-    r = _client(monkeypatch).post("/v1/chat/completions",
-                                  json={"model": "m", "stream": True,
-                                        "messages": [{"role": "user", "content": "hi"}]})
-    assert "".join(_content_deltas(r)) == ANSWER
+    assert "".join(_content_deltas(_post_chat_stream(monkeypatch))) == ANSWER
 
 
 def test_local_delta_stream_is_incremental():
-    """The local token generator emits multiple content deltas as bytes arrive, reassembling to the answer."""
-    deltas = list(H._local_delta_stream(_events(LOCAL_ANSWER)))
-    assert len(deltas) > 1
+    """The local token generator emits more than one content delta for one answer."""
+    assert len(list(H._local_delta_stream(_events(LOCAL_ANSWER)))) > 1
+
+
+def test_local_delta_stream_reassembles_answer():
+    """The local token generator's deltas concatenate back to the full answer."""
+    assert "".join(H._local_delta_stream(_events(LOCAL_ANSWER))) == LOCAL_ANSWER
+
+
+def test_local_delta_stream_emits_no_delta_containing_stop_marker():
+    """No content delta of a stream ending in <|im_end|> contains the marker."""
+    deltas = list(H._local_delta_stream(_events(LOCAL_ANSWER + CHATML_IM_END)))
+    assert [d for d in deltas if CHATML_IM_END in d] == []
+
+
+def test_local_delta_stream_cuts_trailing_stop_marker():
+    """A trailing <|im_end|> is cut from the reassembled content, leaving the answer."""
+    deltas = list(H._local_delta_stream(_events(LOCAL_ANSWER + CHATML_IM_END)))
     assert "".join(deltas) == LOCAL_ANSWER
 
 
-def test_local_delta_stream_holds_back_stop_marker():
-    """A turn marker ending the byte stream is cut, never emitted in the content deltas."""
-    deltas = list(H._local_delta_stream(_events(LOCAL_ANSWER + "<|user|>")))
+def test_local_delta_stream_never_leaks_partial_stop_marker():
+    """A stream ending in <|im_end|> emits no content delta holding a marker prefix at the tail."""
+    deltas = list(H._local_delta_stream(_events(LOCAL_ANSWER + CHATML_IM_END)))
     text = "".join(deltas)
-    assert "<|user|>" not in text
-    assert text == LOCAL_ANSWER
+    assert not any(text.endswith(CHATML_IM_END[:i]) for i in range(1, len(CHATML_IM_END) + 1))
+
+
+def test_local_delta_stream_cuts_every_chatml_stop_marker():
+    """Each marker in STOP_MARKERS terminating the byte stream is cut from the content."""
+    for marker in H.STOP_MARKERS:
+        deltas = list(H._local_delta_stream(_events(LOCAL_ANSWER + marker)))
+        assert "".join(deltas) == LOCAL_ANSWER, marker
 
 
 def test_stream_local_dispatches_true_token_path(monkeypatch):
@@ -141,8 +170,12 @@ def test_stream_local_dispatches_true_token_path(monkeypatch):
 
 def test_bad_body_is_400(monkeypatch):
     """A request with no messages array is a 400 invalid_request_error."""
+    assert _client(monkeypatch).post("/v1/chat/completions", json={"model": "m"}).status_code == 400
+
+
+def test_bad_body_error_type_is_invalid_request(monkeypatch):
+    """A request with no messages array reports error.type invalid_request_error."""
     r = _client(monkeypatch).post("/v1/chat/completions", json={"model": "m"})
-    assert r.status_code == 400
     assert r.get_json()["error"]["type"] == "invalid_request_error"
 
 
@@ -151,6 +184,23 @@ def test_unavailable_provider_is_503(monkeypatch):
     r = _client(monkeypatch, raises=H.ChatUnavailable("no key")).post(
         "/v1/chat/completions", json={"model": "m", "messages": [{"role": "user", "content": "hi"}]})
     assert r.status_code == 503
+
+
+def _post_chat(monkeypatch):
+    """POST a non-stream /v1/chat/completions and return the parsed body."""
+    return _client(monkeypatch).post(
+        "/v1/chat/completions",
+        json={"model": "m", "messages": [{"role": "user", "content": "hi"}]}).get_json()
+
+
+def _post_chat_stream(monkeypatch):
+    return _client(monkeypatch).post(
+        "/v1/chat/completions",
+        json={"model": "m", "stream": True, "messages": [{"role": "user", "content": "hi"}]})
+
+
+def _sse_frames(resp):
+    return [f for f in resp.get_data(as_text=True).split("\n\n") if f.strip()]
 
 
 def _hybrid_frames(resp):
@@ -163,24 +213,41 @@ def _hybrid_frames(resp):
     return out
 
 
-def test_hybrid_stream_is_sse_and_reassembles(monkeypatch):
-    """/hybrid/chat/stream is text/event-stream whose delta frames reassemble the answer."""
+def test_hybrid_stream_content_type_is_sse(monkeypatch):
+    """/hybrid/chat/stream responds with content type text/event-stream."""
     r = _client(monkeypatch).post("/hybrid/chat/stream", json={"model": "m", "message": "hi"})
     assert "text/event-stream" in r.content_type
-    frames = _hybrid_frames(r)
-    deltas = "".join(f["text"] for f in frames if f["kind"] == "delta")
-    assert deltas == ANSWER
 
 
-def test_hybrid_stream_done_carries_memory_and_context(monkeypatch):
-    """The terminal done frame carries the full answer, the new turns, sources, and the context gauge."""
+def test_hybrid_stream_deltas_reassemble(monkeypatch):
+    """/hybrid/chat/stream delta frames concatenate back to the full answer."""
     r = _client(monkeypatch).post("/hybrid/chat/stream", json={"model": "m", "message": "hi"})
-    done = _hybrid_frames(r)[-1]
-    assert done["kind"] == "done"
-    assert done["answer"] == ANSWER
-    assert [t["role"] for t in done["memory"]["turns"]] == ["user", "assistant"]
-    assert done["context"]["turns"] == 2
-    assert "sources" in done
+    assert "".join(f["text"] for f in _hybrid_frames(r) if f["kind"] == "delta") == ANSWER
+
+
+def test_hybrid_stream_terminal_frame_is_done(monkeypatch):
+    """/hybrid/chat/stream's last frame is of kind done."""
+    assert _done_frame(monkeypatch)["kind"] == "done"
+
+
+def test_hybrid_done_frame_carries_answer(monkeypatch):
+    """The done frame carries the full answer."""
+    assert _done_frame(monkeypatch)["answer"] == ANSWER
+
+
+def test_hybrid_done_frame_carries_both_turns(monkeypatch):
+    """The done frame's memory carries the user turn then the assistant turn."""
+    assert [t["role"] for t in _done_frame(monkeypatch)["memory"]["turns"]] == ["user", "assistant"]
+
+
+def test_hybrid_done_frame_carries_context_gauge(monkeypatch):
+    """The done frame's context gauge counts the two new turns."""
+    assert _done_frame(monkeypatch)["context"]["turns"] == 2
+
+
+def test_hybrid_done_frame_carries_sources(monkeypatch):
+    """The done frame carries a sources key."""
+    assert "sources" in _done_frame(monkeypatch)
 
 
 def test_hybrid_stream_empty_message_is_400(monkeypatch):
@@ -194,8 +261,13 @@ def test_hybrid_stream_unavailable_emits_error_frame(monkeypatch):
     r = _client(monkeypatch, raises=H.ChatUnavailable("no key")).post(
         "/hybrid/chat/stream", json={"model": "m", "message": "hi"})
     assert r.status_code == 200
-    errs = [f for f in _hybrid_frames(r) if f["kind"] == "error"]
-    assert errs and errs[0]["error"] == "no key"
+
+
+def test_hybrid_stream_error_frame_carries_reason(monkeypatch):
+    """A ChatUnavailable after the stream opened emits an error frame naming the reason."""
+    r = _client(monkeypatch, raises=H.ChatUnavailable("no key")).post(
+        "/hybrid/chat/stream", json={"model": "m", "message": "hi"})
+    assert [f["error"] for f in _hybrid_frames(r) if f["kind"] == "error"] == ["no key"]
 
 
 def test_hybrid_stream_local_honors_c_engine(monkeypatch):
@@ -207,9 +279,6 @@ def test_hybrid_stream_local_honors_c_engine(monkeypatch):
     monkeypatch.setattr(H, "_local_events",
                         lambda cfg, backend, prompt, mri=False: (_events(LOCAL_ANSWER), []))
     monkeypatch.setattr(B, "_stop_on_bytes", lambda events, stop: events)
-    r = _client(monkeypatch, kind="local").post(
+    _client(monkeypatch, kind="local").post(
         "/hybrid/chat/stream", json={"model": "m", "backend": "c", "message": "hi"})
-    frames = _hybrid_frames(r)
     assert calls == ["c"]
-    assert "".join(f["text"] for f in frames if f["kind"] == "delta") == LOCAL_ANSWER
-    assert frames[-1]["kind"] == "done" and frames[-1]["answer"] == LOCAL_ANSWER

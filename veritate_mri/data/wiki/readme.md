@@ -1,35 +1,28 @@
-# wiki
-
-Markdown content tree served by the MRI server and pulled by the public site.
-
-## layout
-
-```
-veritate_mri/data/wiki/
-  <category>/
-    <slug>.md
-```
-
-- `<category>` and `<slug>` must match `[a-z0-9_]` and `[a-z0-9_\-]` respectively.
-- Each `.md` starts with optional frontmatter:
-
-```
 ---
-title: Short title
-date: 2026-05-05
-tags: [build, vnni]
-summary: One sentence shown in the listing.
+title: the wiki
+date: 2026-07-27
+tags: [index]
+summary: What each wiki category holds and where to start.
 ---
 
-Body markdown.
-```
+# the wiki
 
-## endpoints
+The documentation that ships inside Veritate. The dashboard wiki tab serves it from `veritate_mri/data/wiki/<category>/<slug>.md`, and any entry also renders as a standalone page at `/wiki/<category>/<slug>/page`.
 
-- `GET /wiki` lists categories.
-- `GET /wiki/<category>` lists entries (frontmatter only).
-- `GET /wiki/<category>/<slug>` returns frontmatter, raw body, and rendered HTML.
+| category | holds |
+|---|---|
+| `api` | the REST contract: every platform route, and the outward-facing surface with its key gate |
+| `extensions` | how to build, install, and publish an extension |
+| `settings` | one entry per training setting, linked from the training form |
+| `concepts` | plain-language background for anyone new to the platform |
+| `build_notes` | one entry per build: what changed and what to do about it |
 
-## adding content
+## where to start
 
-Drop a new `.md` under the appropriate category. Commit. The local server picks it up on the next request; the public site picks it up on the next repo pull.
+New to the platform: read `concepts`, then open the training tab. Every setting on that form links straight to its own entry in `settings`.
+
+Integrating this box from another service: `api/external_api`.
+
+Building something that runs beside the dashboard: `extensions/authoring`, then `api/internal_api` for the routes it calls.
+
+Internal platform and component contracts are not here. They live under `developer_documentation/` in the repository.

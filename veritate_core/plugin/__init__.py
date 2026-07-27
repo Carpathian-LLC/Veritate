@@ -5,7 +5,7 @@
 # ------------------------------------------------------------------------------------
 # Notes:
 # - The platform-side entry point that plugins call into. The full surface is
-#   specified in documentation/trainers/contract.md.
+#   specified in developer_documentation/trainers/contract.md.
 # - This module is the only thing plugins are allowed to import from outside
 #   their own bundle. Internals of veritate_mri/ are not part of the contract
 #   and must not be reached into directly.
@@ -21,26 +21,32 @@ _VERITATE_MRI = os.path.join(_REPO_ROOT, "veritate_mri")
 if _VERITATE_MRI not in sys.path:
     sys.path.insert(0, _VERITATE_MRI)
 
-from training import save         # noqa: E402  veritate_mri/training/save.py
-from readers import paths         # noqa: E402  veritate_mri/readers/paths.py
-from veritate_core import model   # noqa: E402  veritate_core/model.py
-from veritate_core import qat     # noqa: E402  veritate_core/qat.py
-from veritate_core.plugin import oom_recovery  # noqa: E402  shared OOM helper
-from veritate_core.plugin import multicorpus   # noqa: E402  shared mixed-corpus loader
-from veritate_core.plugin import hardware      # noqa: E402  shared device/core detect
-from veritate_core.plugin import mem_planner   # noqa: E402  unified-memory plan
-from veritate_core.plugin import mem_executor  # noqa: E402  applies the plan
-from veritate_core.plugin import bench         # noqa: E402  empirical mem/throughput benchmark
-from veritate_core.plugin import optim         # noqa: E402  shared optimizer builder (muon)
-from veritate_core import model_patched        # noqa: E402  boundary-patched trunk variant
-from veritate_core import model_recurrent      # noqa: E402  constant-state trunk variant
-from veritate_core import model_memory         # noqa: E402  surprise-gated memory trunk variant
-from veritate_core.plugin import slm           # noqa: E402  selective language modeling (RHO-1)
+from readers import paths
+from training import save
+
+from veritate_core import (
+    model,
+    model_memory,
+    model_patched,
+    model_recurrent,
+    qat,
+)
+from veritate_core.plugin import (
+    bench,
+    hardware,
+    mem_executor,
+    mem_planner,
+    multicorpus,
+    oom_recovery,
+    optim,
+    slm,
+)
 
 
 def get_teacher_client(provider_override=None, model_override=None):
-    from veritate_mri.teacher import Client, get_provider, resolve_api_key
     from runtime import settings as settings_mod
+
+    from veritate_mri.teacher import Client, get_provider, resolve_api_key
     cfg = settings_mod.get()
     provider_id = provider_override or cfg.get("teacher_provider", "")
     if not provider_id:
@@ -52,5 +58,14 @@ def get_teacher_client(provider_override=None, model_override=None):
     return Client(provider_id, model=model, base_url=base_url, api_key=api_key)
 
 
-__all__ = ["save", "paths", "model", "qat", "hardware",
-           "mem_planner", "mem_executor", "bench", "get_teacher_client"]
+__all__ = [
+    "bench",
+    "get_teacher_client",
+    "hardware",
+    "mem_executor",
+    "mem_planner",
+    "model",
+    "paths",
+    "qat",
+    "save",
+]

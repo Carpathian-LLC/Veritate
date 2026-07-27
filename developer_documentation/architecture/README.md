@@ -2,8 +2,10 @@
 
 Per-component documentation, split into frontend and backend.
 
-- **[frontend/](frontend/)** — the dashboard (vanilla JS, served by Flask at `veritate_mri/web/`). One file per tab, panel, or standalone module.
-- **[backend/](backend/)** — the Flask app, training pipeline, readers, runtime, and engine. One file per module or subsystem.
+- **[frontend/](frontend/)**: the dashboard (vanilla JS, served by Flask at `veritate_mri/web/`). One file per tab, panel, or standalone module.
+- **[backend/](backend/)**: the Flask app, training pipeline, readers, runtime, and engine. One file per module or subsystem.
+
+Flask serves `index.html` (the dashboard) at both `/` and `/app`, and `hybrid.html` (the standalone chat page) at `/chat`. The dashboard tabs are Chat, Generation, Models, Training, Wiki, Logs, Settings.
 
 Each file follows the same shape:
 

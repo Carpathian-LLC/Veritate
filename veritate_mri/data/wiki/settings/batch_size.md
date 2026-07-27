@@ -1,27 +1,32 @@
 ---
-title: Batch Size
-summary: How many rows of text the model studies together in one step; bigger is faster and steadier but uses more memory.
-tags: training, settings
+title: batch size
+date: 2026-07-27
+tags: [settings, training]
+summary: How many independent stretches of text the model reads at once before each weight update.
 ---
 
-# Batch Size
+# batch size
 
-Batch size is how many rows (chunks of training text) the model processes together in a single step before it updates. Instead of learning from one example at a time, it looks at a stack of them at once and averages the lesson.
+The number of separate rows of training text processed side by side in one step.
 
-## Why it matters
+## what it does
 
-- **Speed**: processing a stack together is more efficient than one-at-a-time, so bigger batches finish the run in less wall-clock time.
-- **Stability**: averaging over more examples gives a smoother, less noisy update each step, which can make training steadier.
+Each row is an independent sample drawn from the corpus. The loss is averaged over all of them, so a larger batch gives a steadier estimate of which direction the weights should move: less noise per step, fewer steps needed, more memory and more math per step.
 
-## Weak-hardware angle
+Batch size is the main lever on how fully a GPU is used. A GPU running one row at a time spends most of its time waiting.
 
-Every row in the batch has to be held in memory at once, so **a bigger batch uses more memory (VRAM)**. On a modest machine this is often the first thing you have to turn down to make a run fit. If a run runs out of memory, lowering batch size is the usual first fix.
+The value sets the row count in the data loader and feeds the memory plan in `veritate_core/plugin/mem_planner.py`, which refuses a configuration that cannot fit before the run starts.
 
-## When to change it
+## range and default
 
-- Raise it when you have memory headroom and want faster, smoother training.
-- Lower it when a run will not fit, or crashes with an out-of-memory error.
+Any integer of 1 or more. No upper limit is enforced in code; the memory plan is the real ceiling.
 
-## Gotcha
+Manifest defaults track model size: 32 at `veritate_10m`, 12 at `veritate_80m`, 24 at `veritate_200m`, 16 at `veritate_400m`, 8 at `veritate_800m`, 4 at `veritate_1b3`, and 1 for every trainer of 13B and above.
 
-- Batch size and learning rate are linked: much larger batches often want a slightly higher learning rate. If you change batch size a lot by hand, revisit the learning rate rather than assuming the old one still fits.
+Running auto tune replaces the manifest value with the batch size that measured the highest tokens per second on this box, and that measured value is what the form shows afterwards.
+
+## when to change it
+
+Raise it while throughput keeps improving and the memory plan still fits. Stop when either stalls. A large jump in batch size changes the effective gradient scale, so raise the learning rate along with it or move in moderate steps.
+
+Lower it when a run aborts on memory, before reaching for anything else.

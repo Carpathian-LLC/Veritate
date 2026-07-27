@@ -45,42 +45,54 @@ RESERVED_DIRS = {"corpus", "common", "__pycache__", ".git", "node_modules"}
 # static/index.js), so all knobs render and route through the same CLI surface.
 NATIVE_TRAINER_ID   = "native/trainer"
 NATIVE_TRAINER_PATH = os.path.normpath(os.path.join(paths.MRI_ROOT, "training", "native_trainer.py"))
+
+# Single owner of the size -> shape table (rule 20). The manifest below offers
+# exactly these sizes and native_trainer.py resolves --size against the same
+# dict, so the offered set can never drift from the supported set.
+NATIVE_SIZES = {
+    "5m":   {"layers":  6, "hidden":  256, "ffn":  1024, "heads":  4, "params":      5000000},
+    "7m":   {"layers":  8, "hidden":  256, "ffn":  1024, "heads":  4, "params":      7000000},
+    "10m":  {"layers":  8, "hidden":  320, "ffn":  1280, "heads":  8, "params":     10000000},
+    "20m":  {"layers":  8, "hidden":  512, "ffn":  2048, "heads":  8, "params":     20000000},
+    "30m":  {"layers": 10, "hidden":  512, "ffn":  2048, "heads":  8, "params":     31000000},
+    "50m":  {"layers": 10, "hidden":  640, "ffn":  2560, "heads": 10, "params":     50000000},
+    "70m":  {"layers": 12, "hidden":  640, "ffn":  2560, "heads": 10, "params":     70000000},
+    "80m":  {"layers": 12, "hidden":  768, "ffn":  3072, "heads": 12, "params":     85000000},
+    "85m":  {"layers": 12, "hidden":  768, "ffn":  3072, "heads": 12, "params":     85000000},
+    "120m": {"layers": 12, "hidden":  896, "ffn":  3584, "heads": 14, "params":    115000000},
+    "160m": {"layers": 12, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    162000000},
+    "200m": {"layers": 16, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    202000000},
+    "350m": {"layers": 24, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    330000000},
+    "400m": {"layers": 24, "hidden": 1280, "ffn":  5120, "heads": 20, "params":    472000000},
+    "800m": {"layers": 28, "hidden": 1536, "ffn":  6144, "heads": 24, "params":    793000000},
+    "1b3":  {"layers": 24, "hidden": 2048, "ffn":  8192, "heads": 16, "params":   1300000000},
+    "2b":   {"layers": 24, "hidden": 2560, "ffn": 10240, "heads": 20, "params":   2700000000},
+    "3b":   {"layers": 32, "hidden": 2560, "ffn": 10240, "heads": 32, "params":   2900000000},
+    "4b5":  {"layers": 36, "hidden": 3200, "ffn": 12800, "heads": 25, "params":   4400000000},
+    "7b":   {"layers": 32, "hidden": 4096, "ffn": 18432, "heads": 32, "params":   7000000000},
+    "13b":  {"layers": 40, "hidden": 5120, "ffn": 21504, "heads": 40, "params":  13000000000},
+    "30b":  {"layers": 60, "hidden": 6656, "ffn": 26624, "heads": 52, "params":  32000000000},
+    "50b":  {"layers": 64, "hidden": 8192, "ffn": 32768, "heads": 64, "params":  52000000000},
+}
+
+NATIVE_DEFAULT_SIZE  = "85m"
+NATIVE_DEFAULT_SEQ   = 1024
+NATIVE_DEFAULT_VOCAB = 256   # byte-level; mirrors veritate_core.model.VOCAB_BYTE_LEVEL
+
 NATIVE_TRAINER_MANIFEST = {
     "name":        "Native trainer (no plugin)",
-    "description": "Train, continue, or refine any size from the dashboard. Canonical Veritate (GELU FFN + RMSNorm + learned pos-emb + tied LM head); QAT-aware; same save.save / append_train_row contract as a plugin.",
+    "description": "Train, continue, or refine any size from the dashboard. Canonical Veritate (GELU FFN + "
+                   "RMSNorm + learned pos-emb + tied LM head); QAT-aware; same save.save / append_train_row "
+                   "contract as a plugin.",
     "kind":        "trainer",
     "bench":       True,
     "flow":        ["scratch", "continue"],
-    "sizes": {
-        "5m":   {"layers":  6, "hidden":  256, "ffn":  1024, "heads":  4, "params":      5000000},
-        "7m":   {"layers":  8, "hidden":  256, "ffn":  1024, "heads":  4, "params":      7000000},
-        "10m":  {"layers":  8, "hidden":  320, "ffn":  1280, "heads":  8, "params":     10000000},
-        "20m":  {"layers":  8, "hidden":  512, "ffn":  2048, "heads":  8, "params":     20000000},
-        "30m":  {"layers": 10, "hidden":  512, "ffn":  2048, "heads":  8, "params":     31000000},
-        "50m":  {"layers": 10, "hidden":  640, "ffn":  2560, "heads": 10, "params":     50000000},
-        "70m":  {"layers": 12, "hidden":  640, "ffn":  2560, "heads": 10, "params":     70000000},
-        "80m":  {"layers": 12, "hidden":  768, "ffn":  3072, "heads": 12, "params":     85000000},
-        "85m":  {"layers": 12, "hidden":  768, "ffn":  3072, "heads": 12, "params":     85000000},
-        "120m": {"layers": 12, "hidden":  896, "ffn":  3584, "heads": 14, "params":    115000000},
-        "160m": {"layers": 12, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    162000000},
-        "200m": {"layers": 16, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    202000000},
-        "350m": {"layers": 24, "hidden": 1024, "ffn":  4096, "heads": 16, "params":    330000000},
-        "400m": {"layers": 24, "hidden": 1280, "ffn":  5120, "heads": 20, "params":    472000000},
-        "800m": {"layers": 28, "hidden": 1536, "ffn":  6144, "heads": 24, "params":    793000000},
-        "1b3":  {"layers": 24, "hidden": 2048, "ffn":  8192, "heads": 16, "params":   1300000000},
-        "2b":   {"layers": 24, "hidden": 2560, "ffn": 10240, "heads": 20, "params":   2700000000},
-        "3b":   {"layers": 32, "hidden": 2560, "ffn": 10240, "heads": 32, "params":   2900000000},
-        "4b5":  {"layers": 36, "hidden": 3200, "ffn": 12800, "heads": 25, "params":   4400000000},
-        "7b":   {"layers": 32, "hidden": 4096, "ffn": 18432, "heads": 32, "params":   7000000000},
-        "13b":  {"layers": 40, "hidden": 5120, "ffn": 21504, "heads": 40, "params":  13000000000},
-        "30b":  {"layers": 60, "hidden": 6656, "ffn": 26624, "heads": 52, "params":  32000000000},
-        "50b":  {"layers": 64, "hidden": 8192, "ffn": 32768, "heads": 64, "params":  52000000000}
-    },
+    "sizes": NATIVE_SIZES,
     "defaults": {
-        "size":         "85m",
+        "size":         NATIVE_DEFAULT_SIZE,
         "precision":    "bf16",
-        "vocab":        256,
-        "seq":          1024,
+        "vocab":        NATIVE_DEFAULT_VOCAB,
+        "seq":          NATIVE_DEFAULT_SEQ,
         "total_steps":  20000,
         "batch_size":   8,
         "n_chunks":     1,
@@ -111,7 +123,7 @@ NATIVE_TRAINER_MANIFEST = {
 
 def _read_manifest(path):
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return None
@@ -145,7 +157,7 @@ def _walk(rel_path, out):
     if not os.path.isdir(abs_dir):
         return
     for entry in sorted(os.listdir(abs_dir)):
-        if entry.startswith("_") or entry.startswith("."):
+        if entry.startswith(("_", ".")):
             continue
         if entry in RESERVED_DIRS:
             continue
@@ -170,7 +182,7 @@ def _walk(rel_path, out):
 
 
 def _native_record():
-    """Synthetic trainer entry — no manifest on disk, persisted defaults live
+    """Synthetic trainer entry: no manifest on disk, persisted defaults live
     in memory only (a future refinement could mirror them to a JSON next to
     native_trainer.py). The runner builds argv off `path` like any plugin."""
     return {
@@ -204,7 +216,7 @@ def _size_key(rec):
 
 def scan():
     out = []
-    # Native trainer first — surfaces "no plugin needed" at the top of the picker.
+    # Native trainer first: surfaces "no plugin needed" at the top of the picker.
     if os.path.isfile(NATIVE_TRAINER_PATH):
         out.append(_native_record())
     if not os.path.isdir(PLUGINS_ROOT):

@@ -45,7 +45,7 @@ def list_addons():
         ap = os.path.join(d, ADDON_FILENAME)
         if not (os.path.isfile(mp) and os.path.isfile(ap)):
             continue
-        with open(mp, "r", encoding="utf-8") as f:
+        with open(mp, encoding="utf-8") as f:
             manifest = json.load(f)
         out.append({"id": fn, "manifest": manifest})
     return out
@@ -70,7 +70,7 @@ def instantiate(addon_id, params=None):
     """build one addon by id; params override manifest defaults."""
     cls = _load_class(addon_id)
     d = os.path.join(HERE, addon_id)
-    with open(os.path.join(d, MANIFEST_NAME), "r", encoding="utf-8") as f:
+    with open(os.path.join(d, MANIFEST_NAME), encoding="utf-8") as f:
         manifest = json.load(f)
     defaults = {}
     for k, spec in (manifest.get("params") or {}).items():

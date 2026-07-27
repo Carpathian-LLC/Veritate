@@ -21,6 +21,9 @@
 #   or x.device is not CUDA.
 # - INT4 and ternary weight quant remain unfused for now: their ablations are
 #   not throughput-bound and the unfused path is correct.
+# - Owns the shared INT8 quant constants (INT8_MAX, ACT_INT8_SCALE,
+#   LN_FIXED_SCALE, EPS_SCALE). qat.py imports this module, so the dependency
+#   runs one way only and the constants are defined here, not there.
 # veritate_core/qat_triton.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -41,6 +44,7 @@ except Exception:
 # Constants
 
 INT8_MAX        = 127
+INT8_MAX_F      = float(INT8_MAX)
 ACT_INT8_SCALE  = 32.0
 LN_FIXED_SCALE  = 64.0
 EPS_SCALE       = 1e-8
@@ -59,50 +63,50 @@ def triton_enabled(x):
         return False
     if os.environ.get(_ENV_DISABLE, "") not in ("", "0", "false", "False"):
         return False
-    if not x.is_cuda:
-        return False
-    return True
+    return x.is_cuda
 
 
 if TRITON_AVAILABLE:
 
     @triton.jit
-    def _quant_act_fwd_kernel(x_ptr, y_ptr, n, scale, BLOCK: tl.constexpr):
+    def _quant_act_fwd_kernel(x_ptr, y_ptr, n, scale, QMAX: tl.constexpr, BLOCK: tl.constexpr):
         pid  = tl.program_id(0)
         offs = pid * BLOCK + tl.arange(0, BLOCK)
         mask = offs < n
         x    = tl.load(x_ptr + offs, mask=mask, other=0.0).to(tl.float32)
         q    = tl.extra.libdevice.rint(x * scale)
-        q    = tl.minimum(tl.maximum(q, -127.0), 127.0)
+        q    = tl.minimum(tl.maximum(q, -QMAX), QMAX)
         y    = q / scale
         tl.store(y_ptr + offs, y, mask=mask)
 
     @triton.jit
-    def _quant_act_bwd_kernel(grad_in_ptr, grad_out_ptr, x_ptr, n, scale, BLOCK: tl.constexpr):
+    def _quant_act_bwd_kernel(grad_in_ptr, grad_out_ptr, x_ptr, n, scale,
+                              QMAX: tl.constexpr, BLOCK: tl.constexpr):
         pid  = tl.program_id(0)
         offs = pid * BLOCK + tl.arange(0, BLOCK)
         mask = offs < n
         g    = tl.load(grad_out_ptr + offs, mask=mask, other=0.0).to(tl.float32)
         x    = tl.load(x_ptr + offs, mask=mask, other=0.0).to(tl.float32)
         q    = tl.extra.libdevice.rint(x * scale)
-        ok   = (q >= -127.0) & (q <= 127.0)
+        ok   = (q >= -QMAX) & (q <= QMAX)
         g_in = tl.where(ok, g, 0.0)
         tl.store(grad_in_ptr + offs, g_in, mask=mask)
 
     @triton.jit
-    def _quant_w_fwd_kernel(w_ptr, y_ptr, scale_ptr, n, BLOCK: tl.constexpr):
+    def _quant_w_fwd_kernel(w_ptr, y_ptr, scale_ptr, n, QMAX: tl.constexpr, BLOCK: tl.constexpr):
         pid   = tl.program_id(0)
         offs  = pid * BLOCK + tl.arange(0, BLOCK)
         mask  = offs < n
         scale = tl.load(scale_ptr).to(tl.float32)
         w     = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
         q     = tl.extra.libdevice.rint(w / scale)
-        q     = tl.minimum(tl.maximum(q, -127.0), 127.0)
+        q     = tl.minimum(tl.maximum(q, -QMAX), QMAX)
         y     = q * scale
         tl.store(y_ptr + offs, y, mask=mask)
 
     @triton.jit
-    def _quant_w_bwd_kernel(grad_in_ptr, grad_out_ptr, w_ptr, scale_ptr, n, BLOCK: tl.constexpr):
+    def _quant_w_bwd_kernel(grad_in_ptr, grad_out_ptr, w_ptr, scale_ptr, n,
+                            QMAX: tl.constexpr, BLOCK: tl.constexpr):
         pid   = tl.program_id(0)
         offs  = pid * BLOCK + tl.arange(0, BLOCK)
         mask  = offs < n
@@ -110,30 +114,31 @@ if TRITON_AVAILABLE:
         g     = tl.load(grad_out_ptr + offs, mask=mask, other=0.0).to(tl.float32)
         w     = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
         q     = tl.extra.libdevice.rint(w / scale)
-        ok    = (q >= -127.0) & (q <= 127.0)
+        ok    = (q >= -QMAX) & (q <= QMAX)
         g_in  = tl.where(ok, g, 0.0)
         tl.store(grad_in_ptr + offs, g_in, mask=mask)
 
     @triton.jit
-    def _quant_ln_fwd_kernel(w_ptr, y_ptr, n, scale, BLOCK: tl.constexpr):
+    def _quant_ln_fwd_kernel(w_ptr, y_ptr, n, scale, QMAX: tl.constexpr, BLOCK: tl.constexpr):
         pid  = tl.program_id(0)
         offs = pid * BLOCK + tl.arange(0, BLOCK)
         mask = offs < n
         w    = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
         q    = tl.extra.libdevice.rint(w * scale)
-        q    = tl.minimum(tl.maximum(q, -127.0), 127.0)
+        q    = tl.minimum(tl.maximum(q, -QMAX), QMAX)
         y    = q / scale
         tl.store(y_ptr + offs, y, mask=mask)
 
     @triton.jit
-    def _quant_ln_bwd_kernel(grad_in_ptr, grad_out_ptr, w_ptr, n, scale, BLOCK: tl.constexpr):
+    def _quant_ln_bwd_kernel(grad_in_ptr, grad_out_ptr, w_ptr, n, scale,
+                             QMAX: tl.constexpr, BLOCK: tl.constexpr):
         pid  = tl.program_id(0)
         offs = pid * BLOCK + tl.arange(0, BLOCK)
         mask = offs < n
         g    = tl.load(grad_out_ptr + offs, mask=mask, other=0.0).to(tl.float32)
         w    = tl.load(w_ptr + offs, mask=mask, other=0.0).to(tl.float32)
         q    = tl.extra.libdevice.rint(w * scale)
-        ok   = (q >= -127.0) & (q <= 127.0)
+        ok   = (q >= -QMAX) & (q <= QMAX)
         g_in = tl.where(ok, g, 0.0)
         tl.store(grad_in_ptr + offs, g_in, mask=mask)
 
@@ -149,7 +154,7 @@ class _FakeQuantActTriton(torch.autograd.Function):
         if n == 0:
             return y
         grid = (triton.cdiv(n, BLOCK_DEFAULT),)
-        _quant_act_fwd_kernel[grid](x, y, n, ctx.scale, BLOCK=BLOCK_DEFAULT)
+        _quant_act_fwd_kernel[grid](x, y, n, ctx.scale, QMAX=INT8_MAX_F, BLOCK=BLOCK_DEFAULT)
         return y
 
     @staticmethod
@@ -161,7 +166,8 @@ class _FakeQuantActTriton(torch.autograd.Function):
         if n == 0:
             return grad_in, None
         grid = (triton.cdiv(n, BLOCK_DEFAULT),)
-        _quant_act_bwd_kernel[grid](grad_in, g, x, n, ctx.scale, BLOCK=BLOCK_DEFAULT)
+        _quant_act_bwd_kernel[grid](grad_in, g, x, n, ctx.scale, QMAX=INT8_MAX_F,
+                                    BLOCK=BLOCK_DEFAULT)
         return grad_in, None
 
 
@@ -178,7 +184,7 @@ class _FakeQuantWeightTriton(torch.autograd.Function):
             ctx.save_for_backward(w, scale)
             return y
         grid = (triton.cdiv(n, BLOCK_DEFAULT),)
-        _quant_w_fwd_kernel[grid](w, y, scale, n, BLOCK=BLOCK_DEFAULT)
+        _quant_w_fwd_kernel[grid](w, y, scale, n, QMAX=INT8_MAX_F, BLOCK=BLOCK_DEFAULT)
         ctx.save_for_backward(w, scale)
         return y
 
@@ -191,7 +197,8 @@ class _FakeQuantWeightTriton(torch.autograd.Function):
         if n == 0:
             return grad_in
         grid = (triton.cdiv(n, BLOCK_DEFAULT),)
-        _quant_w_bwd_kernel[grid](grad_in, g, w, scale, n, BLOCK=BLOCK_DEFAULT)
+        _quant_w_bwd_kernel[grid](grad_in, g, w, scale, n, QMAX=INT8_MAX_F,
+                                  BLOCK=BLOCK_DEFAULT)
         return grad_in
 
 
@@ -206,7 +213,7 @@ class _FakeQuantLnWeightTriton(torch.autograd.Function):
         if n == 0:
             return y
         grid = (triton.cdiv(n, BLOCK_DEFAULT),)
-        _quant_ln_fwd_kernel[grid](w, y, n, ctx.scale, BLOCK=BLOCK_DEFAULT)
+        _quant_ln_fwd_kernel[grid](w, y, n, ctx.scale, QMAX=INT8_MAX_F, BLOCK=BLOCK_DEFAULT)
         return y
 
     @staticmethod
@@ -218,7 +225,8 @@ class _FakeQuantLnWeightTriton(torch.autograd.Function):
         if n == 0:
             return grad_in, None
         grid = (triton.cdiv(n, BLOCK_DEFAULT),)
-        _quant_ln_bwd_kernel[grid](grad_in, g, w, n, ctx.scale, BLOCK=BLOCK_DEFAULT)
+        _quant_ln_bwd_kernel[grid](grad_in, g, w, n, ctx.scale, QMAX=INT8_MAX_F,
+                                   BLOCK=BLOCK_DEFAULT)
         return grad_in, None
 
 

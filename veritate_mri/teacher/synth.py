@@ -101,7 +101,7 @@ def _load_done_ids(samples_path):
     done = set()
     if not os.path.isfile(samples_path):
         return done
-    with open(samples_path, "r", encoding="utf-8") as f:
+    with open(samples_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -228,7 +228,7 @@ class SynthJob:
             system = prompt.get("system")
             send_msgs = list(messages)
             if system is not None:
-                send_msgs = [{"role": "system", "content": system}] + send_msgs
+                send_msgs = [{"role": "system", "content": system}, *send_msgs]
             key = _cache_key(self.provider_id, self.model, send_msgs, self.temperature)
             cached = self._cache_get(conn, key)
             if cached is not None:
@@ -293,8 +293,10 @@ class SynthJob:
             if c["processed"] % STATE_FLUSH_EVERY == 0:
                 flush_state()
 
-        samples_fp = open(samples_path, "a", encoding="utf-8")
-        errors_fp = open(self._errors_path(), "a", encoding="utf-8")
+        # long-lived handle: both handles are written by the worker pool below and
+        # closed in the finally; a with-block would close them mid-flight.
+        samples_fp = open(samples_path, "a", encoding="utf-8")   # noqa: SIM115
+        errors_fp = open(self._errors_path(), "a", encoding="utf-8")   # noqa: SIM115
         ex = ThreadPoolExecutor(max_workers=workers)
         try:
             pending_iter = iter(pending)

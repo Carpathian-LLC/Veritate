@@ -80,7 +80,7 @@ REGISTRY = [
     {
         "id":          "l1_sparsity_strong",
         "label":       "L1 sparsity (strong)",
-        "description": "l1_lambda=1e-2 — aggressive sparsity bias. Loss often climbs "
+        "description": "l1_lambda=1e-2: aggressive sparsity bias. Loss often climbs "
                        "noticeably before it descends. Pairs with ReLU only.",
         "group":       GROUP_REGULARIZER,
         "default":     False,

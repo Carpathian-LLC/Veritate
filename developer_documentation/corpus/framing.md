@@ -36,7 +36,7 @@ Rules:
 
 - Each turn opens with `<|im_start|>{role}\n` and closes with `<|im_end|>`. Role is `system`, `user`, `assistant`, or `tool`.
 - Inference hard-stops on `<|im_end|>` regardless of logits.
-- A prompt at inference time ends after the user's `<|im_end|>`; the model emits `<|im_start|>assistant\n...<|im_end|>`.
+- A prompt at inference time ends after the `user` turn's `<|im_end|>`; the model emits `<|im_start|>assistant\n...<|im_end|>`.
 
 ## agent mode (Hermes function-calling)
 

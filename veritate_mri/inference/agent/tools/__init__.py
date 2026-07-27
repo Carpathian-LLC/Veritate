@@ -15,11 +15,24 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 # ------------------------------------------------------------------------------------
 # Constants
+
+# Prompt-block templates. This is what the model reads when deciding which tool
+# to call, so the wording is part of the agent contract (see agent/loop.py).
+PROMPT_BLOCK_HEADER = "Available tools:"
+PROMPT_TOOL_FMT     = "- {name}: {description}"
+PROMPT_ARG_FMT      = "    {name} ({type}{required}): {doc}"
+PROMPT_REQUIRED_TAG = " (required)"
+PROMPT_DEFAULT_TYPE = "string"
+
+# Tools return an observation string; failures are reported in-band with this
+# prefix so the model can read the error and recover instead of crashing.
+ERROR_PREFIX = "error: "
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -38,26 +51,26 @@ class Tool:
     """
     name:         str
     description:  str
-    args_schema:  Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    execute:      Optional[Callable[[Dict[str, Any]], str]] = None
+    args_schema:  dict[str, dict[str, Any]] = field(default_factory=dict)
+    execute:      Callable[[dict[str, Any]], str] | None = None
 
-    def call(self, args: Dict[str, Any]) -> str:
+    def call(self, args: dict[str, Any]) -> str:
         if self.execute is None:
-            return f"error: tool '{self.name}' has no executor"
+            return f"{ERROR_PREFIX}tool '{self.name}' has no executor"
         try:
             out = self.execute(args)
             if not isinstance(out, str):
                 out = str(out)
             return out
         except Exception as e:
-            return f"error: {type(e).__name__}: {e}"
+            return f"{ERROR_PREFIX}{type(e).__name__}: {e}"
 
 
 class Toolbox:
     """Registry of tools. Lookup by name. Prompt-block generator."""
 
-    def __init__(self, tools: Optional[List[Tool]] = None):
-        self._tools: Dict[str, Tool] = {}
+    def __init__(self, tools: list[Tool] | None = None):
+        self._tools: dict[str, Tool] = {}
         for t in (tools or []):
             self.register(t)
 
@@ -66,30 +79,33 @@ class Toolbox:
             raise ValueError(f"tool name collision: {tool.name!r}")
         self._tools[tool.name] = tool
 
-    def names(self) -> List[str]:
+    def names(self) -> list[str]:
         return sorted(self._tools.keys())
 
-    def get(self, name: str) -> Optional[Tool]:
+    def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
     def prompt_block(self) -> str:
         """Human-readable list of tools for prompt injection."""
-        lines = ["Available tools:"]
+        lines = [PROMPT_BLOCK_HEADER]
         for name in self.names():
             t = self._tools[name]
-            lines.append(f"- {name}: {t.description}")
+            lines.append(PROMPT_TOOL_FMT.format(name=name, description=t.description))
             for arg_name, meta in (t.args_schema or {}).items():
-                req = " (required)" if meta.get("required") else ""
-                lines.append(f"    {arg_name} ({meta.get('type', 'string')}{req}): {meta.get('doc', '')}")
+                lines.append(PROMPT_ARG_FMT.format(
+                    name=arg_name,
+                    type=meta.get("type", PROMPT_DEFAULT_TYPE),
+                    required=PROMPT_REQUIRED_TAG if meta.get("required") else "",
+                    doc=meta.get("doc", "")))
         return "\n".join(lines)
 
 
-def build_default_toolbox(corpus_path: Optional[str] = None,
-                          fs_root: Optional[str] = None) -> Toolbox:
+def build_default_toolbox(corpus_path: str | None = None,
+                          fs_root: str | None = None) -> Toolbox:
     """Bundle calculator + fs_read + fetch + (optional) retriever."""
     from .calculator import TOOL as CALC
-    from .filesystem import make_tool as fs_make
     from .fetch import TOOL as FETCH
+    from .filesystem import make_tool as fs_make
     from .retriever import make_tool as retr_make
 
     tb = Toolbox([CALC, FETCH])

@@ -27,14 +27,16 @@ import torch.nn.functional as F
 # ------------------------------------------------------------------------------------
 # Constants
 
-VOCAB_BYTE_LEVEL = 256
+VOCAB_BYTE_LEVEL  = 256
+ROPE_BASE_DEFAULT = 10000.0
+RMS_NORM_EPS      = 1e-5
 
 # ------------------------------------------------------------------------------------
 # Functions
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, hidden, eps=1e-5):
+    def __init__(self, hidden, eps=RMS_NORM_EPS):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden))
         self.eps    = eps
@@ -45,7 +47,7 @@ class RMSNorm(nn.Module):
         return x * inv * self.weight
 
 
-def build_rope_cache(d_head, max_seq, base=10000.0, device=None, dtype=torch.float32):
+def build_rope_cache(d_head, max_seq, base=ROPE_BASE_DEFAULT, device=None, dtype=torch.float32):
     if d_head % 2 != 0:
         raise ValueError(f"RoPE requires even head dim, got {d_head}")
     half     = d_head // 2
@@ -58,7 +60,7 @@ def build_rope_cache(d_head, max_seq, base=10000.0, device=None, dtype=torch.flo
 
 
 def apply_rope(x, cos, sin):
-    B, H, T, D = x.shape
+    _B, _H, T, _D = x.shape
     x1 = x[..., 0::2]
     x2 = x[..., 1::2]
     cos_t = cos[:T].view(1, 1, T, -1)
@@ -114,8 +116,7 @@ class Block(nn.Module):
 
     def forward(self, x, rope_cos, rope_sin):
         x = x + self.attn(self.n1(x), rope_cos, rope_sin)
-        x = x + self.ff(self.n2(x))
-        return x
+        return x + self.ff(self.n2(x))
 
 
 class VeritateRoPE(nn.Module):
@@ -126,8 +127,8 @@ class VeritateRoPE(nn.Module):
     per-block forward hooks attach unchanged.
     """
 
-    def __init__(self, vocab=VOCAB_BYTE_LEVEL, hidden=768, layers=12, ffn=3072, heads=12,
-                 seq=512, rope_base=10000.0):
+    def __init__(self, vocab, hidden, layers, ffn, heads, seq,
+                 rope_base=ROPE_BASE_DEFAULT):
         super().__init__()
         if vocab != VOCAB_BYTE_LEVEL:
             raise ValueError(f"vocab must be {VOCAB_BYTE_LEVEL}, got {vocab}")
@@ -159,7 +160,7 @@ class VeritateRoPE(nn.Module):
         self.rope_sin = sin
 
     def ensure_context(self, T):
-        if T > self.rope_cos.shape[0]:
+        if self.rope_cos.shape[0] < T:
             self.extend_rope(T)
 
     def run_blocks(self, x, start_pos=0, exit_after=None):
@@ -209,7 +210,7 @@ class VeritateRoPE(nn.Module):
         return fwd
 
     def forward(self, tokens, targets=None):
-        B, T = tokens.shape
+        _B, T = tokens.shape
         self.ensure_context(T)
         x = self.embed(tokens)
         x = self.run_blocks(x)

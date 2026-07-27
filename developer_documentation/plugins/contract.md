@@ -31,12 +31,12 @@ Optional per-trainer files (corpus builders, helpers used by only this trainer) 
 }
 ```
 
-- `name` — display name in the dashboard. Named by size (`"Veritate 200B"`).
-- `kind` — `"trainer"` (currently the only kind).
-- `flow` — list of valid entry modes. `scratch` = new model; `continue` = resume from a checkpoint.
-- `sizes` — single-entry shape table. Each trainer is standalone at exactly one size; the dashboard fixes the size from the trainer selection (no size dropdown for plugin trainers).
-- `defaults` — every argparse arg the plugin accepts, with its default value. The dashboard generates form fields from this; missing keys mean missing form fields.
-- `bench` (optional) — `true` when the trainer implements the `--bench` flag ([bench.md](../platform/bench.md)). Gates the dashboard's Auto tune; without it the flag would be silently dropped by `parse_known_args` and a real run would start.
+- `name`: display name in the dashboard. Named by size (`"Veritate 200B"`).
+- `kind`: `"trainer"` (currently the only kind).
+- `flow`: list of valid entry modes. `scratch` = new model; `continue` = resume from a checkpoint.
+- `sizes`: single-entry shape table. Each trainer is standalone at exactly one size; the dashboard fixes the size from the trainer selection (no size dropdown for plugin trainers).
+- `defaults`: every argparse arg the plugin accepts, with its default value. The dashboard generates form fields from this; missing keys mean missing form fields.
+- `bench` (optional): `true` when the trainer implements the `--bench` flag ([bench.md](../platform/bench.md)). Gates the dashboard's Auto tune; without it the flag would be silently dropped by `parse_known_args` and a real run would start.
 
 **`model_type` is NOT a manifest field.** It is a REQUIRED per-RUN choice
 (`language`|`code`|`statistical`|`other`) set on the dashboard run form, not declared in any
@@ -88,11 +88,11 @@ Full signatures and semantics for each namespace are in [trainers/contract.md](.
 
 ## Launch paths
 
-- **Dashboard Training tab** → calls `/trainers/<id>/start` → `trainer_runner.start(plugin_id, args)`.
+- **Dashboard Training tab** → POSTs `/trainers/run` with `id` in the body (`veritate_mri/routes/trainers_routes.py:34`) → `trainer_runner.start(plugin_id, args)`.
 - **Direct CLI** → `python trainers/<id>/trainer.py --arg val ...`. Bypasses the runner.
 - **Programmatic** → `from training import trainer_runner; trainer_runner.start(id, args)`.
 
-The dashboard's Training tab is the canonical path. Direct CLI is valid for experiments but bypasses the heartbeat primary-detection path; the [heartbeat fallback](../architecture/backend/heartbeat.md) (train.csv mtime scan) catches direct-CLI runs.
+`POST /trainers/run` on the live dashboard server is the canonical path (preflight rule 24a). Direct CLI is valid for experiments but bypasses the heartbeat primary-detection path; the [heartbeat fallback](../architecture/backend/heartbeat.md) (train.csv mtime scan) catches direct-CLI runs.
 
 ## Forbidden
 
@@ -105,4 +105,4 @@ The dashboard's Training tab is the canonical path. Direct CLI is valid for expe
 
 - Trainers import the platform surface as `from veritate_core.plugin import save, paths, model, qat, ...`.
 - Subprocess stdout is line-buffered. Use `flush=True` or unbuffered output (`python -u`) so logs appear in the dashboard in real time.
-- Single-instance enforced by `trainer_runner.start()`. Direct CLI launches can be concurrent — be deliberate.
+- Single-instance enforced by `trainer_runner.start()`. Direct CLI launches can be concurrent, so be deliberate.

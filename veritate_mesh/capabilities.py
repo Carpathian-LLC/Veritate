@@ -19,7 +19,7 @@ import platform
 import socket
 import uuid
 
-from .protocol import Capabilities, PROTOCOL_VERSION
+from .protocol import PROTOCOL_VERSION, Capabilities
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -38,7 +38,7 @@ def _load_or_create_node_id() -> str:
     p = _node_id_path()
     if os.path.isfile(p):
         try:
-            with open(p, "r", encoding="utf-8") as f:
+            with open(p, encoding="utf-8") as f:
                 v = f.read().strip()
             if v:
                 return v
@@ -95,7 +95,7 @@ def _veritate_build() -> int:
     try:
         from readers.paths import REPO_ROOT
         p = os.path.join(REPO_ROOT, "versions.json")
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return int((json.load(f) or {}).get("build") or 0)
     except (OSError, ValueError, KeyError):
         return 0

@@ -1,7 +1,10 @@
 # ------------------------------------------------------------------------------------
-# veritate_mri/eval/run_eval.py
+# Developed by Carpathian, LLC.
 # ------------------------------------------------------------------------------------
-# Top-level entry for the byte-level eval harness in its dashboard-facing copy.
+# Legal Notice: Distribution Not Authorized.
+# ------------------------------------------------------------------------------------
+# Notes:
+# - Top-level entry for the byte-level eval harness in its dashboard-facing copy.
 #
 # Two ways to invoke this:
 #
@@ -11,10 +14,10 @@
 #          --suite mmlu,hellaswag,ifeval \
 #          --output report.json
 #
-# 2. Programmatic (used by the dashboard's POST /run/<name>/eval_deep):
-#      from veritate_mri.eval.run_eval import run_suites_on_model
-#      report = run_suites_on_model(brain.model, suites=["mmlu", "hellaswag"],
-#                                   limit=None, verbose=False)
+# 2. Programmatic (used by the dashboard's POST /run/<name>/eval_deep): import
+#    run_suites_on_model from this module and pass the model, suites as a list of
+#    suite names, limit (None for every item), and verbose. It returns the report
+#    dict the CLI would have written.
 #
 # Optional CLI flags:
 #   --device {cpu,mps,cuda}    default: cpu (CPU smoke; MPS is busy with training)
@@ -28,7 +31,9 @@
 # Checkpoint loading uses the same logic as veritate_mri/backends/pytorch.py::Brain so
 # any Veritate-family ckpt (canonical, RoPE 85M, 800M MTP) is supported. Inference is
 # pure single-byte forward; the MTP head (if present) is loaded but unused.
+# veritate_mri/eval/run_eval.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 from __future__ import annotations
 
@@ -39,12 +44,18 @@ import sys
 import time
 
 import torch
+from readers import paths
 
+# ------------------------------------------------------------------------------------
+# Constants
 
-HERE      = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+# veritate_core lives at the repo root; the harness runs both as a module and as
+# a script, so make the import resolvable either way.
+if paths.REPO_ROOT not in sys.path:
+    sys.path.insert(0, paths.REPO_ROOT)
+
+# ------------------------------------------------------------------------------------
+# Functions
 
 
 def load_checkpoint(ckpt_path: str, device: str = "cpu"):
@@ -89,9 +100,12 @@ def run_suites_on_model(model,
     `progress_cb`, if supplied, is invoked as `progress_cb(suite, i, n)` so callers
     can surface live progress (currently used by the dashboard's spinner).
     """
-    from .mmlu      import run_mmlu,      DEFAULT_DATA as MMLU_DEFAULT
-    from .hellaswag import run_hellaswag, DEFAULT_DATA as HS_DEFAULT
-    from .ifeval    import run_ifeval,    DEFAULT_DATA as IF_DEFAULT
+    from .hellaswag import DEFAULT_DATA as HS_DEFAULT
+    from .hellaswag import run_hellaswag
+    from .ifeval import DEFAULT_DATA as IF_DEFAULT
+    from .ifeval import run_ifeval
+    from .mmlu import DEFAULT_DATA as MMLU_DEFAULT
+    from .mmlu import run_mmlu
 
     out: dict = {"suites": {}}
     suites = [s.strip().lower() for s in suites if s and s.strip()]
@@ -148,7 +162,7 @@ def main():
     suites = [s.strip().lower() for s in args.suite.split(",") if s.strip()]
     print(f"[eval] loading {args.ckpt} -> {args.device}")
     t0 = time.perf_counter()
-    model, cfg, shape = load_checkpoint(args.ckpt, device=args.device)
+    model, _cfg, shape = load_checkpoint(args.ckpt, device=args.device)
     print(f"[eval] loaded in {time.perf_counter()-t0:.1f}s; shape={shape}")
 
     sub = run_suites_on_model(

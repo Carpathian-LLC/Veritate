@@ -1,24 +1,28 @@
 ---
-title: Weight Decay
-summary: A gentle pull that keeps the model's internal numbers from growing too large, which helps it generalize instead of memorizing.
-tags: training, settings
+title: weight decay
+date: 2026-07-27
+tags: [settings, training]
+summary: A constant pull of every weight toward zero, applied each step to keep the model from memorizing.
 ---
 
-# Weight Decay
+# weight decay
 
-Weight decay is a small, steady pull that nudges the model's weights (its internal numbers) toward smaller values every step. It is a form of regularization, meaning a technique that discourages the model from over-fitting the training data.
+A small shrink applied to every weight on every step, independent of the gradient.
 
-## Why it matters
+## what it does
 
-Left unchecked, a model can grow large, spiky weights that memorize the training set instead of learning the general pattern. Such a model looks great on data it has seen and poorly on data it has not. Weight decay counteracts that by keeping the numbers modest, which usually improves how well the model handles new inputs.
+Left alone, weights grow to whatever size fits the training data best, including sizes that fit its noise. Decay applies a steady inward pull, so a weight only stays large if the gradient keeps pushing it there. The result is a model that leans on patterns that repeat rather than details it saw once.
 
-## How the dial works
+Both optimizers apply it in decoupled form, meaning the shrink is a separate operation from the gradient step rather than something folded into the gradient. `torch.optim.AdamW` handles the AdamW path; the Muon group applies its own decoupled shrink inside `veritate_core/plugin/optim.py`.
 
-- **Higher** = stronger pull = more regularization. The model is kept simpler, at the risk of under-fitting if overdone.
-- **Lower** (or zero) = little to no pull. The model can fit the data more tightly, at the risk of over-fitting.
+## range and default
 
-## When to change it
+Any non-negative float. Zero disables it.
 
-- Leave it at the recipe's default for most runs; the presets already pick a sensible amount.
-- Nudge it **up** if the model does much better on training data than on validation data (a sign of over-fitting).
-- Nudge it **down** if the model seems to be under-fitting and never learns the data well.
+Every trainer manifest sets `0.1` except `veritate_80m`, which sets `0.18`.
+
+## when to change it
+
+Raise it when validation loss rises while training loss keeps falling: the model is fitting the corpus rather than the language in it.
+
+Lower it when both losses stall high on a small model, where the pull toward zero can cost more capacity than it saves.

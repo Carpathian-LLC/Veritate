@@ -106,7 +106,7 @@ class Addon:
 
         if self.rep_penalty > 1.0 and len(self.window) > 0:
             recent = self.window[-self.rep_lookback :]
-            seen = set(int(x) for x in recent)
+            seen = {int(x) for x in recent}
             for b in seen:
                 v = out[b]
                 if v > 0:
@@ -171,9 +171,7 @@ class Addon:
         if len(self.window) < 2:
             return True
         last2 = bytes(self.window[-2:])
-        if last2[-1:] in WORD_START_TRIGGERS and last2[-2:-1] in SENTENCE_END_BYTES:
-            return True
-        return False
+        return last2[-1:] in WORD_START_TRIGGERS and last2[-2:-1] in SENTENCE_END_BYTES
 
     def _pronoun_forbidden_next_bytes(self):
         prefix = bytes(self.word_buf).lower()

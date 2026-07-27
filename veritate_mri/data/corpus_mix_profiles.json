@@ -14,7 +14,6 @@
         "fineweb_edu",
         "openwebtext10g",
         "wikitext103",
-        "skills",
         "mixed_code_qa_200mb"
       ]
     },
@@ -30,7 +29,6 @@
       "unlisted_topic_share": 0.02,
       "stems": [
         "fineweb_edu",
-        "skills",
         "wikitext103"
       ]
     },

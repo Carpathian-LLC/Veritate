@@ -1,0 +1,105 @@
+# ------------------------------------------------------------------------------------
+# Developed by Carpathian, LLC.
+# ------------------------------------------------------------------------------------
+# Legal Notice: Distribution Not Authorized.
+# ------------------------------------------------------------------------------------
+# Notes:
+# - tool configuration only. veritate is not a distributed package; there is no build backend.
+# - ruff is the single linter for platform code. trainers/ is an upstream checkout and is excluded.
+# - target-version tracks the oldest supported tier (intel mac, torch 2.2), not the dev box.
+# pyproject.toml
+# ------------------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [
+    "venv",
+    ".veritate_venv",
+    "trainers",
+    "models",
+    "experiments",
+    "temp",
+    "facts",
+    "data",
+    "veritate_mri/web",
+]
+
+[tool.ruff.lint]
+select = [
+    "F",    # pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "PIE",  # misc lints
+    "RET",  # return simplification
+    "SIM",  # simplification
+    "ARG",  # unused arguments
+    "T20",  # no print (preflight rule 116)
+    "ERA",  # no commented-out code (preflight rule 16)
+    "TD",   # no TODO/FIXME (preflight rule 16)
+    "FIX",  # no FIXME/XXX (preflight rule 16)
+    "RUF",
+]
+ignore = [
+    "E221",    # aligned assignment operators are the house style
+    "E241",    # aligned dict/tuple values are the house style
+    "E701",    # guard clauses on one line are the house style
+    "E702",    # ditto for paired short statements
+    "E741",    # l/L are the canonical layer index in this codebase
+    "RUF001",  # ambiguous unicode in strings is intentional in dashboard copy
+    "RUF002",
+    "RUF003",
+    "TD003",   # no issue tracker; preflight rule 17 bans ticket refs in source
+    "SIM108",  # explicit if/else beats a dense ternary in numeric code
+    "SIM105",  # contextlib.suppress hides which call is allowed to fail
+]
+
+[tool.ruff.lint.per-file-ignores]
+"veritate.py"                = ["T20"]  # the launcher is a console program; printing is its job
+# app.py/__main__.py: sys.path is set up before the package imports, and the bind URL must
+# reach stdout. runtime/logs.py is an in-memory ring buffer with no stdout sink, so routing
+# that line through logmod would delete the only message saying where the server is.
+"veritate_mri/app.py"        = ["E402", "T20"]
+"veritate_mesh/__main__.py"  = ["E402", "T20"]
+"veritate_mri/tools/**"      = ["T20"]  # subprocess tools report progress on stdout
+"tests/**"                   = ["ARG", "E402"]
+"**/__init__.py"             = ["F401"] # re-exports are the point of a package init
+
+# stdout is the persisted run log for these entry points; logmod's ring buffer dies with the process.
+"veritate_mri/training/native_trainer.py"   = ["T20"]  # trainer subprocess; stdout is .plugin_run.log
+"veritate_mri/training/rag_sft.py"          = ["T20"]  # rag sft subprocess; stdout is .rag_run.log
+"veritate_mri/training/builders/**"         = ["T20"]  # standalone eval-set builders; stdout is the build report
+"veritate_mri/training/checkpoint_probe.py" = ["T20"]  # CLI probe entry; main() lists written artifacts on stdout
+"veritate_mri/eval/**"                      = ["T20"]  # eval CLI; --verbose and the report print, in-process uses progress_cb
+
+# Signatures fixed by a contract, so a parameter a given implementation ignores must still be accepted.
+"veritate_core/model*.py"  = ["ARG002"]  # cross-variant contract methods (rule 11a); callers pass start_pos by keyword
+"veritate_core/qat.py"     = ["ARG004"]  # torch.autograd.Function passes ctx to forward/backward
+
+# The long lines are markdown prose inside the LICENSE_TEXT template written next to the corpus;
+# rewrapping them would change the emitted file. Every code line in this module is under the limit.
+"veritate_mri/tools/build_sft_idk_corpus.py" = ["E501"]
+
+# sys.path bootstrap must precede the veritate_mri package imports (same reason as app.py).
+"veritate_core/plugin/__init__.py"    = ["E402"]
+"veritate_mri/training/save.py"       = ["E402"]
+"veritate_mri/training/export.py"     = ["E402"]
+"veritate_mri/training/pruning.py"    = ["E402"]
+"veritate_mri/tools/diff.py"          = ["E402"]
+"extensions/tests/**"                 = ["ARG", "E402"]  # same as tests/**: stub lambdas mirror the real callee signature
+
+[tool.ruff.lint.isort]
+known-first-party = ["veritate_core", "veritate_mri", "veritate_mesh", "extensions"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["flask.Response"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: takes over five seconds; filter with -m 'not slow' (preflight rule 50)",
+]

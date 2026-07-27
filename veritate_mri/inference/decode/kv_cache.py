@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import contextlib
-from typing import List, Optional, Tuple
 
 import torch
 
@@ -54,7 +53,7 @@ class _LayerKV:
         self.v[:, :, self.length:end, :] = v_new.to(self.dtype)
         self.length = end
 
-    def view(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def view(self) -> tuple[torch.Tensor, torch.Tensor]:
         return (self.k[:, :, :self.length, :], self.v[:, :, :self.length, :])
 
     def bytes(self) -> int:
@@ -67,7 +66,7 @@ class KVCachedDecoder:
     the cross-model contract (embed, run_blocks, ensure_context, project_byte0,
     kv_cache_patch_attn); this decoder calls it blindly."""
 
-    def __init__(self, model, max_T: Optional[int] = None, B: int = 1):
+    def __init__(self, model, max_T: int | None = None, B: int = 1):
         self.model = model
         self.B = B
         self.heads = model.heads
@@ -84,7 +83,7 @@ class KVCachedDecoder:
         self.dtype = dtype
         self._chunk_start_pos = 0
 
-        self.caches: List[_LayerKV] = [
+        self.caches: list[_LayerKV] = [
             _LayerKV(B, self.heads, self.head_dim, max_T, device, dtype)
             for _ in range(self.n_layers)
         ]
@@ -92,7 +91,9 @@ class KVCachedDecoder:
     @contextlib.contextmanager
     def cached(self):
         originals = []
-        get_start = lambda: self._chunk_start_pos
+
+        def get_start():
+            return self._chunk_start_pos
         try:
             for i, blk in enumerate(self.model.blocks):
                 attn = blk.attn
@@ -101,14 +102,15 @@ class KVCachedDecoder:
                 attn.forward = self.model.kv_cache_patch_attn(attn, cache, get_start)
             yield self
         finally:
-            for blk, fwd in zip(self.model.blocks, originals):
+            # strict=False: patching may have raised part-way, leaving fewer saved forwards than blocks.
+            for blk, fwd in zip(self.model.blocks, originals, strict=False):
                 blk.attn.forward = fwd
 
     def reset(self) -> None:
         for c in self.caches:
             c.length = 0
 
-    def cache_lengths(self) -> List[int]:
+    def cache_lengths(self) -> list[int]:
         return [c.length for c in self.caches]
 
     def cache_total_bytes(self) -> int:
@@ -135,7 +137,7 @@ class KVCachedDecoder:
 
     def _forward_chunk(self, ids: torch.Tensor, start_pos: int) -> torch.Tensor:
         m = self.model
-        B, T_new = ids.shape
+        _, T_new = ids.shape
         m.ensure_context(start_pos + T_new)
         self._chunk_start_pos = start_pos
         x = m.embed(ids, start_pos=start_pos)

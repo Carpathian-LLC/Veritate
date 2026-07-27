@@ -16,17 +16,17 @@ The training tab opens the SSE via `EventSource` ([index.js:11447](../../../veri
 
 `train_stream` does not enforce a schema. The payload format is whatever the trainer publishes; dashboards consume what they understand and ignore the rest. Conventional fields used by the Training tab:
 
-- `step`, `loss`, `lr`, `tok_per_s` — same names as the CSV contract.
-- `layer_acts`, `neuron_top`, `lens` — per-token brain-stream telemetry.
+- `step`, `loss`, `lr`, `tok_per_s`: same names as the CSV contract.
+- `layer_acts`, `neuron_top`, `lens`: per-token brain-stream telemetry.
 
 Trainers must opt in by calling `publish()`. Most current trainers do.
 
 ## Dependencies
 
-- [train_routes.py](../../../veritate_mri/routes/train_routes.py) — exposes the SSE endpoint.
-- Frontend [data_flow.md](../frontend/data_flow.md) — SSE consumption.
+- [train_routes.py](../../../veritate_mri/routes/train_routes.py): exposes the SSE endpoint.
+- Frontend [data_flow.md](../frontend/data_flow.md): SSE consumption.
 
 ## Pitfalls
 
-- This is in-process. Trainer subprocesses publish back via... they don't, actually. The publisher is the dashboard process; trainer subprocesses can't directly call into this. Live brain-stream events from a subprocess require an IPC bridge (currently absent — the dashboard polls `train.csv` instead).
+- This is in-process. Trainer subprocesses publish back via... they don't, actually. The publisher is the dashboard process; trainer subprocesses can't directly call into this. Live brain-stream events from a subprocess require an IPC bridge (currently absent, the dashboard polls `train.csv` instead).
 - Queues are per-connection. A slow client doesn't block publishers, but a stalled subscriber can grow its queue indefinitely if not bounded. Bounded queues are recommended for new subscribers.

@@ -29,7 +29,10 @@ _MRI_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file
 if _MRI_ROOT not in sys.path:
     sys.path.insert(0, _MRI_ROOT)
 
-from readers import paths, models, config as cfg_reader, capabilities as caps_reader, trainers as trainers_reader
+from readers import capabilities as caps_reader
+from readers import config as cfg_reader
+from readers import models, paths
+from readers import trainers as trainers_reader
 from runtime import logs as logmod
 
 # ------------------------------------------------------------------------------------
@@ -51,7 +54,7 @@ PLUGIN_ID_ENV = "VERITATE_PLUGIN_ID"
 MODEL_TYPE_ENV = "VERITATE_MODEL_TYPE"
 
 # Dumps that only make sense for a model whose corpus is text. Skipped ONLY
-# for `statistical` / `other` model types — those train on non-text data (time
+# for `statistical` / `other` model types: those train on non-text data (time
 # series, tabular, image bytes) where reading/grammar/math scores are truly
 # meaningless. Code models DO train on text and now get the full suite;
 # grammar and reasoning probes are informative for a code trainer, and the
@@ -90,7 +93,7 @@ def _validate_name(name):
     if not models.is_valid_name(name):
         raise ValueError(
             f"invalid model name: {name!r}. expected <name>_<param>_<precision>_<version> "
-            "per documentation/training/model_naming.md"
+            "per developer_documentation/training/model_naming.md"
         )
 
 
@@ -117,7 +120,7 @@ def compose_name(*args, **kwargs):
         size = size.strip()
         # Size is auto-appended; if the name already carries it (e.g.
         # name='chat200m', size='200m'), do not produce 'chat200m_200m'.
-        if slug == size or slug.endswith(NAME_SEP + size) or slug.endswith(size):
+        if slug == size or slug.endswith((NAME_SEP + size, size)):
             return slug
         return NAME_SEP.join([slug, size])
     # Legacy 4-arg form.
@@ -157,7 +160,7 @@ def sha256_file(path):
         st = None
     if st is not None and os.path.isfile(cache_path):
         try:
-            with open(cache_path, "r", encoding="utf-8") as f:
+            with open(cache_path, encoding="utf-8") as f:
                 line = f.read().strip()
             parts = line.split()
             if len(parts) == 3:
@@ -218,9 +221,11 @@ def _auto_description(name, args):
         if spec: parts.append(" ".join(spec))
         shape = args.get("shape") if isinstance(args.get("shape"), dict) else None
         if shape:
-            parts.append(f"layers={shape.get('layers','?')} hidden={shape.get('hidden','?')} ffn={shape.get('ffn','?')} heads={shape.get('heads','?')} seq={shape.get('seq','?')}")
+            parts.append(f"layers={shape.get('layers','?')} hidden={shape.get('hidden','?')} "
+                         f"ffn={shape.get('ffn','?')} heads={shape.get('heads','?')} seq={shape.get('seq','?')}")
         elif args.get("layers"):
-            parts.append(f"layers={args.get('layers')} hidden={args.get('hidden')} ffn={args.get('ffn')} heads={args.get('heads')} seq={args.get('seq')}")
+            parts.append(f"layers={args.get('layers')} hidden={args.get('hidden')} ffn={args.get('ffn')} "
+                         f"heads={args.get('heads')} seq={args.get('seq')}")
         if args.get("training"):    parts.append(str(args["training"]))
         if args.get("from_model"):  parts.append(f"warm-start from {args['from_model']}")
         if args.get("total_steps"): parts.append(f"total_steps={args['total_steps']}")
@@ -315,7 +320,7 @@ def _sync_capabilities(name, step, args):
             logmod.warn("save", f"capability mark failed: {e}")
 
 
-def _sync_model_meta(name, args):
+def _sync_model_meta(name):
     """Promote model_type (from the launch env) into config.json's training_args. The
     trainer drops --model_type (not a manifest key, so parse_known_args discards it),
     so it never lands in config.json on its own, leaving the dashboard, the eval-deep
@@ -326,7 +331,7 @@ def _sync_model_meta(name, args):
     if not os.path.isfile(cfg_path):
         return
     try:
-        with open(cfg_path, "r", encoding="utf-8") as f:
+        with open(cfg_path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return
@@ -354,7 +359,7 @@ def _sync_qat_flag(name, args):
     if not os.path.isfile(cfg_path):
         return
     try:
-        with open(cfg_path, "r", encoding="utf-8") as f:
+        with open(cfg_path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return
@@ -398,7 +403,7 @@ def truncate_train_csv_at(name, resume_step):
     if not os.path.isfile(p):
         return 0
     try:
-        with open(p, "r", encoding="utf-8", newline="") as f:
+        with open(p, encoding="utf-8", newline="") as f:
             reader = csv.reader(f)
             rows = list(reader)
     except OSError:
@@ -473,12 +478,23 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
     Returns: the absolute path of the .pt file written.
     """
     import torch
+
     from .checkpoint_probe import (
-        dump_probe, dump_classroom, dump_grades, dump_concepts,
-        dump_math, dump_grammar, dump_reasoning,
-        dump_surprise, dump_quant_kl, dump_generation,
-        dump_writing_health, dump_reading_comprehension,
-        sample_probe_prompts, PROBE_PROMPT, generation_prompt,
+        PROBE_PROMPT,
+        dump_classroom,
+        dump_concepts,
+        dump_generation,
+        dump_grades,
+        dump_grammar,
+        dump_math,
+        dump_probe,
+        dump_quant_kl,
+        dump_reading_comprehension,
+        dump_reasoning,
+        dump_surprise,
+        dump_writing_health,
+        generation_prompt,
+        sample_probe_prompts,
     )
 
     _validate_name(name)
@@ -494,7 +510,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         else:
             args.setdefault("model_type", _env_mt)
     _ensure_config(name, args)
-    _sync_model_meta(name, args)
+    _sync_model_meta(name)
     _validate_description(name, args)
     _sync_capabilities(name, step, args)
 
@@ -605,9 +621,9 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         try:
             fn()
         except Exception as e:
-            # print too: trainer subprocesses only persist stdout (.plugin_run.log);
+            # print stays: trainer subprocesses only persist stdout (.plugin_run.log);
             # the logmod ring buffer dies with the process and hides dump failures.
-            print(f"DUMP FAILED: {label}: {type(e).__name__}: {e}", flush=True)
+            print(f"DUMP FAILED: {label}: {type(e).__name__}: {e}", flush=True)  # noqa: T201
             logmod.error("save", f"dump {label} failed: {e}")
         finally:
             if cuda_avail:

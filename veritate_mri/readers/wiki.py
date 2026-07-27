@@ -11,9 +11,9 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import html
 import os
 import re
-import html
 
 from . import paths as paths_mod
 
@@ -107,7 +107,7 @@ def load_entry(category, slug):
     p = paths_mod.wiki_entry_path(category, slug)
     if not os.path.isfile(p):
         return None
-    with open(p, "r", encoding="utf-8") as f:
+    with open(p, encoding="utf-8") as f:
         text = f.read()
     fm, body = _split_frontmatter(text)
     meta = _parse_frontmatter(fm)
@@ -119,7 +119,7 @@ def load_entry(category, slug):
 
 
 def _read_meta(path):
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
     fm, _ = _split_frontmatter(text)
     return _parse_frontmatter(fm)
@@ -230,8 +230,7 @@ def render_markdown(text):
             quote_buf.append(m.group(1))
             i += 1
             continue
-        else:
-            flush_quote()
+        flush_quote()
         if _is_table_start(lines, i):
             flush_para(); close_lists()
             j, html_block = _render_table(lines, i)
@@ -332,9 +331,9 @@ def _inline(text):
     def link_sub(m):
         href = m.group(2)
         label = m.group(1)
-        if href.startswith("http://") or href.startswith("https://"):
+        if href.startswith(("http://", "https://")):
             return f'<a href="{href}" target="_blank" rel="noopener">{label}</a>'
-        if href.startswith("/") or href.startswith("#"):
+        if href.startswith(("/", "#")):
             return f'<a href="{href}">{label}</a>'
         # Relative path inside the repo: keep the label visible, show
         # the path muted alongside it. We don't link because the wiki
@@ -346,5 +345,4 @@ def _inline(text):
     def restore(_m):
         s = spans[idx[0]]; idx[0] += 1
         return s
-    text = re.sub(INLINE_PLACEHOLDER, restore, text)
-    return text
+    return re.sub(INLINE_PLACEHOLDER, restore, text)

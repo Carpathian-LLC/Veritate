@@ -95,7 +95,7 @@ for step in range(max_new):
     chain.observe(nxt)
 ```
 
-The chain pipes `bias_logits` through addons in selection order. `observe` and `reset` are broadcast to every addon. Addons do not see each other; they only see the logits the chain hands them. Two addons that produce conflicting bias on the same byte simply add their biases.
+The chain pipes `bias_logits` through addons in selection order. `observe` and `reset` are broadcast to every addon. Addons do not see each other; they only see the logits the chain hands them. Two addons that produce conflicting bias on the same byte add their biases.
 
 ## sample integration points
 
@@ -104,8 +104,9 @@ Addons currently apply to:
 | backend | path | wiring |
 |---|---|---|
 | PyTorch | `veritate_mri/inference/backends/pytorch.py::Brain.stream` | `addons_chain` kwarg. The dashboard's `/generate?addons=<csv>` builds a chain from the registry and passes it through. |
+| C engine | `veritate_engine/v1/src/model.c::sample_token_ext` | `addons_csv` token in the `chat_traced` wire header, sent by `veritate_mri/inference/backends/c_engine.py`. |
 
-The C engine path does not yet support addons. Addon checkboxes have no effect when `backend=c`. Porting an addon to the engine is a separate workstream: the same three-method contract is mirrored as a C function-pointer table.
+The C engine mirrors this contract as a function-pointer vtable; an addon must be ported to C separately to run there. Contract: [c_engine_port.md](c_engine_port.md).
 
 ## API endpoints
 

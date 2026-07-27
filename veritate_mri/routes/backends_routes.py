@@ -21,19 +21,39 @@ import time
 
 import numpy as np
 from flask import Response, current_app, request
-
 from inference.addons import build_chain, list_addons
 from inference.agent.loop import AgentLoop
 from inference.agent.rag import build_rag_prefix, crude_compressor, make_word_ppl_compressor
 from inference.agent.tools import build_default_toolbox
+from inference.agent.tools.retriever import CORPUS_EXTENSIONS
 from inference.agent.tools.retriever import make_tool as _make_rag_tool
 from inference.backends.c_engine import CTracedSubprocess
 from inference.backends.pytorch import (
-    ACTIVATION_INT8_SCALE, NEURON_TOP_K, load_memory,
+    ACTIVATION_INT8_SCALE,
+    ADAPTIVE_THRESHOLD_DEFAULT,
+    MAX_NEW_DEFAULT,
+    NEURON_TOP_K,
+    NO_REPEAT_NGRAM_OFF,
+    REP_PENALTY_OFF,
+    REP_WINDOW_OFF,
+    TEMPERATURE_DEFAULT,
+    TOP_K_DEFAULT,
+    load_memory,
 )
 from readers import (
-    bin as binr, capabilities as caps_reader, checkpoints,
-    config as cfg_reader, engine, models, paths,
+    bin as binr,
+)
+from readers import (
+    capabilities as caps_reader,
+)
+from readers import (
+    checkpoints,
+    engine,
+    models,
+    paths,
+)
+from readers import (
+    config as cfg_reader,
 )
 from runtime import logs as logmod
 from runtime import settings as settings_mod
@@ -60,6 +80,21 @@ AGENT_MAX_TURNS_CAP  = 16
 AGENT_BEST_OF_N_CAP  = 8
 MAX_NEW_CAP          = 4096
 BYTE_VOCAB           = 256
+# Softmax temperature applied to raw logits before the dashboard renders a
+# probability bar. Fixed scale, not a sampling knob: it only shapes what the
+# lens/candidate panels display, so it must be identical on both call sites.
+LENS_LOGIT_SCALE     = 8.0
+U8_MAX               = 255.0
+EPS                  = 1e-9
+LOG2_EPS             = 1e-12
+NEURON_AFFINITY_TOP_K    = 8
+NEURON_PREDECESSOR_TOP_K = 10
+NEURON_SUCCESSOR_TOP_K   = 8
+AGENT_MAX_TURNS_DEFAULT  = 6
+AGENT_BEST_OF_N_DEFAULT  = 1
+AGENT_SEED_DEFAULT       = 0
+ABLATE_OFF           = -1
+DEFAULT_BACKEND      = "c"
 SSE_HEADERS          = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 PATH_LOOPBACK_ONLY   = "path params (rag/corpus/fs_root) are restricted to loopback (local) requests"
 
@@ -154,8 +189,8 @@ def _reduce_full(raw, shape):
         grouped = act[:usable].reshape(BUCKETS, DS)
         bucket_vals = grouped.max(axis=1)
         bucket_argmax = grouped.argmax(axis=1)
-        mx = max(1e-9, float(bucket_vals.max()))
-        u8 = ((bucket_vals / mx) * 255.0).clip(0, 255).astype(np.uint8)
+        mx = max(EPS, float(bucket_vals.max()))
+        u8 = ((bucket_vals / mx) * U8_MAX).clip(0, U8_MAX).astype(np.uint8)
         # base64-pack the per-layer uint8 grids (~2.6x smaller than JSON int arrays,
         # lossless). Frontend decodeFfnField() unpacks; old clients read number[][].
         ffn_full.append(base64.b64encode(u8.tobytes()).decode("ascii"))
@@ -171,10 +206,10 @@ def _reduce_full(raw, shape):
         for h in range(n_heads):
             w = raw["attention"][layer, h, :R].astype(np.float32)
             s = float(w.sum())
-            if s > 1e-9: w = w / s
+            if s > EPS: w = w / s
             info_flow_pos += w
 
-    flow_max = max(1e-9, float(info_flow_pos.max()))
+    flow_max = max(EPS, float(info_flow_pos.max()))
     flow_idx = np.argsort(-info_flow_pos)[:min(INFO_FLOW_TOP_K, R)]
     info_flow = [{"p": int(p), "w": round(float(info_flow_pos[p]) / flow_max, 3)}
                  for p in flow_idx]
@@ -190,7 +225,7 @@ def _reduce_full(raw, shape):
     for layer in range(n_layers):
         ll = raw["lens_logits"][layer].astype(np.float64)
         mx = max(1.0, float(np.abs(ll).max()))
-        scaled = ll / mx * 8.0
+        scaled = ll / mx * LENS_LOGIT_SCALE
         e = np.exp(scaled - scaled.max())
         probs = e / e.sum()
         top_idx = np.argsort(-probs)[:DLA_TOP_K_LENS]
@@ -230,15 +265,15 @@ def _assemble_frame(raw, reduced, fwd_ms, shape):
 
     logits = raw["logits"].astype(np.float64)
     mx = max(1.0, float(np.abs(logits).max()))
-    scaled = logits / mx * 8.0
+    scaled = logits / mx * LENS_LOGIT_SCALE
     e = np.exp(scaled - scaled.max())
     probs = e / e.sum()
     top_idx = np.argsort(-probs)[:DLA_TOP_K_CAND]
     cand = [{"b": int(b), "p": round(float(probs[b]), 3)} for b in top_idx]
     sampled = raw["byte"]
     argmax_byte = int(raw.get("argmax_byte", int(np.argmax(logits))))
-    entropy_bits  = float(-(probs * np.log2(probs + 1e-12)).sum())
-    surprise_bits = float(-math.log2(float(probs[sampled]) + 1e-12))
+    entropy_bits  = float(-(probs * np.log2(probs + LOG2_EPS)).sum())
+    surprise_bits = float(-math.log2(float(probs[sampled]) + LOG2_EPS))
 
     decisiveness = [round(float(x), 3) for x in raw.get("decisiveness", np.zeros(n_layers)).tolist()]
 
@@ -315,9 +350,10 @@ def _build_c_mri_frame_compact(raw, fwd_ms, shape):
     return _assemble_frame(raw, _reduce_compact(raw, shape), fwd_ms, shape)
 
 
-def _c_engine_stream(cfg, prompt, max_new, temperature=0.7, top_k=40,
-                     ablate_layer=-1, ablate_neuron=-1, addons_csv="",
-                     rep_window=0, rep_penalty=0.0, no_repeat_ngram=0, trace=False):
+def _c_engine_stream(cfg, prompt, max_new, temperature=TEMPERATURE_DEFAULT, top_k=TOP_K_DEFAULT,
+                     ablate_layer=ABLATE_OFF, ablate_neuron=ABLATE_OFF, addons_csv="",
+                     rep_window=REP_WINDOW_OFF, rep_penalty=REP_PENALTY_OFF,
+                     no_repeat_ngram=NO_REPEAT_NGRAM_OFF, trace=False):
     sub = cfg["C_SUBPROCESS"]
     if sub is None:
         yield {"kind": "error", "message": "c chat_traced subprocess not running"}
@@ -350,11 +386,16 @@ def _c_engine_stream(cfg, prompt, max_new, temperature=0.7, top_k=40,
     want_compact = bool(trace and settings_mod.get().get("mri_compact_frames", False))
     try:
         last = time.perf_counter()
+        # Hand the same turn markers to the engine. Without them Python stops at the
+        # marker while the engine keeps generating to max_new, so the abandoned
+        # generator has to be drained and the subprocess respawned, discarding its
+        # prefix state cache. With them the engine ends the turn and emits TEND.
         for raw in sub.stream(prompt, temperature, top_k, max_new,
                               ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
                               addons_csv=addons_csv, rep_window=rep_window,
                               rep_penalty=rep_penalty, no_repeat_ngram=no_repeat_ngram,
-                              do_trace=trace, compact=want_compact):
+                              do_trace=trace, compact=want_compact,
+                              stop_sequences=_chat_stop_seq(prompt) or ()):
             now = time.perf_counter()
             fwd_ms = (now - last) * 1000.0
             last = now
@@ -564,7 +605,8 @@ def ensure_c_loaded(cfg, model_override=None):
         boost = binr.act_boost(model_dir)
         qat = cfg_reader.qat_enabled(model_dir)
         if boost is not None and boost > 1 and not qat:
-            logmod.warn("backends", f"c engine: {model_dir} act_boost={boost} and config.qat_enabled is not set; output may be gibberish")
+            logmod.warn("backends", f"c engine: {model_dir} act_boost={boost} and config.qat_enabled "
+                                    "is not set; output may be gibberish")
         cfg["C_BLOCKED_REASON"] = None
         cfg["C_BLOCKED_MODEL"]  = None
         _spawn_c_subprocess(cfg, exe, model)
@@ -612,7 +654,7 @@ def _rag_path_signature(path):
     total  = 0
     for dirpath, _, fnames in os.walk(path):
         for fn in fnames:
-            if not fn.lower().endswith((".txt", ".md", ".rst", ".text")):
+            if not fn.lower().endswith(CORPUS_EXTENSIONS):
                 continue
             try:
                 st = os.stat(os.path.join(dirpath, fn))
@@ -674,7 +716,7 @@ def _parse_rag_hits(formatted):
 
 
 def _build_constraint(spec):
-    from inference.decode import JSONConstraint, VocabConstraint, StopOnConstraint
+    from inference.decode import JSONConstraint, StopOnConstraint, VocabConstraint
     s = spec.strip()
     if s == "json":
         return JSONConstraint()
@@ -733,7 +775,8 @@ def register(app):
                 )
                 if same:
                     return _backends_status_payload(cfg)
-                logmod.info("backends", f"pytorch swap: {cur_m} step {cur_s} -> {body_model} step {body_step or 'latest'}")
+                logmod.info("backends", f"pytorch swap: {cur_m} step {cur_s} -> "
+                                        f"{body_model} step {body_step or 'latest'}")
                 cfg["BRAIN"] = None
                 cfg["BRAIN_MODEL"] = None
                 cfg["BRAIN_STEP"]  = None
@@ -745,7 +788,8 @@ def register(app):
                     cfg["DEFAULT_MODEL"] = name
                     cfg["DEFAULT_STEP"]  = checkpoints.latest_step(name)
             if not name or not models.exists(name):
-                return ({"ok": False, "error": "no models with checkpoints under models/. train one first or pass an explicit model name."}, 400)
+                return ({"ok": False, "error": "no models with checkpoints under models/. "
+                                               "train one first or pass an explicit model name."}, 400)
             step = body_step or (None if did_swap else cfg.get("DEFAULT_STEP")) or checkpoints.latest_step(name)
             if step is None:
                 return ({"ok": False, "error": f"no checkpoints under models/{name}/"}, 400)
@@ -756,7 +800,8 @@ def register(app):
                 msg = user_error(e)
                 cfg["BRAIN_LAST_ERROR"] = msg
                 if isinstance(e, RuntimeError) and "PyTorch inference is not enabled" in str(e):
-                    logmod.warn("backends", f"pytorch: no vanilla checkpoints found (default '{name}' is non-vanilla and fallback search yielded nothing)")
+                    logmod.warn("backends", f"pytorch: no vanilla checkpoints found (default '{name}' "
+                                            "is non-vanilla and fallback search yielded nothing)")
                     return ({"ok": False, "error": msg, "reason": "non_vanilla"}, 400)
                 logmod.error("backends", f"pytorch load failed: {type(e).__name__}: {e}")
                 return ({"ok": False, "error": msg}, 500)
@@ -805,8 +850,7 @@ def register(app):
         name  = cfg.get("BRAIN_MODEL") or cfg.get("DEFAULT_MODEL")
         stories = []
         if name:
-            mem_path = os.path.join(paths.model_dir(name), "neuron_memory.json")
-            mem = load_memory(mem_path)
+            mem = load_memory(_brain.neuron_memory_path(name))
             if mem is not None:
                 stories = (mem.get(str(layer), {}) or {}).get(str(nid), []) or []
         if brain is None:
@@ -823,9 +867,9 @@ def register(app):
         cfg["BRAIN_LAST_USED"] = time.time()
         try:
             with brain.lock:
-                affinity     = brain.neuron_byte_affinity(layer, nid, top_k=8)
-                predecessors = brain.neuron_predecessors(layer, nid, top_k=10)
-                successors   = brain.neuron_successors(layer, nid, top_k=8)
+                affinity     = brain.neuron_byte_affinity(layer, nid, top_k=NEURON_AFFINITY_TOP_K)
+                predecessors = brain.neuron_predecessors(layer, nid, top_k=NEURON_PREDECESSOR_TOP_K)
+                successors   = brain.neuron_successors(layer, nid, top_k=NEURON_SUCCESSOR_TOP_K)
                 stats        = brain.neuron_stats(layer, nid)
         except Exception as e:
             logmod.error("neuron", f"layer={layer} nid={nid}: {e}")
@@ -904,34 +948,35 @@ def register(app):
     def generate():
         cfg = current_app.config
         prompt        = request.args.get("prompt", "")
-        backend       = request.args.get("backend", "c").lower()
+        backend       = request.args.get("backend", DEFAULT_BACKEND).lower()
         addons_csv    = request.args.get("addons", "")
         addons_sel    = [s.strip() for s in addons_csv.split(",") if s.strip()]
         fast_mode     = (request.args.get("fast", "") or "").strip().lower()
         constrained_v = (request.args.get("constrained", "") or "").strip()
         try:
-            temperature   = float(request.args.get("temperature", "0.7"))
-            top_k         = int(request.args.get("top_k", "40"))
-            max_new       = int(request.args.get("max_new", "200"))
-            ablate_layer  = int(request.args.get("ablate_layer",  "-1"))
-            ablate_neuron = int(request.args.get("ablate_neuron", "-1"))
+            temperature   = float(request.args.get("temperature", TEMPERATURE_DEFAULT))
+            top_k         = int(request.args.get("top_k", TOP_K_DEFAULT))
+            max_new       = int(request.args.get("max_new", MAX_NEW_DEFAULT))
+            ablate_layer  = int(request.args.get("ablate_layer",  ABLATE_OFF))
+            ablate_neuron = int(request.args.get("ablate_neuron", ABLATE_OFF))
         except (TypeError, ValueError) as e:
             return _sse_error_response(user_error(e, "bad query param"))
         top_k   = max(1, min(top_k, BYTE_VOCAB))
         max_new = max(1, min(max_new, MAX_NEW_CAP))
         try:
-            adaptive_threshold = float(request.args.get("adaptive_threshold", "0.8"))
+            adaptive_threshold = float(request.args.get("adaptive_threshold", ADAPTIVE_THRESHOLD_DEFAULT))
         except ValueError:
-            adaptive_threshold = 0.8
+            adaptive_threshold = ADAPTIVE_THRESHOLD_DEFAULT
         adaptive_threshold = max(0.0, min(1.0, adaptive_threshold))
-        # Repetition control (chat decode). Absent params default OFF, so
-        # autocomplete and the C-vs-PyTorch parity path are unchanged.
+        # Repetition control (chat decode). Absent params default OFF.
         try:
-            rep_window = max(0, int(request.args.get("rep_window", "0")))
-            rep_penalty = max(0.0, float(request.args.get("rep_penalty", "0")))
-            no_repeat_ngram = max(0, int(request.args.get("no_repeat_ngram", "0")))
+            rep_window = max(REP_WINDOW_OFF, int(request.args.get("rep_window", REP_WINDOW_OFF)))
+            rep_penalty = max(REP_PENALTY_OFF, float(request.args.get("rep_penalty", REP_PENALTY_OFF)))
+            no_repeat_ngram = max(NO_REPEAT_NGRAM_OFF,
+                                  int(request.args.get("no_repeat_ngram", NO_REPEAT_NGRAM_OFF)))
         except ValueError:
-            rep_window, rep_penalty, no_repeat_ngram = 0, 0.0, 0
+            rep_window, rep_penalty, no_repeat_ngram = (REP_WINDOW_OFF, REP_PENALTY_OFF,
+                                                        NO_REPEAT_NGRAM_OFF)
 
         if backend == "c":
             if cfg.get("C_SUBPROCESS") is None:
@@ -1008,7 +1053,8 @@ def register(app):
             rp = rag_press.split(":", 1) if rag_press else [""]
             rp_kind = rp[0]
             if rp_kind not in ("", "off", "crude", "word_ppl"):
-                return ({"error": f"unknown rag_compress: {rag_press!r}. Allowed: off, crude, word_ppl[:keep_frac]."}, 400)
+                return ({"error": f"unknown rag_compress: {rag_press!r}. "
+                                  "Allowed: off, crude, word_ppl[:keep_frac]."}, 400)
             rp_keep = None
             if rp_kind == "word_ppl" and len(rp) == 2:
                 try:
@@ -1114,11 +1160,13 @@ def register(app):
             return Response(stream_err(), mimetype="text/event-stream",
                             headers=SSE_HEADERS)
         try:
-            max_turns   = max(1, min(int(request.args.get("max_turns", "6")), AGENT_MAX_TURNS_CAP))
-            best_of_n   = max(1, min(int(request.args.get("best_of_n", "1")), AGENT_BEST_OF_N_CAP))
-            temperature = float(request.args.get("temperature", "0.7"))
-            top_k       = int(request.args.get("top_k", "40"))
-            seed        = int(request.args.get("seed", "0"))
+            max_turns   = max(1, min(int(request.args.get("max_turns", AGENT_MAX_TURNS_DEFAULT)),
+                                     AGENT_MAX_TURNS_CAP))
+            best_of_n   = max(1, min(int(request.args.get("best_of_n", AGENT_BEST_OF_N_DEFAULT)),
+                                     AGENT_BEST_OF_N_CAP))
+            temperature = float(request.args.get("temperature", TEMPERATURE_DEFAULT))
+            top_k       = int(request.args.get("top_k", TOP_K_DEFAULT))
+            seed        = int(request.args.get("seed", AGENT_SEED_DEFAULT))
         except (TypeError, ValueError) as e:
             return ({"error": user_error(e, "bad query param")}, 400)
         corpus_path = (request.args.get("corpus", "") or "").strip() or None
@@ -1139,7 +1187,8 @@ def register(app):
             available = set(toolbox.names())
             toolbox._tools = {n: t for n, t in toolbox._tools.items() if n in wanted and n in available}
             if not toolbox._tools:
-                return ({"error": "no usable tools: none of the requested tools are registered (retrieve needs a corpus; fs_read needs a folder)"}, 400)
+                return ({"error": "no usable tools: none of the requested tools are registered "
+                                  "(retrieve needs a corpus; fs_read needs a folder)"}, 400)
         loop = AgentLoop(brain, toolbox, max_turns=max_turns,
                          temperature=temperature, top_k_sample=top_k,
                          best_of_n=best_of_n, seed_base=seed)

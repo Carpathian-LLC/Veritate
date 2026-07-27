@@ -21,11 +21,16 @@
 from __future__ import annotations
 
 import json
-import os
 import random
 import re
+import sys
 from pathlib import Path
 
+_MRI_ROOT = str(Path(__file__).resolve().parents[3])
+if _MRI_ROOT not in sys.path:
+    sys.path.insert(0, _MRI_ROOT)
+
+from readers import paths  # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -214,7 +219,7 @@ def build_band_hard(level: str, source_path: Path, rng: random.Random) -> dict |
     followers_by_preceder: dict[str, set[str]] = {}
     content_set = set()
     for i in range(1, len(words)):
-        ps, pe, pw = words[i - 1]
+        _ps, _pe, pw = words[i - 1]
         cs, ce, cw = words[i]
         # Only register the follower if it's a content word and the boundary
         # between P and the follower is "word, then maybe space/punct, then word"
@@ -242,7 +247,7 @@ def build_band_hard(level: str, source_path: Path, rng: random.Random) -> dict |
     # We need the preceding word words[i-1] for distractor lookup.
     callbacks = []
     for i in range(1, len(words)):
-        ps, pe, pw = words[i - 1]
+        _ps, _pe, pw = words[i - 1]
         cs, ce, cw = words[i]
         if cw not in occurrences:
             continue
@@ -262,7 +267,8 @@ def build_band_hard(level: str, source_path: Path, rng: random.Random) -> dict |
         callbacks.append((cs, ce, cw, pw))
 
     if len(callbacks) < HARD_ITEMS_PER_BAND // 2:
-        print(f"  [skip-hard] {level}: only {len(callbacks)} callback-eligible slots (need >= {HARD_ITEMS_PER_BAND // 2})")
+        print(f"  [skip-hard] {level}: only {len(callbacks)} callback-eligible slots (need >= "
+              f"{HARD_ITEMS_PER_BAND // 2})")
         return None
 
     rng.shuffle(callbacks)
@@ -309,7 +315,8 @@ def build_band_hard(level: str, source_path: Path, rng: random.Random) -> dict |
         used_offsets.add(cs)
 
     if len(items) < HARD_ITEMS_PER_BAND // 2:
-        print(f"  [skip-hard] {level}: only {len(items)} items survived distractor filtering (skipped {skipped_no_distractors} for no POS-matched distractors)")
+        print(f"  [skip-hard] {level}: only {len(items)} items survived distractor filtering (skipped "
+              f"{skipped_no_distractors} for no POS-matched distractors)")
         return None
 
     return {
@@ -332,9 +339,8 @@ def build_band_hard(level: str, source_path: Path, rng: random.Random) -> dict |
 
 
 def main():
-    here = Path(__file__).resolve().parent
-    sources_dir = here.parent / "grade_eval" / "sources"
-    out_dir = here.parent / "grade_eval"
+    sources_dir = Path(paths.GRADE_EVAL_SOURCES_ROOT)
+    out_dir = Path(paths.GRADE_EVAL_ROOT)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"sources: {sources_dir}")
@@ -343,12 +349,12 @@ def main():
 
     print("=== easy (local context completion) ===")
     for level in LEVELS:
-        source_path = sources_dir / f"grade_{level}_source.txt"
+        source_path = Path(paths.grade_source_path(level))
         rng = random.Random(SEED + LEVELS.index(level))
         band = build_band(level, source_path, rng)
         if band is None:
             continue
-        out_path = out_dir / f"comprehension_{level}.json"
+        out_path = Path(paths.comprehension_path(level))
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(band, f, ensure_ascii=False, indent=1)
         print(f"  {level:8s}  {band['n_items']:3d} items  ->  {out_path.name}")
@@ -356,13 +362,13 @@ def main():
     print()
     print("=== hard (long-range entity reference) ===")
     for level in LEVELS:
-        source_path = sources_dir / f"grade_{level}_source.txt"
+        source_path = Path(paths.grade_source_path(level))
         # Distinct seed offset so the hard-mode rng samples don't correlate with easy mode.
         rng = random.Random(SEED + 1000 + LEVELS.index(level))
         band = build_band_hard(level, source_path, rng)
         if band is None:
             continue
-        out_path = out_dir / f"comprehension_hard_{level}.json"
+        out_path = Path(paths.comprehension_path(level, hard=True))
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(band, f, ensure_ascii=False, indent=1)
         print(f"  {level:8s}  {band['n_items']:3d} items  ->  {out_path.name}")

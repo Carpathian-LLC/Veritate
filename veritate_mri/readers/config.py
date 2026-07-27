@@ -10,7 +10,6 @@
 # Imports:
 
 import json
-import os
 
 from . import paths
 
@@ -23,7 +22,7 @@ from . import paths
 def load(name):
     p = paths.config_path(name)
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return None

@@ -9,7 +9,7 @@ This is a versioned contract. Adding, removing, or changing the signature of any
 
 Total parameters scale linearly with `n_experts` while active parameters per byte stay near a single expert's footprint. Combined with ternary weights ([developer_documentation/kernels/ternary.md](ternary.md)), an 8-expert 1B-class model has a per-byte active footprint that fits the 96 MB L3 of the 9800X3D. Without MoE, the same accuracy band requires a dense 1B model that misses cache catastrophically.
 
-MEGA is the canonical MoE trainer (`trainers/veritate_mega/`). It produces top-1 8-expert checkpoints. The engine reads those.
+MoE checkpoints come from any trainer launched with the `trunk=hybrid_moe` reserved flag (`trainers/common/vanilla_trainer.py`), which builds `VeritatePatched` with `global_ffn="moe"` (`veritate_core/model_moe.py::MoEFFN`). The engine reads the exported v11 binary.
 
 # ------------------------------------------------------------------------------------
 # block layout
@@ -72,13 +72,13 @@ The loader refuses any v11 binary with `router_topk > 1` -- the multi-expert wei
 # ------------------------------------------------------------------------------------
 # bitwise parity contract
 
-Per claude_preflight rule 23: every kernel produces bitwise-identical output to its scalar reference before shipping. For the MoE path:
+Per claude_preflight rule 24: every kernel produces bitwise-identical output to its scalar reference before shipping. For the MoE path:
 
 1. Top-1 expert index from the engine's router must match PyTorch's `top_i[:, 0]` for the same token, given the same router weights and hidden state.
 2. Per-expert FFN output (post-`ffn_down` int32) must match the corresponding PyTorch expert's output bit-for-bit, since the kernel is the same INT8 VNNI matmul.
-3. Block residual after the MoE FFN must match the PyTorch MEGA forward at every layer, on a representative checkpoint, with cosine distance < 0.01.
+3. Block residual after the MoE FFN must match the PyTorch `hybrid_moe` forward at every layer, on a representative checkpoint, with cosine distance < 0.01.
 
-Validation is gated on the export pipeline writing a v11 binary from a QAT'd MEGA checkpoint.
+Validation is gated on the export pipeline writing a v11 binary from a QAT'd `hybrid_moe` checkpoint.
 
 # ------------------------------------------------------------------------------------
 # what this contract does NOT cover

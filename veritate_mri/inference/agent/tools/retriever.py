@@ -20,19 +20,38 @@ import math
 import os
 import re
 from collections import Counter, defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from . import Tool
+from . import ERROR_PREFIX, Tool
 
 # ------------------------------------------------------------------------------------
 # Constants
 
+# File suffixes indexed when the corpus path is a directory. Shared with the
+# dashboard's corpus-signature walk (routes/backends_routes.py) so both see the
+# same set of files.
+CORPUS_EXTENSIONS = (".txt", ".md", ".rst", ".text")
+
 _CHUNK_BYTES   = 1024
 _CHUNK_OVERLAP = 128
 _TOP_K_DEFAULT = 4
+_K_MIN         = 1
+_K_MAX         = 16
+_PREVIEW_CHARS = 480
 
 _BM25_K1 = 1.5
 _BM25_B  = 0.75
+
+_ARG_QUERY = "query"
+_ARG_K     = "k"
+
+_TOOL_NAME        = "retrieve"
+_TOOL_DESCRIPTION = "Search a local text corpus by keywords. Returns top-K chunks by BM25 score."
+_QUERY_DOC        = "Search query (free text). Tokens are matched case-insensitively."
+_K_DOC_FMT        = "Number of results to return (default {default}, max {maximum})."
+_HIT_FMT          = "[{source} @{offset}] (score {score:.2f}) {preview}"
+_HIT_SEPARATOR    = "\n\n"
+_NO_MATCHES       = "no matches"
 
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_]+")
 
@@ -47,11 +66,11 @@ _STOPWORDS = {
 # Functions
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     return [t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS]
 
 
-def _split_chunks(text: str, chunk_bytes: int, overlap: int) -> List[Tuple[int, str]]:
+def _split_chunks(text: str, chunk_bytes: int, overlap: int) -> list[tuple[int, str]]:
     """Yield (offset, chunk_text) tuples. Best-effort split on whitespace boundaries."""
     out = []
     i = 0
@@ -75,29 +94,29 @@ def _split_chunks(text: str, chunk_bytes: int, overlap: int) -> List[Tuple[int, 
 class BM25Index:
     """Build once, query many times. Documents are (offset, chunk_text) tuples."""
 
-    def __init__(self, chunks: List[Tuple[int, str]]):
-        self.chunks: List[Tuple[int, str]] = chunks
-        self.tokens: List[List[str]] = [_tokenize(c) for _, c in chunks]
-        self.doc_lens: List[int] = [len(t) for t in self.tokens]
+    def __init__(self, chunks: list[tuple[int, str]]):
+        self.chunks: list[tuple[int, str]] = chunks
+        self.tokens: list[list[str]] = [_tokenize(c) for _, c in chunks]
+        self.doc_lens: list[int] = [len(t) for t in self.tokens]
         self.avg_dl: float = sum(self.doc_lens) / max(1, len(self.doc_lens))
         self.N: int = len(self.tokens)
         # Inverted index: term -> list of (doc_id, term_freq)
-        self.posting: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
+        self.posting: dict[str, list[tuple[int, int]]] = defaultdict(list)
         for did, toks in enumerate(self.tokens):
             c = Counter(toks)
             for term, tf in c.items():
                 self.posting[term].append((did, tf))
         # idf cache
-        self.idf: Dict[str, float] = {}
+        self.idf: dict[str, float] = {}
         for term, post in self.posting.items():
             df = len(post)
             self.idf[term] = math.log(1 + (self.N - df + 0.5) / (df + 0.5))
 
-    def search(self, query: str, k: int = _TOP_K_DEFAULT) -> List[Tuple[float, int]]:
+    def search(self, query: str, k: int = _TOP_K_DEFAULT) -> list[tuple[float, int]]:
         q_terms = _tokenize(query)
         if not q_terms:
             return []
-        scores: Dict[int, float] = defaultdict(float)
+        scores: dict[int, float] = defaultdict(float)
         for term in set(q_terms):
             idf = self.idf.get(term)
             if idf is None:
@@ -118,7 +137,7 @@ def make_tool(corpus_path: str, top_k: int = _TOP_K_DEFAULT,
         raise ValueError(f"retriever corpus does not exist: {corpus_path}")
 
     # Collect text
-    blobs: List[Tuple[str, str]] = []  # (source, text)
+    blobs: list[tuple[str, str]] = []  # (source, text)
     if os.path.isfile(corpus_path):
         with open(corpus_path, "rb") as f:
             data = f.read()
@@ -127,7 +146,7 @@ def make_tool(corpus_path: str, top_k: int = _TOP_K_DEFAULT,
     else:
         for dirpath, _, fnames in os.walk(corpus_path):
             for fn in fnames:
-                if not fn.lower().endswith((".txt", ".md", ".rst", ".text")):
+                if not fn.lower().endswith(CORPUS_EXTENSIONS):
                     continue
                 fp = os.path.join(dirpath, fn)
                 try:
@@ -139,8 +158,8 @@ def make_tool(corpus_path: str, top_k: int = _TOP_K_DEFAULT,
                 rel = os.path.relpath(fp, corpus_path)
                 blobs.append((rel, text))
 
-    chunks: List[Tuple[int, str]] = []     # (idx, chunk_text)
-    chunk_sources: List[Tuple[str, int]] = []  # (source, offset)
+    chunks: list[tuple[int, str]] = []     # (idx, chunk_text)
+    chunk_sources: list[tuple[str, int]] = []  # (source, offset)
     for source, text in blobs:
         for off, ch in _split_chunks(text, chunk_bytes, overlap):
             chunks.append((len(chunks), ch))
@@ -151,34 +170,33 @@ def make_tool(corpus_path: str, top_k: int = _TOP_K_DEFAULT,
 
     idx = BM25Index([(c[0], c[1]) for c in chunks])
 
-    def _execute(args: Dict[str, Any]) -> str:
-        query = args.get("query")
+    def _execute(args: dict[str, Any]) -> str:
+        query = args.get(_ARG_QUERY)
         if query is None:
-            return "error: missing required arg 'query'"
-        k = args.get("k", top_k)
+            return f"{ERROR_PREFIX}missing required arg {_ARG_QUERY!r}"
+        k = args.get(_ARG_K, top_k)
         try:
-            k = max(1, min(int(k), 16))
+            k = max(_K_MIN, min(int(k), _K_MAX))
         except (TypeError, ValueError):
-            return "error: 'k' must be an integer 1..16"
+            return f"{ERROR_PREFIX}{_ARG_K!r} must be an integer {_K_MIN}..{_K_MAX}"
         hits = idx.search(str(query), k=k)
         if not hits:
-            return "no matches"
+            return _NO_MATCHES
         lines = []
         for score, did in hits:
             src, off = chunk_sources[did]
             chunk = idx.chunks[did][1]
-            preview = chunk[:480].replace("\n", " ").strip()
-            lines.append(f"[{src} @{off}] (score {score:.2f}) {preview}")
-        return "\n\n".join(lines)
+            preview = chunk[:_PREVIEW_CHARS].replace("\n", " ").strip()
+            lines.append(_HIT_FMT.format(source=src, offset=off, score=score, preview=preview))
+        return _HIT_SEPARATOR.join(lines)
 
     return Tool(
-        name="retrieve",
-        description=f"Search a local text corpus by keywords. Returns top-K chunks by BM25 score.",
+        name=_TOOL_NAME,
+        description=_TOOL_DESCRIPTION,
         args_schema={
-            "query": {"type": "string", "required": True,
-                      "doc": "Search query (free text). Tokens are matched case-insensitively."},
-            "k":     {"type": "integer", "required": False,
-                      "doc": f"Number of results to return (default {top_k}, max 16)."},
+            _ARG_QUERY: {"type": "string", "required": True, "doc": _QUERY_DOC},
+            _ARG_K:     {"type": "integer", "required": False,
+                         "doc": _K_DOC_FMT.format(default=top_k, maximum=_K_MAX)},
         },
         execute=_execute,
     )

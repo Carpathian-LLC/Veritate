@@ -12,7 +12,6 @@
 import html as _html
 
 from flask import Response
-
 from readers import wiki as wiki_reader
 
 # ------------------------------------------------------------------------------------

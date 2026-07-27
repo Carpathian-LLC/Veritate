@@ -53,7 +53,8 @@ def _mk(root, ext_id):
 # Tests
 
 def test_uninstall_disables_a_builtin_then_install_reenables(tmp_path, monkeypatch):
-    """uninstall records the id in disabled.json so discover() drops a canonical builtin; install clears it and the extension returns."""
+    """uninstall records the id in disabled.json so discover() drops a canonical
+    builtin; install clears it and the extension returns."""
     can, _ = _roots(tmp_path, monkeypatch)
     _mk(can, "foo")
     assert [m["id"] for m in registry.discover()] == ["foo"]
@@ -78,7 +79,8 @@ def test_uninstall_preserves_data_cache(tmp_path, monkeypatch):
 
 
 def test_uninstall_404s_live_routes_without_restart(tmp_path, monkeypatch):
-    """the before_request gate 404s a disabled extension's already-registered routes, and reinstall restores them, with no re-registration or restart."""
+    """the before_request gate 404s a disabled extension's already-registered routes,
+    and reinstall restores them, with no re-registration or restart."""
     from flask import Flask
     can, _ = _roots(tmp_path, monkeypatch)
     d = _mk(can, "foo")

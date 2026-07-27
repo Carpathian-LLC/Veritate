@@ -11,12 +11,7 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
-import os
-import sys
 
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-if os.path.join(REPO_ROOT, "veritate_mri") not in sys.path:
-    sys.path.insert(0, os.path.join(REPO_ROOT, "veritate_mri"))
 
 from routes import hybrid_routes as H
 
@@ -52,11 +47,17 @@ def test_local_slide_never_calls_the_model():
     H._compact(complete, "", _turns(8), LIMIT, "local")
 
 
-def test_local_slide_keeps_newest_suffix_opening_on_user():
-    """The slid tail is a newest-first suffix that opens on a user turn."""
+def test_local_slide_keeps_the_newest_suffix():
+    """The slid tail is the newest suffix of the original turns."""
     turns = _turns(8)
     _summary, kept = H._compact(lambda *a: "", "", turns, LIMIT, "local")
-    assert kept == turns[len(turns) - len(kept):] and kept[0]["role"] == "user"
+    assert kept == turns[len(turns) - len(kept):]
+
+
+def test_local_slide_opens_on_a_user_turn():
+    """The slid tail opens on a user turn."""
+    _summary, kept = H._compact(lambda *a: "", "", _turns(8), LIMIT, "local")
+    assert kept[0]["role"] == "user"
 
 
 def test_under_budget_is_a_noop():
@@ -66,7 +67,13 @@ def test_under_budget_is_a_noop():
 
 
 def test_remote_folds_head_into_model_summary():
-    """A remote model over budget summarizes the head and keeps the verbatim tail."""
+    """A remote model over budget returns the model-written summary."""
+    summary, _kept = H._compact(lambda messages, system: "SUMMARY", "", _turns(10), 200, "remote")
+    assert summary == "SUMMARY"
+
+
+def test_remote_keeps_the_verbatim_tail():
+    """A remote compaction keeps CTX_KEEP_TAIL_TURNS turns verbatim."""
     turns = _turns(10)
-    summary, kept = H._compact(lambda messages, system: "SUMMARY", "", turns, 200, "remote")
-    assert summary == "SUMMARY" and kept == turns[-H.CTX_KEEP_TAIL_TURNS:]
+    _summary, kept = H._compact(lambda messages, system: "SUMMARY", "", turns, 200, "remote")
+    assert kept == turns[-H.CTX_KEEP_TAIL_TURNS:]

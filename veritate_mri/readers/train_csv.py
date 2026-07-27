@@ -28,7 +28,7 @@ NUMERIC_FIELDS = ("loss", "lr", "grad_norm", "tok_per_s", "wall_s")
 def _parse_row(header, parts):
     if len(parts) != len(header):
         return None
-    d = dict(zip(header, parts))
+    d = dict(zip(header, parts, strict=True))
     try:
         d["step"] = int(float(d.get("step", 0)))
     except (TypeError, ValueError):
@@ -56,7 +56,7 @@ def load(name):
         return hit[1]
     rows = []
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             header_line = f.readline().strip()
             if not header_line:
                 return []
@@ -74,7 +74,7 @@ def load(name):
 def raw_text(name):
     p = paths.train_csv_path(name)
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return f.read()
     except OSError:
         return ""

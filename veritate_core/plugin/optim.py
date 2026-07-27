@@ -75,10 +75,10 @@ class _VendoredMuon(torch.optim.Optimizer):
     def __init__(self, params, lr=1e-3, weight_decay=0.1, momentum=MUON_MOMENTUM,
                  nesterov=MUON_NESTEROV, ns_coefficients=MUON_NS_COEFFICIENTS,
                  eps=MUON_EPS, ns_steps=MUON_NS_STEPS, adjust_lr_fn=None):
-        defaults = dict(
-            lr=lr, weight_decay=weight_decay, momentum=momentum, nesterov=nesterov,
-            ns_coefficients=ns_coefficients, eps=eps, ns_steps=ns_steps,
-            adjust_lr_fn=adjust_lr_fn)
+        defaults = {
+            "lr": lr, "weight_decay": weight_decay, "momentum": momentum, "nesterov": nesterov,
+            "ns_coefficients": ns_coefficients, "eps": eps, "ns_steps": ns_steps,
+            "adjust_lr_fn": adjust_lr_fn}
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -148,7 +148,8 @@ def _muon_cls():
     native = getattr(torch.optim, "Muon", None)
     if native is not None:
         return native, "torch.optim.Muon"
-    print("[optim] torch.optim.Muon unavailable; using vendored Muon fallback")
+    from runtime import logs as logmod
+    logmod.warn("optim", "torch.optim.Muon unavailable; using vendored Muon fallback")
     return _VendoredMuon, "vendored"
 
 
@@ -156,20 +157,21 @@ def _build_adamw(params, args):
     """AdamW group. Honors use_8bit_adam via bitsandbytes when it is usable
     (importable + CUDA); otherwise falls back to torch AdamW."""
     lr = args.base_lr
-    kwargs = dict(
-        lr=lr, weight_decay=args.weight_decay,
-        betas=(args.beta1, args.beta2), eps=ADAMW_EPS)
+    kwargs = {
+        "lr": lr, "weight_decay": args.weight_decay,
+        "betas": (args.beta1, args.beta2), "eps": ADAMW_EPS}
     if getattr(args, "use_8bit_adam", False):
+        from runtime import logs as logmod
         if torch.cuda.is_available():
             try:
                 import bitsandbytes as bnb
                 return bnb.optim.AdamW8bit(params, **kwargs)
             except Exception as e:  # import or init failure -> graceful fallback
-                print("[optim] 8-bit AdamW requested but bitsandbytes unusable "
-                      f"({e}); falling back to torch AdamW")
+                logmod.warn("optim", "8-bit AdamW requested but bitsandbytes unusable "
+                            f"({e}); falling back to torch AdamW")
         else:
-            print("[optim] 8-bit AdamW requested but no CUDA device; "
-                  "falling back to torch AdamW (8-bit optimizers require CUDA)")
+            logmod.warn("optim", "8-bit AdamW requested but no CUDA device; "
+                        "falling back to torch AdamW (8-bit optimizers require CUDA)")
     return torch.optim.AdamW(params, **kwargs)
 
 

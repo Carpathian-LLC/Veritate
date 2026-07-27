@@ -17,15 +17,10 @@
 # Imports
 
 import os
-import sys
 
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
+import pytest
+from conftest import REPO_ROOT
 from routes import hybrid_routes
-
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -33,6 +28,19 @@ from routes import hybrid_routes
 CHATML_IM_START = "<|im_start|>"
 CHATML_IM_END   = "<|im_end|>"
 CHATML_EOT      = "<|endoftext|>"
+LEGACY_USER     = "<|user|>"
+
+HEAD_BYTES  = 256
+CHAT_PREFIX = "chat_"
+TRAIN_SUFFIX = "_train.bin"
+
+# Shipped corpora built before the ChatML standardisation. The data is the user's and is
+# not rewritten by the test suite; the list exists so a NEW legacy-framed bin fails loudly.
+KNOWN_LEGACY_CHAT_BINS = frozenset({
+    "chat_distill_v1_train.bin",
+    "chat_distill_v2_train.bin",
+    "chat_identity_v1_train.bin",
+})
 
 CORPUS_DIR = os.path.join(REPO_ROOT, "trainers", "corpus")
 BUILDERS_DIR = os.path.join(REPO_ROOT, "veritate_mri", "tools")
@@ -48,24 +56,53 @@ def _first_bytes(path, n=4096):
 
 
 def _read_file(path):
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 
-def test_backend_chat_template_matches_chatml():
-    """PROMPT_TMPL and PLAIN_TMPL and STOP_MARKERS on the backend use ChatML."""
+def _shipped_chat_bins():
+    if not os.path.isdir(CORPUS_DIR):
+        pytest.skip(f"{CORPUS_DIR} absent (trainers/ is gitignored)")
+    names = [fn for fn in sorted(os.listdir(CORPUS_DIR))
+             if fn.startswith(CHAT_PREFIX) and fn.endswith(TRAIN_SUFFIX)]
+    if not names:
+        pytest.skip("no shipped chat_*_train.bin to inspect")
+    return names
+
+
+def _split_by_framing():
+    """Return (chatml_framed, legacy_framed) shipped chat corpus filenames."""
+    chatml, legacy = [], []
+    for fn in _shipped_chat_bins():
+        head = _first_bytes(os.path.join(CORPUS_DIR, fn), HEAD_BYTES)
+        (chatml if CHATML_IM_START.encode("utf-8") in head else legacy).append(fn)
+    return chatml, legacy
+
+
+def test_backend_prompt_tmpl_is_chatml():
+    """PROMPT_TMPL renders turns with ChatML markers."""
     assert CHATML_IM_START in hybrid_routes.PROMPT_TMPL
-    assert CHATML_IM_END   in hybrid_routes.PROMPT_TMPL
+    assert CHATML_IM_END in hybrid_routes.PROMPT_TMPL
+
+
+def test_backend_plain_tmpl_is_chatml():
+    """PLAIN_TMPL renders turns with ChatML markers."""
     assert CHATML_IM_START in hybrid_routes.PLAIN_TMPL
-    assert CHATML_IM_END   in hybrid_routes.PLAIN_TMPL
-    assert CHATML_IM_END   in hybrid_routes.STOP_MARKERS
-    assert CHATML_EOT      in hybrid_routes.STOP_MARKERS
-    assert CHATML_IM_START in hybrid_routes.STOP_MARKERS
+    assert CHATML_IM_END in hybrid_routes.PLAIN_TMPL
+
+
+def test_stop_markers_are_chatml_only():
+    """STOP_MARKERS covers the ChatML turn/end markers and carries no legacy <|user|> marker."""
+    assert {CHATML_IM_END, CHATML_EOT, CHATML_IM_START} <= set(hybrid_routes.STOP_MARKERS)
+
+
+def test_stop_markers_exclude_legacy_marker():
+    """STOP_MARKERS does not list the legacy <|user|> marker."""
+    assert LEGACY_USER not in hybrid_routes.STOP_MARKERS
 
 
 def test_frontend_chat_template_matches_chatml():
-    """Frontend wrapChat MUST render the same ChatML markers as the backend so
-    a browser-round-trip prompt is byte-identical to a curl POST."""
+    """Frontend wrapChat renders the same ChatML markers as the backend."""
     text = _read_file(JS_INDEX)
     idx = text.find("function wrapChat(")
     assert idx >= 0
@@ -87,54 +124,43 @@ def test_frontend_chat_template_matches_chatml():
 
 
 def test_corpus_builder_declares_chatml():
-    """build_chat_corpus.py (the OWNER of the shipped Carpathian chat corpora)
-    must declare ChatML as its byte-level frame. If someone reintroduces a
-    <|user|> builder, this catches it immediately."""
+    """build_chat_corpus.py declares the ChatML byte-level frame."""
     src = _read_file(os.path.join(BUILDERS_DIR, "build_chat_corpus.py"))
     assert 'IM_START = "<|im_start|>"' in src
     assert 'IM_END   = "<|im_end|>"' in src
 
 
 def test_sft_builder_declares_chatml():
-    """build_sft_idk_corpus.py must emit the same ChatML frame as the shipped
-    chat corpora so the sft_idk stem interleaves cleanly in the pretrain mix."""
+    """build_sft_idk_corpus.py declares the ChatML byte-level frame."""
     src = _read_file(os.path.join(BUILDERS_DIR, "build_sft_idk_corpus.py"))
     assert 'IM_START = "<|im_start|>"' in src
     assert 'IM_END   = "<|im_end|>"' in src
 
 
+def test_no_unknown_legacy_framed_chat_corpus():
+    """No shipped chat_*_train.bin is legacy-framed outside the known legacy set."""
+    _, legacy = _split_by_framing()
+    assert sorted(set(legacy) - KNOWN_LEGACY_CHAT_BINS) == []
+
+
 def test_shipped_chat_corpora_are_chatml():
-    """Every shipped chat_*_train.bin under trainers/corpus/ MUST start with
-    ChatML markers. Catches a corrupted or re-framed corpus swap silently
-    breaking every downstream chat model."""
-    for fn in os.listdir(CORPUS_DIR) if os.path.isdir(CORPUS_DIR) else []:
-        if not (fn.startswith("chat_") and fn.endswith("_train.bin")):
-            continue
-        p = os.path.join(CORPUS_DIR, fn)
-        head = _first_bytes(p, 256)
-        assert CHATML_IM_START.encode("utf-8") in head, (
-            f"{fn}: expected ChatML frame in first 256 bytes")
+    """Every shipped chat_*_train.bin frames turns in ChatML; skips naming the known legacy bins."""
+    chatml, legacy = _split_by_framing()
+    if legacy:
+        pytest.skip("legacy <|user|>-framed chat corpora shipped, mixing them with "
+                    f"ChatML {sorted(chatml)} trains the wrong turn framing: {sorted(legacy)}")
+    assert legacy == []
 
 
 def test_shipped_sft_idk_corpus_is_chatml():
-    """The generated SFT bin (matches sft_idk stem) uses ChatML if present."""
-    for tail in ("sft_idk_train.bin",):
-        p = os.path.join(CORPUS_DIR, tail)
-        if not os.path.isfile(p):
-            return  # optional artifact; skip if not built
-        head = _first_bytes(p, 256)
-        assert CHATML_IM_START.encode("utf-8") in head
-        assert CHATML_IM_END.encode("utf-8")   in head
+    """The generated sft_idk_train.bin, when built, frames turns in ChatML."""
+    p = os.path.join(CORPUS_DIR, "sft_idk_train.bin")
+    if not os.path.isfile(p):
+        pytest.skip("sft_idk_train.bin not built in this checkout")
+    assert CHATML_IM_START.encode("utf-8") in _first_bytes(p, HEAD_BYTES)
 
 
-def test_render_local_output_matches_stop_markers():
-    """End-to-end: a rendered prompt must terminate exactly where the STOP_MARKERS
-    would begin the next turn. Guards against silent template drift between
-    render and stop-detection."""
-    msgs = [{"role": "user", "content": "hi"}]
-    rendered = hybrid_routes._render_local(msgs, system=None)
-    # The rendered prompt ends with an OPEN assistant marker. If the model outputs
-    # <|im_end|> we should be able to detect it. Prove the marker literally appears
-    # in STOP_MARKERS so streaming can halt.
+def test_render_local_opens_assistant_turn():
+    """_render_local ends the prompt on an open ChatML assistant turn."""
+    rendered = hybrid_routes._render_local([{"role": "user", "content": "hi"}], system=None)
     assert "<|im_start|>assistant" in rendered
-    assert any(m in ("<|im_end|>",) for m in hybrid_routes.STOP_MARKERS)

@@ -1,27 +1,28 @@
 ---
-title: Gradient Clip
-summary: A safety cap on how big any single update can be, so one wild step cannot knock training off the rails.
-tags: training, settings
+title: gradient clip
+date: 2026-07-27
+tags: [settings, training]
+summary: A ceiling on how large one step's gradient may be before it is scaled down.
 ---
 
-# Gradient Clip
+# gradient clip
 
-The gradient is the size and direction of the correction the model wants to make each step. Gradient clip is a **cap on how big that correction is allowed to get**. If a step tries to push harder than the cap, it gets scaled back down to the limit. It is a seatbelt for training.
+A cap on the total size of the gradient for a step. When the gradient is larger than the cap, the whole gradient is scaled down to exactly the cap, keeping its direction and shrinking its length.
 
-## Why it matters
+## what it does
 
-Every so often a single batch produces a huge, unlucky gradient: a spike that would shove the model far in one direction and undo a lot of progress, sometimes crashing the run. Clipping catches those spikes and keeps each step within a sane range, which makes training much more stable.
+Most steps produce ordinary gradients. Occasionally a batch contains something unusual and produces one enormous gradient that would move the weights far out of a good region in a single update. Clipping keeps that step in proportion instead of letting it dominate.
 
-## How the dial works
+Applied unconditionally in `trainers/common/vanilla_trainer.py::run` through `torch.nn.utils.clip_grad_norm_`. The measured gradient norm, before clipping, is written to `train.csv` every logged step, so the training charts show how often the cap is actually reached.
 
-- **Lower** = a stricter cap = spikes are trimmed harder, so training is calmer but individual steps are gentler.
-- **Higher** = a looser cap = the model is freer to take big steps, at more risk of a destabilizing spike.
+## range and default
 
-## When to change it
+A positive float. Every trainer manifest sets `1.0`.
 
-- Leave it at the recipe's default for most runs; a common value is around 1.0.
-- Tighten it (lower the number) if you see the loss occasionally spiking or the run going unstable.
+Zero is not an off switch here: a cap of zero scales every gradient to nothing and the model stops learning. To effectively disable clipping, set a large value.
 
-## Gotcha
+## when to change it
 
-- Clipping treats the symptom, not the cause. If you constantly hit the cap, the real fix is usually a lower learning rate, not an ever-tighter clip.
+Lower it to around 0.5 when the loss curve shows sharp spikes and the logged gradient norm confirms occasional huge steps.
+
+Raise it when the logged norm sits at the cap for most steps. At that point clipping rescales every update instead of catching outliers.

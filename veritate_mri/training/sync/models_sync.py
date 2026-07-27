@@ -14,7 +14,7 @@
 #     * remote-pulled: any model dir whose name appears in the remote tree.
 #                      these participate in three-state classification.
 #     * local-trained: any model dir on disk whose name does NOT appear in the
-#                      remote tree. these are invisible to sync — they cannot be
+#                      remote tree. these are invisible to sync: they cannot be
 #                      overwritten, listed, or affected by any sync action.
 #   provenance is computed at every check() against the live remote listing, so
 #   moving a model from local-trained -> remote-pulled (by publishing it
@@ -37,6 +37,7 @@ import urllib.request
 from readers import paths
 from runtime import logs as logmod
 from runtime import net
+
 from . import sync_common as sc
 
 _SSL_CTX = net.ssl_context()
@@ -47,8 +48,14 @@ _SSL_CTX = net.ssl_context()
 REPO_OWNER         = "Carpathian-LLC"
 REPO_NAME          = "Veritate-Models"
 DEFAULT_BRANCH     = "main"
+
+# GitHub endpoints. Named so a mirror / enterprise host is a one-line change.
+GITHUB_API_BASE    = "https://api.github.com"
+GITHUB_RAW_BASE    = "https://raw.githubusercontent.com"
+TREE_URL_FMT       = "{api}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+RAW_URL_FMT        = "{raw}/{owner}/{repo}/{branch}/{rel}"
 TIMEOUT_TREE_S     = 30
-TIMEOUT_FILE_S     = 600   # per-file download timeout (10 min — enough for a few GB on a fast link)
+TIMEOUT_FILE_S     = 600   # per-file download timeout (10 min: enough for a few GB on a fast link)
 CHUNK_BYTES        = 1024 * 1024     # 1 MB streaming chunks
 LARGE_FILE_BYTES   = 100 * 1024 * 1024  # 100 MB threshold for "large" confirmation gate
 
@@ -62,7 +69,7 @@ _REMOTE_CACHE = {"files": {}, "fetched_at": 0.0, "branch": ""}
 _REMOTE_CACHE_TTL_S = 300
 
 # Live download progress, surfaced to the dashboard for the active sync().
-# {path: {bytes_done, bytes_total, started_at, finished_at, state}}
+# keyed by path; each value holds bytes_done, bytes_total, started_at, finished_at, state.
 _PROGRESS = {}
 
 _LAST = {"ok": None, "message": "", "finished_at": None, "action": None}
@@ -76,11 +83,12 @@ _SYNC_IN_FLIGHT = False
 # HTTP
 
 def _tree_url(branch):
-    return f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/git/trees/{branch}?recursive=1"
+    return TREE_URL_FMT.format(api=GITHUB_API_BASE, owner=REPO_OWNER, repo=REPO_NAME, branch=branch)
 
 
 def _raw_url(branch, rel):
-    return f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{branch}/{rel}"
+    return RAW_URL_FMT.format(raw=GITHUB_RAW_BASE, owner=REPO_OWNER, repo=REPO_NAME,
+                              branch=branch, rel=rel)
 
 
 def _http_get(url, timeout, headers=None):
@@ -92,7 +100,7 @@ def _http_get(url, timeout, headers=None):
 
 def _fetch_tree(branch):
     """Return {rel: {"sha":..., "size":...}}. GitHub trees API returns git
-    blob SHAs (sha1), not content sha256 — that's fine for change detection
+    blob SHAs (sha1), not content sha256: that's fine for change detection
     because we record the same field in our state file. The two never get
     compared against each other."""
     url = _tree_url(branch)
@@ -104,7 +112,7 @@ def _fetch_tree(branch):
     if not isinstance(payload, dict):
         raise RuntimeError("malformed tree response")
     if payload.get("truncated"):
-        # >100k entries — fall back? For now we just warn and proceed with what we got.
+        # >100k entries: fall back? For now we just warn and proceed with what we got.
         logmod.warn("models-sync", "remote tree was truncated by github API")
     tree = payload.get("tree") or []
     out = {}
@@ -205,7 +213,7 @@ def _top_level_dirs():
 def _remote_top_level_dirs(remote_tree):
     """Returns the set of top-level model dirs that appear in remote."""
     out = set()
-    for rel in remote_tree.keys():
+    for rel in remote_tree:
         if "/" in rel:
             out.add(rel.split("/", 1)[0])
     return out
@@ -284,7 +292,7 @@ def files():
 
 
 def check():
-    """Compatibility-shim for the existing dashboard banner — same output shape
+    """Compatibility-shim for the existing dashboard banner: same output shape
     the old check() returned, but populated from the new files() pipeline."""
     r = files()
     if not r.get("ok"): return r

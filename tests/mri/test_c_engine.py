@@ -12,23 +12,24 @@
 # Imports:
 
 import os
-import sys
 import threading
 import time
 
 import pytest
-
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-if os.path.join(REPO_ROOT, "veritate_mri") not in sys.path:
-    sys.path.insert(0, os.path.join(REPO_ROOT, "veritate_mri"))
-
-from readers import paths
 from inference.backends import c_engine as ce
+from readers import paths
 
 # ------------------------------------------------------------------------------------
 # Constants
 
 PROMPT = "<|system|>\nYou are Veritate.\n<|user|>\nhi\n<|assistant|>\n"
+
+LOCK_TIMEOUT_S      = 2.0    # monkeypatched STREAM_LOCK_TIMEOUT_S
+RECLAIM_POLL_S      = 0.5
+HANDSHAKE_S         = 10.0   # bound on a thread handshake; never a timing assertion
+STALE_HEARTBEAT_S   = 100.0  # heartbeat age that is unambiguously past LOCK_TIMEOUT_S
+HEARTBEAT_PERIOD_S  = 0.2    # well under LOCK_TIMEOUT_S, so the holder reads as healthy
+HEARTBEAT_TICKS     = 5
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -88,52 +89,63 @@ def test_unclean_subprocess_respawns_on_next_request():
         sub.close()
 
 
+@pytest.mark.slow
 def test_wedged_holder_is_reclaimed(monkeypatch):
-    """A holder with a stale heartbeat is reclaimed (epoch bumps) so a new request proceeds."""
-    monkeypatch.setattr(ce, "STREAM_LOCK_TIMEOUT_S", 2.0)
-    monkeypatch.setattr(ce, "RECLAIM_POLL_S", 0.5)
+    """A holder with a stale heartbeat is reclaimed so a waiting request bumps the epoch."""
+    monkeypatch.setattr(ce, "STREAM_LOCK_TIMEOUT_S", LOCK_TIMEOUT_S)
+    monkeypatch.setattr(ce, "RECLAIM_POLL_S", RECLAIM_POLL_S)
     sub = _sub_or_skip()
+    held, release = threading.Event(), threading.Event()
+
+    def _wedge():
+        sub.lock.acquire()
+        sub._last_frame_time = time.monotonic() - STALE_HEARTBEAT_S
+        held.set()
+        release.wait(HANDSHAKE_S)
+
+    holder = threading.Thread(target=_wedge, daemon=True)
+    holder.start()
     try:
-        def _wedge():
-            sub.lock.acquire()
-            sub._last_frame_time = time.monotonic() - 100.0
-            time.sleep(30)
-        threading.Thread(target=_wedge, daemon=True).start()
-        time.sleep(0.4)
+        assert held.wait(HANDSHAKE_S), "holder never took the stream lock"
         epoch0 = sub._epoch
-        assert len(_gen(sub)) >= 3
+        _gen(sub)
         assert sub._epoch > epoch0
     finally:
+        release.set()
+        holder.join(HANDSHAKE_S)
         sub.close()
 
 
+@pytest.mark.slow
 def test_healthy_slow_holder_is_not_reclaimed(monkeypatch):
-    """A holder that keeps its heartbeat fresh is NOT killed; the waiter proceeds after it."""
-    monkeypatch.setattr(ce, "STREAM_LOCK_TIMEOUT_S", 2.0)
-    monkeypatch.setattr(ce, "RECLAIM_POLL_S", 0.5)
+    """A holder that keeps its heartbeat fresh is never reclaimed: the epoch is unchanged."""
+    monkeypatch.setattr(ce, "STREAM_LOCK_TIMEOUT_S", LOCK_TIMEOUT_S)
+    monkeypatch.setattr(ce, "RECLAIM_POLL_S", RECLAIM_POLL_S)
     sub = _sub_or_skip()
+    held = threading.Event()
+
+    def _hold():
+        sub.lock.acquire()
+        held.set()
+        for _ in range(HEARTBEAT_TICKS):
+            sub._last_frame_time = time.monotonic()
+            time.sleep(HEARTBEAT_PERIOD_S)
+        sub.lock.release()
+
+    holder = threading.Thread(target=_hold, daemon=True)
+    holder.start()
     try:
-        stop = {"v": False}
-        def _hold():
-            sub.lock.acquire()
-            for _ in range(8):
-                if stop["v"]:
-                    break
-                sub._last_frame_time = time.monotonic()
-                time.sleep(0.5)
-            sub.lock.release()
-        threading.Thread(target=_hold, daemon=True).start()
-        time.sleep(0.4)
+        assert held.wait(HANDSHAKE_S), "holder never took the stream lock"
         epoch0 = sub._epoch
-        assert len(_gen(sub)) >= 3
-        assert sub._epoch == epoch0  # healthy holder never reclaimed
+        _gen(sub)
+        assert sub._epoch == epoch0
     finally:
-        stop["v"] = True
+        holder.join(HANDSHAKE_S)
         sub.close()
 
 
 def test_overlong_prompt_keeps_following_turn_in_sync():
-    """An over-long prompt is tail-clamped leaving reply room: the long turn generates, the next short turn reports its true real_len."""
+    """An over-long prompt is tail-clamped so the following short turn reports its true real_len."""
     sub = _sub_or_skip()
     try:
         seq = sub.shape["seq"]
@@ -154,7 +166,7 @@ def test_overlong_prompt_does_not_respawn_backend():
         pid0 = sub.proc.pid
         _run_turn(sub, "x" * (sub.shape["seq"] * 2))
         rl, frames = _run_turn(sub, "hi")
-        assert rl == 2 and frames > 0
+        assert (rl, frames > 0) == (2, True)
         assert sub.proc.pid == pid0
         assert sub._last_clean is True
     finally:

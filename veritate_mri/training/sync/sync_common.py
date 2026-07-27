@@ -5,7 +5,7 @@
 # ------------------------------------------------------------------------------------
 # Notes:
 # - shared three-state sync engine used by plugins_sync.py and models_sync.py.
-# - the world view: for each remote file, compare three things — local-on-disk,
+# - the world view: for each remote file, compare three things: local-on-disk,
 #   last-synced (snapshot of what we wrote OR what existed at first adoption),
 #   and what remote has now. that yields four user-visible states (plus a fifth
 #   for the conflict case where both moved).
@@ -64,7 +64,7 @@ def load_state(root_dir):
     if not os.path.isfile(p):
         return {}
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return {}
@@ -190,7 +190,7 @@ def classify_one(local_path, remote_sha, state_entry, sha_fn=sha256_file):
         return (STATE_CURRENT, local_sha)
 
     if last_sha is None:
-        # never tracked — adopt mode treats local as the baseline. Until the user
+        # never tracked: adopt mode treats local as the baseline. Until the user
         # confirms an update, flag as modified so they see remote drift.
         return (STATE_MODIFIED, local_sha)
 
@@ -266,6 +266,4 @@ def action_is_destructive(action, file_state):
     """Returns True if the action would overwrite user changes that haven't been
     explicitly accepted. Used by callers to require an extra confirmation."""
     if action in (ACTION_FORCE, ACTION_DELETE): return True
-    if action == ACTION_UPDATE and file_state in (STATE_MODIFIED, STATE_CONFLICT):
-        return True
-    return False
+    return action == ACTION_UPDATE and file_state in (STATE_MODIFIED, STATE_CONFLICT)

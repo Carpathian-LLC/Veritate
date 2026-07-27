@@ -11,9 +11,8 @@
 # Imports:
 
 from flask import request
-
-from runtime import logs as logmod
 from readers import checkpoints, models
+from runtime import logs as logmod
 
 from ._common import user_error
 
@@ -38,6 +37,7 @@ def register(app):
         try:
             import torch
             from training import pruning as pruning_mod
+
             from veritate_core.load import load_from_state_dict
             ckpt_path = checkpoints.path_for(name, step)
             s = torch.load(ckpt_path, map_location="cpu", weights_only=True)
@@ -74,7 +74,7 @@ def register(app):
             keep_total = 0
             for L in range(layers):
                 keep_frac = float(plan[str(L)])
-                kept_ffn  = max(1, int(round(ffn_per_layer[L] * keep_frac)))
+                kept_ffn  = max(1, round(ffn_per_layer[L] * keep_frac))
                 keep_total += kept_ffn * hidden * 2
             keep_total += vocab * hidden + seq * hidden + hidden + sum(
                 3 * hidden * hidden + hidden * hidden + 2 * hidden
@@ -119,6 +119,7 @@ def register(app):
         try:
             import torch
             from training import pruning as pruning_mod
+
             from veritate_core.load import load_from_state_dict
             ckpt_path = checkpoints.path_for(name, step)
             s = torch.load(ckpt_path, map_location="cpu", weights_only=True)

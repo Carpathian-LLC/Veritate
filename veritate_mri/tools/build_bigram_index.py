@@ -7,6 +7,9 @@
 # - Build a unigram + bigram index over a corpus .bin file. Consumed by the
 #   writing-health probe (checkpoint_probe.dump_writing_health) to compute PMI
 #   of adjacent word pairs in model generations.
+# - Owns the sidecar path (sidecar_path) and the build (write_index). The probe
+#   builds a missing sidecar on demand through this module; --all pre-builds the
+#   whole corpus library.
 # - Output (.npz next to the corpus, <stem>_bigrams.npz):
 #     vocab     unique tokens (N,) <Uk
 #     uni_c     unigram counts (N,) int64
@@ -31,6 +34,11 @@ from pathlib import Path
 
 import numpy as np
 
+_MRI_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+if _MRI_ROOT not in sys.path:
+    sys.path.insert(0, _MRI_ROOT)
+
+from readers import paths  # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -39,10 +47,24 @@ WORD_RE = re.compile(rb"[a-z][a-z']*")
 DEFAULT_TOP_UNI     = 150_000
 DEFAULT_TOP_BIGRAMS = 500_000
 CHUNK_BYTES         = 64 * 1024 * 1024   # 64 MB chunks; PG19 (10 GB) needs streaming
+CORPUS_ROOT         = Path(paths.CORPUS_ROOT)
+TRAIN_GLOB          = f"*{paths.CORPUS_TRAIN_SUFFIX}"
+PG19_STEM           = "pg19"             # ~10 GB; opt-in only
+BIN_SUFFIX          = ".bin"
+SIDECAR_SUFFIX      = "_bigrams.npz"
+SIDECAR_ALT_SUFFIX  = ".bigrams.npz"     # corpus files that are not .bin
 
 
 # ------------------------------------------------------------------------------------
 # Functions
+
+def sidecar_path(corpus_path: str) -> str:
+    """Where the bigram index for `corpus_path` lives. Single owner of the name
+    (the writing-health probe reads the same path)."""
+    if corpus_path.endswith(BIN_SUFFIX):
+        return corpus_path[:-len(BIN_SUFFIX)] + SIDECAR_SUFFIX
+    return corpus_path + SIDECAR_ALT_SUFFIX
+
 
 def iter_words(corpus_path: str):
     """Yield lowercase byte-tokens from the corpus, streaming in chunks so we
@@ -74,7 +96,6 @@ def build_index(corpus_path: str, top_uni: int, top_bigrams: int, max_bytes: int
     n_tokens = 0
     n_bigrams = 0
     bytes_read = 0
-    last_log = t0
 
     for tok in iter_words(corpus_path):
         n_tokens += 1
@@ -93,7 +114,6 @@ def build_index(corpus_path: str, top_uni: int, top_bigrams: int, max_bytes: int
             print(f"  scanned {n_tokens:,} tokens ({n_bigrams:,} bigrams) "
                   f"in {now - t0:.1f}s; uni={len(uni):,} bi={len(bigrams):,}",
                   file=sys.stderr)
-            last_log = now
             if len(bigrams) > top_bigrams * 6:
                 # shrink: keep top top_bigrams * 4 by current count
                 keep = bigrams.most_common(top_bigrams * 4)
@@ -150,16 +170,19 @@ def build_index(corpus_path: str, top_uni: int, top_bigrams: int, max_bytes: int
     }, config
 
 
-def write_index(corpus_path: str, top_uni: int, top_bigrams: int, max_bytes: int) -> dict:
+def write_index(corpus_path: str, top_uni: int = DEFAULT_TOP_UNI,
+                top_bigrams: int = DEFAULT_TOP_BIGRAMS, max_bytes: int = 0) -> dict:
     print(f"\nbuilding index: {corpus_path}", file=sys.stderr)
     if max_bytes:
         print(f"  capped at {max_bytes:,} bytes", file=sys.stderr)
     payload, cfg = build_index(corpus_path, top_uni, top_bigrams, max_bytes)
-    out_path = corpus_path[:-4] + "_bigrams.npz" if corpus_path.endswith(".bin") else corpus_path + ".bigrams.npz"
+    out_path = sidecar_path(corpus_path)
     np.savez_compressed(out_path, **payload)
     size = os.path.getsize(out_path)
-    print(f"  wrote {os.path.basename(out_path)} ({size / 1024 / 1024:.2f} MB) in {cfg['build_time_s']}s", file=sys.stderr)
-    print(f"  vocab={cfg['vocab_size']:,}  bigrams_kept={cfg['bigrams_kept']:,}  total_tokens={cfg['n_tokens']:,}", file=sys.stderr)
+    print(f"  wrote {os.path.basename(out_path)} ({size / 1024 / 1024:.2f} MB) in {cfg['build_time_s']}s",
+          file=sys.stderr)
+    print(f"  vocab={cfg['vocab_size']:,}  bigrams_kept={cfg['bigrams_kept']:,}  total_tokens={cfg['n_tokens']:,}",
+          file=sys.stderr)
     return cfg
 
 
@@ -179,22 +202,19 @@ def main() -> int:
                     help="cap input bytes (debug)")
     args = ap.parse_args()
 
-    here = Path(__file__).resolve().parent
-    corpus_root = here.parent.parent / "plugins" / "corpus"
-
     targets: list[str] = []
     if args.corpus_path:
         targets.append(args.corpus_path)
     elif args.corpus:
-        p = corpus_root / f"{args.corpus}_train.bin"
+        p = Path(paths.corpus_train_path(args.corpus))
         if not p.exists():
             print(f"corpus not found: {p}", file=sys.stderr)
             return 1
         targets.append(str(p))
     elif args.all:
-        for p in sorted(corpus_root.glob("*_train.bin")):
+        for p in sorted(CORPUS_ROOT.glob(TRAIN_GLOB)):
             stem = p.stem.replace("_train", "")
-            if stem == "pg19" and not args.include_pg19:
+            if stem == PG19_STEM and not args.include_pg19:
                 print(f"  skipping {p.name} (pg19; pass --include-pg19 to index)", file=sys.stderr)
                 continue
             targets.append(str(p))

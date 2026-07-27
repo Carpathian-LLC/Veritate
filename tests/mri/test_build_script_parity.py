@@ -13,13 +13,8 @@
 # Imports:
 
 import os
-import sys
 
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
+from conftest import REPO_ROOT
 from training import build_runner
 
 BUILD_DIR = os.path.join(REPO_ROOT, "veritate_engine", "v1", "build")
@@ -53,7 +48,7 @@ def test_referenced_kernels_exist_on_disk():
 
 
 def test_parity_helper_flags_injected_drift():
-    """The parser must actually notice a dropped kernel — proves the guard isn't
+    """The parser must actually notice a dropped kernel: proves the guard isn't
     trivially passing by returning empty sets."""
     bat = build_runner._referenced_shared_tus(os.path.join(BUILD_DIR, "build.bat")) or set()
     sh  = build_runner._referenced_shared_tus(os.path.join(BUILD_DIR, "build.sh")) or set()

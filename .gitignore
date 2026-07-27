@@ -1,49 +1,57 @@
+# Build output
 veritate_engine/bin/
 veritate_engine/**/bin/
+build_out.txt
 *.obj
 *.o
 *.exe
 *.pdb
 *.lib
-*.log
+
+# Python environments and caches
+venv/
+.venv/
+..venv/
+.veritate_venv/
+__pycache__/
+.pytest_cache
+
+# Editor and agent state
 .vscode/
 .claude/
 .claude_review/
-.venv/
-..venv/
-venv/
-__pycache__/
-/models/
-docs/
-build_out.txt
+.DS_Store
+/CLAUDE.md
+
+# Runtime state and logs
+data/*
+*.log
 chat_err.log
-c_trace_*.bin
-*.tmp
-*.orig
 .plugin_pid.json
 .plugin_run.log
-/trainers/
-data/*
-/*de.md
-.DS_Store
-/experiments
-experiments
-experiments/
+*.tmp
+*.orig
+
+# Model artifacts and traces
+/models/
+c_trace_*.bin
 veritate_trace.bin
 *.vrmr
 *.tern
-.pytest_cache
+
+# Upstream-synced checkout (canonical trainers repo is source of truth)
+/trainers/
+
+# Local-only trees: research scratch, generated corpora, installed extensions
+/experiments/
+/temp/
 /synth_jobs/
-.veritate_venv/
+corpus_for_s3/
+docs/
+extensions/installed/
 veritate_mri/data/kb/
 veritate_mri/data/synth_jobs/
-dev_documentation/multimind/*.pt
-dev_documentation/multimind/affect_probe_stats.json
-trainers/multimind_poc/corpus/
-corpus_for_s3/
-extensions/installed/
-/temp
 
-# Standalone local fact dataset + its watchdog: local-only (not for the repo).
+# Standalone local fact dataset and its watchdog: local-only, not for the repo.
 /facts/
 /facts_pipeline/

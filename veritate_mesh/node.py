@@ -16,15 +16,14 @@ import threading
 import time
 
 from flask import jsonify
-
 from runtime import logs as logmod
 from runtime import settings as settings_mod
 
 from .capabilities import detect
 from .client import HubClient, HubClientError
 from .protocol import (
-    ROLE_NODE,
     ROLE_BOTH,
+    ROLE_NODE,
 )
 
 # ------------------------------------------------------------------------------------

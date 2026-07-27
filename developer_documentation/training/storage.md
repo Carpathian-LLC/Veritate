@@ -48,8 +48,8 @@ models/<name>/
 
 Two valid forms accepted by `models.is_valid_name`:
 
-- **User-friendly:** `<slug>_<size>` — e.g., `chatty_otter_85m`.
-- **Legacy:** `<corpus>_<size>_<precision>_<version>` — e.g., `wikitext_25m_v1`.
+- **User-friendly:** `<slug>_<size>`, e.g., `chatty_otter_85m`.
+- **Four-part:** `<corpus>_<size>_<precision>_<version>`, e.g., `wikitext_25m_v1`.
 
 Validation lives at [veritate_mri/readers/models.py](../../veritate_mri/readers/models.py).
 
@@ -60,5 +60,5 @@ Validation lives at [veritate_mri/readers/models.py](../../veritate_mri/readers/
 ## Pitfalls
 
 - Don't write directly to `models/<name>/`. Always go through `save.py` so the dump suite stays consistent.
-- `models/` is gitignored — clean clones start empty.
+- `models/` is gitignored: clean clones start empty.
 - Stale `.tmp` files accumulate if trainers are killed mid-checkpoint. Safe to delete any `*.tmp` when no training is running.

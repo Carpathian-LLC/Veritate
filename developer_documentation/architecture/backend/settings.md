@@ -18,7 +18,7 @@ Validation lives inline: e.g., `device_name` capped at 15 characters at [setting
 
 | Key                              | Purpose                                                        |
 | -------------------------------- | -------------------------------------------------------------- |
-| `pytorch_load_mode`              | `always` / `on_demand` / `off` — when to load the brain        |
+| `pytorch_load_mode`              | `always` / `on_demand` / `off`: when to load the brain        |
 | `pytorch_idle_unload_secs`       | Idle watcher timeout                                           |
 | `warm_models`                    | Model names kept resident as C-engine subprocesses (warm pool); see [warm_models.md](warm_models.md) |
 | `heartbeat_enabled`              | Master switch for the Carpathian webhook                       |
@@ -29,7 +29,7 @@ Validation lives inline: e.g., `device_name` capped at 15 characters at [setting
 | `device_preference`              | `auto` / `cpu` / `mps` / `cuda` for trainers                   |
 | `device_name`                    | Display name (max 15 chars) shown on Carpathian dashboard      |
 | `update_channel`                 | `development` / `stable` for self-update                       |
-| `experimental`                   | Reveals in-progress tools (the Market LLM nav link); gates UI visibility only, not isolation |
+| `extensions`                     | Reveals the extension library in the dashboard nav; gates UI visibility only, not the isolation boundary |
 | `mesh_role`                      | `off` / `hub` / `node` / `both`                                |
 | `teacher_provider`, `teacher_*`  | Ollama / API teacher endpoint (active config)                  |
 | `teacher_configs`                | Per-provider remembered `{api_key, model, base_url}`; `/teacher` POST swaps the matching entry into the active `teacher_*` slots on provider switch |
@@ -43,13 +43,13 @@ Validation lives inline: e.g., `device_name` capped at 15 characters at [setting
 
 ## Dependencies
 
-- [settings_routes.py](../../../veritate_mri/routes/settings_routes.py) — GET/POST `/settings` for the dashboard; POST `/settings/api-key` (`{"action":"rotate"|"clear"}`) mints/clears the API key via `rotate_api_key()` / `clear_api_key()`. A `warm_models` change applies the C-engine warm pool via `backends_routes.warm_apply` (see [warm_models.md](warm_models.md)), mirroring the `pytorch_load_mode="always"` eager-load hook.
-- [api_auth_routes.py](../../../veritate_mri/routes/api_auth_routes.py) — reads `api_key`, calls `record_api_key_use()` on each authed programmatic request.
-- [runtime/heartbeat.py](../../../veritate_mri/runtime/heartbeat.py) — reads consent flags.
-- [training/trainer_runner.py](../../../veritate_mri/training/trainer_runner.py) — reads `device_preference`.
+- [settings_routes.py](../../../veritate_mri/routes/settings_routes.py): GET/POST `/settings` for the dashboard; POST `/settings/api-key` (`{"action":"rotate"|"clear"}`) mints/clears the API key via `rotate_api_key()` / `clear_api_key()`. A `warm_models` change applies the C-engine warm pool via `backends_routes.warm_apply` (see [warm_models.md](warm_models.md)), mirroring the `pytorch_load_mode="always"` eager-load hook.
+- [api_auth_routes.py](../../../veritate_mri/routes/api_auth_routes.py): reads `api_key`, calls `record_api_key_use()` on each authed programmatic request.
+- [runtime/heartbeat.py](../../../veritate_mri/runtime/heartbeat.py): reads consent flags.
+- [training/trainer_runner.py](../../../veritate_mri/training/trainer_runner.py): reads `device_preference`.
 
 ## Pitfalls
 
 - Some settings only take effect after a dashboard restart (`pytorch_load_mode`, `mesh_role`, anything captured at startup).
 - Adding a new setting: extend `DEFAULTS`, add validation in `_validate` if non-trivial, document the key here.
-- Don't store secrets the user expects to keep private outside the machine — `mri_settings.json` is plaintext.
+- `mri_settings.json` is plaintext. Anything stored there is readable by any process or person with disk access, so do not put a secret in it that must not leak.

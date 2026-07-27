@@ -54,7 +54,7 @@ This holds because a position's key and value depend only on that position and w
 
 The fix is to compute each position's key and value once, when the position is first seen, and store them. Every subsequent byte reads the store instead of rebuilding it. That store is the key-value cache, and the name is exactly what it holds.
 
-The asymmetry in the name is worth stating, because it is a common point of confusion. Queries are not cached. A query is used once, at the moment its own position is computed, to interrogate everything before it. Once that comparison is done the query has no further use, and no future position ever consults it. Keys and values are consulted by every future position for the remainder of the conversation. Keys and values are the archive; queries are consumed on use.
+The asymmetry in the name is a common point of confusion. Queries are not cached. A query is used once, at the moment its own position is computed, to interrogate everything before it. Once that comparison is done the query has no further use, and no future position ever consults it. Keys and values are consulted by every future position for the remainder of the conversation. Keys and values are the archive; queries are consumed on use.
 
 Nothing about this is exotic. Every transformer in production does it, because the alternative is quadratic waste. The cache is the correct engineering answer to the mechanism attention specifies.
 
@@ -85,7 +85,7 @@ The recurrent alternative changes what is stored rather than how it is stored.
 
 Instead of retaining every position's key and value, each head keeps one fixed-size matrix. Every byte updates that matrix by folding in the current byte's contribution and multiplying the existing contents by a learned decay, so recent information is written in while older information fades at a rate the model learned rather than one chosen by hand. The engine enforces the update in place, with no allocation inside the decode loop, which is how the property survives the trip from training code to serving code.
 
-The size of that matrix is a constant of the model. It does not depend on position, on conversation length, or on anything the user does. A conversation that has run for a thousand bytes uses precisely the same state as one that has run for ten, and the same as one that has run for ten million.
+The size of that matrix is a constant of the model. It does not depend on position, on conversation length, or on anything said in the exchange. A conversation that has run for a thousand bytes uses precisely the same state as one that has run for ten, and the same as one that has run for ten million.
 
 The hybrid trunk is not free of attention, and the distinction matters for anyone reading the footprint honestly. It keeps local attention on every byte, and that component does carry a cache. The difference is that the local cache is capped by the fixed sequence length rather than by the length of the exchange, so it reaches a ceiling and stops. Everything recurrent is flat from the first byte. The total is bounded, which is the property that matters, rather than zero, which would be a stronger claim than the architecture supports.
 

@@ -73,5 +73,5 @@ the other `build_*_corpus.py` builders.
 
 ## tests
 
-[`tests/mri/test_build_code_corpus.py`](../../tests/mri/test_build_code_corpus.py):
+[`tests/corpus/test_build_code_corpus.py`](../../tests/corpus/test_build_code_corpus.py):
 filters, dedup, ChatML framing, deterministic assembly, EOT separators.

@@ -17,8 +17,14 @@
 
 import json
 import random
+import sys
 from pathlib import Path
 
+_MRI_ROOT = str(Path(__file__).resolve().parents[3])
+if _MRI_ROOT not in sys.path:
+    sys.path.insert(0, _MRI_ROOT)
+
+from readers import paths  # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -60,12 +66,13 @@ def recall(rng):
     for fact, ans in ANIMAL_FACTS:
         pool.append({"prompt": f"{fact} ", "answer": ans})
     # numeric-recall fillers to reach N
-    for i in range(50):
+    for _ in range(50):
         n = rng.randint(2, 9)
-        pool.append({"prompt": f"There are {n} days in {n} day{'s' if n > 1 else ''}, so the answer is ", "answer": str(n)})
+        pool.append({"prompt": f"There are {n} days in {n} day{'s' if n > 1 else ''}, so the answer is ",
+                     "answer": str(n)})
     rng.shuffle(pool)
     out.extend(pool[:N_PER_TIER])
-    for i, p in enumerate(out):
+    for p in out:
         p["type"] = "recall"
     return out
 
@@ -141,13 +148,12 @@ TIERS = [
 
 
 def main() -> int:
-    here = Path(__file__).resolve().parent
-    out_dir = here.parent / "grade_eval" / "reasoning"
+    out_dir = Path(paths.GRADE_EVAL_REASONING_ROOT)
     out_dir.mkdir(parents=True, exist_ok=True)
     rng = random.Random(SEED)
     for name, fn in TIERS:
         items = fn(rng)
-        path = out_dir / f"{name}.jsonl"
+        path = Path(paths.eval_axis_item_path(str(out_dir), name))
         with path.open("w", encoding="utf-8") as f:
             for p in items:
                 f.write(json.dumps(p, ensure_ascii=False) + "\n")

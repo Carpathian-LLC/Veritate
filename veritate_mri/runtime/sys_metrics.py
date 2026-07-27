@@ -57,24 +57,121 @@ _LHM_NAMESPACE = None
 _INSTALLED_RAM = None  # bytes; one-shot at startup, doesn't change at runtime
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
+# macmon has a ~8s startup cost when stdout is piped, so per-poll subprocess
+# calls would freeze the HUD. Run it once as a persistent streaming process and
+# read JSON samples from a background thread.
+_MAC_MACMON_PROC   = None
+_MAC_MACMON_LATEST = None  # {"cpu": float|None, "gpu": float|None, "ts": float}
+_MAC_MACMON_LOCK   = threading.Lock()
+_MAC_MACMON_STALE_S = 5.0
+
+# Subprocess budgets by call class: one-shot probes, live per-poll queries,
+# slow adapter discovery.
+_PROBE_TIMEOUT_S     = 1.0
+_MAC_TEMP_TIMEOUT_S  = 1.5
+_LIVE_TIMEOUT_S      = 2.0
+_DISCOVERY_TIMEOUT_S = 4.0
+
+_KIB = 1024
+_MIB = _KIB * 1024
+_GIB = _MIB * 1024
+
+# Plausible die-temperature window. Readings outside it are sensor noise.
+_TEMP_MIN_C = 0.0
+_TEMP_MAX_C = 150.0
+
+SPECS_PATH = os.path.join(REPO_ROOT, "data", "system_specs.json")
+
 # ------------------------------------------------------------------------------------
-# Functions
+# Per-OS probe commands. One table per platform so an arch fix lands in one
+# place (rule 34c). Every subprocess argv in this file comes from here.
 
-def _run(cmd, timeout=2.0):
-    try:
-        out = subprocess.run(cmd, capture_output=True, text=True,
-                             timeout=timeout, check=False,
-                             creationflags=_NO_WINDOW)
-        return out.stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return None
+_NVIDIA_QUERY_ARGS = (
+    "nvidia-smi",
+    "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+    "--format=csv,noheader,nounits",
+)
+_NVIDIA_NA_VALUES = ("", "N/A", "[N/A]")
 
+_MAC_MACMON_BIN           = "macmon"
+_MAC_MACMON_INTERVAL_MS   = 1000
+_MAC_MACMON_ARGS          = (_MAC_MACMON_BIN, "pipe", "-i", str(_MAC_MACMON_INTERVAL_MS))
+_MAC_SYSTEM_PROFILER_ARGS = ("system_profiler", "SPDisplaysDataType", "-json")
+_MAC_IOREG_ACCEL_ARGS     = ("ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator")
+_MAC_IOREG_PLATFORM_ARGS  = ("ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
+_MAC_CPU_TEMP_ARGS        = ("osx-cpu-temp", "-c")
+_MAC_SW_VERS_PRODUCT_ARGS = ("sw_vers", "-productVersion")
+_MAC_SW_VERS_BUILD_ARGS   = ("sw_vers", "-buildVersion")
+_MAC_SYSCTL_ARGS          = ("sysctl", "-n")
+_MAC_SYSCTL_BRAND         = "machdep.cpu.brand_string"
+_MAC_SYSCTL_VENDOR        = "machdep.cpu.vendor"
+_MAC_SYSCTL_FEATURE_KEYS  = ("machdep.cpu.features", "machdep.cpu.leaf7_features")
+_MAC_SYSCTL_FREQ_MAX      = "hw.cpufrequency_max"
+_MAC_ARM_MACHINE          = "arm64"
+_MAC_ARM_VENDOR           = "Apple"
+_MAC_APPLE_GPU_TOKEN      = "apple"
+_SYSCTL_TRUE              = "1"
+_MAC_UUID_RE  = re.compile(r'"IOPlatformUUID"\s*=\s*"([^"]+)"')
+_IOREG_UTIL_RE = re.compile(r'"Device Utilization %"\s*=\s*(\d+)')
+_FLOAT_RE = re.compile(r"(\d+(?:\.\d+)?)")
+# NEON/ASIMD are mandatory on ARMv8 so Apple exposes no separate sysctl for
+# them. Treat as always-present on arm64 macOS.
+_MAC_ARM_IMPLIED_FEATURES = ("NEON", "ASIMD")
+# (sysctl key, feature name reported). Apple Silicon ships these as
+# hw.optional.arm.FEAT_*, each returning "1" when supported.
+_MAC_ARM_FEATURE_PROBES = (
+    ("hw.optional.arm.FEAT_DotProd",       "ASIMDDP"),
+    ("hw.optional.arm.FEAT_FP16",          "FP16"),
+    ("hw.optional.arm.FEAT_BF16",          "BF16"),
+    ("hw.optional.arm.FEAT_I8MM",          "I8MM"),
+    ("hw.optional.arm.FEAT_FHM",           "ASIMDFHM"),
+    ("hw.optional.arm.FEAT_SHA512",        "SHA512"),
+    ("hw.optional.arm.FEAT_SHA3",          "SHA3"),
+    ("hw.optional.arm.FEAT_AES",           "AES"),
+)
 
-# Substring patterns that identify non-hardware display adapters we want to hide
-# from the HUD: remote-session viewers (RDP), fallback software rasterizers, VM
-# guest drivers, USB "indirect display" adapters, and virtual-monitor tools.
-# Matched case-insensitively against the adapter name; the underlying discrete
-# and integrated GPUs are unaffected.
+_LINUX_DRM_PATH        = "/sys/class/drm"
+_LINUX_DEVICE_DIR      = "device"
+_LINUX_VENDOR_FILE     = "vendor"
+_LINUX_GPU_BUSY_FILE   = "gpu_busy_percent"
+_LINUX_CPUINFO_PATH    = "/proc/cpuinfo"
+_LINUX_OS_RELEASE_PATH = "/etc/os-release"
+_LINUX_MACHINE_ID_PATHS = ("/etc/machine-id", "/var/lib/dbus/machine-id")
+_LSPCI_ARGS             = ("lspci", "-D")
+
+_PS_ARGS = ("powershell", "-NoProfile", "-Command")
+_PS_LHM_SENSORS_FMT = (
+    "Get-CimInstance -Namespace '{ns}' -ClassName Sensor -ErrorAction Stop | "
+    "Where-Object {{ $_.SensorType -eq 'Temperature' }} | "
+    "Select-Object Name,Parent,Value | ConvertTo-Json -Compress"
+)
+_PS_VIDEO_CONTROLLERS = (
+    "Get-CimInstance Win32_VideoController | "
+    "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress"
+)
+_PS_PHYSICAL_MEMORY_SUM = "(Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum"
+_PS_PROCESSOR = (
+    "Get-CimInstance Win32_Processor | "
+    "Select-Object Name,Manufacturer,MaxClockSpeed | ConvertTo-Json -Compress"
+)
+_LHM_NAMESPACES = ("root/LibreHardwareMonitor", "root/OpenHardwareMonitor")
+_WIN_MACHINE_GUID_ARGS = (
+    "reg", "query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid",
+)
+_WIN_GUID_RE = re.compile(r"MachineGuid\s+REG_SZ\s+(\S+)")
+
+# psutil sensor buckets and label tokens that carry a CPU package temperature.
+_PSUTIL_TEMP_KEYS = ("coretemp", "k10temp", "zenpower", "cpu_thermal", "acpitz")
+_PSUTIL_TEMP_LABEL_TOKENS = ("cpu", "package", "tdie", "tctl")
+_LHM_CPU_TOKENS      = ("cpu", "package", "tctl", "tdie")
+_LHM_CPU_PARENT_TOKEN = "cpu"
+_LHM_GPU_TOKEN       = "gpu"
+_LHM_PACKAGE_TOKEN   = "package"
+
+# Substring patterns that identify non-hardware display adapters hidden from
+# the HUD: remote-session viewers (RDP), fallback software rasterizers, VM
+# guest drivers, USB "indirect display" adapters, virtual-monitor tools.
+# Matched case-insensitively; discrete and integrated GPUs are unaffected.
 _VIRTUAL_ADAPTER_TOKENS = (
     "remote display",       # Microsoft Remote Display Adapter (RDP session)
     "basic display",        # Microsoft Basic Display Adapter (fallback WDDM)
@@ -100,6 +197,61 @@ _VIRTUAL_ADAPTER_TOKENS = (
     "cirrus logic",         # QEMU legacy VGA
 )
 
+# (canonical vendor, name substrings). Shared by the Windows adapter reader and
+# the lspci name cleaner so vendor detection has one owner (rule 20).
+_GPU_VENDOR_TOKENS = (
+    ("Intel",  ("intel",)),
+    ("NVIDIA", ("nvidia", "geforce", "rtx", "gtx")),
+    ("AMD",    ("amd", "radeon", "advanced micro")),
+)
+_INTEGRATED_TOKENS = ("integrated", "vega")
+_INTEGRATED_VENDOR = "Intel"
+_UNKNOWN_VENDOR    = "?"
+
+_GPU_CLASS_RE = re.compile(
+    r"^(\S+)\s+(?:VGA compatible controller|3D controller|Display controller):\s*(.+)$",
+    re.IGNORECASE,
+)
+_GPU_MODEL_BRACKET_RE = re.compile(r"\[([^\]]+)\]")
+_GPU_REV_RE = re.compile(r"\s*\(rev [0-9a-fA-F]+\)\s*$")
+_DRM_CARD_RE = re.compile(r"^card\d+$")
+_PCI_VENDOR_NAMES = {"0x1002": "AMD", "0x10de": "NVIDIA", "0x8086": "Intel"}
+
+# Stable, ordered CPU feature flags downstream code keys off when picking
+# kernels or warning the user. Reported as bools so consumers never
+# canonicalize a raw feature set.
+CPU_FEATURES_OF_INTEREST = (
+    "SSE2", "SSE3", "SSSE3", "SSE4_1", "SSE4_2",
+    "AVX1_0", "AVX2", "AVX512F", "AVX512BW", "AVX512VL", "AVX512VNNI",
+    "FMA", "F16C", "BMI1", "BMI2", "POPCNT", "AES", "PCLMULQDQ", "RDRAND",
+    "NEON", "ASIMD", "ASIMDDP", "ASIMDFHM", "FP16", "BF16", "I8MM",
+)
+
+# ------------------------------------------------------------------------------------
+# Functions
+
+def _run(cmd, timeout=_LIVE_TIMEOUT_S):
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=timeout, check=False,
+                             creationflags=_NO_WINDOW)
+        return out.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _in_temp_range(v):
+    return _TEMP_MIN_C < v < _TEMP_MAX_C
+
+
+def _vendor_from_name(name):
+    """Canonical GPU vendor for an adapter/controller name. None when unknown."""
+    low = (name or "").lower()
+    for vendor, tokens in _GPU_VENDOR_TOKENS:
+        if any(tok in low for tok in tokens):
+            return vendor
+    return None
+
 
 def _is_virtual_adapter(name):
     if not name:
@@ -113,11 +265,7 @@ def _nvidia_query():
     now = time.time()
     if (now - _NV_CACHE[0]) < _LIVE_TTL:
         return _NV_CACHE[1]
-    out = _run([
-        "nvidia-smi",
-        "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
-        "--format=csv,noheader,nounits",
-    ])
+    out = _run(_NVIDIA_QUERY_ARGS)
     rows = []
     if out:
         for line in out.strip().splitlines():
@@ -126,7 +274,7 @@ def _nvidia_query():
                 continue
             try:
                 temp = None
-                if len(parts) >= 5 and parts[4] not in ("", "N/A", "[N/A]"):
+                if len(parts) >= 5 and parts[4] not in _NVIDIA_NA_VALUES:
                     try:
                         temp = float(parts[4])
                     except ValueError:
@@ -136,8 +284,8 @@ def _nvidia_query():
                     "vendor": "NVIDIA",
                     "integrated": False,
                     "load_pct": float(parts[1]),
-                    "vram_used": int(parts[2]) * 1024 * 1024,
-                    "vram_total": int(parts[3]) * 1024 * 1024,
+                    "vram_used": int(parts[2]) * _MIB,
+                    "vram_total": int(parts[3]) * _MIB,
                     "temp_c": temp,
                 })
             except ValueError:
@@ -158,14 +306,14 @@ def _parse_size_str(s):
     except ValueError:
         return None
     u = parts[1].upper()
-    if u.startswith("GB"): return int(n * (1024 ** 3))
-    if u.startswith("MB"): return int(n * (1024 ** 2))
-    if u.startswith("KB"): return int(n * 1024)
+    if u.startswith("GB"): return int(n * _GIB)
+    if u.startswith("MB"): return int(n * _MIB)
+    if u.startswith("KB"): return int(n * _KIB)
     return None
 
 
 def _mac_adapters():
-    out = _run(["system_profiler", "SPDisplaysDataType", "-json"], timeout=4.0)
+    out = _run(_MAC_SYSTEM_PROFILER_ARGS, timeout=_DISCOVERY_TIMEOUT_S)
     if not out:
         return []
     try:
@@ -191,9 +339,6 @@ def _mac_adapters():
     return rows
 
 
-_IOREG_UTIL_RE = re.compile(r'"Device Utilization %"\s*=\s*(\d+)')
-
-
 def _psutil_cpu_temp():
     """psutil.sensors_temperatures. Works on Linux (coretemp/k10temp/cpu_thermal)
     and some macOS builds. Returns Celsius or None. Empty on Windows."""
@@ -203,26 +348,16 @@ def _psutil_cpu_temp():
         temps = psutil.sensors_temperatures() or {}
     except (AttributeError, OSError):
         return None
-    for key in ("coretemp", "k10temp", "zenpower", "cpu_thermal", "acpitz"):
+    for key in _PSUTIL_TEMP_KEYS:
         for e in temps.get(key) or []:
-            if e.current and e.current > 0:
+            if e.current and e.current > _TEMP_MIN_C:
                 return float(e.current)
     for entries in temps.values():
         for e in entries or []:
             label = (getattr(e, "label", "") or "").lower()
-            if "cpu" in label or "package" in label or "tdie" in label or "tctl" in label:
-                if e.current and e.current > 0:
-                    return float(e.current)
+            if any(tok in label for tok in _PSUTIL_TEMP_LABEL_TOKENS) and e.current and e.current > _TEMP_MIN_C:
+                return float(e.current)
     return None
-
-
-# macmon has a ~8s startup cost when stdout is piped, so per-poll subprocess
-# calls would freeze the HUD. We run it once as a persistent streaming process
-# and read JSON samples from a background thread.
-_MAC_MACMON_PROC   = None
-_MAC_MACMON_LATEST = None  # {"cpu": float|None, "gpu": float|None, "ts": float}
-_MAC_MACMON_LOCK   = threading.Lock()
-_MAC_MACMON_STALE_S = 5.0
 
 
 def _mac_macmon_reader(proc):
@@ -241,8 +376,8 @@ def _mac_macmon_reader(proc):
             gpu = temp.get("gpu_temp_avg")
             with _MAC_MACMON_LOCK:
                 _MAC_MACMON_LATEST = {
-                    "cpu": float(cpu) if isinstance(cpu, (int, float)) and 0 < cpu < 150 else None,
-                    "gpu": float(gpu) if isinstance(gpu, (int, float)) and 0 < gpu < 150 else None,
+                    "cpu": float(cpu) if isinstance(cpu, (int, float)) and _in_temp_range(cpu) else None,
+                    "gpu": float(gpu) if isinstance(gpu, (int, float)) and _in_temp_range(gpu) else None,
                     "ts":  time.time(),
                 }
     except (OSError, ValueError):
@@ -258,14 +393,14 @@ def _mac_macmon_start():
     # Reap any orphan macmons from a prior dashboard instance whose os._exit
     # bypassed atexit cleanup. Only kills processes owned by the current user.
     try:
-        subprocess.run(["pkill", "-U", str(os.getuid()), "-x", "macmon"],
+        subprocess.run(["pkill", "-U", str(os.getuid()), "-x", _MAC_MACMON_BIN],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=1.0)
+                       timeout=_PROBE_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired):
         pass
     try:
         proc = subprocess.Popen(
-            ["macmon", "pipe", "-i", "1000"],
+            _MAC_MACMON_ARGS,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL, text=True, bufsize=1,
         )
@@ -309,13 +444,13 @@ def _mac_cpu_temp():
     s = _mac_macmon_sample()
     if s and s.get("cpu") is not None:
         return s["cpu"]
-    out = _run(["osx-cpu-temp", "-c"], timeout=1.5)
+    out = _run(_MAC_CPU_TEMP_ARGS, timeout=_MAC_TEMP_TIMEOUT_S)
     if out:
-        m = re.search(r"(\d+(?:\.\d+)?)", out)
+        m = _FLOAT_RE.search(out)
         if m:
             try:
                 v = float(m.group(1))
-                if 0 < v < 150:
+                if _in_temp_range(v):
                     return v
             except ValueError:
                 pass
@@ -337,15 +472,10 @@ def _lhm_sensors():
     now = time.time()
     if (now - _LHM_TEMP_CACHE[0]) < _LIVE_TTL:
         return _LHM_TEMP_CACHE[1]
-    namespaces = [_LHM_NAMESPACE] if _LHM_NAMESPACE else ["root/LibreHardwareMonitor", "root/OpenHardwareMonitor"]
+    namespaces = (_LHM_NAMESPACE,) if _LHM_NAMESPACE else _LHM_NAMESPACES
     result = None
     for ns in namespaces:
-        out = _run([
-            "powershell", "-NoProfile", "-Command",
-            f"Get-CimInstance -Namespace '{ns}' -ClassName Sensor -ErrorAction Stop | "
-            "Where-Object { $_.SensorType -eq 'Temperature' } | "
-            "Select-Object Name,Parent,Value | ConvertTo-Json -Compress",
-        ], timeout=2.0)
+        out = _run([*_PS_ARGS, _PS_LHM_SENSORS_FMT.format(ns=ns)], timeout=_LIVE_TIMEOUT_S)
         if not out or not out.strip():
             continue
         try:
@@ -366,13 +496,13 @@ def _lhm_sensors():
                 val = float(val)
             except (TypeError, ValueError):
                 continue
-            if val <= 0 or val > 150:
+            if not _in_temp_range(val):
                 continue
             low = name.lower()
-            if "cpu" in parent or "cpu" in low or "package" in low or "tctl" in low or "tdie" in low:
-                if cpu_val is None or (("package" in low) and val > 0):
+            if _LHM_CPU_PARENT_TOKEN in parent or any(tok in low for tok in _LHM_CPU_TOKENS):
+                if cpu_val is None or _LHM_PACKAGE_TOKEN in low:
                     cpu_val = val
-            elif "gpu" in parent or "gpu" in low:
+            elif _LHM_GPU_TOKEN in parent or _LHM_GPU_TOKEN in low:
                 gpus.append({"name": name, "temp_c": val})
         if cpu_val is not None or gpus:
             _LHM_NAMESPACE = ns
@@ -407,7 +537,7 @@ def _mac_apple_gpu_load():
     now = time.time()
     if (now - _MAC_LOAD_CACHE[0]) < _LIVE_TTL:
         return _MAC_LOAD_CACHE[1]
-    out = _run(["ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"], timeout=2.0)
+    out = _run(_MAC_IOREG_ACCEL_ARGS, timeout=_LIVE_TIMEOUT_S)
     val = None
     if out:
         m = _IOREG_UTIL_RE.search(out)
@@ -421,11 +551,7 @@ def _mac_apple_gpu_load():
 
 
 def _win_adapters():
-    out = _run([
-        "powershell", "-NoProfile", "-Command",
-        "Get-CimInstance Win32_VideoController | "
-        "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress",
-    ], timeout=4.0)
+    out = _run([*_PS_ARGS, _PS_VIDEO_CONTROLLERS], timeout=_DISCOVERY_TIMEOUT_S)
     if not out:
         return []
     try:
@@ -442,15 +568,9 @@ def _win_adapters():
             ram_int = int(ram) if ram is not None else None
         except (TypeError, ValueError):
             ram_int = None
-        vendor = "?"
         low = name.lower()
-        if "nvidia" in low or "geforce" in low or "rtx" in low or "gtx" in low:
-            vendor = "NVIDIA"
-        elif "amd" in low or "radeon" in low:
-            vendor = "AMD"
-        elif "intel" in low:
-            vendor = "Intel"
-        integrated = vendor == "Intel" or "integrated" in low or "vega" in low
+        vendor = _vendor_from_name(name) or _UNKNOWN_VENDOR
+        integrated = vendor == _INTEGRATED_VENDOR or any(tok in low for tok in _INTEGRATED_TOKENS)
         rows.append({
             "name": name,
             "vendor": vendor,
@@ -463,16 +583,6 @@ def _win_adapters():
     return rows
 
 
-_GPU_CLASS_RE = re.compile(
-    r"^(\S+)\s+(?:VGA compatible controller|3D controller|Display controller):\s*(.+)$",
-    re.IGNORECASE,
-)
-_GPU_MODEL_BRACKET_RE = re.compile(r"\[([^\]]+)\]")
-_GPU_REV_RE = re.compile(r"\s*\(rev [0-9a-fA-F]+\)\s*$")
-_DRM_CARD_RE = re.compile(r"^card\d+$")
-_PCI_VENDOR_NAMES = {"0x1002": "AMD", "0x10de": "NVIDIA", "0x8086": "Intel"}
-
-
 def _clean_gpu_name(desc):
     """Short model name from an lspci controller description.
     'Intel Corporation CoffeeLake-S GT2 [UHD Graphics 630] (rev 02)' ->
@@ -480,11 +590,7 @@ def _clean_gpu_name(desc):
     desc = _GPU_REV_RE.sub("", desc).strip()
     brackets = _GPU_MODEL_BRACKET_RE.findall(desc)
     model = brackets[-1].strip() if brackets else desc
-    low = desc.lower()
-    vendor = ("Intel"  if "intel" in low else
-              "NVIDIA" if ("nvidia" in low or "geforce" in low) else
-              "AMD"    if ("amd" in low or "radeon" in low or "advanced micro" in low) else
-              "")
+    vendor = _vendor_from_name(desc)
     if vendor and vendor.lower() not in model.lower():
         return f"{vendor} {model}"
     return model
@@ -492,7 +598,7 @@ def _clean_gpu_name(desc):
 
 def _lspci_gpu_names():
     """Map PCI slot (domain:bus:dev.fn) -> model name via lspci. {} if lspci absent."""
-    out = _run(["lspci", "-D"], timeout=2.0)
+    out = _run(_LSPCI_ARGS, timeout=_LIVE_TIMEOUT_S)
     names = {}
     if not out:
         return names
@@ -505,33 +611,32 @@ def _lspci_gpu_names():
 
 def _linux_adapters():
     rows = []
-    drm = "/sys/class/drm"
-    if not os.path.isdir(drm):
+    if not os.path.isdir(_LINUX_DRM_PATH):
         return rows
     names = _lspci_gpu_names()
-    for entry in sorted(os.listdir(drm)):
+    for entry in sorted(os.listdir(_LINUX_DRM_PATH)):
         if not _DRM_CARD_RE.match(entry):
             continue
-        dev = os.path.join(drm, entry, "device")
-        vendor = "?"
+        dev = os.path.join(_LINUX_DRM_PATH, entry, _LINUX_DEVICE_DIR)
+        vendor = _UNKNOWN_VENDOR
         try:
-            with open(os.path.join(dev, "vendor"), "r") as f:
+            with open(os.path.join(dev, _LINUX_VENDOR_FILE)) as f:
                 vid = f.read().strip()
             vendor = _PCI_VENDOR_NAMES.get(vid, vid)
         except OSError:
             pass
         slot = os.path.basename(os.path.realpath(dev))
-        name = names.get(slot) or (f"{vendor} GPU" if vendor not in ("?", "") else entry)
+        name = names.get(slot) or (f"{vendor} GPU" if vendor not in (_UNKNOWN_VENDOR, "") else entry)
         load = None
         try:
-            with open(os.path.join(dev, "gpu_busy_percent"), "r") as f:
+            with open(os.path.join(dev, _LINUX_GPU_BUSY_FILE)) as f:
                 load = float(f.read().strip())
         except OSError:
             pass
         rows.append({
             "name": name,
             "vendor": vendor,
-            "integrated": vendor == "Intel",
+            "integrated": vendor == _INTEGRATED_VENDOR,
             "load_pct": load,
             "vram_used": None,
             "vram_total": None,
@@ -574,10 +679,7 @@ def _installed_ram_bytes():
     if _INSTALLED_RAM is not None:
         return _INSTALLED_RAM
     if sys.platform.startswith("win"):
-        out = _run([
-            "powershell", "-NoProfile", "-Command",
-            "(Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum",
-        ], timeout=4.0)
+        out = _run([*_PS_ARGS, _PS_PHYSICAL_MEMORY_SUM], timeout=_DISCOVERY_TIMEOUT_S)
         if out:
             try:
                 _INSTALLED_RAM = int(out.strip())
@@ -628,13 +730,13 @@ def _gpus():
         load = _mac_apple_gpu_load()
         if load is not None:
             for a in adapters:
-                if "apple" in a["name"].lower() or a["integrated"]:
+                if _MAC_APPLE_GPU_TOKEN in a["name"].lower() or a["integrated"]:
                     a["load_pct"] = load
                     break
         gpu_t = _mac_gpu_temp()
         if gpu_t is not None:
             for a in adapters:
-                if a.get("temp_c") is None and ("apple" in a["name"].lower() or a["integrated"]):
+                if a.get("temp_c") is None and (_MAC_APPLE_GPU_TOKEN in a["name"].lower() or a["integrated"]):
                     a["temp_c"] = gpu_t
                     break
     if sys.platform.startswith("win"):
@@ -667,7 +769,7 @@ def snapshot():
             "gpus": [],
         }
     # cpu_pct is system-wide across all cores (0-100). This is what users
-    # expect the HUD to spike on — trainers run in subprocesses, so the
+    # expect the HUD to spike on: trainers run in subprocesses, so the
     # dashboard's own process_cpu_pct stays near zero even when the box is
     # pegged. psutil.cpu_percent uses delta-since-last-call when interval=None;
     # the HUD polls regularly so the first reading after launch may be 0.
@@ -696,50 +798,39 @@ def snapshot():
 # Hardware capability probes. Cross-platform. Used by detect_specs() and the
 # settings-tab "what we collect" panel.
 
-# NEON/ASIMD are mandatory on ARMv8 so Apple doesn't expose a separate sysctl
-# for them on Apple Silicon. We treat them as always-present on arm64 macOS.
-_MAC_ARM_IMPLIED_FEATURES = ("NEON", "ASIMD")
-_MAC_ARM_FEATURE_PROBES = (
-    # (sysctl key, feature name we report). Apple Silicon ships these as
-    # hw.optional.arm.FEAT_*, each returning "1" when supported.
-    ("hw.optional.arm.FEAT_DotProd",       "ASIMDDP"),
-    ("hw.optional.arm.FEAT_FP16",          "FP16"),
-    ("hw.optional.arm.FEAT_BF16",          "BF16"),
-    ("hw.optional.arm.FEAT_I8MM",          "I8MM"),
-    ("hw.optional.arm.FEAT_FHM",           "ASIMDFHM"),
-    ("hw.optional.arm.FEAT_SHA512",        "SHA512"),
-    ("hw.optional.arm.FEAT_SHA3",          "SHA3"),
-    ("hw.optional.arm.FEAT_AES",           "AES"),
-)
+def _sysctl(key):
+    return _run([*_MAC_SYSCTL_ARGS, key], timeout=_PROBE_TIMEOUT_S)
+
+
+def _is_mac_arm():
+    return (platform.machine() or "").lower() == _MAC_ARM_MACHINE
 
 
 def _cpu_features_macos():
     """Returns {brand, vendor, features:set, freq_max_hz}. Empty fields if a
-    probe fails — never raises. On Intel Macs reads machdep.cpu.{features,
+    probe fails: never raises. On Intel Macs reads machdep.cpu.{features,
     leaf7_features}; on Apple Silicon probes hw.optional.* per-feature."""
     out = {"brand": None, "vendor": None, "features": set(), "freq_max_hz": None}
-    brand = _run(["sysctl", "-n", "machdep.cpu.brand_string"], timeout=1.0)
+    brand = _sysctl(_MAC_SYSCTL_BRAND)
     if brand: out["brand"] = brand.strip()
-    vendor = _run(["sysctl", "-n", "machdep.cpu.vendor"], timeout=1.0)
+    vendor = _sysctl(_MAC_SYSCTL_VENDOR)
     if vendor and vendor.strip():
         out["vendor"] = vendor.strip()
-    elif (platform.machine() or "").lower() == "arm64":
-        out["vendor"] = "Apple"
+    elif _is_mac_arm():
+        out["vendor"] = _MAC_ARM_VENDOR
 
-    f1 = _run(["sysctl", "-n", "machdep.cpu.features"], timeout=1.0) or ""
-    f2 = _run(["sysctl", "-n", "machdep.cpu.leaf7_features"], timeout=1.0) or ""
-    for tok in (f1 + " " + f2).split():
-        out["features"].add(tok.upper().replace(".", "_"))
+    for key in _MAC_SYSCTL_FEATURE_KEYS:
+        for tok in (_sysctl(key) or "").split():
+            out["features"].add(tok.upper().replace(".", "_"))
 
-    if (platform.machine() or "").lower() == "arm64":
-        for name in _MAC_ARM_IMPLIED_FEATURES:
-            out["features"].add(name)
+    if _is_mac_arm():
+        out["features"].update(_MAC_ARM_IMPLIED_FEATURES)
         for key, name in _MAC_ARM_FEATURE_PROBES:
-            v = _run(["sysctl", "-n", key], timeout=1.0)
-            if v and v.strip() == "1":
+            v = _sysctl(key)
+            if v and v.strip() == _SYSCTL_TRUE:
                 out["features"].add(name)
 
-    freq = _run(["sysctl", "-n", "hw.cpufrequency_max"], timeout=1.0)
+    freq = _sysctl(_MAC_SYSCTL_FREQ_MAX)
     if freq:
         try: out["freq_max_hz"] = int(freq.strip())
         except ValueError: pass
@@ -749,7 +840,7 @@ def _cpu_features_macos():
 def _cpu_features_linux():
     out = {"brand": None, "vendor": None, "features": set(), "freq_max_hz": None}
     try:
-        with open("/proc/cpuinfo", "r") as f:
+        with open(_LINUX_CPUINFO_PATH) as f:
             for raw in f:
                 if ":" not in raw: continue
                 k, _, v = raw.partition(":")
@@ -773,11 +864,7 @@ def _cpu_features_windows():
     infer the obvious ones (AVX, AVX2) from the brand string when we can,
     leaving the set possibly incomplete."""
     out = {"brand": None, "vendor": None, "features": set(), "freq_max_hz": None}
-    j = _run([
-        "powershell", "-NoProfile", "-Command",
-        "Get-CimInstance Win32_Processor | "
-        "Select-Object Name,Manufacturer,MaxClockSpeed | ConvertTo-Json -Compress",
-    ], timeout=4.0)
+    j = _run([*_PS_ARGS, _PS_PROCESSOR], timeout=_DISCOVERY_TIMEOUT_S)
     if j:
         try:
             blob = json.loads(j)
@@ -808,15 +895,15 @@ def _os_version():
     """Product-level OS version string. macOS: `sw_vers -productVersion`.
     Linux: best-effort from /etc/os-release. Windows: platform.win32_ver."""
     if sys.platform == "darwin":
-        v = _run(["sw_vers", "-productVersion"], timeout=1.0)
-        b = _run(["sw_vers", "-buildVersion"],   timeout=1.0)
+        v = _run(_MAC_SW_VERS_PRODUCT_ARGS, timeout=_PROBE_TIMEOUT_S)
+        b = _run(_MAC_SW_VERS_BUILD_ARGS,   timeout=_PROBE_TIMEOUT_S)
         return {
             "product": (v.strip() if v else None),
             "build":   (b.strip() if b else None),
         }
     if sys.platform.startswith("linux"):
         try:
-            with open("/etc/os-release", "r") as f:
+            with open(_LINUX_OS_RELEASE_PATH) as f:
                 kv = {}
                 for line in f:
                     if "=" not in line: continue
@@ -829,14 +916,9 @@ def _os_version():
         except OSError:
             return {"product": None, "build": None}
     if sys.platform.startswith("win"):
-        rel, ver, csd, ptype = platform.win32_ver()
+        rel, ver, _, _ = platform.win32_ver()
         return {"product": rel or None, "build": ver or None}
     return {"product": None, "build": None}
-
-
-_MAC_UUID_RE = re.compile(r'"IOPlatformUUID"\s*=\s*"([^"]+)"')
-_WIN_GUID_RE = re.compile(r"MachineGuid\s+REG_SZ\s+(\S+)")
-_LINUX_MACHINE_ID_PATHS = ("/etc/machine-id", "/var/lib/dbus/machine-id")
 
 
 def stable_machine_key():
@@ -848,19 +930,18 @@ def stable_machine_key():
     if sys.platform.startswith("linux"):
         for p in _LINUX_MACHINE_ID_PATHS:
             try:
-                with open(p, "r") as f:
+                with open(p) as f:
                     v = f.read().strip()
                 if v:
                     return v
             except OSError:
                 pass
     elif sys.platform == "darwin":
-        m = _MAC_UUID_RE.search(_run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], timeout=2.0) or "")
+        m = _MAC_UUID_RE.search(_run(_MAC_IOREG_PLATFORM_ARGS, timeout=_LIVE_TIMEOUT_S) or "")
         if m:
             return m.group(1)
     elif sys.platform.startswith("win"):
-        m = _WIN_GUID_RE.search(_run(
-            ["reg", "query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"], timeout=2.0) or "")
+        m = _WIN_GUID_RE.search(_run(_WIN_MACHINE_GUID_ARGS, timeout=_LIVE_TIMEOUT_S) or "")
         if m:
             return m.group(1)
     return f"{platform.node() or ''}|{uuid.getnode()}"
@@ -877,23 +958,6 @@ def _disk_free_at_repo():
         return None
 
 
-# A stable, ordered list of CPU feature flag names that downstream code keys
-# off when picking kernels or warning the user. The presence/absence of each
-# is reported as a bool so consumers don't have to canonicalize a giant set.
-CPU_FEATURES_OF_INTEREST = (
-    "SSE2", "SSE3", "SSSE3", "SSE4_1", "SSE4_2",
-    "AVX1_0", "AVX2", "AVX512F", "AVX512BW", "AVX512VL", "AVX512VNNI",
-    "FMA", "F16C", "BMI1", "BMI2", "POPCNT", "AES", "PCLMULQDQ", "RDRAND",
-    "NEON", "ASIMD", "ASIMDDP", "ASIMDFHM", "FP16", "BF16", "I8MM",
-)
-
-
-# ------------------------------------------------------------------------------------
-# Saved system spec file. Captured on demand from settings; lives under data/.
-
-SPECS_PATH = os.path.join(REPO_ROOT, "data", "system_specs.json")
-
-
 def detect_specs():
     """Cross-platform machine spec snapshot for the saved specs file. Includes
     raw OS/CPU/GPU/memory details PLUS pre-derived `capabilities` booleans so
@@ -906,7 +970,7 @@ def detect_specs():
     feats = cpu_info.get("features") or set()
     features_present = {name: (name in feats) for name in CPU_FEATURES_OF_INTEREST}
     has_any_nvidia = any((g.get("vendor") or "").upper() == "NVIDIA" for g in (snap.get("gpus") or []))
-    is_apple_silicon = (sys.platform == "darwin" and (platform.machine() or "").lower() == "arm64")
+    is_apple_silicon = (sys.platform == "darwin" and _is_mac_arm())
     os_v = _os_version()
     return {
         "captured_at": int(time.time()),
@@ -965,7 +1029,7 @@ def load_specs():
     if not os.path.isfile(SPECS_PATH):
         return None
     try:
-        with open(SPECS_PATH, "r", encoding="utf-8") as f:
+        with open(SPECS_PATH, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
@@ -991,7 +1055,7 @@ def save_measured(measured):
     installing the CUDA torch build) doesn't overwrite the previous one. The
     top-level `measured` still holds the most recent probe for backwards
     compatibility with older consumers that read specs["measured"] directly.
-    Rule 34c: distinguish device+memory kind at every layer — the per-device
+    Rule 34c: distinguish device+memory kind at every layer: the per-device
     map is the storage half of that."""
     if not isinstance(measured, dict):
         return None

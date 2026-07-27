@@ -1,40 +1,22 @@
 ---
-title: "Build 1: initial commit and base features"
-date: 2026-05-05
-tags: [build, engine, mri, format, plugins]
-summary: Initial commit. INT8 byte-level inference engine plus the live MRI dashboard.
+title: Build 1: Veritate 1.0.0
+date: 2026-07-27
+tags: [build, release]
+summary: The 1.0.0 launch. Every component starts at v1.0.0 and nothing on disk needs rebuilding.
 ---
 
-## versions
+# Build 1: Veritate 1.0.0
 
-- build: 1
-- engine: v2.0.0
-- mri: v0.1.0
-- format: v0.1.0
-- plugins: v0.1.0
+The first released build. Train a byte-level model on this box, watch every layer of it while it learns, chat with it, and serve it to any OpenAI-compatible client.
 
-## what changed
+Nothing to do. There is no earlier version of Veritate, so no models, corpora, settings, or exported files need rebuilding or migrating.
 
-This is the baseline. Everything in the repo as of this build is "build 1." The pieces:
+The wiki tab is now the home of the public documentation: the REST API every client and extension calls, how to build and publish an extension, one page per training setting, and these build notes.
 
-- **Engine.** A small inference program written in C and assembly, targeting modern x86 CPUs. It loads a trained model and predicts text one byte at a time.
-- **MRI dashboard.** A local web app that shows what the model is doing while it generates: which neurons fire, how attention moves, where confidence comes from. Open it at the URL the server prints when it starts.
-- **Format.** The on-disk layout for trained models, settings, and per-step training artifacts. Set once, here.
-- **Plugins.** Self-contained add-ons under `plugins/`. They cover trainers, corpus builders, and experiments.
-
-There is nothing to compare against yet. Future build notes will list deltas from this one.
-
-## what you need to do
-
-Nothing. Pull and keep working.
-
-If this is your first time:
-
-1. Run `pwsh veritate_engine/build/setup.ps1` once to set up the build toolchain.
-2. Run `veritate_engine/build/build.bat` to compile the engine.
-3. Start the MRI server with `python veritate_mri/app.py`. Open the URL it prints.
-
-## known issues
-
-- The engine is x86-only at this build. ARM64 support is planned, not present.
-- Long contexts can drift past the 0.1 ms / byte target on some workloads. Tightening that is on the list.
+| component | version | covers |
+|---|---|---|
+| build | 1 | the number to quote in a bug report |
+| engine | v1.0.0 | the C inference engine and its per-architecture kernels |
+| mri | v1.0.0 | the dashboard, routes, training, and inference |
+| format | v1.0.0 | on-disk layouts: model files, settings, run configs, hook artifacts |
+| trainers | v1.0.0 | the contract trainers are built against |

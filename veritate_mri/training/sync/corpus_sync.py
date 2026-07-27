@@ -19,7 +19,7 @@
 #        added by hand. takes precedence over remote and local.
 # - format='raw_bytes' means the URL points at a single file written directly
 #   as a uint8 byte stream. since Veritate trains byte-level (np.uint8 memmap),
-#   plaintext bytes ARE tokens — no tokenizer step. val_split_ratio carves off
+#   plaintext bytes ARE tokens: no tokenizer step. val_split_ratio carves off
 #   the tail of the downloaded train file as val.bin when no val_url is given.
 # - format='zip_bundle' means train_url points at one hosted zip holding
 #   <stem>_train.bin and <stem>_val.bin (any folder prefix inside the archive).
@@ -28,7 +28,7 @@
 #   bins never invalidates the catalog hashes.
 # - format='native' means the corpus ships inside the repo at
 #   veritate_mri/data/corpus/<stem>_{train,val}.bin. install copies the files
-#   into trainers/corpus/ — no network, no sha. uninstall only removes the
+#   into trainers/corpus/: no network, no sha. uninstall only removes the
 #   user copy; the repo copy stays, so reinstall is always possible.
 # - coming_soon=true on an entry disables install in the dashboard: the corpus
 #   is staged but not published yet. Flipping it off (plus a real train_url)
@@ -95,7 +95,7 @@ def _load_local_catalog():
     """Read the JSON catalog shipped next to this module. Returns [] if the
     file is missing or unreadable so the rest of the system still works."""
     try:
-        with open(LOCAL_CATALOG_PATH, "r", encoding="utf-8") as f:
+        with open(LOCAL_CATALOG_PATH, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         logmod.warn("corpus-sync", f"local catalog unreadable ({LOCAL_CATALOG_PATH}): {e}")
@@ -302,7 +302,7 @@ def catalog():
 # ------------------------------------------------------------------------------------
 # Install / uninstall
 
-def _download_once(url, dest_path, stem, kind, tmp):
+def _download_once(url, stem, kind, tmp):
     """One attempt. Caller handles retry/backoff. Raises on transient errors so
     the caller can decide whether to retry; returns (wrote_bytes) on success."""
     started = time.time()
@@ -357,7 +357,7 @@ def _download(url, dest_path, stem, kind):
         except OSError:
             pass
         try:
-            wrote = _download_once(url, dest_path, stem, kind, tmp)
+            wrote = _download_once(url, stem, kind, tmp)
             os.replace(tmp, dest_path)
             if attempt > 1:
                 logmod.ok("corpus-sync", f"{stem} {kind} succeeded on attempt {attempt}")
@@ -390,7 +390,7 @@ def hf_available():
 
 
 def hf_probe():
-    """Rich version of hf_available() — returns the running Python's
+    """Rich version of hf_available(): returns the running Python's
     executable path, whether `datasets` is importable in THIS process, the
     exact ImportError message if not, and a platform-correct install command
     that points at the same interpreter. Used by the dashboard to surface a
@@ -422,7 +422,6 @@ def _suggest_install_command():
     interpreter. Uses sys.executable so the install lands in the same Python
     Flask is running in, regardless of platform or launcher."""
     import sys
-    import shlex
     exe = sys.executable
     # Quote the path if it contains spaces (very common on Windows).
     if " " in exe and not exe.startswith('"'):
@@ -434,13 +433,11 @@ def install_hf_deps(extra_packages=None):
     """Run `<sys.executable> -m pip install -r requirements.txt` (plus any
     extra_packages) as a subprocess and return {ok, stdout, stderr, returncode,
     command}. Because we use sys.executable, the install always lands in the
-    Python that's running this Flask process — `import datasets` will succeed
+    Python that's running this Flask process: `import datasets` will succeed
     immediately after this returns ok=True, no restart needed."""
     import subprocess
     import sys
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.normpath(os.path.join(here, ".."))
-    requirements_path = os.path.join(repo_root, "requirements.txt")
+    requirements_path = paths.REQUIREMENTS_PATH
     if not os.path.isfile(requirements_path):
         return {
             "ok": False,
@@ -583,7 +580,7 @@ def _install_hf_dataset(entry):
     """Stream rows from a HuggingFace dataset, encode the text column as UTF-8
     bytes, and write to <stem>_train.bin (and _val.bin if hf_split_val is set,
     or via val_split_ratio post-hoc). HuggingFace's `datasets` library is
-    imported lazily — installing a corpus is the first time the user pays the
+    imported lazily: installing a corpus is the first time the user pays the
     import cost."""
     stem = entry["stem"]
     try:
@@ -726,7 +723,7 @@ def _install_hf_dataset(entry):
 
 def _install_native(stem):
     """Copy the repo-bundled <stem>_{train,val}.bin from veritate_mri/data/corpus/
-    into trainers/corpus/. Local copy only — no network, no sha."""
+    into trainers/corpus/. Local copy only: no network, no sha."""
     os.makedirs(CORPUS_DIR, exist_ok=True)
     try:
         for src, dest in ((_native_train_path(stem), _train_path(stem)),
@@ -788,7 +785,7 @@ def _split_val_from_train(stem, ratio):
 def install(entry):
     """entry: {stem, train_url, val_url?, val_split_ratio?, format?, sha256_train?, sha256_val?}.
     Downloads files into trainers/corpus/. Verifies sha256 if provided. The
-    val file is optional — if val_split_ratio is set instead, the trailing
+    val file is optional: if val_split_ratio is set instead, the trailing
     fraction of the train file becomes val.bin. Returns {ok, ...}."""
     if not isinstance(entry, dict):
         return {"ok": False, "error": "install body must be a JSON object"}
@@ -809,7 +806,8 @@ def install(entry):
     if "/" in stem or "\\" in stem or stem.startswith(".") or ":" in stem:
         return {"ok": False, "error": f"invalid stem: {stem!r}"}
     if fmt not in SUPPORTED_FORMATS:
-        return {"ok": False, "error": f"format '{fmt}' is not supported by this build (supported: {sorted(SUPPORTED_FORMATS)})"}
+        return {"ok": False,
+                "error": f"format '{fmt}' is not supported by this build (supported: {sorted(SUPPORTED_FORMATS)})"}
     if entry.get("coming_soon"):
         return {"ok": False, "error": f"corpus '{stem}' is not published yet (coming soon)"}
     if val_split is not None and not (0.0 < val_split < 0.5):
@@ -823,7 +821,8 @@ def install(entry):
     if entry.get("hf_split_val") or entry.get("val_url") or fmt == "zip_bundle":
         expected += entry.get("size_val") or 0
     if expected and expected > LARGE_DOWNLOAD_BYTES and not entry.get("confirm_large"):
-        return {"ok": False, "error": f"this corpus is ~{expected/1e9:.1f} GB. confirm in the dashboard before installing.",
+        return {"ok": False, "error": f"this corpus is ~{expected/1e9:.1f} GB. confirm in the dashboard before "
+                                      f"installing.",
                 "needs_confirm": True, "expected_bytes": expected}
     ok, derr = _disk_precheck(stem, expected)
     if not ok:
@@ -832,13 +831,14 @@ def install(entry):
     # Format-specific arg requirements
     if fmt in ("raw_bytes", "raw_bytes_zip", "zip_bundle"):
         if not train_url:
-            return {"ok": False, "error": f"corpus '{stem}' has no train_url. set one in the catalog, or add the corpus as a custom source."}
+            return {"ok": False, "error": f"corpus '{stem}' has no train_url. set one in the catalog, or add the "
+                                          f"corpus as a custom source."}
     elif fmt == "hf_dataset":
         if not entry.get("hf_dataset"):
             return {"ok": False, "error": f"corpus '{stem}' has format=hf_dataset but no hf_dataset name"}
-    elif fmt == "native":
-        if not os.path.isfile(_native_train_path(stem)):
-            return {"ok": False, "error": f"corpus '{stem}' is not bundled with this build (missing {_native_train_path(stem)})"}
+    elif fmt == "native" and not os.path.isfile(_native_train_path(stem)):
+        return {"ok": False,
+                "error": f"corpus '{stem}' is not bundled with this build (missing {_native_train_path(stem)})"}
 
     with _LOCK:
         if stem in _PROGRESS:
@@ -918,7 +918,7 @@ def install(entry):
                     return {"ok": True, "warning": msg, "stem": stem}
         elif val_split is not None:
             logmod.info("corpus-sync", f"{stem}: splitting last {val_split*100:.1f}% off train as val")
-            val_bytes, split_err = _split_val_from_train(stem, val_split)
+            _val_bytes, split_err = _split_val_from_train(stem, val_split)
             if split_err:
                 logmod.warn("corpus-sync", f"{stem} val split failed: {split_err}")
                 _record("install", True, f"train ok; val split failed: {split_err}", stem=stem)
@@ -962,7 +962,7 @@ def uninstall(stem):
 
 def set_catalog_url(url):
     url = (url or "").strip()
-    if url and not (url.startswith("http://") or url.startswith("https://")):
+    if url and not url.startswith(("http://", "https://")):
         return {"ok": False, "error": "catalog URL must start with http:// or https://"}
     settings_mod.update({"corpus_catalog_url": url})
     return {"ok": True, "catalog_url": url}
@@ -979,10 +979,10 @@ def add_user_source(entry):
     train_url = (entry.get("train_url") or "").strip()
     if not train_url:
         return {"ok": False, "error": "missing train_url"}
-    if not (train_url.startswith("http://") or train_url.startswith("https://")):
+    if not train_url.startswith(("http://", "https://")):
         return {"ok": False, "error": "train_url must start with http:// or https://"}
     val_url = (entry.get("val_url") or "").strip()
-    if val_url and not (val_url.startswith("http://") or val_url.startswith("https://")):
+    if val_url and not val_url.startswith(("http://", "https://")):
         return {"ok": False, "error": "val_url must start with http:// or https://"}
 
     norm = {

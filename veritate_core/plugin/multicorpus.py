@@ -98,7 +98,7 @@ def resolve_and_weight(spec, resolver_fn):
     if total <= 0:
         raise ValueError("corpus weights sum to zero")
     weights /= total
-    out = [(p, v, float(w)) for (p, v, _), w in zip(resolved, weights)]
+    out = [(p, v, float(w)) for (p, v, _), w in zip(resolved, weights, strict=True)]
     out.sort(key=lambda e: e[2], reverse=True)
     return out
 

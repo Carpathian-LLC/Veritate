@@ -26,7 +26,6 @@
 import json
 import os
 import shutil
-import sys
 import tarfile
 import tempfile
 import threading
@@ -38,7 +37,9 @@ from readers import paths
 from runtime import logs as logmod
 from runtime import net
 from runtime import settings as settings_mod
+
 from training import trainer_runner as plugin_runner
+
 from . import sync_common as sc
 
 # ------------------------------------------------------------------------------------
@@ -70,16 +71,29 @@ ALL_CHANNELS = (CHANNEL_STABLE, CHANNEL_EXPERIMENTAL, CHANNEL_DEVELOPMENT)
 
 # Derived from paths.py so any future rename of the user-data roots flows
 # through automatically.
-DEFAULT_SKIP_DIRS = tuple(sorted(set(
-    [os.path.basename(paths.MODELS_ROOT), os.path.basename(paths.PLUGINS_ROOT)]
-    + ["data", "experiments", ".git", ".venv", "venv", "__pycache__"]
-)))
+DEFAULT_SKIP_DIRS = tuple(sorted({
+    os.path.basename(paths.MODELS_ROOT), os.path.basename(paths.PLUGINS_ROOT),
+    "data", "experiments", ".git", ".venv", "venv", "__pycache__",
+}))
 
 _REPO_URL_ENV     = "VERITATE_REPO_URL"
 # Canonical public repo. Final fallback so a checkout with no origin remote and
 # no env override still resolves an update source instead of going dead.
 _REPO_URL_DEFAULT = "https://github.com/Carpathian-LLC/Veritate"
 GITHUB_API_BASE   = "https://api.github.com"
+# Source-tarball path GitHub serves for a branch, appended to the repo base URL.
+GITHUB_BRANCH_TARBALL_FMT = "{base}/archive/refs/heads/{branch}.tar.gz"
+
+# .git layout the updater parses directly (no git binary required).
+GIT_DIR_NAME       = ".git"
+GIT_CONFIG_NAME    = "config"
+GIT_REMOTE_SECTION = "[remote "
+GIT_ORIGIN_SECTION = '[remote "origin"]'
+GIT_URL_KEY        = "url"
+GIT_HEAD_NAME      = "HEAD"
+GIT_PACKED_REFS_NAME = "packed-refs"
+GIT_REF_PREFIX     = "ref:"
+GIT_HEADS_PREFIX   = "refs/heads/"
 
 _LOCK         = threading.RLock()
 _STATE_CACHE  = None
@@ -97,7 +111,7 @@ def _read_state():
     if not os.path.isfile(STATE_PATH):
         return {}
     try:
-        with open(STATE_PATH, "r", encoding="utf-8") as f:
+        with open(STATE_PATH, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
@@ -143,26 +157,25 @@ def _channel_branch():
 
 
 def _is_git_checkout():
-    return os.path.isdir(os.path.join(REPO_DIR, ".git"))
+    return os.path.isdir(os.path.join(REPO_DIR, GIT_DIR_NAME))
 
 
 def _local_git_branch():
     """Read `.git/HEAD` to determine the currently checked-out branch. Returns
     the branch name (e.g. "dev") or None if `.git/HEAD` is missing, detached,
     or unreadable."""
-    head_path = os.path.join(REPO_DIR, ".git", "HEAD")
+    head_path = os.path.join(REPO_DIR, GIT_DIR_NAME, GIT_HEAD_NAME)
     if not os.path.isfile(head_path):
         return None
     try:
-        with open(head_path, "r", encoding="utf-8", errors="replace") as f:
+        with open(head_path, encoding="utf-8", errors="replace") as f:
             line = f.read().strip()
     except OSError:
         return None
-    if line.startswith("ref:"):
+    if line.startswith(GIT_REF_PREFIX):
         ref = line.partition(":")[2].strip()
-        prefix = "refs/heads/"
-        if ref.startswith(prefix):
-            return ref[len(prefix):] or None
+        if ref.startswith(GIT_HEADS_PREFIX):
+            return ref[len(GIT_HEADS_PREFIX):] or None
     return None
 
 
@@ -171,22 +184,22 @@ def _local_head_sha():
     Follows `.git/HEAD` to its branch ref, reading the loose ref file and
     falling back to `.git/packed-refs`. Returns the SHA, or None on a detached
     or unreadable HEAD with no resolvable ref."""
-    git_dir = os.path.join(REPO_DIR, ".git")
+    git_dir = os.path.join(REPO_DIR, GIT_DIR_NAME)
     try:
-        with open(os.path.join(git_dir, "HEAD"), "r", encoding="utf-8", errors="replace") as f:
+        with open(os.path.join(git_dir, GIT_HEAD_NAME), encoding="utf-8", errors="replace") as f:
             head = f.read().strip()
     except OSError:
         return None
-    if not head.startswith("ref:"):
+    if not head.startswith(GIT_REF_PREFIX):
         return head or None
     ref = head.partition(":")[2].strip()
     try:
-        with open(os.path.join(git_dir, *ref.split("/")), "r", encoding="utf-8", errors="replace") as f:
+        with open(os.path.join(git_dir, *ref.split("/")), encoding="utf-8", errors="replace") as f:
             return f.read().strip() or None
     except OSError:
         pass
     try:
-        with open(os.path.join(git_dir, "packed-refs"), "r", encoding="utf-8", errors="replace") as f:
+        with open(os.path.join(git_dir, GIT_PACKED_REFS_NAME), encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if line.startswith(("#", "^")):
@@ -201,7 +214,7 @@ def _local_head_sha():
 
 def _active_branch():
     """Branch the updater should actually track. In a git checkout the locally
-    checked-out branch wins — developers may be testing on a branch and must
+    checked-out branch wins: developers may be testing on a branch and must
     not be prompted to overwrite it with a different one. Falls back to the
     channel branch only when no `.git/HEAD` is present (tarball install)."""
     return _local_git_branch() or _channel_branch()
@@ -229,18 +242,18 @@ def _normalize_github_url(url):
 def _git_remote_url():
     """Read `origin` from .git/config without shelling out. Returns None if
     .git/config is absent or doesn't contain a remote.origin url."""
-    cfg = os.path.join(REPO_DIR, ".git", "config")
+    cfg = os.path.join(REPO_DIR, GIT_DIR_NAME, GIT_CONFIG_NAME)
     if not os.path.isfile(cfg):
         return None
     in_origin = False
     try:
-        with open(cfg, "r", encoding="utf-8", errors="replace") as f:
+        with open(cfg, encoding="utf-8", errors="replace") as f:
             for raw in f:
                 line = raw.strip()
-                if line.startswith("[remote "):
-                    in_origin = (line == '[remote "origin"]')
+                if line.startswith(GIT_REMOTE_SECTION):
+                    in_origin = (line == GIT_ORIGIN_SECTION)
                     continue
-                if in_origin and line.startswith("url"):
+                if in_origin and line.startswith(GIT_URL_KEY):
                     _, _, value = line.partition("=")
                     return value.strip() or None
     except OSError:
@@ -262,7 +275,7 @@ def _tarball_url(branch):
     base = _repo_url_base()
     if not base:
         return None
-    return f"{base}/archive/refs/heads/{branch}.tar.gz"
+    return GITHUB_BRANCH_TARBALL_FMT.format(base=base, branch=branch)
 
 
 def _tarball_urls():
@@ -409,7 +422,7 @@ def _read_baseline():
     if not os.path.isfile(BASELINE_PATH):
         return {}
     try:
-        with open(BASELINE_PATH, "r", encoding="utf-8") as f:
+        with open(BASELINE_PATH, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return {}
@@ -491,9 +504,9 @@ def local_edits(skip_dirs=None):
     """Return the set of repo files that differ from the last-pulled baseline.
 
     Three relations:
-      - "modified" — file exists locally with a different SHA than baseline
-      - "missing"  — file is in baseline but deleted locally (user/git/build)
-      - "added"    — file is on disk but never tracked by a pull (user-added)
+      - "modified": file exists locally with a different SHA than baseline
+      - "missing" : file is in baseline but deleted locally (user/git/build)
+      - "added"   : file is on disk but never tracked by a pull (user-added)
                      reported only when its top-level dir is NOT in skip_dirs
                      and only if it has a Veritate-relevant extension (.py/.js/.html/.css/.md)
 
@@ -538,7 +551,7 @@ def local_edits(skip_dirs=None):
     if len(missing) >= max(20, len(baseline) // 2):
         logmod.warn("http-updater",
                     f"baseline appears stale ({len(missing)}/{len(baseline)} files "
-                    f"missing); ignoring it — next pull will rebuild")
+                    f"missing); ignoring it: next pull will rebuild")
         return {
             "ok":             True,
             "has_baseline":   False,
@@ -738,7 +751,7 @@ def pull_update(reload=False, force=False, ignore_training=False):
 
     if not force:
         edits = local_edits()
-        # Only gate on modified/missing — those are the cases where pull would
+        # Only gate on modified/missing: those are the cases where pull would
         # overwrite or fail to restore user work. "added" files are user-created
         # and never touched by the updater (it only writes files present in
         # the tarball), so they don't need to block the pull.
@@ -788,7 +801,7 @@ def pull_update(reload=False, force=False, ignore_training=False):
         msg = f"synced {branch} ({result['copied']} files; {result['skipped']} preserved)"
         logmod.ok("http-updater", msg)
         # Persist the per-file SHA snapshot so the next pull can detect local
-        # edits. Failure to write the baseline is non-fatal — the pull itself
+        # edits. Failure to write the baseline is non-fatal: the pull itself
         # succeeded.
         try:
             _write_baseline(result.get("baseline") or {}, branch=branch)
@@ -816,7 +829,7 @@ def pull_update(reload=False, force=False, ignore_training=False):
         # sentinel so the NEXT boot re-runs pip install. requirements.txt may
         # have changed in the tarball; the launcher's fast-path skips pip if
         # the hash still matches its stored copy, so we clear the sentinel to
-        # force a fresh check. Non-fatal on failure — the launcher will
+        # force a fresh check. Non-fatal on failure: the launcher will
         # re-check on its own if the hash mismatches. This is what makes
         # "run install helper after updating" cheap: the launcher already has
         # all the platform-specific install logic; we just re-arm it.
@@ -829,7 +842,7 @@ def pull_update(reload=False, force=False, ignore_training=False):
             logmod.warn("http-updater", f"could not clear .req_hash (non-fatal): {e}")
 
         # Fire a dep snapshot log so the analytics/telemetry stream captures
-        # the post-pull state. Never blocks and never surfaces to the user —
+        # the post-pull state. Never blocks and never surfaces to the user:
         # the frontend's Detect Hardware / auto-tune paths still handle the
         # interactive case. This is just diagnostic bread-crumbs so we can
         # tell after-the-fact whether a pull left a box with a broken torch.
@@ -843,13 +856,12 @@ def pull_update(reload=False, force=False, ignore_training=False):
         except Exception as e:
             logmod.info("http-updater", f"post-pull dep probe skipped: {e}")
 
-        if reload or settings_mod.get().get("auto_reload_on_update"):
-            if _RELOAD_HOOK is not None:
-                logmod.warn("http-updater", "reload hook firing after update")
-                try:
-                    _RELOAD_HOOK()
-                except Exception as e:
-                    logmod.error("http-updater", f"reload hook failed: {e}")
+        if (reload or settings_mod.get().get("auto_reload_on_update")) and _RELOAD_HOOK is not None:
+            logmod.warn("http-updater", "reload hook firing after update")
+            try:
+                _RELOAD_HOOK()
+            except Exception as e:
+                logmod.error("http-updater", f"reload hook failed: {e}")
         return {"ok": True, "status": status(), "copied": result["copied"], "skipped": result["skipped"]}
     finally:
         try:

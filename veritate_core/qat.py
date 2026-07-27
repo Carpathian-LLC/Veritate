@@ -10,30 +10,41 @@
 #   match the C engine's quantization scheme exactly:
 #     weights (int8):    per-tensor symmetric maxabs INT8
 #     weights (int4):    per-tensor symmetric maxabs INT4 (16 levels)
-#     weights (ternary): BitNet b1.58 — per-tensor mean-abs scale, levels {-1,0,+1}
+#     weights (ternary): BitNet b1.58: per-tensor mean-abs scale, levels {-1,0,+1}
 #     activations:       scale-32 INT8 (the residual stream's fixed scale)
 #     RMSNorm weights:   scale-64 INT8
 #   The straight-through estimator passes gradients unchanged so the optimizer
 #   continues to operate as if the rounding were absent.
 # - Ternary and INT4 are L3-fit accelerators. Ternary at 1.58 bits/param means
 #   a 200M dense model fits 40 MB; a 1B 4-way MoE has 50 MB active. Engine
-#   kernels for these live under documentation/kernels/.
+#   kernels for these live under developer_documentation/kernels/.
+# - INT8_MAX, ACT_INT8_SCALE, LN_FIXED_SCALE and EPS_SCALE are owned by
+#   qat_triton and re-exported here; this module imports that one, so the
+#   dependency runs one way only.
 # veritate_core/qat.py
 # ------------------------------------------------------------------------------------
+# Imports:
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 from . import qat_triton as _qt
+from .qat_triton import ACT_INT8_SCALE, EPS_SCALE, INT8_MAX, LN_FIXED_SCALE
 
-INT8_MAX        = 127
-INT4_MAX        = 7
-ACT_INT8_SCALE  = 32.0
-LN_FIXED_SCALE  = 64.0
+# ------------------------------------------------------------------------------------
+# Constants
+
+INT4_MAX    = 7
+TERNARY_MAX = 1.0
 
 QUANT_MODE_INT8    = "int8"
 QUANT_MODE_INT4    = "int4"
 QUANT_MODE_TERNARY = "ternary"
 QUANT_MODES        = (QUANT_MODE_INT8, QUANT_MODE_INT4, QUANT_MODE_TERNARY)
+
+# ------------------------------------------------------------------------------------
+# Functions
 
 
 class _RoundSTE(torch.autograd.Function):
@@ -58,7 +69,7 @@ def fake_quant_weight(w):
         return _qt.fake_quant_weight_triton(w)
     orig = w.dtype
     wf = w.to(torch.float32)
-    max_abs = wf.detach().abs().amax().clamp_min(1e-8)
+    max_abs = wf.detach().abs().amax().clamp_min(EPS_SCALE)
     scale   = max_abs / INT8_MAX
     q       = round_ste(wf / scale).clamp(-INT8_MAX, INT8_MAX)
     return (q * scale).to(orig)
@@ -67,7 +78,7 @@ def fake_quant_weight(w):
 def fake_quant_weight_int4(w):
     """Per-tensor symmetric maxabs INT4. 4 bits/param, 2x density vs INT8.
     Levels: {-7..+7}. Engine packs 2 weights per byte."""
-    max_abs = w.detach().abs().amax().clamp_min(1e-8)
+    max_abs = w.detach().abs().amax().clamp_min(EPS_SCALE)
     scale   = max_abs / INT4_MAX
     q       = round_ste(w / scale).clamp(-INT4_MAX, INT4_MAX)
     return q * scale
@@ -77,8 +88,8 @@ def fake_quant_weight_ternary(w):
     """BitNet b1.58 ternary quantization. Levels {-1, 0, +1} with per-tensor
     mean-abs scale. ~1.58 bits/param (log2(3)). 5x density vs INT8.
     Engine packs 5 trits per byte (3^5 = 243 < 256)."""
-    gamma = w.detach().abs().mean().clamp_min(1e-8)
-    q     = round_ste(w / gamma).clamp(-1.0, 1.0)
+    gamma = w.detach().abs().mean().clamp_min(EPS_SCALE)
+    q     = round_ste(w / gamma).clamp(-TERNARY_MAX, TERNARY_MAX)
     return q * gamma
 
 
@@ -148,9 +159,6 @@ def set_engine_faithful(module, value):
 # streams + 8-bit Adam on CPU when wall starts dominating.
 # ----------------------------------------------------------------------------
 
-import torch.nn as nn
-import torch.nn.functional as F
-
 
 class _CrossDeviceFakeQuantCached(torch.autograd.Function):
     """Forward: dequantize a pre-shipped INT8 GPU buffer + scale to bf16 GPU.
@@ -205,7 +213,7 @@ class SplitLinear(nn.Module):
 
     def _refresh_cache(self, gpu_device):
         w = self.weight.detach().to(torch.float32)
-        max_abs = w.abs().amax().clamp_min(1e-8)
+        max_abs = w.abs().amax().clamp_min(EPS_SCALE)
         scale = max_abs / float(INT8_MAX)
         q = (w / scale).round().clamp(-INT8_MAX, INT8_MAX).to(torch.int8)
         self._q_gpu     = q.to(gpu_device, non_blocking=True)
@@ -248,7 +256,7 @@ def convert_to_split_precision(module):
     """Walk module, replace every QuantLinear with SplitLinear. Copies the
     existing weights (and biases) bf16-on-CPU so any prior state_dict load
     survives the conversion. Skips any QuantLinear whose weight is tied to
-    an embedding (e.g. lm_head tied to tok_emb) — those keep their original
+    an embedding (e.g. lm_head tied to tok_emb): those keep their original
     QuantLinear behavior so the embedding stays on GPU and the tie holds.
     Returns the module and a count of replacements."""
     # Avoid an import cycle: veritate_core.model imports from veritate_core.qat.
@@ -298,7 +306,7 @@ def split_precision_param_groups(module):
 
 def set_quant_mode(module, mode):
     """Recursively set .quant_mode on every submodule that has one. Activation
-    and RMSNorm scales stay INT8 — only the weight quantization changes."""
+    and RMSNorm scales stay INT8: only the weight quantization changes."""
     if mode not in QUANT_MODES:
         raise ValueError(f"unknown quant_mode: {mode!r}; expected one of {QUANT_MODES}")
     for m in module.modules():

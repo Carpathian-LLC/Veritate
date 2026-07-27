@@ -1,24 +1,33 @@
 ---
-title: Architecture (Trunk)
-summary: The internal shape of the model; different trunks trade speed, size, and how well the model handles long conversations.
-tags: training, settings
+title: trunk
+date: 2026-07-27
+tags: [settings, training, architecture]
+summary: Which model body the run builds: the arrangement of layers that does the thinking.
 ---
 
-# Architecture (Trunk)
+# trunk
 
-The trunk is the model's internal wiring: the core layout that does the thinking before the final output. Same job (read text, predict what comes next), different internal machinery. The choice affects how fast the model trains, how much it can hold, and how it copes as a conversation gets long.
+The body of the model: the stack of layers between the byte inputs and the byte predictions. The trunk decides how the model mixes information across a sequence, and therefore what it costs to train and to run.
 
-## The choices (with measured notes)
+## what it does
 
-- **dense** : the standard, canonical transformer. The reliable baseline everything else is compared against.
-- **patched** : does its heavy compute once per roughly 4-byte "patch" instead of per byte. Measured **1.82x faster** to the same quality, and fits more parameters at the same speed.
-- **recurrent** : keeps a fixed-size running state instead of re-reading everything. Matches attention's quality and stays fast and light no matter how long the conversation gets.
-- **hybrid** : patched plus a recurrent global path. The **best measured quality** of all variants (1.70x versus dense).
-- **looped** : reuses the same layers over and over for extra depth. Beats dense at equal parameter count but loses to patched and hybrid, and letting it "think longer" at test time did not help (measured 2026-07-05).
-- **memory** : a long-context device, meant to hold a long input, not a store of knowledge (measured 2026-07-05).
+Each choice builds a different class from `veritate_core/`. The selection happens once, in `trainers/common/vanilla_trainer.py::run`, and is baked into the checkpoint. A continue run keeps the trunk of the model it continues.
 
-## When to change it
+| value | class | how it mixes information |
+|---|---|---|
+| `dense` | `model.py::Veritate` | Plain transformer. Every layer attends over every byte. Simplest, best understood, cost grows with the square of sequence length. |
+| `patched` | `model_patched.py::VeritatePatched` | Cheap local blocks run on every byte; expensive global blocks run only on patch anchor bytes. Global cost drops by the patch stride. |
+| `hybrid` | `VeritatePatched` with a recurrent global mixer | Patched layout, but the global blocks carry a running state instead of attending. |
+| `looped` | `VeritatePatched` with repeated global blocks | The same global block runs several times. Extra depth with no extra parameters. |
+| `recurrent` | `model_recurrent.py::VeritateRecurrent` | Fixed-size state per attention head, updated byte by byte. Constant memory and constant time per byte at decode, no matter how long the text is. |
+| `memory` | `model_memory.py::VeritateMemory` | A fast-weight branch mid-stack that writes only when a byte is surprising, giving the model a scratchpad that survives across chunks. |
 
-- **dense** for a safe, well-understood run.
-- **patched** or **hybrid** when you want the most quality per unit of compute.
-- **recurrent** when conversations get very long and you need steady speed.
+## default
+
+No trainer manifest sets `trunk`, so the field renders empty and the trainer falls back to `dense` from `RESERVED_STR_FLAGS` in `vanilla_trainer.py`. A run with the field left alone is a dense transformer.
+
+## when to change it
+
+`dense` is the right answer for a first run and for any comparison against published numbers. Pick `patched` when sequence length, not parameter count, is the cost driver. Pick `recurrent` when decode speed on long conversations matters more than peak quality. `memory` and `looped` are research choices: measure them against a dense baseline of the same parameter count before trusting a result.
+
+Export to the C engine expects a canonical dense trunk. A recurrent, patched, or memory model trains and runs under PyTorch but is not exportable to a `.bin` today.

@@ -12,18 +12,9 @@
 # ------------------------------------------------------------------------------------
 # Imports
 
-import os
-import sys
 
 import pytest
-
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
 from inference.decode import abstention
-
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -41,14 +32,14 @@ def gate_on(monkeypatch):
 
 
 def test_gate_off_by_default_passes_through(gate_off):
-    """When the env flag is unset, the backstop is a no-op — no arch loses default behavior."""
+    """When the env flag is unset, the backstop is a no-op: no arch loses default behavior."""
     assert abstention.wrap_response_text("aaaaaaaaaa") == "aaaaaaaaaa"
     assert abstention.wrap_response_text("Hello world!") == "Hello world!"
     assert abstention.wrap_response_text("") == ""
 
 
 def test_gate_on_preserves_short_valid_answers(gate_on):
-    """Short answers like math replies must NOT be gated — the model's zero-facts stance is fine."""
+    """Short answers like math replies must NOT be gated: the model's zero-facts stance is fine."""
     assert abstention.wrap_response_text("8.") == "8."
     assert abstention.wrap_response_text("Yes.") == "Yes."
     assert abstention.wrap_response_text("Hi.") == "Hi."

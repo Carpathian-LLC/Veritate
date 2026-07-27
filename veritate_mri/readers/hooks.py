@@ -33,7 +33,7 @@ def _load_json(p):
     if hit and hit[0] == st.st_mtime:
         return hit[1]
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return None

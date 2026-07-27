@@ -25,6 +25,7 @@ import time
 
 from training import build_runner
 from training import trainer_runner as plugin_runner
+
 from . import logs as logmod
 
 # ------------------------------------------------------------------------------------
@@ -97,7 +98,7 @@ def _relaunch(launch_cmd, mode):
         os._exit(2)
     for flag in RELAUNCH_FLAGS:
         if flag not in launch_cmd:
-            launch_cmd = launch_cmd + [flag]
+            launch_cmd = [*launch_cmd, flag]
     time.sleep(RELAUNCH_GAP)
     logmod.warn("lifecycle", f"{mode} (training preserved): {' '.join(launch_cmd)}")
     try:

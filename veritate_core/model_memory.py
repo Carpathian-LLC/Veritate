@@ -26,9 +26,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .model import (VOCAB_BYTE_LEVEL, ACT_DEFAULT, REG_DEFAULT, Block, RMSNorm,
-                    QuantLinear)
 from . import qat as _qat
+from .model import ACT_DEFAULT, REG_DEFAULT, VOCAB_BYTE_LEVEL, Block, QuantLinear, RMSNorm
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -83,7 +82,7 @@ class NeuralMemory(nn.Module):
         return self._phi(q @ w1) @ w2
 
     def forward(self, x):
-        B, T, C = x.shape
+        B, T, _C = x.shape
         pad = (MEM_CHUNK - T % MEM_CHUNK) % MEM_CHUNK
         xp = F.pad(x, (0, 0, 0, pad)) if pad else x
         Tp = T + pad
@@ -194,7 +193,7 @@ class VeritateMemory(nn.Module):
         x = self.embed(tokens)
         for L, blk in enumerate(self.blocks):
             x = blk(x)
-            if L == self.mem_layer:
+            if self.mem_layer == L:
                 x = x + self.memory(x)
         logits = self.project_byte0(x)
         loss = None
@@ -210,7 +209,7 @@ class VeritateMemory(nn.Module):
         x = self.embed(tokens)
         for L, blk in enumerate(self.blocks):
             x = blk(x)
-            if L == self.mem_layer:
+            if self.mem_layer == L:
                 x = x + self.memory(x)
         logits = self.project_byte0(x)
         loss = None

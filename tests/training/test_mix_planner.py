@@ -15,17 +15,9 @@
 # Imports:
 
 import json
-import os
-import sys
 
 import pytest
 from flask import Flask
-
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
 from routes import corpus_routes
 from training import mix_planner
 
@@ -174,7 +166,7 @@ def test_shipped_profiles_load(monkeypatch):
     monkeypatch.setattr(mix_planner.settings_mod, "get",
                         lambda: {mix_planner.SETTING_PROFILES_PATH: ""})
     default = mix_planner.load_profiles()["pretrain"]
-    assert mix_planner.PROFILE_TOPICS in default and mix_planner.PROFILE_SHARE in default
+    assert {mix_planner.PROFILE_TOPICS, mix_planner.PROFILE_SHARE} <= set(default)
 
 
 def test_plan_route_rejects_an_empty_stem_list(planner):
@@ -191,4 +183,13 @@ def test_plan_route_returns_a_spec(planner):
     corpus_routes.register(app)
     resp = app.test_client().post("/corpus/mix/plan",
                                   json={"stems": STEMS, "target_bytes": TARGET})
-    assert resp.status_code == 200 and multicorpus.is_mixed_spec(resp.get_json()["spec"])
+    assert resp.status_code == 200
+
+
+def test_plan_route_spec_is_a_multicorpus_spec(planner):
+    """POST /corpus/mix/plan returns a spec string multicorpus recognises as a mix."""
+    app = Flask(__name__)
+    corpus_routes.register(app)
+    resp = app.test_client().post("/corpus/mix/plan",
+                                  json={"stems": STEMS, "target_bytes": TARGET})
+    assert multicorpus.is_mixed_spec(resp.get_json()["spec"])

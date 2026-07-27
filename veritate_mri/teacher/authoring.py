@@ -56,6 +56,7 @@ REJECT_TURN_COUNT = "turn count out of range"
 REJECT_EXACT_DUP = "exact duplicate"
 REJECT_OPENING = "repeated opening"
 REJECT_NEAR_DUP = "near duplicate"
+REJECT_UNKNOWN_GENRE = "unknown genre"
 
 _WORD_RE = re.compile(r"[^a-z0-9 ]+")
 _SPACE_RE = re.compile(r"\s+")
@@ -66,7 +67,7 @@ _BAN_SUFFIX = r")(?![a-z0-9])"
 # Functions
 
 def load_spec(path=None):
-    with open(path or paths_mod.authoring_spec_path(), "r", encoding="utf-8") as f:
+    with open(path or paths_mod.authoring_spec_path(), encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -199,7 +200,7 @@ class RecordGate:
         """Rebuild dedup state from an existing job so a resume keeps the gates honest."""
         if not os.path.isfile(samples_path):
             return
-        with open(samples_path, "r", encoding="utf-8") as f:
+        with open(samples_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:

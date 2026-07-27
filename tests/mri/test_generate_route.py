@@ -12,15 +12,9 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
-import os
-import sys
 
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-if os.path.join(REPO_ROOT, "veritate_mri") not in sys.path:
-    sys.path.insert(0, os.path.join(REPO_ROOT, "veritate_mri"))
 
 from flask import Flask
-
 from routes import backends_routes
 
 # ------------------------------------------------------------------------------------

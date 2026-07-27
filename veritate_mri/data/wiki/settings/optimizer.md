@@ -1,27 +1,34 @@
 ---
-title: Optimizer
-summary: The rule the trainer uses to turn each mistake into a weight update; muon reaches the same quality on fewer training bytes than the classic adamw.
-tags: training, settings
+title: optimizer
+date: 2026-07-27
+tags: [settings, training]
+summary: The algorithm that turns each step's gradients into an actual weight update.
 ---
 
-# Optimizer
+# optimizer
 
-The optimizer is the update rule. Every step, the model makes predictions, sees how wrong it was, and the optimizer decides how to nudge the model's weights to be less wrong next time. It is the "how to learn from a mistake" part of training.
+The rule that decides how far and in which direction every weight moves once the gradients for a step are known.
 
-## Why it matters
+## what it does
 
-Two optimizers can reach the same quality but take very different amounts of data and time to get there. A better update rule means you burn fewer training bytes (and fewer hours) for the same result, which matters a lot on modest hardware.
+A gradient says which way each weight should move. The optimizer decides how big that move is, using the history of previous moves. Two choices ship.
 
-## The choices
+- `adamw`: `torch.optim.AdamW`. Per-weight adaptive step size from a running mean and variance of the gradient, plus decoupled weight decay. The standard, well understood, works everywhere.
+- `muon`: orthogonalized momentum. Every 2-D weight matrix gets its momentum matrix orthogonalized by a short Newton-Schulz iteration before the step, which spreads the update evenly across directions instead of letting a few dominate. Embeddings, norms, and all 1-D parameters stay on AdamW inside the same optimizer object.
 
-- **adamw** : the classic, dependable default. If you are unsure, this always works.
-- **muon** : a newer rule that, on this platform, reached the same quality using about **1.60x fewer training bytes** than adamw (measured 2026-07-03). In other words, it learns more per byte of data.
+Both are built in `trainers/common/vanilla_trainer.py::build_optimizer`. The Muon path is assembled by `veritate_core/plugin/optim.py::build_muon`, which splits parameters into the two groups and presents them as one optimizer, so a single learning-rate schedule drives both.
 
-## When to change it
+## options and default
 
-- Prefer **muon** when you want the most learning out of a limited corpus or a limited time budget.
-- Stick with **adamw** if you want the most conventional, widely-documented behavior, or you are reproducing a classic setup.
+| value | meaning |
+|---|---|
+| `adamw` | AdamW on every parameter |
+| `muon` | Muon on 2-D weights, AdamW on the rest |
 
-## Gotcha
+Trainer manifests from `veritate_10m` through `veritate_3b` set `muon`. Manifests from `veritate_13b` up set nothing, so the field renders empty and the trainer falls back to `adamw` from `RESERVED_STR_FLAGS` in `vanilla_trainer.py`.
 
-- Optimizer choice interacts with learning rate. If you switch optimizers by hand, use a recipe or a known-good learning rate rather than carrying over settings tuned for the other one.
+If `muon` is requested on a box where the optimizer helper cannot load, the trainer logs that it is unavailable and continues on AdamW rather than failing the run.
+
+## when to change it
+
+Use `muon` for a fresh pretrain: it typically reaches a given loss in fewer steps at the same learning rate. Use `adamw` when reproducing a published AdamW recipe, or when comparing against an existing AdamW run where the optimizer must be held fixed.

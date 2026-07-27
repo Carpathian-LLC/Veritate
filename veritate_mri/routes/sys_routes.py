@@ -13,10 +13,9 @@
 import os
 
 from flask import Response, current_app, request
-
+from readers import paths
 from runtime import heartbeat as heartbeat_mod
-from runtime import lifecycle
-from runtime import sys_metrics
+from runtime import lifecycle, sys_metrics
 from training.sync import app_sync as app_sync_mod
 
 from ._common import user_error
@@ -24,8 +23,8 @@ from ._common import user_error
 # ------------------------------------------------------------------------------------
 # Constants
 
-MRI_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSIONS_PATH = os.path.normpath(os.path.join(MRI_ROOT, "..", "versions.json"))
+VERSIONS_JSON = "versions.json"
+VERSIONS_PATH = os.path.join(paths.REPO_ROOT, VERSIONS_JSON)
 
 # Power-save mode contract with veritate.py launcher. The launcher sets the
 # env var when invoked with --minimal; app.py reads it; this route exposes
@@ -33,6 +32,7 @@ VERSIONS_PATH = os.path.normpath(os.path.join(MRI_ROOT, "..", "versions.json"))
 # string in the JS.
 MINIMAL_ENV  = "VERITATE_MINIMAL"
 MINIMAL_FLAG = "--minimal"
+MINIMAL_ON   = "1"
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -45,7 +45,7 @@ def register(app):
     @app.route("/sys/mode")
     def sys_mode_get():
         """Runtime mode. Frontend uses this to gate brain-dependent UI."""
-        return {"minimal": os.environ.get(MINIMAL_ENV) == "1"}
+        return {"minimal": os.environ.get(MINIMAL_ENV) == MINIMAL_ON}
 
     @app.route("/sys/mode/relaunch", methods=["POST"])
     def sys_mode_relaunch():
@@ -131,5 +131,5 @@ def register(app):
     def versions_route():
         if not os.path.isfile(VERSIONS_PATH):
             return ({"error": f"versions file not found: {VERSIONS_PATH}"}, 404)
-        with open(VERSIONS_PATH, "r", encoding="utf-8") as f:
+        with open(VERSIONS_PATH, encoding="utf-8") as f:
             return Response(f.read(), mimetype="application/json")

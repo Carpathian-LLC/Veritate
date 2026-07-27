@@ -32,6 +32,8 @@ from readers import paths
 DEFAULT_SAMPLES   = 64
 DEFAULT_THRESHOLD = 1e-3
 ACTIVITY_KEEP_MIN = 0.05  # never recommend pruning below 5% width
+DEFAULT_HEAD_DIM  = 64    # per-head width the canonical trunk uses; seeds the head-count guess
+DEFAULT_VERSION   = "v1"
 
 
 # ------------------------------------------------------------------------------------
@@ -43,6 +45,7 @@ def resolve_corpus_mix(spec):
     consumes. Reuses the canonical multicorpus parser and platform resolver so
     pruning scores against the exact training distribution."""
     from readers import corpus as corpus_reader
+
     from veritate_core.plugin import multicorpus
     return multicorpus.resolve_and_weight(spec, corpus_reader.resolve_paths)
 
@@ -57,6 +60,7 @@ def measure_activity(model, corpus_mix, n_samples=DEFAULT_SAMPLES,
                   sampled positions. a unit is 'alive' if its score > threshold.
     """
     import torch
+
     from veritate_core.plugin import multicorpus
 
     seq_len = int(seq_len or model.seq)
@@ -107,7 +111,7 @@ def measure_activity(model, corpus_mix, n_samples=DEFAULT_SAMPLES,
             "seq_len": seq_len, "threshold": float(threshold)}
 
 
-def recommend_plan(report, layers):
+def recommend_plan(report, _layers):
     """Take the per-layer alive_frac and bucket each layer into one of four
     actions: prune hard (25%), prune (50%), trim (70%), keep (100%). The cutoffs
     are conservative: never recommend dropping below 25% of the original width."""
@@ -149,7 +153,7 @@ def apply_plan(model, scores, plan):
         orig_ffn = model.ffn_per_layer[L]
         keep_frac = float(plan.get(str(L), plan.get(L, 1.0)))
         keep_frac = max(ACTIVITY_KEEP_MIN, min(1.0, keep_frac))
-        target_n  = max(1, int(round(orig_ffn * keep_frac)))
+        target_n  = max(1, round(orig_ffn * keep_frac))
         if target_n >= orig_ffn:
             new_ffn.append(orig_ffn)
             continue
@@ -226,7 +230,7 @@ def main():
     seq           = sd["pos_emb.weight"].shape[0]
     heads         = int(cfg.get("heads") or 0)
     if heads <= 0 or hidden % heads != 0:
-        target = max(1, hidden // 64)
+        target = max(1, hidden // {head_dim})
         for h in sorted({{d for d in range(1, hidden + 1) if hidden % d == 0}},
                         key=lambda d: (abs(d - target), -d)):
             heads = h; break
@@ -245,7 +249,8 @@ def main():
                                        threshold=args.threshold)
     print(f"  done in {{time.time() - t0:.1f}}s", flush=True)
     for e in report["per_layer"]:
-        print(f"  layer {{e['layer']:2d}}: {{e['alive']:5d}}/{{e['total']:5d}} alive ({{e['alive_frac']*100:5.1f}}%)", flush=True)
+        print(f"  layer {{e['layer']:2d}}: {{e['alive']:5d}}/{{e['total']:5d}} "
+              f"alive ({{e['alive_frac']*100:5.1f}}%)", flush=True)
 
     pruned_sd, new_ffn = pruning.apply_plan(base, report["scores"], plan)
     print(f"new ffn per layer: {{new_ffn}}", flush=True)
@@ -284,7 +289,7 @@ if __name__ == "__main__":
 def generate_plugin(src_name, src_step, plan, report, corpus_stem, plugins_dir=None):
     """Write a one-shot plugin folder under trainers/ that applies the given plan
     to the source checkpoint. Returns (plugin_dir, plugin_id)."""
-    plugins_dir = plugins_dir or os.path.join(paths.REPO_ROOT, "plugins")
+    plugins_dir = plugins_dir or paths.PLUGINS_ROOT
     plugin_id = f"prune_{src_name}_step{src_step}"
     plugin_dir = os.path.join(plugins_dir, plugin_id)
     os.makedirs(plugin_dir, exist_ok=True)
@@ -295,10 +300,10 @@ def generate_plugin(src_name, src_step, plan, report, corpus_stem, plugins_dir=N
         "kind":        "trainer",
         "flow":        "prune",
         "defaults": {
-            "out_version": "v1",
-            "samples":     64,
-            "threshold":   1e-3,
-            "version":     "v1",
+            "out_version": DEFAULT_VERSION,
+            "samples":     DEFAULT_SAMPLES,
+            "threshold":   DEFAULT_THRESHOLD,
+            "version":     DEFAULT_VERSION,
         }
     }
     with open(os.path.join(plugin_dir, "manifest.json"), "w", encoding="utf-8") as f:
@@ -322,7 +327,7 @@ def generate_plugin(src_name, src_step, plan, report, corpus_stem, plugins_dir=N
 
     script = PLUGIN_SCRIPT.format(
         src_name=src_name, src_step=int(src_step),
-        corpus_stem=corpus_stem,
+        corpus_stem=corpus_stem, head_dim=DEFAULT_HEAD_DIM,
         generated_at=time.strftime("%Y-%m-%d %H:%M:%S"),
     )
     with open(os.path.join(plugin_dir, "trainer.py"), "w", encoding="utf-8") as f:

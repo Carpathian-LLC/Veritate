@@ -18,18 +18,22 @@ import time
 import urllib.error
 import urllib.request
 
+from runtime import net
+
 from .providers import (
     DEFAULT_BACKOFF_BASE_S,
     DEFAULT_BACKOFF_MAX_S,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_TOKENS,
+    DEFAULT_SUPPORTS_STREAM,
     DEFAULT_TEMPERATURE,
     DEFAULT_TIMEOUT_S,
+    DEFAULT_UNLOAD_BODY,
+    DEFAULT_UNLOAD_PATH,
     RETRY_STATUS,
     default_model_for,
     get_provider,
 )
-from runtime import net
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -39,6 +43,34 @@ _SSL_CTX = net.ssl_context()
 _JSON_CONTENT_TYPE = "application/json"
 _AUTH_STATUS = (401, 403)
 _ERR_BODY_MAX = 300
+
+_HTTP_OK_DEFAULT     = 200
+_HTTP_OK_MAX         = 300
+_HTTP_NOT_FOUND      = 404
+_HTTP_RATE_LIMIT     = 429
+_HTTP_SERVER_ERR_MIN = 500
+_HTTP_SERVER_ERR_MAX = 600
+_RETRY_AFTER_HEADER  = "Retry-After"
+
+_BACKOFF_FACTOR = 2
+_BACKOFF_JITTER = 0.25
+
+# OpenAI-style server-sent-event framing on the cancellable streaming path.
+_SSE_DATA_PREFIX = "data:"
+_SSE_DONE        = "[DONE]"
+_SSE_STREAM_KEY  = "stream"
+_DELTA_CHOICES   = "choices"
+_DELTA_KEY       = "delta"
+_DELTA_CONTENT   = "content"
+
+_PROVIDER_SUPPORTS_STREAM = "supports_stream"
+_PROVIDER_UNLOAD_PATH     = "unload_path"
+_PROVIDER_UNLOAD_BODY     = "unload_body"
+_PROVIDER_MODELS_PATH     = "models_path"
+_PROVIDER_MODELS_ARRAY    = "models_array"
+_PROVIDER_MODELS_ID       = "models_id"
+_MODELS_ARRAY_DEFAULT     = "data"
+_MODELS_ID_DEFAULT        = "id"
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -95,7 +127,7 @@ def _split_system(messages, style):
 def _build_payload(provider, model, messages, temperature, max_tokens, system):
     msgs = list(messages)
     if system is not None:
-        msgs = [{"role": "system", "content": system}] + msgs
+        msgs = [{"role": "system", "content": system}, *msgs]
     sys_field, msgs = _split_system(msgs, provider["system_message_style"])
     body = {
         "model": model,
@@ -129,8 +161,8 @@ def _parse_retry_after(value):
 
 
 def _backoff(attempt):
-    delay = min(DEFAULT_BACKOFF_BASE_S * (2 ** attempt), DEFAULT_BACKOFF_MAX_S)
-    return delay + random.uniform(0, delay * 0.25)
+    delay = min(DEFAULT_BACKOFF_BASE_S * (_BACKOFF_FACTOR ** attempt), DEFAULT_BACKOFF_MAX_S)
+    return delay + random.uniform(0, delay * _BACKOFF_JITTER)
 
 
 def _err_body(e):
@@ -159,9 +191,10 @@ class Client:
                                  temperature, max_tokens, system)
         headers = _build_headers(self.provider, self.api_key)
         # Cancellable path: stream so the caller can abort between tokens; closing
-        # the connection makes the server stop generating (frees the GPU). Only
-        # OpenAI-style chat endpoints (every local provider) emit the delta format.
-        if cancel_check is not None and self.provider["chat_path"].endswith("chat/completions"):
+        # the connection makes the server stop generating (frees the GPU). Gated
+        # on the provider's declared streaming support, not on its URL shape.
+        if cancel_check is not None and self.provider.get(_PROVIDER_SUPPORTS_STREAM,
+                                                          DEFAULT_SUPPORTS_STREAM):
             return self._complete_stream(url, payload, headers, cancel_check)
         data = json.dumps(payload).encode("utf-8")
         last_status = None
@@ -171,9 +204,9 @@ class Client:
             try:
                 req = urllib.request.Request(url, data=data, headers=headers, method="POST")
                 with urllib.request.urlopen(req, timeout=self.timeout_s, context=_SSL_CTX) as resp:
-                    status = getattr(resp, "status", 200)
+                    status = getattr(resp, "status", _HTTP_OK_DEFAULT)
                     body = resp.read()
-                    if status < 300:
+                    if status < _HTTP_OK_MAX:
                         parsed = json.loads(body.decode("utf-8"))
                         return _extract(parsed, self.provider["response_text_path"])
                     last_status = status
@@ -181,9 +214,9 @@ class Client:
                 last_status = e.code
                 last_detail = _err_body(e)
                 if e.code in _AUTH_STATUS:
-                    raise TeacherAuthError(f"auth failed: {e.code} {last_detail}".rstrip())
+                    raise TeacherAuthError(f"auth failed: {e.code} {last_detail}".rstrip()) from e
                 if e.code not in RETRY_STATUS:
-                    raise TeacherError(f"http error: {e.code} {last_detail}".rstrip())
+                    raise TeacherError(f"http error: {e.code} {last_detail}".rstrip()) from e
                 last_err = e
             except urllib.error.URLError as e:
                 last_err = e
@@ -193,20 +226,21 @@ class Client:
                 break
             wait = None
             if last_err is not None and isinstance(last_err, urllib.error.HTTPError):
-                wait = _parse_retry_after(last_err.headers.get("Retry-After") if last_err.headers else None)
+                wait = _parse_retry_after(last_err.headers.get(_RETRY_AFTER_HEADER)
+                                          if last_err.headers else None)
             if wait is None:
                 wait = _backoff(attempt)
             time.sleep(wait)
-        if last_status == 429:
+        if last_status == _HTTP_RATE_LIMIT:
             raise TeacherRateLimitError(f"rate limit exhausted {last_detail}".rstrip())
-        if last_status is not None and 500 <= last_status < 600:
+        if last_status is not None and _HTTP_SERVER_ERR_MIN <= last_status < _HTTP_SERVER_ERR_MAX:
             raise TeacherUnavailableError(f"upstream unavailable: {last_status} {last_detail}".rstrip())
         raise TeacherError(f"request failed: status={last_status} err={last_err} {last_detail}".rstrip())
 
     def _complete_stream(self, url, payload, headers, cancel_check):
         # Retry transients (cold-load empty stream, connection blips) the same way
         # the non-streaming path does. A set cancel flag aborts without retrying.
-        body = json.dumps({**payload, "stream": True}).encode("utf-8")
+        body = json.dumps({**payload, _SSE_STREAM_KEY: True}).encode("utf-8")
         last_err = None
         for attempt in range(self.max_retries + 1):
             if cancel_check():
@@ -230,14 +264,14 @@ class Client:
                 if cancel_check():
                     raise TeacherCancelled("cancelled")
                 line = raw.decode("utf-8", "replace").strip()
-                if not line.startswith("data:"):
+                if not line.startswith(_SSE_DATA_PREFIX):
                     continue
-                chunk = line[5:].strip()
-                if chunk == "[DONE]":
+                chunk = line[len(_SSE_DATA_PREFIX):].strip()
+                if chunk == _SSE_DONE:
                     break
                 try:
                     obj = json.loads(chunk)
-                    delta = obj["choices"][0]["delta"].get("content")
+                    delta = obj[_DELTA_CHOICES][0][_DELTA_KEY].get(_DELTA_CONTENT)
                 except (ValueError, KeyError, IndexError, TypeError):
                     continue
                 if delta:
@@ -247,13 +281,15 @@ class Client:
         return "".join(parts)
 
     def unload(self, model=None):
-        """Drop a model from the server's memory (Ollama native keep_alive=0).
-        Best-effort: no-op for providers without the native unload endpoint."""
+        """Drop a model from the server's memory. Best-effort: no-op for
+        providers whose registry entry declares no native unload endpoint."""
         m = model or self.model
-        if not m:
+        path = self.provider.get(_PROVIDER_UNLOAD_PATH, DEFAULT_UNLOAD_PATH)
+        if not m or not path:
             return False
-        body = json.dumps({"model": m, "keep_alive": 0}).encode("utf-8")
-        req = urllib.request.Request(self.base_url + "/api/generate", data=body,
+        payload = {"model": m, **self.provider.get(_PROVIDER_UNLOAD_BODY, DEFAULT_UNLOAD_BODY)}
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(self.base_url + path, data=body,
                                      headers={"Content-Type": _JSON_CONTENT_TYPE}, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_s, context=_SSL_CTX) as resp:
@@ -267,7 +303,7 @@ class Client:
         model-id strings, None when the provider has no listing endpoint or it
         404s. Raises TeacherAuthError / TeacherUnavailableError so a probe can
         tell a bad key or unreachable host from a missing listing API."""
-        path = self.provider.get("models_path") or ""
+        path = self.provider.get(_PROVIDER_MODELS_PATH) or ""
         if not path:
             return None
         headers = _build_headers(self.provider, self.api_key)
@@ -278,18 +314,18 @@ class Client:
                 raw = resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as e:
             if e.code in _AUTH_STATUS:
-                raise TeacherAuthError(f"auth failed: {e.code}")
-            if e.code == 404:
+                raise TeacherAuthError(f"auth failed: {e.code}") from e
+            if e.code == _HTTP_NOT_FOUND:
                 return None
-            raise TeacherError(f"models list http {e.code}")
+            raise TeacherError(f"models list http {e.code}") from e
         except (urllib.error.URLError, OSError) as e:
-            raise TeacherUnavailableError(f"unreachable: {e}")
+            raise TeacherUnavailableError(f"unreachable: {e}") from e
         try:
             data = json.loads(raw)
         except ValueError:
             return None
-        arr = data.get(self.provider.get("models_array", "data")) or []
-        idk = self.provider.get("models_id", "id")
+        arr = data.get(self.provider.get(_PROVIDER_MODELS_ARRAY, _MODELS_ARRAY_DEFAULT)) or []
+        idk = self.provider.get(_PROVIDER_MODELS_ID, _MODELS_ID_DEFAULT)
         return [str(m[idk]) for m in arr if isinstance(m, dict) and m.get(idk)]
 
 

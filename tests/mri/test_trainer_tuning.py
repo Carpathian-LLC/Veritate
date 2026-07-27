@@ -11,15 +11,9 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
-import os
-import sys
 
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
-from readers import trainers, trainer_tuning
+from readers import trainer_tuning, trainers
 
 # ------------------------------------------------------------------------------------
 # Functions

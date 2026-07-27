@@ -1,8 +1,8 @@
 {
   "channel": "stable",
-  "build": 10,
-  "engine": "v1.3.0",
-  "mri": "v1.3.0",
-  "format": "v1.5.0",
-  "trainers": "v1.1.1"
+  "build": 1,
+  "engine": "v1.0.0",
+  "mri": "v1.0.0",
+  "format": "v1.0.0",
+  "trainers": "v1.0.0"
 }

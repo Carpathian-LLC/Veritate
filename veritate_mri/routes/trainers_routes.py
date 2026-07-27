@@ -14,12 +14,13 @@
 # Imports:
 
 from flask import request
-
-from readers import models, trainers as trainers_reader
+from readers import models
+from readers import trainers as trainers_reader
 from training import trainer_runner
 from training.sync import trainers_sync
 
-from ._common import open_folder, safe_route as _safe
+from ._common import open_folder
+from ._common import safe_route as _safe
 
 
 def register(app):
@@ -67,7 +68,7 @@ def register(app):
         opted into advanced analytics. The upstream-synced manifest is never
         touched."""
         def _do():
-            from runtime import sys_metrics, heartbeat
+            from runtime import heartbeat, sys_metrics
             body = request.get_json(silent=True) or {}
             trainer_id = body.get("id")
             if not trainer_id:

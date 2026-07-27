@@ -40,9 +40,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .model import (VOCAB_BYTE_LEVEL, ACT_DEFAULT, REG_DEFAULT, RMSNorm,
-                    QuantLinear, FFN)
 from . import qat as _qat
+from .model import ACT_DEFAULT, FFN, REG_DEFAULT, VOCAB_BYTE_LEVEL, QuantLinear, RMSNorm
 
 # ------------------------------------------------------------------------------------
 # Constants

@@ -8,10 +8,10 @@ The subprocess manager for trainer plugins at [veritate_mri/training/trainer_run
 
 Public API:
 
-- [`start(plugin_id, args)`](../../../veritate_mri/training/trainer_runner.py#L349) — finds the plugin manifest, builds `python trainers/<id>/trainer.py --arg val ...`, spawns it, writes `.plugin_pid.json`, tails stdout into the in-memory log ring.
-- [`state()`](../../../veritate_mri/training/trainer_runner.py#L245) — returns `{status, plugin_id, args, started_at, finished_at, exit_code}`. Statuses are `idle`, `running`, `ok`, `failed`, `stopped`.
-- [`stop()`](../../../veritate_mri/training/trainer_runner.py#L372) — SIGTERM the subprocess.
-- [`is_running()`](../../../veritate_mri/training/trainer_runner.py#L250) — boolean shortcut.
+- [`start(plugin_id, args)`](../../../veritate_mri/training/trainer_runner.py#L349): finds the plugin manifest, builds `python trainers/<id>/trainer.py --arg val ...`, spawns it, writes `.plugin_pid.json`, tails stdout into the in-memory log ring.
+- [`state()`](../../../veritate_mri/training/trainer_runner.py#L245): returns `{status, plugin_id, args, started_at, finished_at, exit_code}`. Statuses are `idle`, `running`, `ok`, `failed`, `stopped`.
+- [`stop()`](../../../veritate_mri/training/trainer_runner.py#L372), SIGTERM the subprocess.
+- [`is_running()`](../../../veritate_mri/training/trainer_runner.py#L250): boolean shortcut.
 
 Globals: `_LOCK`, `_STATE`, `_PROC`. Single-instance enforcement: `start()` returns an error if `_STATE["status"] == STATUS_RUNNING`.
 
@@ -21,16 +21,16 @@ PID-file persistence at `.plugin_pid.json` lets the dashboard reattach after a s
 
 Environment variables set on every spawn:
 
-- `VERITATE_PLUGIN_ID` — plugin knows its own ID.
-- `VERITATE_DEVICE` — device preference (`cpu`, `mps`, `cuda`, or unset for auto).
-- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — GPU memory hygiene.
-- `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, etc. — capped at physical cores (max 16).
+- `VERITATE_PLUGIN_ID`: plugin knows its own ID.
+- `VERITATE_DEVICE`: device preference (`cpu`, `mps`, `cuda`, or unset for auto).
+- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, GPU memory hygiene.
+- `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, etc.: capped at physical cores (max 16).
 
 ## Dependencies
 
-- Plugins under [trainers/](../../../trainers/) — see [trainer_plugins.md](trainer_plugins.md).
-- [readers/trainers.py](../../../veritate_mri/readers/trainers.py) — plugin discovery and manifest reading.
-- [runtime/heartbeat.py](../../../veritate_mri/runtime/heartbeat.py) — reads `state()` for presence pings; `record_training_event` is called from `start()` ([line 363](../../../veritate_mri/training/trainer_runner.py#L363)).
+- Plugins under [trainers/](../../../trainers/): see [trainer_plugins.md](trainer_plugins.md).
+- [readers/trainers.py](../../../veritate_mri/readers/trainers.py): plugin discovery and manifest reading.
+- [runtime/heartbeat.py](../../../veritate_mri/runtime/heartbeat.py): reads `state()` for presence pings; `record_training_event` is called from `start()` ([line 363](../../../veritate_mri/training/trainer_runner.py#L363)).
 
 ## Pitfalls
 

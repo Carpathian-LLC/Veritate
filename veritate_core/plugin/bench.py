@@ -21,8 +21,7 @@
 
 import time
 
-from veritate_core.plugin import oom_recovery
-from veritate_core.plugin import mem_executor, mem_planner
+from veritate_core.plugin import mem_executor, mem_planner, oom_recovery
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -37,8 +36,7 @@ PROBE_WD     = 0.0
 GB           = 1024 ** 3
 # On unified memory an over-budget allocation is SIGKILLed by the OS, not raised as a
 # catchable error, so the ramp must stop on a measured budget rather than wait for OOM.
-# Matches mem_planner.USABLE_FRACTION so bench and planner agree on the ceiling.
-BUDGET_FRACTION = 0.85
+BUDGET_FRACTION = mem_planner.USABLE_FRACTION
 # Backend tensor-size limits (not OOM): a rung whose tensors exceed what the backend can
 # address bounds the ramp exactly like OOM, so it must stop the sweep, never crash the run.
 # e.g. MPS: "MPSGaph does not support tensor dims larger than INT_MAX"; "Invalid buffer size".
@@ -84,7 +82,7 @@ def _memory_budget(device):
 
 def _memory_kind(device):
     """Human label for the memory pool the budget represents. Rule 34c: never
-    say a generic 'RAM' when it's actually VRAM or unified memory — the user
+    say a generic 'RAM' when it's actually VRAM or unified memory: the user
     needs to know which arch is being measured. Returns (kind, ceiling_label)
     used in the emit lines. cpu -> physical RAM, cuda -> VRAM (per-GPU),
     mps/other unified backends -> unified memory."""
@@ -172,7 +170,7 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
     # Warn only in the actual failure case: box has an NVIDIA GPU AND torch
     # is CPU-only (cuda_available False). If the user intentionally picked
     # CPU via _device_override for a dual-device auto-tune, that's expected
-    # and doesn't deserve a warning — torch CAN reach the GPU, we're just
+    # and doesn't deserve a warning: torch CAN reach the GPU, we're just
     # measuring CPU on purpose for comparison.
     if device == "cpu":
         try:

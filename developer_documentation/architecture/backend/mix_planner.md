@@ -25,10 +25,10 @@ Determinism: sources are walked in caller order, the water-fill is a fixed-point
 
 ## Dependencies
 
-- [veritate_core/plugin/multicorpus.py](../../../veritate_core/plugin/multicorpus.py) — spec separators and the parse the emitted string must satisfy.
-- [training/sync/corpus_sync.py](../../../veritate_mri/training/sync/corpus_sync.py) — catalog (topic, sizes, param bands).
-- [readers/corpus.py](../../../veritate_mri/readers/corpus.py), [readers/paths.py](../../../veritate_mri/readers/paths.py) — stem resolution, profiles path.
-- [runtime/settings.py](../../../veritate_mri/runtime/settings.py) — `corpus_mix_max_epochs`, `corpus_mix_default_profile`, `corpus_mix_profiles_path`.
+- [veritate_core/plugin/multicorpus.py](../../../veritate_core/plugin/multicorpus.py): spec separators and the parse the emitted string must satisfy.
+- [training/sync/corpus_sync.py](../../../veritate_mri/training/sync/corpus_sync.py): catalog (topic, sizes, param bands).
+- [readers/corpus.py](../../../veritate_mri/readers/corpus.py), [readers/paths.py](../../../veritate_mri/readers/paths.py), stem resolution, profiles path.
+- [runtime/settings.py](../../../veritate_mri/runtime/settings.py), `corpus_mix_max_epochs`, `corpus_mix_default_profile`, `corpus_mix_profiles_path`.
 - Tests: [tests/training/test_mix_planner.py](../../../tests/training/test_mix_planner.py).
 
 ## Pitfalls

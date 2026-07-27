@@ -23,7 +23,6 @@ import argparse
 import base64
 import json
 import os
-import sys
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -89,8 +88,8 @@ def jsonl_to_bin(jsonl_path, out_bin_path, separator=DEFAULT_SEPARATOR,
     # ~500 bytes each = ~50 MB)
     records = []
     n_skipped = 0
-    with open(jsonl_path, "r", encoding="utf-8") as f:
-        for line_no, line in enumerate(f, 1):
+    with open(jsonl_path, encoding="utf-8") as f:
+        for line in f:
             line = line.strip()
             if not line:
                 continue
@@ -112,7 +111,7 @@ def jsonl_to_bin(jsonl_path, out_bin_path, separator=DEFAULT_SEPARATOR,
                            f"(check trace_key={trace_key!r}; skipped {n_skipped})")
 
     # Split
-    n_val = int(round(len(records) * val_split_ratio))
+    n_val = round(len(records) * val_split_ratio)
     val_records = records[-n_val:] if n_val > 0 else []
     train_records = records[:len(records) - n_val] if n_val > 0 else records
 
@@ -164,7 +163,8 @@ def main():
     ap.add_argument("--val-ratio",    type=float, default=DEFAULT_VAL_FRAC,
                                        help=f"trailing fraction → val.bin (default {DEFAULT_VAL_FRAC})")
     ap.add_argument("--trace-key",    default=DEFAULT_TRACE_KEY,
-                                       help=f"JSONL field containing the byte sequence (default '{DEFAULT_TRACE_KEY}'; auto-falls back to {SUPPORTED_KEYS})")
+                                       help=f"JSONL field containing the byte sequence "
+                                            f"(default '{DEFAULT_TRACE_KEY}'; auto-falls back to {SUPPORTED_KEYS})")
     ap.add_argument("--separator",    default=DEFAULT_SEPARATOR.decode("utf-8"),
                                        help="record separator (default '<|endoftext|>')")
     ap.add_argument("--max-records",  type=int, default=None,
@@ -189,11 +189,11 @@ def main():
         else:
             print(f"  {k:>14}: {v}")
     print()
-    print(f"Ready for training. To use:")
+    print("Ready for training. To use:")
     print(f"  cp {stats['train_bin']} trainers/corpus/tool_sft_train.bin")
     if stats.get("val_bin"):
         print(f"  cp {stats['val_bin']} trainers/corpus/tool_sft_val.bin")
-    print(f"  # then train the 800M plugin with --corpus tool_sft")
+    print("  # then train the 800M plugin with --corpus tool_sft")
 
 
 if __name__ == "__main__":

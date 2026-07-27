@@ -8,20 +8,20 @@ A pure-arithmetic estimator. Given a model's parameter count and shape plus the 
 
 ## the four buckets
 
-- **params** — `param_count × dtype_bytes`.
-- **grads** — same size as params.
-- **optimizer** — Adam's two fp32 moment buffers, plus one fp32 master copy when training in a low-precision dtype.
-- **activations** — coarse `batch × seq × layers × (hidden + ffn)` store with an overhead factor for attention and norm scratch.
+- **params**: `param_count × dtype_bytes`.
+- **grads**: same size as params.
+- **optimizer**: Adam's two fp32 moment buffers, plus one fp32 master copy when training in a low-precision dtype.
+- **activations**: coarse `batch × seq × layers × (hidden + ffn)` store with an overhead factor for attention and norm scratch.
 
 ## escalation ladder
 
 Apple Silicon has no separate VRAM; the GPU shares the unified RAM pool, so moving a tensor "to host" frees nothing. The ladder only uses rungs that cut a real bucket:
 
-1. `none` — everything resident.
-2. `checkpoint_activations` — recompute activations in backward instead of storing them; the activation bucket drops to `CHECKPOINT_ACT_RETAIN`.
-3. `checkpoint+bf16_optimizer` — moment buffers in bf16, halving the optimizer bucket.
-4. `checkpoint+page_optimizer_to_nvme` — optimizer state paged to SSD, removed from the RAM budget. This is the "train bigger than RAM" rung.
-5. `infeasible_reduce_batch_or_seq` — params + grads alone exceed the budget; no offload helps, the run must shrink batch or seq.
+1. `none`: everything resident.
+2. `checkpoint_activations`: recompute activations in backward instead of storing them; the activation bucket drops to `CHECKPOINT_ACT_RETAIN`.
+3. `checkpoint+bf16_optimizer`: moment buffers in bf16, halving the optimizer bucket.
+4. `checkpoint+page_optimizer_to_nvme`: optimizer state paged to SSD, removed from the RAM budget. This is the "train bigger than RAM" rung.
+5. `infeasible_reduce_batch_or_seq`: params + grads alone exceed the budget; no offload helps, the run must shrink batch or seq.
 
 `plan_training_memory()` walks the rungs in order and returns the first that fits, so the result is the minimal intervention. Tier is monotonic in budget: a smaller budget never yields a cheaper tier.
 
@@ -50,5 +50,5 @@ Estimate is biased to meet-or-exceed measured: under-prediction OOMs and costs t
 ## pitfalls
 
 - The activation estimate is linear in `(hidden + ffn) × batch × seq × layers`. It does not carry a separate `seq²` attention term, so very long sequences drift toward under-prediction; the `est/meas = 1.00` point above is already at the conservative edge for seq 512. Add an attention term before trusting it past seq ~2k.
-- The planner decides the tier; [mem_executor](mem_executor.md) executes it. Checkpointing and NVMe optimizer paging ([paged_optimizer](paged_optimizer.md)) are wired; both offload tiers are delivered by paging the Adam moments to disk. Paging frees only the optimizer bucket — a size where params+grads alone exceed the budget returns `infeasible` and the trainer refuses before building.
+- The planner decides the tier; [mem_executor](mem_executor.md) executes it. Checkpointing and NVMe optimizer paging ([paged_optimizer](paged_optimizer.md)) are wired; both offload tiers are delivered by paging the Adam moments to disk. Paging frees only the optimizer bucket, a size where params+grads alone exceed the budget returns `infeasible` and the trainer refuses before building.
 - Optimizer bucket assumes Adam. A different optimizer (e.g. Muon) changes the moment-slot count; the constant must follow the optimizer the trainer actually uses.

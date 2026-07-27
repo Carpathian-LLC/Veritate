@@ -19,12 +19,18 @@ import os
 import sys
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
-sys.path.insert(0, os.path.join(HERE, "..", "inference", "backends"))
+_MRI_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+for _p in (_MRI_ROOT, os.path.join(_MRI_ROOT, "inference", "backends")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-from c_engine import CTracedSubprocess, FRAME_PAYLOAD_BYTES
+from c_engine import FRAME_PAYLOAD_BYTES, CTracedSubprocess  # noqa: E402
+from readers import paths  # noqa: E402
 
+# ------------------------------------------------------------------------------------
+# Constants
+
+RESULTS_NAME = "perf_trace_results.md"
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -32,7 +38,7 @@ from c_engine import CTracedSubprocess, FRAME_PAYLOAD_BYTES
 def _percentile(values, p):
     if not values: return 0.0
     s = sorted(values)
-    k = int(round((p / 100.0) * (len(s) - 1)))
+    k = round((p / 100.0) * (len(s) - 1))
     return s[k]
 
 
@@ -49,28 +55,27 @@ def _stats(values):
 
 
 def _resolve_exe(override):
+    """--exe, then the binary this box builds, then any alternate build named in
+    engine_versions.json. All three resolve under veritate_engine/v1/bin/<os>/<arch>,
+    so this works the same on macOS, Linux, and Windows."""
     if override and os.path.isfile(override): return override
-    manifest_path = os.path.join(ROOT, "veritate_engine", "v1", "engine_versions.json")
-    edir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "veritate")
-    if os.path.isfile(manifest_path):
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-            for entry in manifest.get("engines", []):
-                p = os.path.join(edir, entry["exe"])
-                if os.path.isfile(p): return p
-        except Exception:
-            pass
-    p = os.path.join(edir, "veritate.exe")
-    return p if os.path.isfile(p) else None
+    built = paths.engine_binary_path()
+    if os.path.isfile(built): return built
+    if not os.path.isfile(paths.ENGINE_VERSIONS_JSON): return None
+    with open(paths.ENGINE_VERSIONS_JSON, encoding="utf-8") as f:
+        manifest = json.load(f)
+    for entry in manifest.get("engines", []):
+        p = os.path.join(paths.engine_binary_dir(), entry["exe"])
+        if os.path.isfile(p): return p
+    return None
 
 
 def _resolve_model(override):
     if override and os.path.isfile(override): return override
     cands = []
-    for p in glob.glob(os.path.join(ROOT, "models", "*", "veritate.bin")):
+    for p in glob.glob(os.path.join(paths.MODELS_ROOT, "*", paths.BIN_NAME)):
         mdir = os.path.dirname(p)
-        if not os.path.isfile(os.path.join(mdir, "config.json")): continue
+        if not os.path.isfile(os.path.join(mdir, paths.CONFIG_NAME)): continue
         try: cands.append((os.path.getmtime(p), p))
         except OSError: continue
     cands.sort(reverse=True)
@@ -130,7 +135,8 @@ def render_markdown(result, agg, exe, model, prompt):
     lines.append(f"- model: `{model}`")
     lines.append(f"- prompt: `{prompt!r}`")
     lines.append(f"- frames: {agg['frames']}  (token_count={result['token_count']})")
-    lines.append(f"- frame size: {agg['frame_size_bytes']:,} bytes  (4 marker + 12 header + {FRAME_PAYLOAD_BYTES:,} payload)")
+    lines.append(f"- frame size: {agg['frame_size_bytes']:,} bytes  (4 marker + 12 header + {FRAME_PAYLOAD_BYTES:,} "
+                 f"payload)")
     lines.append(f"- total stream wall: {result['total_wall_ms']:.2f} ms")
     lines.append(f"- outer wall (incl. close): {result['outer_wall_ms']:.2f} ms")
     lines.append(f"- total bytes streamed: {result['total_bytes']:,}")
@@ -151,7 +157,8 @@ def render_markdown(result, agg, exe, model, prompt):
     lines.append("|--------------------|------:|------:|------:|------:|------:|")
     for name, key in [("read pipe", "read"), ("parse frame", "parse"), ("engine inter-frame", "engine")]:
         s = agg[key]
-        lines.append(f"| {name:<18} | {s['avg']:5.3f} | {s['p50']:5.3f} | {s['p99']:5.3f} | {s['min']:5.3f} | {s['max']:5.3f} |")
+        lines.append(f"| {name:<18} | {s['avg']:5.3f} | {s['p50']:5.3f} | {s['p99']:5.3f} | {s['min']:5.3f} | "
+                     f"{s['max']:5.3f} |")
     lines.append("")
     # split read into engine-known (~0.9 ms p50 from kernel-side telemetry) and pipe overhead.
     # the engine fix referenced in the work order brought kernel-side decode to ~0.9 ms p50.
@@ -165,7 +172,8 @@ def render_markdown(result, agg, exe, model, prompt):
     lines.append(f"- frame size: {agg['frame_size_bytes']:,} bytes")
     if pipe_overhead_p50 > 0:
         bw_mb_s = (agg["frame_size_bytes"] / 1e6) / (pipe_overhead_p50 / 1e3)
-        lines.append(f"- effective pipe bandwidth: ~{bw_mb_s:.0f} MB/s for the {agg['frame_size_bytes'] / 1024:.0f} KB frame")
+        lines.append(f"- effective pipe bandwidth: ~{bw_mb_s:.0f} MB/s for the {agg['frame_size_bytes'] / 1024:.0f} KB "
+                     f"frame")
     lines.append("")
 
     lines.append("## per-frame trace (first 32)")
@@ -173,7 +181,8 @@ def render_markdown(result, agg, exe, model, prompt):
     lines.append("| # | read_ms | parse_ms | engine_inter_ms | bytes |")
     lines.append("|---|--------:|---------:|----------------:|------:|")
     for i, f in enumerate(result["trace"][:32]):
-        lines.append(f"| {i} | {f['t_read_pipe_ms']:7.3f} | {f['t_parse_ms']:8.3f} | {f['t_engine_inter_ms']:15.3f} | {f['frame_size_bytes']} |")
+        lines.append(f"| {i} | {f['t_read_pipe_ms']:7.3f} | {f['t_parse_ms']:8.3f} | {f['t_engine_inter_ms']:15.3f} | "
+                     f"{f['frame_size_bytes']} |")
     lines.append("")
 
     # top-3 wins ranked by ms saved per token (use p50).
@@ -182,22 +191,26 @@ def render_markdown(result, agg, exe, model, prompt):
     lines.append("")
     lines.append(f"1. **shrink the frame payload**, current {agg['frame_size_bytes'] / 1024:.0f} KB / token. "
                  f"FFN neurons (36 KB) + attention floats (147 KB) + lens logits (12 KB) dominate. "
-                 f"Switching attention from f32 -> u8 (or downsampling to top-k) saves ~{pipe_overhead_p50 * 0.7:.2f} ms p50 by cutting bytes-on-pipe.")
+                 f"Switching attention from f32 -> u8 (or downsampling to top-k) saves "
+                 f"~{pipe_overhead_p50 * 0.7:.2f} ms p50 by cutting bytes-on-pipe.")
     lines.append(f"2. **parse frame in one shot**, current {parse_p50:.3f} ms p50 from many `np.frombuffer` calls "
-                 f"with per-call dtype dispatch. A single structured-dtype view over the whole payload (or a flat memcpy "
+                 f"with per-call dtype dispatch. A single structured-dtype view over the whole payload "
+                 f"(or a flat memcpy "
                  f"into a pre-allocated buffer) saves ~{max(0.0, parse_p50 - 0.02):.3f} ms p50.")
-    lines.append(f"3. **read full frame in one syscall**, current `_read_exact` loops {1 + (FRAME_PAYLOAD_BYTES // 65536) + 1} times "
+    lines.append(f"3. **read full frame in one syscall**, current `_read_exact` loops "
+                 f"{1 + (FRAME_PAYLOAD_BYTES // 65536) + 1} times "
                  f"on a 64 KB pipe buffer. Increasing the engine's stdout buffer via `setvbuf` + a single big `read()` "
                  f"saves ~0.1-0.3 ms p50 from per-chunk overhead.")
     lines.append("")
     lines.append("## interpretation vs. browser 4 ms/byte")
     lines.append("")
-    lines.append(f"- harness avg wall-per-token (includes prefill): {result['total_wall_ms'] / max(1, result['token_count']):.2f} ms")
+    lines.append(f"- harness avg wall-per-token (includes prefill): "
+                 f"{result['total_wall_ms'] / max(1, result['token_count']):.2f} ms")
     if len(result['trace']) > 1:
         steady_ms = sum(f['t_read_pipe_ms'] + f['t_parse_ms'] for f in result['trace'][1:]) / (len(result['trace']) - 1)
         lines.append(f"- harness steady-state per token (no prefill): {steady_ms:.2f} ms")
     lines.append(f"- frame 0 prefill cost: {result['trace'][0]['t_read_pipe_ms']:.1f} ms (one-shot, amortized)")
-    lines.append(f"- engine kernel-side decode (per workbook): ~0.9 ms p50")
+    lines.append("- engine kernel-side decode (per workbook): ~0.9 ms p50")
     lines.append(f"- python-side overhead per token: read+parse = {agg['read']['p50'] + parse_p50:.2f} ms p50")
     lines.append("")
     lines.append("Conclusion: the user's 4 ms/byte browser wall is mostly the **prefill on frame 0** smeared")
@@ -209,23 +222,23 @@ def render_markdown(result, agg, exe, model, prompt):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default=None, help="path to veritate.exe (defaults to engine_versions.json current)")
+    ap.add_argument("--exe", default=None, help="engine binary (defaults to the built binary for this os/arch)")
     ap.add_argument("--model", default=None, help="path to veritate.bin (defaults to freshest models/*/veritate.bin)")
     ap.add_argument("--prompt", default="Once upon a time")
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--top-k", type=int, default=40)
     ap.add_argument("--max-new", type=int, default=16)
     ap.add_argument("--warmup", type=int, default=1)
-    ap.add_argument("--out", default=os.path.join(ROOT, "models", "perf_trace_results.md"))
+    ap.add_argument("--out", default=os.path.join(paths.MODELS_ROOT, RESULTS_NAME))
     args = ap.parse_args()
 
     exe = _resolve_exe(args.exe)
     model = _resolve_model(args.model)
     if not exe:
-        print("error: no engine exe found (checked --exe, engine_versions.json, %LOCALAPPDATA%\\veritate)")
+        print(f"error: no engine binary found (checked --exe, {paths.engine_binary_dir()})")
         return 2
     if not model:
-        print("error: no veritate.bin found (checked --model, models/*/veritate.bin)")
+        print(f"error: no model bin found (checked --model, {paths.MODELS_ROOT}/*/{paths.BIN_NAME})")
         return 2
 
     print(f"exe:    {exe}")

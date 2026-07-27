@@ -37,7 +37,8 @@ VERITATE_MODEL_VERSION_QAT = 11  # unified: header carries quant_mode + n_expert
 VERITATE_MODEL_VERSION_MTP = 12  # v11 + optional MTP byte-0 head (mtp.norms[0], mtp.transforms[0]) + untied lm_head
 VERITATE_MODEL_VERSION_HYBRID = 13  # hybrid trunk: local attn + recurrent global slots, fp32/fp16/int8 tensors
 HEADER_FMT                = "<4sIIIIIII"
-HYBRID_HEADER_EXT_FMT     = "<iiiiiiii"  # dtype, n_local_enc, n_global, n_local_dec, patch_stride, slots, conv_kernel, state_rule
+# dtype, n_local_enc, n_global, n_local_dec, patch_stride, slots, conv_kernel, state_rule
+HYBRID_HEADER_EXT_FMT     = "<iiiiiiii"
 HYBRID_DTYPES             = {"fp32": 0, "fp16": 1, "int8": 2}
 HYBRID_NP_DTYPES          = {"fp32": "<f4", "fp16": "<f2", "int8": "<f4"}  # int8: small tensors stay fp32
 HYBRID_DTYPE_DEFAULT      = "fp16"  # parity + bpb gates passed vs fp32; half the bin
@@ -61,6 +62,7 @@ QUANT_MODE_TO_INT = {
 }
 
 SHAPE_KEYS = ("vocab", "hidden", "layers", "ffn", "heads", "seq")
+ENGINE_VOCAB = 256   # engine is byte-level only; any other vocab cannot be exported
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -79,7 +81,7 @@ def quantize_matmul(w):
         return np.zeros(arr.shape, dtype=np.int8), 1
     scale = max_abs / INT8_MAX
     q = np.round(arr / scale).clip(-INT8_MAX, INT8_MAX).astype(np.int8)
-    scale_q24 = max(1, int(round(scale * (1 << Q24_SHIFT))))
+    scale_q24 = max(1, round(scale * (1 << Q24_SHIFT)))
     return q, scale_q24
 
 
@@ -143,14 +145,13 @@ def quantize_matmul_ternary(w):
     # columns of the matmul. Engine's load_b_ternary reads `j` as the slow
     # axis and decodes trits at columns p=0..k-1. So pack_trits_2d with
     # q.T (shape [n=out, k=in]) gives the right byte layout.
-    n_out, k_in = arr.shape[1], arr.shape[0]
     q_no = q.T.copy()  # [n_out, k_in]
     packed = pack_trits_2d(q_no)
     # gamma is the per-tensor weight scale. The engine's requant convention
     # uses scale_q24 = scale * 2^24 where scale is the fp value of one int8
     # step. For ternary, one trit step = gamma, so gamma_q24 = gamma * 2^24.
     # No factor of ACT_INT8_SCALE here (that lives on the activation side).
-    gamma_q24 = max(1, int(round(gamma * (1 << Q24_SHIFT))))
+    gamma_q24 = max(1, round(gamma * (1 << Q24_SHIFT)))
     return packed, gamma_q24
 
 
@@ -193,7 +194,7 @@ def shape_from_config(name):
     cfg_path = paths.config_path(name)
     if not os.path.isfile(cfg_path):
         raise FileNotFoundError(f"no config.json for model: {name}")
-    with open(cfg_path, "r", encoding="utf-8") as f:
+    with open(cfg_path, encoding="utf-8") as f:
         cfg = json.load(f)
     shape = cfg.get("shape") or {}
     out = {}
@@ -205,8 +206,8 @@ def shape_from_config(name):
         if v is None:
             raise ValueError(f"config.json for {name} missing shape field: {key}")
         out[key] = int(v)
-    if out["vocab"] != 256:
-        raise ValueError(f"engine requires vocab=256, got {out['vocab']}")
+    if out["vocab"] != ENGINE_VOCAB:
+        raise ValueError(f"engine requires vocab={ENGINE_VOCAB}, got {out['vocab']}")
     if out["hidden"] % out["heads"] != 0:
         raise ValueError(f"hidden ({out['hidden']}) not divisible by heads ({out['heads']})")
     return out
@@ -219,7 +220,7 @@ def moe_config(name):
     The check is on the config shape, not the plugin name: any plugin that writes
     these fields is treated as MoE."""
     cfg_path = paths.config_path(name)
-    with open(cfg_path, "r", encoding="utf-8") as f:
+    with open(cfg_path, encoding="utf-8") as f:
         cfg = json.load(f)
     mega = cfg.get("mega") or {}
     # Either the nested mega block declares it, or the top-level config carries
@@ -314,7 +315,7 @@ def export_checkpoint(name, step, dtype=None):
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
 
-    with open(paths.config_path(name), "r", encoding="utf-8") as f:
+    with open(paths.config_path(name), encoding="utf-8") as f:
         cfg_ta = (json.load(f).get("training_args")) or {}
     trunk = str(cfg_ta.get("trunk") or "dense")
     if trunk == "hybrid":
@@ -357,7 +358,7 @@ def export_checkpoint(name, step, dtype=None):
             f"v12 covers MTP for non-MoE trunks; MoE + MTP needs a follow-up."
         )
     if has_mtp:
-        return _export_checkpoint_mtp(name, step, ckpt_path, shape, sd, base_prefix, quant_mode)
+        return _export_checkpoint_mtp(name, step, shape, sd, base_prefix, quant_mode)
     version = VERITATE_MODEL_VERSION_QAT if is_moe else VERITATE_MODEL_VERSION
 
     tok_w = fetch(sd, base_prefix + "tok_emb.weight")
@@ -414,7 +415,7 @@ def export_checkpoint(name, step, dtype=None):
     }
 
 
-def _export_checkpoint_mtp(name, step, ckpt_path, shape, sd, base_prefix, quant_mode):
+def _export_checkpoint_mtp(name, step, shape, sd, base_prefix, quant_mode):
     """v12 binary: canonical body + MTP byte-0 head + untied lm_head."""
     tok_w = fetch(sd, base_prefix + "tok_emb.weight")
     pos_w = fetch(sd, base_prefix + "pos_emb.weight")
@@ -438,7 +439,8 @@ def _export_checkpoint_mtp(name, step, ckpt_path, shape, sd, base_prefix, quant_
     if mtp_norm0.shape != (shape["hidden"],):
         raise ValueError(f"mtp.norms[0] shape {mtp_norm0.shape} != ({shape['hidden']},)")
     if mtp_trans0_w.shape != (shape["hidden"], shape["hidden"]):
-        raise ValueError(f"mtp.transforms[0] shape {tuple(mtp_trans0_w.shape)} != ({shape['hidden']}, {shape['hidden']})")
+        raise ValueError(f"mtp.transforms[0] shape {tuple(mtp_trans0_w.shape)} != ({shape['hidden']}, "
+                         f"{shape['hidden']})")
 
     lm_head_w = fetch(sd, base_prefix + "lm_head.weight")
     lm_head, lm_head_q24 = quantize_matmul(lm_head_w)
@@ -486,7 +488,7 @@ def _export_checkpoint_mtp(name, step, ckpt_path, shape, sd, base_prefix, quant_
 def _hybrid_block_kinds(sd):
     """Ordered block kinds from checkpoint keys: 'recurrent' iff the block has a
     conv tensor. Validates the enc/global/dec sandwich the engine expects."""
-    from veritate_core.model_patched import N_LOCAL_ENC, N_LOCAL_DEC
+    from veritate_core.model_patched import N_LOCAL_DEC, N_LOCAL_ENC
     idx = sorted({int(k.split(".")[1]) for k in sd if k.startswith("blocks.")})
     if idx != list(range(len(idx))):
         raise ValueError(f"non-contiguous block indices in checkpoint: {idx}")
@@ -619,7 +621,7 @@ def export_checkpoint_ternary(name, step, out_path=None):
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
 
-    with open(paths.config_path(name), "r", encoding="utf-8") as f:
+    with open(paths.config_path(name), encoding="utf-8") as f:
         trunk = str(((json.load(f).get("training_args")) or {}).get("trunk") or "dense")
     if trunk != "dense":
         raise ValueError(
@@ -659,8 +661,7 @@ def export_checkpoint_ternary(name, step, out_path=None):
         raise ValueError(f"n_out shape {n_out.shape} != ({shape['hidden']},)")
 
     if out_path is None:
-        bin_dir = os.path.dirname(paths.bin_path(name))
-        out_path = os.path.join(bin_dir, "veritate_v2.bin")
+        out_path = paths.bin_v2_path(name)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     with open(out_path, "wb") as f:

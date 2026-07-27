@@ -176,7 +176,7 @@
       $("kbFile").value = ""; $("kbFileName").textContent = "no file selected";
       refreshHealth().finally(() => {
         renderControls();
-        $("kbHint").textContent = `added ${d.filename} — ${nFiles} file${nFiles === 1 ? "" : "s"} indexed`;
+        $("kbHint").textContent = `added ${d.filename}, ${nFiles} file${nFiles === 1 ? "" : "s"} indexed`;
       });
     }).catch(() => { busy = false; renderKb(); $("kbHint").textContent = "upload failed"; });
   }

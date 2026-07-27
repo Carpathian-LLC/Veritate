@@ -27,4 +27,4 @@ A 200-300M-class hybrid chat model with real common knowledge, ms-class C-engine
 
 ## Related
 
-- 80M repair round (separate, queued behind this run on GPU): combined SFT from chat80m step 48000 — grounded_v3 ~25% + chat_identity_v1 ~15% + chat mix, ~2-3k steps at 1e-5, gates per `failures.md` 2026-07-08 retry condition (a).
+- 80M repair round (separate, queued behind this run on GPU): combined SFT from chat80m step 48000: grounded_v3 ~25% + chat_identity_v1 ~15% + chat mix, ~2-3k steps at 1e-5, gates per `failures.md` 2026-07-08 retry condition (a).

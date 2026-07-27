@@ -17,7 +17,6 @@
 import hmac
 
 from flask import request
-
 from runtime import settings as settings_mod
 
 # ------------------------------------------------------------------------------------

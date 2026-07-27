@@ -8,15 +8,15 @@ Low-level training loop helpers at [veritate_mri/training/native_trainer.py](../
 
 Imports `from veritate_core import qat as veritate_qat` ([line 42](../../../veritate_mri/training/native_trainer.py#L42)) for the QAT switchovers.
 
-Exposes loop building blocks: corpus sampler integration, LR scheduling, gradient accumulation, optimizer step, checkpoint trigger. Plugins compose these — they don't have to use the whole package.
+Exposes loop building blocks: corpus sampler integration, LR scheduling, gradient accumulation, optimizer step, checkpoint trigger. Plugins compose these, they don't have to use the whole package.
 
 The canonical trainers share the loop in [trainers/common/vanilla_trainer.py](../../../trainers/common/vanilla_trainer.py) rather than this module. A trainer that needs only individual building blocks can compose them from here.
 
 ## Dependencies
 
-- [veritate_core/qat.py](../../../veritate_core/qat.py) — QAT mode switching.
-- [training/save.py](save.md) — CSV append + checkpoint save.
-- [veritate_core/plugin/multicorpus.py](../../../veritate_core/plugin/multicorpus.py) — mixed corpus loading.
+- [veritate_core/qat.py](../../../veritate_core/qat.py): QAT mode switching.
+- [training/save.py](save.md): CSV append + checkpoint save.
+- [veritate_core/plugin/multicorpus.py](../../../veritate_core/plugin/multicorpus.py): mixed corpus loading.
 
 ## Pitfalls
 

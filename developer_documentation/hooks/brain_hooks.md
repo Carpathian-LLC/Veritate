@@ -7,10 +7,10 @@ Which hook fields are available on which architecture and engine path. Field sha
 | path | what it is | typical use |
 |---|---|---|
 | pytorch | `veritate_mri/inference/backends/pytorch.py::Brain.stream` with forward hooks on each block | full activation capture, slow (~20-30 ms/token) |
-| engine | `veritate_engine/src/model.c::forward_decode` writing `trace_record_t` slices | INT8 inference, fast (~3 ms/token with full trace) |
+| engine | `veritate_engine/v1/src/model.c::forward_decode` writing `trace_record_t` slices | INT8 inference, fast (~3 ms/token with full trace) |
 | training-time dump | `veritate_mri/training/save.py::save` walks `model.hook_spec()` at every checkpoint | per-step probe / lens / classroom / generation artifacts under `models/<name>/hooks/step_<N>/` |
 
-The training-time path uses the `hook_spec()` contract documented in [`contract.md`](contract.md#hook_spec-contract). Canonical models return `self`. Non-canonical trainers (e.g. `veritate_mega`) return a thin adapter that exposes canonical-shaped trace points so the dumper does not need to know the model's internal topology.
+The training-time path uses the `hook_spec()` contract documented in [`contract.md`](contract.md#hook_spec-contract). Canonical models return `self`. Non-canonical models (MoE wrappers, sidecar adapters) return a thin adapter that exposes canonical-shaped trace points so the dumper does not need to know the model's internal topology.
 
 ## architecture coverage
 
@@ -50,16 +50,16 @@ Kernel selection affects performance only. Trace field shape is kernel-agnostic.
 
 | kernel | path | architectures it serves |
 |---|---|---|
-| scalar | `engine/kernels/scalar/` | reference oracle for every architecture; parity bar for x86_64 / arm64 ports |
-| x86_64 avx-512 vnni | `engine/kernels/x86_64/` | transformer matmul (qkv, out_proj, ffn_up, ffn_down, lm_head); mamba-2 ssd kernel prototype |
-| arm64 neon | `engine/kernels/arm64/` | planned, transformer matmul first |
+| scalar | `veritate_engine/v1/kernels/scalar/` | reference oracle for every architecture; parity bar for x86_64 / arm64 ports |
+| x86_64 avx-512 vnni | `veritate_engine/v1/kernels/x86_64/` | transformer matmul (qkv, out_proj, ffn_up, ffn_down, lm_head); mamba-2 ssd kernel prototype |
+| arm64 neon | `veritate_engine/v1/kernels/arm64/` | planned, transformer matmul first |
 
 ## adding a hook
 
 1. Add the field to `developer_documentation/hooks/contract.md` (this commit is the gate).
 2. Emit from the producer on every supported path: `veritate_mri/training/checkpoint_probe.py::dump_generation`, engine forward, pytorch `Brain.stream`. All in the same commit.
 3. Add the dashboard render path. The render must gate on field presence so older runs do not break.
-4. If the field changes the TFRM frame size, bump the trace version in `engine/src/veritate.h` and update the parser.
+4. If the field changes the TFRM frame size, bump the trace version in `veritate_engine/v1/src/veritate.h` and update the parser.
 
 ## interpretability layer (v8)
 

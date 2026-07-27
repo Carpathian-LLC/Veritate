@@ -15,8 +15,9 @@
 # - Composition:
 #     1. Retriever (e.g., veritate_mri.agent.tools.retriever's BM25) returns
 #        top-K passages for the user query.
-#     2. We build a prefix:
-#          "Context:\n[1] <passage1>\n[2] <passage2>\n...\nQuestion: <user>\nAnswer: "
+#     2. We build a prefix of the form:
+#          Context: newline, [1] <passage1>, [2] <passage2>, ...,
+#          then Question: <user>, then Answer:
 #     3. Brain.stream(prefix, ...) generates the answer, optionally under
 #        constrained decoding.
 # - LongLLMLingua-style compression hook is a stub for now; the published
@@ -26,8 +27,8 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -45,8 +46,8 @@ DEFAULT_PASSAGE_FORMAT = "[{i}] {chunk}"
 class RAGResult:
     """One RAG-augmented generation result."""
     query:             str
-    retrieved:         List[str] = field(default_factory=list)
-    retrieved_scores:  List[float] = field(default_factory=list)
+    retrieved:         list[str] = field(default_factory=list)
+    retrieved_scores:  list[float] = field(default_factory=list)
     prefix:            str = ""
     prefix_bytes:      int = 0
     answer:            str = ""
@@ -55,11 +56,11 @@ class RAGResult:
     compression_ratio: float = 1.0
 
 
-def build_rag_prefix(query: str, passages: List[str],
+def build_rag_prefix(query: str, passages: list[str],
                      prefix_format: str = DEFAULT_PREFIX_FORMAT,
                      passage_format: str = DEFAULT_PASSAGE_FORMAT,
                      max_bytes: int = DEFAULT_MAX_PASSAGES_B,
-                     compressor: Optional[Callable[[str], str]] = None) -> str:
+                     compressor: Callable[[str], str] | None = None) -> str:
     """Build a prompt prefix from retrieved passages + a user query.
     If `compressor` is provided, run each passage through it first
     (LongLLMLingua-style).
@@ -88,7 +89,7 @@ class RAGRunner:
     callable that returns (passages, scores) given a query."""
 
     def __init__(self, backend, retriever: Callable[[str, int], list],
-                 compressor: Optional[Callable[[str], str]] = None,
+                 compressor: Callable[[str], str] | None = None,
                  top_k: int = DEFAULT_TOP_K,
                  prefix_format: str = DEFAULT_PREFIX_FORMAT,
                  passage_format: str = DEFAULT_PASSAGE_FORMAT,
@@ -112,7 +113,7 @@ class RAGRunner:
         # Retrieve
         try:
             hits = self.retriever(query, self.top_k)
-        except Exception as e:
+        except Exception:
             hits = []
         passages = [h[0] if isinstance(h, (tuple, list)) else str(h) for h in hits]
         scores = [float(h[1]) if isinstance(h, (tuple, list)) and len(h) > 1 else 0.0
@@ -138,11 +139,7 @@ class RAGRunner:
                                        max_new=max_new,
                                        constraint=constraint):
             kind = ev.get("kind")
-            if kind == "token":
-                b = ev.get("byte")
-                if isinstance(b, int):
-                    out_bytes.append(b & 0xff)
-            elif kind == "fast_byte":
+            if kind == "token" or kind == "fast_byte":
                 b = ev.get("byte")
                 if isinstance(b, int):
                     out_bytes.append(b & 0xff)
@@ -176,7 +173,8 @@ def bm25_retriever_from_tool(tool):
             return []
         if out == "no matches":
             return []
-        # Format: "[src @off] (score 1.23) <preview>\n\n[src @off] (score ..) ..."
+        # one block per hit, blocks split by a blank line, each block
+        # opening with the source, offset, and parenthesised score
         hits = []
         for chunk in out.split("\n\n"):
             chunk = chunk.strip()
@@ -185,7 +183,7 @@ def bm25_retriever_from_tool(tool):
             # Parse leading score
             score = 0.0
             if "(score " in chunk:
-                pre, _, rest = chunk.partition("(score ")
+                rest = chunk.partition("(score ")[2]
                 score_s, _, body = rest.partition(") ")
                 try:
                     score = float(score_s)
@@ -210,6 +208,7 @@ def make_word_ppl_compressor(brain, keep_frac: float = 0.5, max_ctx_bytes: int =
     +0.19 nll on held-out continuations; @ keep=0.25 ≈ 4.3× for +0.27.
     Output is human-readable, unlike per-byte deletion."""
     import re
+
     import torch
     import torch.nn.functional as F
     _WORD_RE = re.compile(rb"\S+|\s+")
@@ -255,7 +254,7 @@ def make_word_ppl_compressor(brain, keep_frac: float = 0.5, max_ctx_bytes: int =
         for (s, e) in spans:
             seg = nlls[s:e]
             scores.append(sum(seg) / max(1, len(seg)))
-        keep_n = max(1, int(round(len(spans) * keep_frac)))
+        keep_n = max(1, round(len(spans) * keep_frac))
         order = sorted(range(len(spans)), key=lambda i: scores[i], reverse=True)
         keep = set(order[:keep_n])
         out = []
@@ -290,6 +289,6 @@ def crude_compressor(passage: str, ratio: float = 0.5) -> str:
     keep = max(1, int(len(scored) * ratio))
     selected = scored[:keep]
     # Restore original order
-    selected_set = set(id(s) for _, s in selected)
+    selected_set = {id(s) for _, s in selected}
     out = [s for s in sentences if id(s) in selected_set]
     return " ".join(out) or sentences[0]

@@ -12,9 +12,16 @@
 import os
 
 from flask import current_app, request
-
 from readers import (
-    capabilities as caps_reader, checkpoints, config as cfg_reader, models, paths,
+    capabilities as caps_reader,
+)
+from readers import (
+    checkpoints,
+    models,
+    paths,
+)
+from readers import (
+    config as cfg_reader,
 )
 from training import fork as fork_mod
 from training.sync import models_sync

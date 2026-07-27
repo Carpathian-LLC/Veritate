@@ -27,7 +27,7 @@ The engine reads any `VRTE` `.bin` whose version is in this table. Format select
 | v6 | `VERITATE_MODEL_VERSION_MOD` | INT8 per col | per col | adds per-block MoD gate |
 | v8 | `VERITATE_MODEL_VERSION_NORM` | INT8 per col | per col | adds final `n_out` RMSNorm |
 | v9 | `VERITATE_MODEL_VERSION_BOOST` | INT8 per col | per col | adds `act_boost` (residual scale 1/2/4). default for INT8 non-MoE `export_checkpoint` |
-| v11 | `VERITATE_MODEL_VERSION_QAT` | INT8 per tensor *or* ternary (5 trits/byte) | `scale_q24` (INT8) or per-tensor `gamma_q24` (ternary) | unified post-merge format. header carries `act_boost` + `quant_mode` (INT8 / INT4 / TERNARY) + `n_experts` + `router_topk`. covers ternary-FFN and MoE-routed checkpoints under one version. (v10 was retired: dev assigned it to MoE, experimental assigned it to ternary; v11 supersedes both.) |
+| v11 | `VERITATE_MODEL_VERSION_QAT` | INT8 per tensor *or* ternary (5 trits/byte) | `scale_q24` (INT8) or per-tensor `gamma_q24` (ternary) | unified format. header carries `act_boost` + `quant_mode` (INT8 / INT4 / TERNARY) + `n_experts` + `router_topk`. covers ternary-FFN and MoE-routed checkpoints under one version. |
 
 ## build
 

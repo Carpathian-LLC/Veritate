@@ -31,9 +31,12 @@ ROUND_DIGITS = 4
 # an overall byte-confidence below it flags the answer as uncertain. The grounding
 # + divergence thresholds gate the verdict. Tune against a labelled set.
 UNCERTAIN_CONFIDENCE_THRESHOLD = 0.55
-GROUNDED_HIGH_FRACTION         = 0.85  # calibration knob: gf at/above this is grounded; below it, with context, at best partially_grounded
-PARTIAL_GROUNDED_LOW_FRACTION  = 0.15  # calibration knob: gf at/below this has no meaningful context overlap (not even partial)
-DIVERGENCE_HALLUCINATION       = 0.8   # calibration knob: divergence at/above this on an under-grounded answer -> likely_hallucinated
+# gf at/above this is grounded; below it, with context, at best partially_grounded
+GROUNDED_HIGH_FRACTION         = 0.85
+# gf at/below this has no meaningful context overlap (not even partial)
+PARTIAL_GROUNDED_LOW_FRACTION  = 0.15
+# divergence at/above this on an under-grounded answer -> likely_hallucinated
+DIVERGENCE_HALLUCINATION       = 0.8
 
 RISK_WEIGHTS = {"ungrounded": 0.4, "unconfident": 0.3, "divergence": 0.3}
 

@@ -16,10 +16,9 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
 
 import numpy as np
-
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -70,7 +69,7 @@ class VocabConstraint(Constraint):
     """
 
     def __init__(self, allowed_bytes: Iterable[int]):
-        allowed = set(int(b) & 0xff for b in allowed_bytes)
+        allowed = {int(b) & 0xff for b in allowed_bytes}
         if not allowed:
             raise ValueError("VocabConstraint needs at least one allowed byte")
         m = _empty_mask()
@@ -140,7 +139,7 @@ class StopOnConstraint(Constraint):
 # Streaming JSON grammar. The state of the constraint is:
 #
 #   value_state : what we expect to see at the current position
-#                 (VAL_START | OBJ_AFTER_OPEN | OBJ_AFTER_KEY | ...)
+#                 one of VAL_START, OBJ_AFTER_OPEN, OBJ_AFTER_KEY, and so on.
 #   stack       : list of container kinds we're inside ("obj" or "arr"),
 #                 deepest last.
 #   in_string   : True iff we're currently between the open and close quote
@@ -212,7 +211,7 @@ class JSONConstraint(Constraint):
 
     def __init__(self):
         self.value_state: str = _VS_VALUE_START
-        self.stack:       List[str] = []
+        self.stack:       list[str] = []
         self.in_string:   bool = False
         # esc states (we don't overload one int):
         #   esc_pending = True iff we just saw '\' and are about to consume
@@ -221,8 +220,8 @@ class JSONConstraint(Constraint):
         #                   must consume that many more hex digits.
         self.esc_pending:   bool = False
         self.hex_remaining: int  = 0
-        self.number_state: Optional[str] = None
-        self.literal:     Optional[bytes] = None  # bytes still to match
+        self.number_state: str | None = None
+        self.literal:     bytes | None = None  # bytes still to match
         self._done:       bool = False
 
     # ------------------------------------------------------------------ priming
@@ -232,7 +231,7 @@ class JSONConstraint(Constraint):
         mask() (we trust the prompt). Useful when the model is given a JSON
         prefix to complete."""
         for b in prefix:
-            self._step_internal(b, validate=False)
+            self._step_internal(b)
 
     # ------------------------------------------------------------------ API
 
@@ -263,7 +262,7 @@ class JSONConstraint(Constraint):
             m[w] = True
 
         vs = self.value_state
-        if vs == _VS_VALUE_START or vs == _VS_OBJ_AFTER_COLON or vs == _VS_ARR_AFTER_COMMA:
+        if vs in (_VS_VALUE_START, _VS_OBJ_AFTER_COLON, _VS_ARR_AFTER_COMMA):
             self._allow_value_start(m)
         elif vs == _VS_OBJ_AFTER_OPEN:
             m[ord('"')] = True
@@ -287,7 +286,7 @@ class JSONConstraint(Constraint):
         return m
 
     def step(self, byte: int) -> None:
-        self._step_internal(byte & 0xff, validate=True)
+        self._step_internal(byte & 0xff)
 
     def done(self) -> bool:
         # We report done() right when the outermost value closes (or when a
@@ -404,10 +403,9 @@ class JSONConstraint(Constraint):
 
     # ------------------------------------------------------------------ step impl
 
-    def _step_internal(self, b: int, validate: bool) -> None:
-        # Note: when validate=True we trust mask() has already enforced
-        # legality and just update state. When validate=False (priming
-        # from a prompt) we do the same updates without checking.
+    def _step_internal(self, b: int) -> None:
+        # State update only; mask() owns legality, so a primed prompt and a
+        # sampled byte follow the same path.
 
         if self._done:
             # Whitespace consumes harmlessly.
@@ -419,7 +417,6 @@ class JSONConstraint(Constraint):
 
         if self.literal is not None:
             # Consuming a true/false/null character.
-            expected = self.literal[0]
             self.literal = self.literal[1:] if len(self.literal) > 1 else None
             if self.literal is None:
                 self._close_value()
@@ -447,7 +444,7 @@ class JSONConstraint(Constraint):
 
         vs = self.value_state
         if vs == _VS_VALUE_START:
-            self._start_value(b, is_toplevel=True)
+            self._start_value(b)
             return
         if vs == _VS_OBJ_AFTER_OPEN:
             if b == ord('"'):
@@ -466,7 +463,7 @@ class JSONConstraint(Constraint):
                 self.value_state = _VS_OBJ_AFTER_COLON
             return
         if vs == _VS_OBJ_AFTER_COLON:
-            self._start_value(b, is_toplevel=False, parent="obj")
+            self._start_value(b)
             return
         if vs == _VS_OBJ_AFTER_VALUE:
             if b == ord(','):
@@ -484,7 +481,7 @@ class JSONConstraint(Constraint):
             if b == ord(']'):
                 self._pop_container()
                 return
-            self._start_value(b, is_toplevel=False, parent="arr")
+            self._start_value(b)
             return
         if vs == _VS_ARR_AFTER_VALUE:
             if b == ord(','):
@@ -494,7 +491,7 @@ class JSONConstraint(Constraint):
                 self._pop_container()
             return
         if vs == _VS_ARR_AFTER_COMMA:
-            self._start_value(b, is_toplevel=False, parent="arr")
+            self._start_value(b)
             return
 
     # ------------------------------------------------------------------ string substates
@@ -588,14 +585,12 @@ class JSONConstraint(Constraint):
                 return True
             return False
         if ns == 'exp_digits':
-            if b in _DIGITS:
-                return True
-            return False
+            return b in _DIGITS
         raise AssertionError(f"unknown number_state {ns!r}")
 
     # ------------------------------------------------------------------ structural helpers
 
-    def _start_value(self, b: int, *, is_toplevel: bool, parent: Optional[str] = None) -> None:
+    def _start_value(self, b: int) -> None:
         if b == ord('"'):
             self.in_string = True
             return

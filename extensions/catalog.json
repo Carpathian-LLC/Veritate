@@ -1,5 +1,3 @@
 {
-  "extensions": [
-    {"id": "trading", "name": "Trading", "version": "1.0.0", "author": "veritate", "description": "Paper trading with simulated capital: news-sentiment, momentum, and byte-model strategies, a market surveillance radar with pump warnings, and chart-model research tools. No real money, no broker, no keys.", "experimental": true, "builtin": true}
-  ]
+  "extensions": []
 }

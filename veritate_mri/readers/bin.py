@@ -21,7 +21,7 @@ VERITATE_MODEL_MAGIC = b"VRTE"
 
 # Mirror of the C engine's accepted versions in veritate_engine/v1/src/model.c
 # (model_load + model_load_int4 dispatch). The engine accepts every entry here
-# at load time with no runtime cost — version handling is load-time-only;
+# at load time with no runtime cost: version handling is load-time-only;
 # decode kernels are shared. Keep this list in lockstep with the C dispatch.
 VERSION_LABELS = {
     3:  "INT8",

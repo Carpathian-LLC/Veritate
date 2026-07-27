@@ -15,7 +15,7 @@
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -68,7 +68,7 @@ class Capabilities:
     protocol_version: int = PROTOCOL_VERSION
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "Capabilities":
+    def from_dict(cls, d: dict[str, Any]) -> "Capabilities":
         return cls(**{k: d.get(k) for k in cls.__dataclass_fields__})
 
 # ------------------------------------------------------------------------------------
@@ -80,27 +80,27 @@ class JobRequirements:
     min_ram_gb:    float = 0.0
     min_vram_gb:   float = 0.0
     min_cpu_cores: int   = 1
-    arch_in:       Optional[List[str]] = None  # None = any
-    os_in:         Optional[List[str]] = None  # None = any
+    arch_in:       list[str] | None = None  # None = any
+    os_in:         list[str] | None = None  # None = any
     gpu_required:  bool  = False
 
 @dataclass
 class Job:
     job_id:       str
     kind:         str                       # one of VALID_JOB_KINDS
-    payload:      Dict[str, Any]            # kind-specific, opaque to the mesh layer
+    payload:      dict[str, Any]            # kind-specific, opaque to the mesh layer
     requirements: JobRequirements
     status:       str   = JOB_STATUS_PENDING
-    assigned_to:  Optional[str] = None      # node_id
+    assigned_to:  str | None = None      # node_id
     created_at:   float = field(default_factory=time.time)
-    started_at:   Optional[float] = None
-    finished_at:  Optional[float] = None
-    progress:     Dict[str, Any] = field(default_factory=dict)
-    result:       Dict[str, Any] = field(default_factory=dict)
+    started_at:   float | None = None
+    finished_at:  float | None = None
+    progress:     dict[str, Any] = field(default_factory=dict)
+    result:       dict[str, Any] = field(default_factory=dict)
     error:        str   = ""
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "Job":
+    def from_dict(cls, d: dict[str, Any]) -> "Job":
         req_raw = d.get("requirements") or {}
         req = JobRequirements(**{
             k: req_raw.get(k, getattr(JobRequirements, k, None))
@@ -132,5 +132,4 @@ def capabilities_satisfy(req: JobRequirements, caps: Capabilities) -> bool:
     if caps.cpu_cores < req.min_cpu_cores: return False
     if req.gpu_required and caps.gpu_backend == "none": return False
     if req.arch_in and caps.arch not in req.arch_in:    return False
-    if req.os_in   and caps.os_name not in req.os_in:   return False
-    return True
+    return not req.os_in or caps.os_name in req.os_in

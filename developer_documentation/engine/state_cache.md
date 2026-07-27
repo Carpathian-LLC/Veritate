@@ -35,7 +35,7 @@ tail zeroing.
 - Forward hook ([model.c forward hybrid branch](../../veritate_engine/v1/src/model.c)):
   `restored = try_restore(...)`; `if (restored == 0) hybrid_reset`; step the loop
   from `i = restored`. Guarded by `state_cache_enabled()`.
-- Store is off the TTFB path: `forward` no longer stores. The chat loops call
+- Store is off the TTFB path: `forward` does not store. The chat loops call
   `model_store_state_cache` ([model.c](../../veritate_engine/v1/src/model.c))
   after the first frame flushes and before the first `forward_decode` mutates
   `rec_state` (`chat_greedy` stores right after prefill). No-op for dense models
@@ -54,7 +54,7 @@ trace frame is real ([main.c:502,542](../../veritate_engine/v1/src/main.c) read
 `pos = n-1` at step 0). `try_restore` therefore caps the scan ceiling to `n-1`
 when `has_trace`, so the matched snapshot is always `<= n-1` and its
 `rec_state`/`conv_ring`/`slot_count` stay consistent with the restored KV rows.
-An exact-length snapshot (stored by a non-traced run) is simply not used by a
+An exact-length snapshot (stored by a non-traced run) is not used by a
 traced prefill.
 
 ## env knobs

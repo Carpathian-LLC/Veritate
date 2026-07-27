@@ -5,9 +5,9 @@
 # ------------------------------------------------------------------------------------
 # Notes:
 # - Agentic tool loop. ReAct-style decoding under JSON-constrained output.
-#   The model emits one of two JSON shapes per turn:
-#     {"action": "<tool>", "args": {...}}     # invokes a tool, observation appended
-#     {"answer": "<final answer>"}            # terminates the loop
+#   The model emits one of two JSON shapes per turn: an action object keyed
+#   action plus args, which invokes a tool and appends its observation, or an
+#   answer object keyed answer, which terminates the loop.
 #   The decode is JSON-constrained (build-7) so every byte is grammar-valid by
 #   construction. Schema validity (the action field must name a real tool,
 #   args must match the tool's schema) is enforced by the loop after parse.
@@ -20,13 +20,17 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
-from .loop import AgentLoop, AgentTurn, AgentResult
-from .tools import build_default_toolbox, Tool, Toolbox
+from .loop import AgentLoop, AgentResult, AgentTurn
+from .tools import Tool, Toolbox, build_default_toolbox
 
 # ------------------------------------------------------------------------------------
 # Constants
 
 __all__ = [
-    "AgentLoop", "AgentTurn", "AgentResult",
-    "Tool", "Toolbox", "build_default_toolbox",
+    "AgentLoop",
+    "AgentResult",
+    "AgentTurn",
+    "Tool",
+    "Toolbox",
+    "build_default_toolbox",
 ]

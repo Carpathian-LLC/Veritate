@@ -32,22 +32,22 @@ Versioned, HuggingFace-aligned:
   parity with the HF `pipeline_tag` convention; the platform does not branch on
   it yet.
 - Per-entry metadata carried through reads (`PRESERVED_KEYS`, capabilities.py:55):
-  `trainer`, `step`, `completed_at`, `legacy` (synthesized fallback), `implied`
+  `trainer`, `step`, `completed_at`, `legacy` (marks a synthesized fallback entry), `implied`
   (set by additivity, not a direct training result).
 
 ### Backward compatibility
 
 `read()` and `_normalize()` (capabilities.py:85) accept **both** the versioned
-block above and the **legacy flat** form written before the schema landed:
+block above and the **flat tier map**:
 
 ```json
 "capabilities": { "autocomplete": {"status": "trained"}, "chat": {"status": "trained"}, "agent": {"status": "untrained"} }
 ```
 
 `_tasks_of()` (capabilities.py:72) picks `tasks` when present, else treats the
-block as the flat tier map. No migration pass exists or is needed: existing
-configs (chat200m, chat80m, market models) keep reading correctly, and are
-rewritten into the versioned form the next time `mark()` touches them.
+block as the flat tier map. No migration pass exists or is needed: flat-form
+configs keep reading correctly, and are rewritten into the versioned form the
+next time `mark()` touches them.
 
 `read()` always returns the **flat tier map** (`{tier: {status, ...}}`), never the
 wrapper. That return contract is stable: `/meta` and `/pytorch-models` embed it
@@ -76,7 +76,7 @@ verbatim.
   `teaches` tier when the corpus is custom, and marks each tier `in_progress`
   (or `trained` on the final step). Training on a catalog chat corpus marks
   `chat` with no hand-editing.
-- **Legacy fallback.** A checkpoint with no `capabilities` key reads as
+- **Missing-key fallback.** A checkpoint with no `capabilities` key reads as
   autocomplete-only (`_legacy_block`, capabilities.py:64): any byte-level model
   can autocomplete.
 
@@ -90,8 +90,8 @@ verbatim.
   only when its tier is `trained`. `_activeCapabilities()` (web/index.js:1723)
   prefers the **selected dropdown model's** own caps (`_selectedModelCaps`, from
   the `/pytorch-models` cache `_pytorchModelCaps`), then merges the two backend
-  blocks (`_mergeCaps`, best status per tier wins), then the legacy autocomplete
-  fallback.
+  blocks (`_mergeCaps`, best status per tier wins), then the autocomplete-only
+  fallback (`_legacyCaps`).
 
 ## Dependencies
 

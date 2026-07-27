@@ -17,18 +17,12 @@
 # Imports:
 
 import os
-import sys
 
 import pytest
 import torch
-
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
 from inference.backends import pytorch as pytorch_backend
 from inference.backends.pytorch import LOOKAHEAD_BACKEND, Brain
+
 from veritate_core.model import Veritate
 
 # ------------------------------------------------------------------------------------
@@ -48,8 +42,8 @@ TOP_K       = 40
 # 0-based positions over the same bytes, so CPU logits are bitwise-identical and parity
 # is exact (byte-exactness holds on CPU, not guaranteed on MPS: see inference_brain.md).
 MAX_NEW     = 64
-DECODE_KW   = dict(temperature=TEMPERATURE, top_k_sample=TOP_K, max_new=MAX_NEW,
-                   rep_window=0, rep_penalty=0.0, no_repeat_ngram=0)
+DECODE_KW   = {"temperature": TEMPERATURE, "top_k_sample": TOP_K, "max_new": MAX_NEW,
+               "rep_window": 0, "rep_penalty": 0.0, "no_repeat_ngram": 0}
 
 # ------------------------------------------------------------------------------------
 # Functions

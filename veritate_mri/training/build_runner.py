@@ -15,7 +15,6 @@
 import os
 import re
 import subprocess
-import sys
 import threading
 import time
 
@@ -30,6 +29,12 @@ STATUS_BUILDING = "building"
 STATUS_OK       = "ok"
 STATUS_FAILED   = "failed"
 STATUS_SKIPPED  = "skipped"
+
+# Translation units every build script on every OS is required to compile: the
+# portable shim plus the kernels shared by build.bat and build.sh. Per-arch
+# kernel dirs outside this set are intentionally excluded from the parity check
+# because each script owns a different subset of them.
+SHARED_TU_PREFIXES = ("src/", f"kernels/{paths.ARCH_X86_64}/")
 
 _LOCK = threading.Lock()
 _PROC = None
@@ -65,11 +70,7 @@ def _binary_is_stale():
     bin_path = _STATE["binary_path"]
     if not os.path.isfile(bin_path):
         return False
-    roots = [
-        os.path.join(paths.ENGINE_PRIMARY, "src"),
-        os.path.join(paths.ENGINE_PRIMARY, "kernels"),
-    ]
-    roots = [r for r in roots if os.path.isdir(r)]
+    roots = [r for r in (paths.ENGINE_SRC, paths.ENGINE_KERNELS) if os.path.isdir(r)]
     if not roots:
         return False
     try:
@@ -88,7 +89,7 @@ def _binary_is_stale():
     for src_dir in roots:
         for root, _dirs, files in os.walk(src_dir):
             for fn in files:
-                if not (fn.endswith(".c") or fn.endswith(".h") or fn.endswith(".S")):
+                if not fn.endswith(paths.ENGINE_SOURCE_SUFFIXES):
                     continue
                 try:
                     if os.path.getmtime(os.path.join(root, fn)) > bin_mtime:
@@ -110,14 +111,14 @@ def _referenced_shared_tus(script_path):
     excluded so build.bat (x86_64-only) and build.sh (multi-arch) compare on the
     exact TU set they are both required to compile."""
     try:
-        with open(script_path, "r", encoding="utf-8", errors="replace") as f:
+        with open(script_path, encoding="utf-8", errors="replace") as f:
             text = f.read()
     except OSError:
         return None
     out = set()
     for tok in _TU_REF_RE.findall(text):
         rel = tok.replace("\\", "/")
-        if rel.startswith("src/") or rel.startswith("kernels/x86_64/"):
+        if rel.startswith(SHARED_TU_PREFIXES):
             out.add(rel)
     return out
 
@@ -129,9 +130,8 @@ def check_build_parity():
     one script but forgotten in the other). Non-fatal: the goal is to surface
     the cause in the build log *before* the linker's cryptic dump. Returns the
     (only_in_bat, only_in_sh) path lists for testability."""
-    build_dir = os.path.join(paths.ENGINE_PRIMARY, "build")
-    bat = _referenced_shared_tus(os.path.join(build_dir, "build.bat"))
-    sh  = _referenced_shared_tus(os.path.join(build_dir, "build.sh"))
+    bat = _referenced_shared_tus(paths.build_script_path(paths.OS_WINDOWS))
+    sh  = _referenced_shared_tus(paths.build_script_path(paths.OS_LINUX))
     if bat is None or sh is None:
         return [], []
     only_bat = sorted(bat - sh)
@@ -140,7 +140,7 @@ def check_build_parity():
         logmod.warn("build",
                     "build.bat is missing x86_64 TUs that build.sh compiles: "
                     + ", ".join(only_sh)
-                    + " — Windows link will fail with undefined symbols until added")
+                    + ": Windows link will fail with undefined symbols until added")
     if only_bat:
         logmod.warn("build",
                     "build.sh is missing x86_64 TUs that build.bat compiles: "

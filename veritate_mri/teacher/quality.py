@@ -79,7 +79,4 @@ def _hamming(a, b):
 
 
 def is_near_dup(h, seen, hamming_threshold=DEFAULT_HAMMING_THRESHOLD):
-    for s in seen:
-        if _hamming(h, s) <= hamming_threshold:
-            return True
-    return False
+    return any(_hamming(h, s) <= hamming_threshold for s in seen)

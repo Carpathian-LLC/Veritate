@@ -17,10 +17,11 @@
 # Imports:
 
 from flask import current_app, request
-
 from inference import hallucination
 from inference.decode import (
-    NO_REPEAT_NGRAM_DEFAULT, REP_PENALTY_DEFAULT, REP_WINDOW_DEFAULT,
+    NO_REPEAT_NGRAM_DEFAULT,
+    REP_PENALTY_DEFAULT,
+    REP_WINDOW_DEFAULT,
 )
 from readers import paths
 from runtime import logs as logmod
@@ -56,7 +57,7 @@ def _finalize(raw, conf, surp, ent):
     clean, metrics, derived = bytearray(), [], False
     for i, byte in enumerate(raw):
         c = NEWLINE_BYTE if byte == WIRE_NEWLINE_BYTE else byte
-        if not (c in KEEP_CTRL_BYTES or (0x20 <= c and c != DEL_BYTE)):
+        if not (c in KEEP_CTRL_BYTES or (c >= 0x20 and c != DEL_BYTE)):
             continue
         cf = conf[i]
         if cf is None:
@@ -120,8 +121,8 @@ def _assemble_from_frames(frames):
 
 def _run(cfg, backend, prompt, max_new, temperature):
     stop_seq = backends_routes._chat_stop_seq(prompt)
-    rep = dict(rep_window=REP_WINDOW_DEFAULT, rep_penalty=REP_PENALTY_DEFAULT,
-               no_repeat_ngram=NO_REPEAT_NGRAM_DEFAULT)
+    rep = {"rep_window": REP_WINDOW_DEFAULT, "rep_penalty": REP_PENALTY_DEFAULT,
+           "no_repeat_ngram": NO_REPEAT_NGRAM_DEFAULT}
     if backend == "c":
         events = backends_routes._c_engine_stream(cfg, prompt, max_new,
                                                   temperature=temperature, top_k=TOP_K, **rep)
@@ -186,7 +187,7 @@ def register(app):
         if message:
             if use_rag and hybrid_routes.has_corpus():
                 facts, scores = hybrid_routes.retrieve(message, k, scope=scope)
-                context = [{"text": t, "score": s} for t, s in zip(facts, scores)]
+                context = [{"text": t, "score": s} for t, s in zip(facts, scores, strict=True)]
             main_prompt = (hybrid_routes.build_prompt(message, facts) if facts
                            else hybrid_routes.build_plain_prompt(message))
             plain_prompt = hybrid_routes.build_plain_prompt(message)

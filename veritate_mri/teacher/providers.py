@@ -30,6 +30,17 @@ RETRY_STATUS = (408, 429, 500, 502, 503, 504)
 OPENAI_RESPONSE_PATH = ["choices", 0, "message", "content"]
 ANTHROPIC_RESPONSE_PATH = ["content", 0, "text"]
 
+# Optional per-provider capability keys. Omitted from an entry means the
+# default below; the client never infers a capability from a URL string.
+# - supports_stream: emits OpenAI-style `data: {...delta...}` chunks, so a
+#   cancellable streaming request can abort mid-generation.
+# - unload_path / unload_body: native "drop this model from memory" endpoint.
+DEFAULT_SUPPORTS_STREAM = True
+DEFAULT_UNLOAD_PATH     = ""
+DEFAULT_UNLOAD_BODY     = {}
+OLLAMA_UNLOAD_PATH = "/api/generate"
+OLLAMA_UNLOAD_BODY = {"keep_alive": 0}
+
 PROVIDERS = {
     "carpathian": {
         "id": "carpathian",
@@ -82,6 +93,7 @@ PROVIDERS = {
         "messages_key": "messages",
         "system_message_style": "field",
         "requires_key": True,
+        "supports_stream": False,
     },
     "gemini": {
         "id": "gemini",
@@ -194,6 +206,8 @@ PROVIDERS = {
         "models_path": "/api/tags",
         "models_array": "models",
         "models_id": "name",
+        "unload_path": OLLAMA_UNLOAD_PATH,
+        "unload_body": dict(OLLAMA_UNLOAD_BODY),
         "auth_style": "none",
         "auth_header": "",
         "auth_prefix": "",
@@ -248,6 +262,8 @@ def _copy(p):
     out["extra_headers"] = dict(p["extra_headers"])
     out["default_models"] = list(p["default_models"])
     out["response_text_path"] = list(p["response_text_path"])
+    if "unload_body" in p:
+        out["unload_body"] = dict(p["unload_body"])
     return out
 
 

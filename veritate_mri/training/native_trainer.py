@@ -37,11 +37,14 @@ for _p in (_REPO, _MRI_ROOT):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from readers import paths as paths_mod, models as models_mod, checkpoints as checkpoints_reader   # noqa: E402
-from training import save as save_mod                          # noqa: E402
-from veritate_core import model as veritate_model              # noqa: E402
-from veritate_core import qat as veritate_qat                  # noqa: E402
-from veritate_core.plugin import mem_planner, mem_executor     # noqa: E402
+from readers import checkpoints as checkpoints_reader  # noqa: E402
+from readers import paths as paths_mod  # noqa: E402
+from readers import trainers as trainers_reader  # noqa: E402
+
+from training import save as save_mod  # noqa: E402
+from veritate_core import model as veritate_model  # noqa: E402
+from veritate_core import qat as veritate_qat  # noqa: E402
+from veritate_core.plugin import mem_executor, mem_planner  # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -57,29 +60,16 @@ QAT_MODES         = ("int8", "int4", "ternary")
 PLAN_DTYPE        = "fp32"
 PAGED_STATE_DIR   = "optim_state"
 
-# Size catalog. Used as a fallback when the form / CLI passes only --size; the
-# dashboard's per-trainer manifest.sizes blocks are the primary source. Native
-# trainer (no plugin manifest loaded) needs a self-contained table.
-SIZE_PRESETS = {
-    "5m":   dict(hidden=256,  layers=6,  ffn=1024,  heads=4),
-    "7m":   dict(hidden=256,  layers=8,  ffn=1024,  heads=4),
-    "10m":  dict(hidden=320,  layers=8,  ffn=1280,  heads=8),
-    "20m":  dict(hidden=512,  layers=8,  ffn=2048,  heads=8),
-    "30m":  dict(hidden=512,  layers=10, ffn=2048,  heads=8),
-    "50m":  dict(hidden=640,  layers=10, ffn=2560,  heads=10),
-    "70m":  dict(hidden=640,  layers=12, ffn=2560,  heads=10),
-    "80m":  dict(hidden=768,  layers=12, ffn=3072,  heads=12),
-    "85m":  dict(hidden=768,  layers=12, ffn=3072,  heads=12),
-    "120m": dict(hidden=896,  layers=12, ffn=3584,  heads=14),
-    "160m": dict(hidden=1024, layers=12, ffn=4096,  heads=16),
-    "200m": dict(hidden=1024, layers=16, ffn=4096,  heads=16),
-    "350m": dict(hidden=1024, layers=24, ffn=4096,  heads=16),
-    "400m": dict(hidden=1280, layers=24, ffn=5120,  heads=20),
-    "800m": dict(hidden=1536, layers=28, ffn=6144,  heads=24),
-    "1b3":  dict(hidden=2048, layers=24, ffn=8192,  heads=16),
-    "2b":   dict(hidden=2560, layers=24, ffn=10240, heads=20),
-    "3b":   dict(hidden=2560, layers=32, ffn=10240, heads=32),
-}
+# Size catalog. readers.trainers owns the table (rule 20); the dashboard offers
+# exactly these sizes in the native manifest, so --size can never name a shape
+# this file cannot build.
+SIZE_PRESETS      = trainers_reader.NATIVE_SIZES
+DEFAULT_SIZE      = trainers_reader.NATIVE_DEFAULT_SIZE
+DEFAULT_SEQ       = trainers_reader.NATIVE_DEFAULT_SEQ
+
+# Autocast backends that implement bf16. MPS is included: excluding it silently
+# dropped bf16 on Apple Silicon (rule 34c).
+AMP_DEVICE_TYPES  = ("cuda", "mps")
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -130,7 +120,7 @@ def _resolve_shape(args):
     if not args.heads:  args.heads  = preset["heads"]
 
 
-def _make_loader(bin_path, seq_len, batch_size, seed):
+def make_loader(bin_path, seq_len, batch_size, seed):
     arr = np.memmap(bin_path, dtype=np.uint8, mode="r")
     n = len(arr)
     if n < seq_len + 2:
@@ -254,13 +244,13 @@ def _parse_args():
     ap.add_argument("--corpus_bin",  type=str, default="")
     ap.add_argument("--val_bin",     type=str, default="")
     # shape
-    ap.add_argument("--size",        type=str, default="85m")
+    ap.add_argument("--size",        type=str, default=DEFAULT_SIZE)
     ap.add_argument("--vocab",       type=int, default=VOCAB_BYTE_LEVEL)
     ap.add_argument("--hidden",      type=int, default=0)
     ap.add_argument("--layers",      type=int, default=0)
     ap.add_argument("--ffn",         type=int, default=0)
     ap.add_argument("--heads",       type=int, default=0)
-    ap.add_argument("--seq",         type=int, default=1024)
+    ap.add_argument("--seq",         type=int, default=DEFAULT_SEQ)
     # training loop
     ap.add_argument("--precision",   type=str, default="bf16", choices=PRECISIONS)
     ap.add_argument("--total_steps", type=int, default=20000)
@@ -310,13 +300,14 @@ def main():
 
     device_type = _pick_device(args.device)
     device = torch.device(device_type)
-    amp_dtype = torch.bfloat16 if (args.precision == "bf16" and device_type == "cuda") else None
+    amp_dtype = torch.bfloat16 if (args.precision == "bf16" and device_type in AMP_DEVICE_TYPES) else None
 
     print(f"[native] device={device_type} amp={amp_dtype}", flush=True)
     if not args.bench:
         print(f"[native] output={args.output_dir}", flush=True)
         print(f"[native] corpus_bin={args.corpus_bin}", flush=True)
-    print(f"[native] shape h={args.hidden} L={args.layers} ffn={args.ffn} heads={args.heads} seq={args.seq}", flush=True)
+    print(f"[native] shape h={args.hidden} L={args.layers} ffn={args.ffn} "
+          f"heads={args.heads} seq={args.seq}", flush=True)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -360,10 +351,10 @@ def main():
               f"Nothing to do, bump --total_steps to continue.", flush=True)
         return
 
-    train_draw, n_train = _make_loader(args.corpus_bin, args.seq, args.batch_size, args.seed)
+    train_draw, n_train = make_loader(args.corpus_bin, args.seq, args.batch_size, args.seed)
     val_draw, n_val = (None, 0)
     if args.val_bin and os.path.isfile(args.val_bin):
-        val_draw, n_val = _make_loader(args.val_bin, args.seq, args.batch_size, args.seed + 1)
+        val_draw, n_val = make_loader(args.val_bin, args.seq, args.batch_size, args.seed + 1)
     print(f"[native] train_bytes={n_train:,} val_bytes={n_val:,}", flush=True)
 
     model.train()

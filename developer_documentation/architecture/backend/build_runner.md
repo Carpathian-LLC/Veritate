@@ -12,8 +12,8 @@ Builds invoke the platform-specific build script under [veritate_engine/v1/build
 
 ## Dependencies
 
-- [engine_routes.py](../../../veritate_mri/routes/engine_routes.py) — exposes build trigger to the dashboard.
-- `app.config["C_SUBPROCESS"]` — held while the engine is running; the pre-build hook clears it.
+- [engine_routes.py](../../../veritate_mri/routes/engine_routes.py): exposes build trigger to the dashboard.
+- `app.config["C_SUBPROCESS"]`: held while the engine is running; the pre-build hook clears it.
 
 ## Pitfalls
 

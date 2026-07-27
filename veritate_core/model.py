@@ -25,8 +25,12 @@ import torch.nn.functional as F
 
 from . import qat as _qat
 
-
 VOCAB_BYTE_LEVEL = 256
+
+# Precision tags a model declares via precision_tag() (rule 11a). Consumers
+# (dumpers, dashboard) read the tag; they never inspect the class name.
+PRECISION_TAG_FP32 = "fp32"
+PRECISION_TAG_QAT  = "qat"
 
 ACTIVATIONS    = ("gelu", "relu", "silu")
 ACT_DEFAULT    = "gelu"
@@ -63,7 +67,7 @@ class RMSNorm(nn.Module):
         # F.rms_norm fuses the fp32 reduction + scale into one kernel (~6x
         # speedup vs the unfused manual chain on CUDA; equivalent on CPU/MPS).
         # Added in torch 2.4. On older torch (e.g. 2.2 which is the Intel-Mac
-        # ceiling) we fall back to the manual chain — correct, slower.
+        # ceiling) we fall back to the manual chain: correct, slower.
         # Weight is cast to x.dtype because the fused dispatcher falls back to
         # scalar when input/weight dtypes mismatch.
         w = _qat.fake_quant_ln_weight(self.weight) if self.qat else self.weight
@@ -228,6 +232,9 @@ class Veritate(nn.Module):
     def set_qat(self, value):
         return _qat.set_qat(self, value)
 
+    def precision_tag(self):
+        return PRECISION_TAG_QAT if self.qat else PRECISION_TAG_FP32
+
     def hook_spec(self):
         # Canonical model is its own dumper view. Non-canonical models (MoE,
         # workspace, etc.) override this to return an adapter that quacks
@@ -244,7 +251,7 @@ class Veritate(nn.Module):
         return e
 
     def ensure_context(self, T):
-        if T > self.seq:
+        if self.seq < T:
             raise ValueError(f"input length {T} exceeds seq {self.seq}")
 
     def run_blocks(self, x, start_pos=0, exit_after=None):

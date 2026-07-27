@@ -12,10 +12,10 @@
 #   = 9000 pairs. Shuffle interleaves families so no long template runs land in one
 #   window (failures.md 2026-07-06/08 lesson: narrow-template SFT interferes).
 # - Deterministic: fixed seed makes the .bin sha256 stable across rebuilds.
-# - Run:
+# - Run (both dirs default under temp/ at the repo root):
 #     python veritate_mri/tools/build_sft_idk_corpus.py \
-#       --in-dir  C:/GitHub/Veritate/temp/sft_gen \
-#       --out-dir C:/Users/malka/Desktop/veritate_sft_idk
+#       --in-dir  temp/sft_gen \
+#       --out-dir temp/veritate_sft_idk
 # veritate_mri/tools/build_sft_idk_corpus.py
 # ------------------------------------------------------------------------------------
 # Imports
@@ -26,6 +26,12 @@ import json
 import os
 import random
 import sys
+
+_MRI_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+if _MRI_ROOT not in sys.path:
+    sys.path.insert(0, _MRI_ROOT)
+
+from readers import paths  # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -48,6 +54,9 @@ TRAIN_FILENAME    = "sft_idk_train.bin"
 VAL_FILENAME      = "sft_idk_val.bin"
 MANIFEST_FILENAME = "manifest.json"
 CORPUS_TRAIN_STEM = "sft_idk"
+
+DEFAULT_IN_DIR  = os.path.join(paths.TEMP_ROOT, "sft_gen")
+DEFAULT_OUT_DIR = os.path.join(paths.TEMP_ROOT, "veritate_sft_idk")
 
 LICENSE_TEXT = """# Veritate SFT: IDK Abstention Corpus
 
@@ -98,7 +107,7 @@ Mix into pretrain at 4-8% (NOT as a late-phase SFT phase; the ledger shows narro
 
 def _load_jsonl(path):
     pairs = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line_no, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -106,7 +115,7 @@ def _load_jsonl(path):
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError as e:
-                raise ValueError(f"{path}:{line_no}: invalid JSON: {e}")
+                raise ValueError(f"{path}:{line_no}: invalid JSON: {e}") from e
             u = obj.get("user")
             a = obj.get("assistant")
             if not isinstance(u, str) or not isinstance(a, str) or not u.strip() or not a.strip():
@@ -168,8 +177,8 @@ def build(in_dir, out_dir, seed=DEFAULT_SEED, val_ratio=DEFAULT_VAL_RATIO,
 
     corpus_paths = None
     if corpus_dir:
-        c_train = os.path.join(corpus_dir, f"{CORPUS_TRAIN_STEM}_train.bin")
-        c_val   = os.path.join(corpus_dir, f"{CORPUS_TRAIN_STEM}_val.bin")
+        c_train = os.path.join(corpus_dir, f"{CORPUS_TRAIN_STEM}{paths.CORPUS_TRAIN_SUFFIX}")
+        c_val   = os.path.join(corpus_dir, f"{CORPUS_TRAIN_STEM}{paths.CORPUS_VAL_SUFFIX}")
         _write_bin(train_pairs, c_train)
         _write_bin(val_pairs,   c_val)
         corpus_paths = {"train": c_train, "val": c_val, "stem": CORPUS_TRAIN_STEM}
@@ -179,7 +188,8 @@ def build(in_dir, out_dir, seed=DEFAULT_SEED, val_ratio=DEFAULT_VAL_RATIO,
 
     manifest = {
         "name": "veritate_sft_idk",
-        "purpose": "Teach a small Veritate byte model honest abstention (I don't know that answer.) plus casual chit-chat, safe jokes, and simple in-domain Q/A.",
+        "purpose": "Teach a small Veritate byte model honest abstention (I don't know that answer.) plus casual "
+                   "chit-chat, safe jokes, and simple in-domain Q/A.",
         "byte_template": "ChatML",
         "seed": seed,
         "val_ratio": val_ratio,
@@ -203,12 +213,11 @@ def build(in_dir, out_dir, seed=DEFAULT_SEED, val_ratio=DEFAULT_VAL_RATIO,
 
 def _parse_args():
     ap = argparse.ArgumentParser(description="Build Veritate SFT IDK corpus from JSONL families.")
-    ap.add_argument("--in-dir",   default=os.path.normpath(os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp", "sft_gen")))
-    ap.add_argument("--out-dir",  default=r"C:\Users\malka\Desktop\veritate_sft_idk")
-    ap.add_argument("--corpus-dir", default=os.path.normpath(os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..", "trainers", "corpus")),
-        help="Also write sft_idk_train.bin + sft_idk_val.bin here so the trainer can resolve the stem. Set to empty to skip.")
+    ap.add_argument("--in-dir",   default=DEFAULT_IN_DIR)
+    ap.add_argument("--out-dir",  default=DEFAULT_OUT_DIR)
+    ap.add_argument("--corpus-dir", default=paths.CORPUS_ROOT,
+        help="Also write sft_idk_train.bin + sft_idk_val.bin here so the trainer can resolve the stem. Set to empty to "
+             "skip.")
     ap.add_argument("--seed",     type=int,   default=DEFAULT_SEED)
     ap.add_argument("--val-ratio", type=float, default=DEFAULT_VAL_RATIO)
     return ap.parse_args()

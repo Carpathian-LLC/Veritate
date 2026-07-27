@@ -601,6 +601,63 @@
    ],
    "recommended_min_params": 80000000,
    "recommended_max_params": 1000000000
+  },
+  {
+   "stem": "veritate_conversation_v1",
+   "label": "Veritate Conversation v1",
+   "family": "carpathian",
+   "topic": "chat",
+   "description": "Self-authored conversational corpus for Veritate research: multi-turn dialogue, long-range carry-over, grounded reading with honest refusal, correction/repair, entity-tracking comprehension, format-constraint following, prose/writing style, sense-of-self, news, and jokes.",
+   "format": "zip_bundle",
+   "train_url": "https://api.carpathian.ai/cos/PLACEHOLDER/veritate_conversation_v1.zip",
+   "size_train": 17279971,
+   "size_val": 364651,
+   "sha256_train": "5c42796e489164315fa3af976aaa141dcb9ab6bd08736e1b065824389a4bd313",
+   "sha256_val": "58412a55e8fbaf6cdfb228552dbc4e06f10eef78809619f1ad39ca40b278aa65",
+   "trained_modes": [
+    "chat"
+   ],
+   "recommended_min_params": 10000000,
+   "recommended_max_params": 1000000000000,
+   "coming_soon": true
+  },
+  {
+   "stem": "veritate_v1",
+   "label": "Veritate v1 conversation layer",
+   "family": "carpathian",
+   "topic": "chat",
+   "description": "Self-authored US-register conversation, carryover, comprehension, format-constraint, writing, cogito, jokes and news. Research use.",
+   "format": "zip_bundle",
+   "train_url": "https://api.carpathian.ai/cos/PLACEHOLDER/veritate_v1.zip",
+   "size_train": 17404373,
+   "size_val": 369308,
+   "sha256_train": "2f4c38aa42fb3e13c91ce53ee471cc44bfb70380406542c0cb4a1c142e78eeda",
+   "sha256_val": "f6c12cb379ee023542adf1545bc30eeb45d32e63387cdc78d187668d49a80e33",
+   "trained_modes": [
+    "chat"
+   ],
+   "recommended_min_params": 0,
+   "recommended_max_params": null,
+   "coming_soon": true
+  },
+  {
+   "stem": "veritate_chat",
+   "label": "Veritate conversation layer",
+   "family": "carpathian",
+   "topic": "chat",
+   "description": "Self-authored US-register conversation, carryover, comprehension, format-constraint, writing, cogito, jokes and news. Research use.",
+   "format": "zip_bundle",
+   "train_url": "https://api.carpathian.ai/cos/PLACEHOLDER/veritate_chat.zip",
+   "size_train": 17497467,
+   "size_val": 369266,
+   "sha256_train": "987ebde758bb8cce5d9bd7d1e1795f58894e74983f6d1a23078d443c14683c35",
+   "sha256_val": "7d1be84705cbca4c173dfaa949bc89eae86ae1767ef10fecacaa0c2bac40e025",
+   "trained_modes": [
+    "chat"
+   ],
+   "recommended_min_params": 0,
+   "recommended_max_params": null,
+   "coming_soon": true
   }
  ]
 }

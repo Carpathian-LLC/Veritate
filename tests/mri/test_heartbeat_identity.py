@@ -13,12 +13,6 @@
 
 import hashlib
 import json
-import os
-import sys
-
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-if os.path.join(REPO_ROOT, "veritate_mri") not in sys.path:
-    sys.path.insert(0, os.path.join(REPO_ROOT, "veritate_mri"))
 
 from runtime import heartbeat as hb
 from runtime import sys_metrics as sm
@@ -67,7 +61,8 @@ def test_legacy_grandfather_stamps_fingerprint(monkeypatch, tmp_path):
     hb._update_state({"machine_id": "6fa286b879b09b4d", "host_token": "ce0c45eae2c3"})
     hb._STATE_CACHE = None
     hb._ensure_identity()
-    assert json.load(open(hb.STATE_PATH))["machine_fingerprint"] == hb._hw_fingerprint()
+    with open(hb.STATE_PATH, encoding="utf-8") as f:
+        assert json.load(f)["machine_fingerprint"] == hb._hw_fingerprint()
 
 
 def test_copied_clone_regenerates(monkeypatch, tmp_path):

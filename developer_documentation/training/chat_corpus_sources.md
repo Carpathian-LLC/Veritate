@@ -1,6 +1,6 @@
 # Chat corpus sources
 
-Open conversation/instruction datasets evaluated for the byte-level chat model, and the corpora built from them. Builder: [experiments/v2/distill/build_chat_corpus.py](../../experiments/v2/distill/build_chat_corpus.py). Output bins in `trainers/corpus/`. Evaluated 2026-07; licenses and sizes as of that date.
+Open conversation/instruction datasets evaluated for the byte-level chat model, and the corpora built from them. Builder: [veritate_mri/tools/build_chat_corpus.py](../../veritate_mri/tools/build_chat_corpus.py). Output bins in `trainers/corpus/`. Evaluated 2026-07; licenses and sizes as of that date.
 
 ## Byte template (all chat bins)
 

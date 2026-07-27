@@ -20,7 +20,6 @@ import shutil
 import sys
 
 from flask import request, send_from_directory
-
 from runtime import logs as logmod
 
 # ------------------------------------------------------------------------------------
@@ -44,7 +43,7 @@ _OWNED = {}                               # url rule string -> ext id, for the l
 
 def _disabled():
     try:
-        with open(DISABLED_PATH, "r", encoding="utf-8") as f:
+        with open(DISABLED_PATH, encoding="utf-8") as f:
             return set(json.load(f) or [])
     except (OSError, ValueError):
         return set()
@@ -70,7 +69,7 @@ def discover():
             if not os.path.isfile(manifest_path):
                 continue
             try:
-                with open(manifest_path, "r", encoding="utf-8") as f:
+                with open(manifest_path, encoding="utf-8") as f:
                     manifest = json.load(f)
             except (OSError, ValueError) as e:
                 logmod.error(LOG_SOURCE, f"manifest read failed for {ext_id}: {e}")
@@ -158,7 +157,7 @@ def list_installed():
 
 def load_catalog():
     active = {m.get("id") for m in discover()}
-    with open(CATALOG_PATH, "r", encoding="utf-8") as f:
+    with open(CATALOG_PATH, encoding="utf-8") as f:
         catalog = json.load(f)
     entries = catalog.get("extensions") or []
     for entry in entries:

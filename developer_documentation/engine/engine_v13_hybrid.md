@@ -149,8 +149,8 @@ attention dot term growing linearly to the seq cap.
   single-thread load is first-touch-fault-bound (~0.7 GB/s); the parallel fill
   reaches ~3.7 GB/s (chat800m 1.95 GB: 2937 -> ~610 ms). Each job writes
   identical bytes to one buffer, so the loaded image is bitwise-unchanged.
-- `state_cache_store` is off the TTFB path: `forward` restores but no longer
-  stores; the chat loops call `model_store_state_cache` after the first frame
+- `state_cache_store` is off the TTFB path: `forward` restores but does not
+  store; the chat loops call `model_store_state_cache` after the first frame
   flushes and before the first `forward_decode` mutates `rec_state`.
 
 ## batched prefill (VERITATE_PREFILL_BATCH)
@@ -184,8 +184,8 @@ local/recurrent block ratio.
   sequential, so the emitted `pos = n-1` frame is byte-identical to a
   fully-sequential-traced run (verified A/B: `tests/engine/test_prefill_batch.py::test_traced_batched_matches_sequential`,
   and old-vs-new binary over 3 prompts x 2 models). Otherwise (either mode too
-  short to batch, or unset / `<= 1`) the sequential per-byte loop runs, the exact
-  pre-feature path byte-for-byte.
+  short to batch, or unset / `<= 1`) the sequential per-byte loop runs, byte-for-byte
+  the unbatched path.
 - `hybrid_prefill` ([hybrid.c:913](../../veritate_engine/v1/src/hybrid.c))
   chunks `tokens[h->pos .. n-1]` into `ceil(rem/B)` blocks. Per chunk: batched
   embed, then each local (enc/dec) block via `prefill_local_block`
@@ -219,7 +219,7 @@ more readily than decode does. Each `out[b][j]` is written by exactly one worker
 with the identical per-`(j,b)` fold, so the result is bitwise-identical at every
 worker count (rule 24).
 
-**int8 quant hoist.** The int8 kernel no longer quantizes activations: it would
+**int8 quant hoist.** The int8 kernel does not quantize activations: doing so would
 race the shared `pf_qx` scratch (and redundantly quantize) once workers run.
 `hybrid_mm` quantizes the `B` rows once on the calling thread into `pf_qx` plus a
 stack `a_scale[B]` before dispatch, and the kernel contract takes `const int8_t*
@@ -253,9 +253,31 @@ post-temperature float logits in the softmax loop (`fp[v] -= rep_soft[v]`), so t
 demotion is scale-free despite the `x1024` hybrid logit view. Constants
 (`VERITATE_REP_MIN_MATCH=4`, `VERITATE_REP_MATCH_CAP=64`) are kept in sync with
 `repetition.py`. With `rep` disabled `rep_soft` is never read and logits are
-untouched, so the sampler is bitwise-identical to the pre-feature build — the v9
+untouched, so the sampler is bitwise-identical to a build without repetition control, the v9
 greedy golden ([tests/engine/test_v13_compat.py](../../tests/engine/test_v13_compat.py))
 still matches, which is the penalty-off parity assertion.
+
+## stop sequences (chat_traced)
+
+The wire header takes one more optional trailing field after `compact`: a
+comma-separated list of stop sequences, with `0x01` escaping an embedded newline
+exactly as the prompt line does. `-` or an absent field disables the check. Parsed
+by `stop_set_parse` into at most `VERITATE_MAX_STOPS` (8) entries of
+`VERITATE_MAX_STOP_LEN` (32) bytes; `stop_set_hit` tests the tail of the generated
+stream after each sampled byte, on both the traced and the fast (`do_trace=0`) paths.
+A match ends the turn and emits `TEND` like any other completion.
+
+Without it the caller has to detect the marker itself and abandon a still-running
+generator, which forces a drain of the engine's remaining frames and, past
+`DRAIN_WALL_S`, a subprocess kill and respawn. That respawn discards the in-memory
+prefix state, so every turn paid a full prefill. `veritate_mri/routes/backends_routes.py`
+now passes the same markers `_chat_stop_seq()` computes, via
+`CTracedSubprocess.stream(stop_sequences=...)`.
+
+`sscanf` leaves the field at its empty default when a caller omits it, so an older
+caller against a newer binary, and a newer caller against an older binary, both
+generate exactly as before. Sequence handling is covered by
+[tests/engine/test_stop_sequences.py](../../tests/engine/test_stop_sequences.py).
 
 ## build: V_SEQ=1024
 
@@ -296,8 +318,8 @@ The pool is **spin-then-park**: `veritate_pool_run` wakes workers by setting a
 lock-free atomic flag and blocks on a lock-free `done_count`; a condvar (POSIX)
 or SRWLOCK+CONDITION_VARIABLE (Win32) only parks a worker after a bounded idle
 spin, so an idle engine burns no cores (energy target) while an active decode
-burst keeps workers hot and pays ~sub-us wake latency. This cut per-dispatch cost
-~60x vs the prior condvar wake (single-stream decode issues 12 matvec dispatches
+burst keeps workers hot and pays ~sub-microsecond wake latency. This cut per-dispatch cost
+~60x vs a condvar wake (single-stream decode issues 12 matvec dispatches
 per non-boundary byte, 48 per boundary byte, so wake latency dominated) and moved
 the useful-scaling knee from ~4 to ~8 cores. The worker count is chosen per box
 by auto-calibration (below), not a fixed default; `VERITATE_HYBRID_THREADS` is an
@@ -331,7 +353,7 @@ load, dtype-independent (it calibrates the real dtype kernel).
 The calibrated pick persists across spawns: `hybrid_threads_init` first checks
 `hybrid_threads.txt` in the `VERITATE_STATE_CACHE` dir (fnv-1a key over shape
 fields + core count; mismatch re-derives), so only the first spawn per
-(box, model) pays the burst — later spawns log `(cached)` and start in ~0.1 ms.
+(box, model) pays the burst: later spawns log `(cached)` and start in ~0.1 ms.
 `VERITATE_HYBRID_THREADS` still overrides both.
 
 **Parity invariant:** row-split output is bitwise-identical at every worker count
@@ -350,9 +372,27 @@ Measured picks (same binary, both boxes): M3 Ultra 24-P-core lands at 8-16
 (the bandwidth knee; never the 24T collapse); Intel i7-9700T (8 cores, no
 hyperthreading) lands at 4-7 and never 8, where 8 workers + the dispatcher
 oversubscribe the 8 cores and decode collapses (measured 49-62 ms/byte forced-8
-vs 2.2-2.6 auto). The prior fixed `min(pool_size, 8)` default over-threaded the
+vs 2.2-2.6 auto). A fixed `min(pool_size, 8)` default over-threads the
 i7 (its dual-channel DDR4 and core count saturate well below 8); auto-calibration
 makes hand-setting `VERITATE_HYBRID_THREADS` on that box unnecessary.
+
+## prefill thread count (VERITATE_HYBRID_PREFILL_THREADS)
+
+Calibration measures decode, and decode is memory-bandwidth-bound: the whole model
+streams once per token, so worker count barely moves it. Prefill batches positions
+(`VERITATE_PREFILL_BATCH`) and does scale with workers. One number for both phases
+therefore serves decode correctly and under-threads prefill. Measured on the
+i7-9700T at a 200M v13 shape: `nt=1/pb=32` gives 27.3 ms per prompt byte,
+`nt=6/pb=32` gives 19.6 ms, a 1.4x prefill win at the same decode speed.
+
+`VERITATE_HYBRID_PREFILL_THREADS=<n>` sets the worker count used for the duration of
+`hybrid_prefill()`; the decode count is restored on exit. Unset (the default) means
+prefill and decode share the calibrated count, so every arch keeps its previous
+behavior until the variable is set. `VERITATE_HYBRID_THREADS` still pins decode, and
+the parity invariant above covers both phases: row-split is output-invariant at any
+worker count, so this is a wall-clock change only.
+
+`VERITATE_HYBRID_CALIB_LOG=1` reports `prefill_threads=` alongside the decode pick.
 
 ## measured performance (M3 Ultra 24 P-core, chat80m fp16 greedy decode)
 
@@ -376,8 +416,8 @@ on a fully quiet box (measured 0.52 p50 there, ~3.4x) and regresses under load;
 auto-calibration lands at 8, or 16 when 16 genuinely wins that box's measurement,
 and never the 24T collapse (the ladder caps at `pool_size - 1`). This 8-16 knee
 is what the per-box calibration converges to on this hardware; it is measured, not
-hardcoded. Prior condvar pool at the same 8T
-was 1.75x (1.04 p50); the spin pool + 2^18 floor is the 2.56x. At the knee decode
+hardcoded. A condvar pool at the same 8T
+measures 1.75x (1.04 p50); the spin pool + 2^18 floor is the 2.56x. At the knee decode
 moves ~57 MB / 0.68 ms ~= 84 GB/s, still ~10x under the ~800 GB/s bandwidth floor:
 the remaining ceiling is per-byte serial work (attention, recurrent state,
 sampling) plus dispatch count, not raw bandwidth. Extracting the leftover cores
@@ -386,10 +426,10 @@ against the byte-exact `project_byte0`), not more matvec threads.
 
 Kernel bench (768x3072 matvec, single-thread): fp32 0.118 ms, fp16 0.112 ms,
 int8 sdot 0.030 ms (~79 GB/s). The int8 split floor is held at 2^23 (1T-optimal
-on the prior pool at this size); it is worth a spin-pool re-measure once an int8
+on a condvar pool at this size); re-measure it on the spin pool once an int8
 bin is on the box.
 
-## measured performance (condvar-era, superseded fp16 rows)
+## measured performance (200m-class shape, condvar pool)
 
 200m-class shape (h1024, 4 local + 16 global blocks, ffn 4096, heads 16,
 seq 1024; 270.8M params by the same manifest-shape convention; random weights,
@@ -405,7 +445,7 @@ latency-only):
 
 Verdict vs the <= 2 ms/byte 200m-class target: **int8 meets it on M-class
 performance cores, single-threaded** (fp16 misses at 2.1-3.5). Efficiency-core
-class silicon sits at ~3.2-3.4 ms p50 with int8 — not yet ms-class there;
+class silicon sits at ~3.2-3.4 ms p50 with int8: not yet ms-class there;
 remaining levers are boundary-density-aware scheduling and fp16 activations in
 the attention KV path.
 

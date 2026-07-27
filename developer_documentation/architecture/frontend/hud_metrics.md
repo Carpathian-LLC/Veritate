@@ -45,8 +45,8 @@ Apple exposes **no** first-party non-sudo API for CPU temperature. `psutil.senso
 
 The metrics module probes two third-party CLIs in order:
 
-1. **`macmon`** (Apple Silicon, sudoless) — `macmon pipe -s 1 -i 200` emits one newline-delimited JSON sample with `temp.cpu_temp_avg` and `temp.gpu_temp_avg`. Install: `brew install macmon`. Single call populates both CPU and GPU; result is cached for `_LIVE_TTL`.
-2. **`osx-cpu-temp -c`** (Intel only, SMC) — CPU only. Install: `brew install osx-cpu-temp`.
+1. **`macmon`** (Apple Silicon, sudoless): `macmon pipe -s 1 -i 200` emits one newline-delimited JSON sample with `temp.cpu_temp_avg` and `temp.gpu_temp_avg`. Install: `brew install macmon`. Single call populates both CPU and GPU; result is cached for `_LIVE_TTL`.
+2. **`osx-cpu-temp -c`** (Intel only, SMC): CPU only. Install: `brew install osx-cpu-temp`.
 
 Neither installed → `cpu_temp_c` is `null`, the integrated GPU's `temp_c` is `null`, and the HUD shows a settings-tab notice with the install commands. `sudo powermetrics` would also produce both numbers but requires sudo per call, which is unworkable for a double-click launcher.
 
@@ -69,6 +69,6 @@ NVIDIA cards on Mac (rare; historic only) report their own temperature via `nvid
 To add a new field:
 1. Compute it in a small helper (`_foo()`) inside `sys_metrics.py` with platform guards.
 2. Surface it from `snapshot()` (and from the `available: false` branch as `null`).
-3. Read it in the HUD render in `index.js`. Treat `null` as "no data" — never `NaN`, never `0`. A `null` metric disables its own display (the GPU load meter renders a greyed `.track.na` with an `N/A` value; the CPU-temp bar sets `display:none`) so the adapter still shows every metric it *can* read. Never fabricate a 0.
+3. Read it in the HUD render in `index.js`. Treat `null` as "no data", never `NaN`, never `0`. A `null` metric disables its own display (the GPU load meter renders a greyed `.track.na` with an `N/A` value; the CPU-temp bar sets `display:none`) so the adapter still shows every metric it *can* read. Never fabricate a 0.
 
 Keep the field name the same across all OSes; the OS-difference belongs inside the helper, not in the consumer.

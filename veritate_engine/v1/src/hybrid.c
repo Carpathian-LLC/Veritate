@@ -296,6 +296,12 @@ static void hybrid_mv_worker(void* arg, int32_t idx) {
 }
 
 static int32_t g_hybrid_nt = 1;
+// Prefill and decode have opposite thread profiles: decode streams the whole model
+// per token and is memory-bandwidth-bound, so extra threads buy nothing, while
+// prefill batches positions and does scale. One calibrated number serves decode
+// correctly and under-threads prefill. Zero means "use the decode count", which
+// keeps every arch on exactly the previous behavior until the override is set.
+static int32_t g_hybrid_nt_prefill = 0;
 
 static int32_t hybrid_threads(void) { return g_hybrid_nt; }
 
@@ -564,8 +570,17 @@ static void hybrid_threads_init(hybrid_t* h) {
         how = "calibrated";
     }
     g_hybrid_nt = nt;
+
+    const char* sp = getenv("VERITATE_HYBRID_PREFILL_THREADS");
+    if (sp && *sp) {
+        int32_t np = atoi(sp);
+        if (np > cap) np = cap;
+        if (np < 1) np = 1;
+        g_hybrid_nt_prefill = np;
+    }
     if (getenv("VERITATE_HYBRID_CALIB_LOG")) {
-        fprintf(stderr, "hybrid: threads=%d (%s) pool=%d %.1fms\n", nt, how,
+        fprintf(stderr, "hybrid: threads=%d (%s) prefill_threads=%d pool=%d %.1fms\n", nt, how,
+                g_hybrid_nt_prefill > 0 ? g_hybrid_nt_prefill : nt,
                 veritate_pool_size(), (double)(veritate_now_ns() - t0) / 1e6);
     }
 }
@@ -969,6 +984,11 @@ static void prefill_recurrent_pos(hybrid_t* h, int32_t tok) {
 
 void hybrid_prefill(hybrid_t* h, const int32_t* tokens, int32_t n, int32_t B) {
     const int32_t H = h->hidden, V = h->vocab;
+    // Run the whole prefill at the prefill thread count, then restore the decode
+    // count. Row-split is output-invariant (see hybrid_calibrate), so this changes
+    // wall-clock only. Restored on every exit path because the loop cannot throw.
+    const int32_t nt_decode = g_hybrid_nt;
+    if (g_hybrid_nt_prefill > 0) g_hybrid_nt = g_hybrid_nt_prefill;
     while (h->pos < n) {
         const int32_t pos0 = h->pos;
         const int32_t rem = n - pos0;
@@ -1005,6 +1025,7 @@ void hybrid_prefill(hybrid_t* h, const int32_t* tokens, int32_t n, int32_t B) {
         }
         h->pos = pos0 + Bc;
     }
+    g_hybrid_nt = nt_decode;
 }
 
 // ------------------------------------------------------------------------------------

@@ -15,15 +15,8 @@
 import json
 import os
 import subprocess
-import sys
 
 import pytest
-
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
 from readers import paths
 
 # ------------------------------------------------------------------------------------
@@ -90,6 +83,7 @@ def test_v13_simd_matches_scalar():
 def _export_fixture(tmp_path, monkeypatch, shape, name, dtype):
     torch = pytest.importorskip("torch")
     from training import export
+
     from veritate_core.model_patched import VeritatePatched
     s = shape
     torch.manual_seed(0)

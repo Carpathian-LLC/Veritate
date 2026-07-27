@@ -1,28 +1,33 @@
 ---
-title: Number Precision
-summary: How many bits each number in the model uses; bf16 halves memory on hardware that supports it, while fp32 is the safe, exact choice on plain CPUs.
-tags: training, settings
+title: precision
+date: 2026-07-27
+tags: [settings, training]
+summary: The number format the training math runs in: bf16 halves memory, fp32 keeps every digit.
 ---
 
-# Number Precision
+# precision
 
-Precision is how much detail each number inside the model carries. **fp32** stores numbers in 32 bits (full detail). **bf16** stores them in 16 bits (half the detail, half the memory). Bf16 is short for "brain float 16," a compact number format.
+How many bits each number carries during training.
 
-## Why it matters
+## what it does
 
-Halving the bits roughly halves the memory the model needs, which can be the difference between a run fitting on your machine or not. But smaller numbers only help if your hardware can do math on them natively.
+`bf16` (brain float 16) keeps the same range as a 32-bit float but far fewer digits of detail. Activations take half the memory and the math runs faster on hardware with bf16 units, which is most modern GPUs and Apple silicon. `fp32` keeps full detail at double the memory.
 
-## Weak-hardware angle (important)
+Gradients and the optimizer state stay in fp32 in both modes. Only the forward and backward math runs in the selected format, through `torch.autocast`.
 
-- **bf16 is only faster on hardware with real bf16 support**: modern GPUs and Apple Silicon. There it saves memory *and* runs quickly.
-- On a **plain CPU without bf16**, the chip has to fake the format in software. That is slower and can actually use more memory, so **fp32 is the better choice on a CPU**.
-- The platform now protects you: on a machine without real bf16, it **automatically downgrades bf16 to fp32**, so you will not accidentally pay the emulation penalty.
+`veritate_core/plugin/hardware.py::resolve_precision` maps the request to a torch dtype. When the device cannot do bf16, the request quietly becomes fp32 rather than failing, so a run started with `bf16` on a plain CPU box trains correctly, just slower and larger.
 
-## When to change it
+## options and default
 
-- On a GPU or Apple Silicon machine: **bf16** to save memory and go faster.
-- On a CPU-only machine: **fp32**.
+| value | meaning |
+|---|---|
+| `bf16` | 16-bit forward and backward, fp32 master weights |
+| `fp32` | full 32-bit throughout |
 
-## Gotcha
+Valid values are fixed in `PRECISIONS` in `trainers/common/vanilla_trainer.py`. Anything else stops the run with a clear error.
 
-- Precision affects memory more than final quality here. Don't reach for fp32 expecting a smarter model; reach for it when you want exactness or you are on a CPU.
+Every trainer manifest defaults to `bf16` except `veritate_10m`, which defaults to `fp32`. Auto tune sets `fp32` when the box has neither CUDA nor Apple silicon.
+
+## when to change it
+
+Leave it on `bf16`. Switch to `fp32` for a very small model where reduced detail dominates the signal, or when chasing a numerical bug and full precision removes a variable.

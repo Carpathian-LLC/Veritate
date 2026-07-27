@@ -4,43 +4,40 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - Unit tests for the memory milestone store + reader (model-free): on-disk store
-#   roundtrip, flat cosine top-k ranking, and deterministic invented-entity facts.
+# - Unit tests for the addressable-memory tier in veritate_core.memory (model-free):
+#   on-disk store roundtrip, flat cosine top-k ranking, and the IVF drill-down
+#   returning the same nearest key as the flat scan.
 # tests/memory/test_store.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
-import os
-import sys
-
 import numpy as np
 
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-MEMORY    = os.path.join(REPO_ROOT, "experiments", "v2", "memory")
-for _p in (MEMORY, REPO_ROOT):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-import make_facts
-import reader
-import store as store_mod
+from veritate_core.memory import hindex, reader
+from veritate_core.memory import store as store_mod
 
 # ------------------------------------------------------------------------------------
 # Constants
 
 LEAF_BYTES = store_mod.LEAF_BYTES
-
+N_LEAVES   = 8
+KEY_DIM    = 16
+SEED       = 0
 
 # ------------------------------------------------------------------------------------
 # Functions
 
+def _leaves(n=N_LEAVES):
+    return [bytes([(i + b) % 256 for b in range(LEAF_BYTES)]) for i in range(n)]
+
+
 def test_store_roundtrip(tmp_path):
     """MemStore persists and reloads leaf bytes and keys unchanged."""
-    leaves = [bytes([(i + b) % 256 for b in range(LEAF_BYTES)]) for i in range(8)]
-    keys = np.random.default_rng(0).standard_normal((8, 16)).astype(store_mod.KEY_DTYPE)
+    leaves = _leaves()
+    keys = np.random.default_rng(SEED).standard_normal((N_LEAVES, KEY_DIM)).astype(store_mod.KEY_DTYPE)
     store_mod._save(str(tmp_path), leaves, keys, LEAF_BYTES)
     s = store_mod.load(str(tmp_path))
-    assert len(s) == 8
+    assert len(s) == N_LEAVES
     assert s.leaf_text(3) == leaves[3].decode("utf-8", "replace")
     assert np.array_equal(s.keys(), keys)
 
@@ -54,10 +51,12 @@ def test_search_topk_ranks_nearest_first():
     assert scores[0] > scores[1]
 
 
-def test_facts_deterministic_and_extractive():
-    """facts() is seed-deterministic and every answer is a substring of its passage."""
-    a = make_facts.facts(30)
-    b = make_facts.facts(30)
-    assert a == b
-    assert len(a) == 30
-    assert all(f["a"] in f["passage"] for f in a)
+def test_hindex_finds_the_same_top_key_as_the_flat_scan():
+    """The IVF drill-down returns the flat scan's nearest key when every cell is probed."""
+    rng = np.random.default_rng(SEED)
+    keys = rng.standard_normal((256, KEY_DIM)).astype(np.float32)
+    keys /= np.linalg.norm(keys, axis=1, keepdims=True)
+    query = keys[7]
+    idx = hindex.HIndex(keys, cell_target=32, seed=SEED)
+    top, _, _ = idx.search(query, topk=1, nprobe=idx.n_cells())
+    assert int(top[0]) == int(reader.search(keys, query, 1)[0][0])

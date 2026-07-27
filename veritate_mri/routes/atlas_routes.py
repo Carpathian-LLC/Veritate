@@ -11,7 +11,6 @@
 # Imports:
 
 from flask import current_app, request
-
 from runtime import logs as logmod
 from training import atlas as atlas_mod
 

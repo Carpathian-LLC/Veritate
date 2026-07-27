@@ -32,7 +32,7 @@ def _read():
     if not os.path.isfile(TUNING_PATH):
         return {}
     try:
-        with open(TUNING_PATH, "r", encoding="utf-8") as f:
+        with open(TUNING_PATH, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):

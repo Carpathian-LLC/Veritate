@@ -4,7 +4,7 @@ Decoupled-AdamW whose optimizer state (`exp_avg`, `exp_avg_sq`) lives in mmap-ba
 
 ## what it is
 
-`PagedAdamW(params, lr, betas, eps, weight_decay, state_dir=None)` is a drop-in `torch.optim.Optimizer`. Its update is bitwise the standard decoupled-AdamW step; the only difference from `torch.optim.AdamW` is where the two moment buffers live. On a unified-memory host the moments are the largest single training bucket (8 B/param at fp32 — larger than weights or grads), so moving them to disk is the highest-leverage single reduction.
+`PagedAdamW(params, lr, betas, eps, weight_decay, state_dir=None)` is a drop-in `torch.optim.Optimizer`. Its update is bitwise the standard decoupled-AdamW step; the only difference from `torch.optim.AdamW` is where the two moment buffers live. On a unified-memory host the moments are the largest single training bucket (8 B/param at fp32, larger than weights or grads), so moving them to disk is the highest-leverage single reduction.
 
 ## how it works
 
@@ -12,7 +12,7 @@ Decoupled-AdamW whose optimizer state (`exp_avg`, `exp_avg_sq`) lives in mmap-ba
 - `step()` does the AdamW math in fp32: moves each param's grad to host, updates the file-backed moments in place, applies the decoupled weight-decay shrink then the `addcdiv` update to the param on its own device. One parameter at a time, so transient extra memory is O(largest param tensor).
 - `state_dir=None` allocates a throwaway temp dir (used by [bench](bench.md)); `close()`/`__del__` removes it. An explicit `state_dir` (a real run passes `<model_dir>/optim_state`) is kept across resume.
 - `_file_backed` zeroes only newly-created files; an existing correctly-sized file is mapped as-is, so resume preserves the moments.
-- `state_dict()` carries only the per-param step counts plus `state_dir` — never the moment buffers — so checkpoints stay tiny. `load_state_dict()` restores the steps and rebinds the on-disk files in place.
+- `state_dict()` carries only the per-param step counts plus `state_dir`, never the moment buffers, so checkpoints stay tiny. `load_state_dict()` restores the steps and rebinds the on-disk files in place.
 
 ## dependencies
 

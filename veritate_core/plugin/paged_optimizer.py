@@ -71,7 +71,7 @@ class PagedAdamW(torch.optim.Optimizer):
             raise ValueError(f"betas must be in [0, 1), got {betas}")
         if eps <= 0.0:
             raise ValueError(f"eps must be > 0, got {eps}")
-        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+        defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay}
         super().__init__(params, defaults)
 
         if state_dir is None:

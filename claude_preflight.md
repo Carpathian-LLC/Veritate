@@ -48,7 +48,7 @@ Contract for how Claude operates on this project. Wins over any conflicting doc.
 # ------------------------------------------------------------------------------------
 # Functions
 ```
-15. Inline comments are sparse, terse, imperative. No articles, no rationale, no "why". Rationale lives in `documentation/`.
+15. Inline comments are sparse, terse, imperative. No articles, no rationale, no "why". Rationale lives in `developer_documentation/`.
 16. No TODO, FIXME, or commented-out code. Dead code is deleted.
 17. No PR refs, ticket numbers, or fix tags in source.
 18. Match the existing style of any file edited. Default to the leanest version that compiles.
@@ -70,19 +70,20 @@ Contract for how Claude operates on this project. Wins over any conflicting doc.
 
 ## docs
 
-25. Documentation lives in three places: [`documentation/`](documentation/) (public, extension-author facing: [`api/internal_api.md`](documentation/api/internal_api.md) platform/extension REST reference, [`api/external_api.md`](documentation/api/external_api.md) the box's outward-facing programmatic API + key gate, [`extensions/`](documentation/extensions/) authoring), [`developer_documentation/`](developer_documentation/) (internal platform + component contracts, in repo), and `docs/` (papers, plans, results, notes; gitignored scratch). Lowercase, snake_case. Layout under [`developer_documentation/`](developer_documentation/):
+25. Documentation lives in three places: the **in-app wiki** at `veritate_mri/data/wiki/<category>/<slug>.md` (public, user and extension-author facing, served by the dashboard wiki tab: `api/` REST reference, `extensions/` authoring, `settings/` per-setting pages the training form links to, `build_notes/`, `concepts/`), [`developer_documentation/`](developer_documentation/) (internal platform + component contracts, in repo), and `docs/` (papers, plans, results, notes; gitignored scratch). Lowercase, snake_case. There is no `documentation/` tree; it was folded into the wiki at 1.0.0 so the docs ship inside the product. Layout under [`developer_documentation/`](developer_documentation/):
     - `architecture/frontend/` — one file per dashboard tab, panel, or standalone module.
     - `architecture/backend/` — one file per Flask app, runtime, training, engine, or inference component.
     - `agents/` — agent rule files (coding_roe, claude_merge, agent_roe).
-    - `addons/`, `corpus/`, `engine/`, `hooks/`, `kernels/`, `market/`, `multimind/`, `platform/`, `plugins/`, `trainers/`, `training/` — domain references.
-25a. **Voice for shipped artifact docs.** Anything under `documentation/` or `developer_documentation/` (READMEs, contract/engine/format specs, anything alongside source) is written developer-to-developer about the artifact: no "the user", no "I/we/my", no narrative of how it came to be. State what it is, how to use it, what it guarantees. Past-tense decision narration and "the user wanted X" are forbidden. Ledger entries, ROE files, design diaries, and `docs/` scratch are exempt.
+    - `addons/`, `corpus/`, `engine/`, `hooks/`, `kernels/`, `platform/`, `plugins/`, `research/`, `trainers/`, `training/` — domain references.
+25a. **Voice for shipped artifact docs.** Anything in the wiki or under `developer_documentation/` (READMEs, contract/engine/format specs, anything alongside source) is written developer-to-developer about the artifact: no "the user", no "I/we/my", no narrative of how it came to be. State what it is, how to use it, what it guarantees. Past-tense decision narration, "the user wanted X", "legacy", "formerly", "no longer", "previously", and hedging or assistant register ("simply", "it is worth noting", "let's") are forbidden. Ledger entries, ROE files, design diaries, and `docs/` scratch are exempt.
 25b. **Per-component docs are mandatory.** Every component (frontend tab/panel, backend module, trainer plugin, kernel, engine subsystem) has one file under `developer_documentation/`, never a multi-component monolith. Sections: what it is, how it works (with file:line refs), dependencies, pitfalls. Keep each short.
 25c. **Update a component's doc in the same change.** New component → new file; removed → delete the file. Docs reflect current state, not history (git carries history). If a component you touch has no doc, write one before finishing.
-25d. **The two canonical doc trees are `documentation/` (public) and `developer_documentation/` (internal); no others.** New per-component docs go in the existing `developer_documentation/architecture/frontend/`, `architecture/backend/`, or appropriate domain folder, not a new top-level folder (`docs2/`, etc.).
-25e. **Keep the external extension docs current.** When platform code the external API surface or extension contract depends on changes (a route an extension calls, the model-loading path, the experimental gate, the isolation boundary), update [`documentation/extensions/authoring.md`](documentation/extensions/authoring.md) and the affected endpoints in [`documentation/api/internal_api.md`](documentation/api/internal_api.md) (and [`documentation/api/external_api.md`](documentation/api/external_api.md) if a gated `/v1/*`, `/generate`, or `/agent/stream` endpoint changed) in the same change (as 25c). The external "extension" is distinct from the internal trainer "plugin"; never relabel one as the other.
+25d. **The two canonical doc trees are the in-app wiki (public) and `developer_documentation/` (internal); no others.** New per-component docs go in the existing `developer_documentation/architecture/frontend/`, `architecture/backend/`, or appropriate domain folder, not a new top-level folder (`documentation/`, `docs2/`, etc.).
+25e. **Keep the public wiki current.** When platform code the external API surface or extension contract depends on changes (a route an extension calls, the model-loading path, the experimental gate, the isolation boundary), update the wiki `extensions/authoring` entry and the affected endpoints in the wiki `api/internal_api` entry (and `api/external_api` if a gated `/v1/*`, `/generate`, or `/agent/stream` endpoint changed) in the same change (as 25c). The external "extension" is distinct from the internal trainer "plugin"; never relabel one as the other.
+25f. **Wiki entries render through `veritate_mri/readers/wiki.py`, a safe markdown subset.** Headings, lists, fenced code, blockquote, tables, inline code, bold, italic, and links render; nested lists with mixed indentation do not. Category must match `^[a-z0-9_]+$`, slug `^[a-z0-9_\-]+$`. Frontmatter keys, all optional: `title`, `date`, `tags`, `summary`. Write only what the reader renders.
 26. [`developer_documentation/hooks/contract.md`](developer_documentation/hooks/contract.md) is the API reference for dump artifacts. Update it whenever a hook changes.
 27. Run output goes to `models/<model_name>/` (gitignored). Layout is fixed and documented at [`developer_documentation/training/storage.md`](developer_documentation/training/storage.md).
-28. No CSVs in `documentation/` or `docs/`. CSVs live in the model dir.
+28. No CSVs in the wiki, `developer_documentation/`, or `docs/`. CSVs live in the model dir.
 29. Active work tracking lives in `docs/` files marked `*_tracking.md`. Check these first when resuming. They record what's done, works, is broken, and who did what. Maintain the canonical tracking doc (one entry per completed task); no parallel tracking.
 30. Agents: read any active `*_tracking.md` at session start. One task at a time. Test before declaring done. Document blockers, don't work around them. Keep implementations lean (rule 19).
 
@@ -108,16 +109,18 @@ Contract for how Claude operates on this project. Wins over any conflicting doc.
 37. `trainers/corpus/` holds training data only (`.bin` files). No code, build scripts, config, or JSON manifests describing what the bins are.
 38. Build scripts live with their consumer: a one-trainer builder in that trainer, a many-trainer builder in `trainers/common/`. Output `.bin` files always land in `trainers/corpus/` (shared) or `trainers/<trainer>/corpus/` (bundled).
 39. Trainers do not import from `veritate_mri/` or `veritate_engine/` directly. Their only platform surface is `veritate_core.plugin` (specified in [`developer_documentation/plugins/contract.md`](developer_documentation/plugins/contract.md)). `sys.path` injection into platform internals is forbidden.
-40. Every code file lives in exactly one of: a trainer folder, `trainers/common/`, `veritate_core/`, `veritate_mri/`, `veritate_engine/`. No file fits two; no file fits none. If one fits none, the rule or the file is wrong — stop and ask.
+40. Every code file lives in exactly one of: a trainer folder, `trainers/common/`, `veritate_core/`, `veritate_mri/`, `veritate_engine/`, `veritate_mesh/`, `extensions/`. No file fits two; no file fits none. If one fits none, the rule or the file is wrong: stop and ask.
+40a-iii. **A capability is a platform feature, never a script someone runs.** Anything the platform needs to do is reachable through a route and a dashboard control, owned by one module (rule 20). A `.py` file whose only entry point is a human typing `python path/to/it.py` is a defect: promote it into the owning module and give it a route. The only exceptions are the launchers (`veritate.py`, `start.command`, `start.bat`), engine build scripts driven by `build_runner.py`, and subprocess entry points the platform itself spawns.
 40b. **Export format invariant (v9/v11).** The `.bin` engine format expects a canonical Veritate trunk: learned `pos_emb`, single `lm_head`, no MTP. RoPE-based models (Veritate800M, anything with `rope_*` buffers or no `pos_emb`), MTP-head models, and other variants are not exportable until a v12 engine format ships. The exporter raises `ValueError` early with the variant name, in both `export_checkpoint` and `export_checkpoint_ternary`.
 
 ## versioning and build notes
 
-41. `versions.json` at the repo root is the version ledger: one global `build` counter plus per-component versions `engine`, `mri`, `format` (on-disk schema for models, settings, config files), `plugins`. Read it before any version question.
+41. `versions.json` at the repo root is the version ledger: `channel`, one global `build` counter, plus per-component versions `engine`, `mri`, `format` (on-disk schema for models, settings, config files), and `trainers`. Read it before any version question. The full standard, what each key covers, what counts as major/minor/patch, and what an upgrade obliges, is [`developer_documentation/platform/versioning.md`](developer_documentation/platform/versioning.md).
 42. **Never bump a version without explicit user permission** — the `build` counter and every component string. If a change seems to warrant a bump, propose it in plain words and stop. The user decides.
 43. When a major *format* change lands (model `.bin` layout, settings schema, trainer manifest, hook artifact contract), a build note MUST accompany it, explaining in user-facing terms what the user must do: which files to delete, rebuild, or rerun. No internals-only language.
-44. Build notes live at `veritate_mri/wiki/build_notes/build_<N>.md` where `<N>` matches `versions.json::build`. One note per build. Format spec at `docs/build_notes_format.md` (gitignored scratch). Frontmatter required.
-44a. **Build notes are super concise:** what changed, what the user must do, the version line. Three to ten body lines plus the version table. No deep dives or design rationale — internals belong in `documentation/`.
+44. Build notes live at `veritate_mri/data/wiki/build_notes/build_<N>.md` where `<N>` matches `versions.json::build`. That is the path the wiki reader serves; a note written anywhere else is invisible in the dashboard. One note per build. Frontmatter required (`title`, `date`, `tags`, `summary`).
+44a. **Build notes are super concise:** what changed, what the user must do, the version line. Three to ten body lines plus the version table. No deep dives or design rationale; internals belong in `developer_documentation/`.
+44b. **A breaking build also gets a `BUILD_NOTICES` entry** in `veritate_mri/runtime/settings.py`, keyed by the integer build number, so the dashboard raises a modal until the user acknowledges it. Add one only when the user must delete, rebuild, or rerun something.
 
 ## merging
 
@@ -132,3 +135,11 @@ Contract for how Claude operates on this project. Wins over any conflicting doc.
 50. Slow tests (> 5s) carry `@pytest.mark.slow`. Default `pytest` runs them; the marker lets devs filter with `-m "not slow"` during fast local iteration.
 51. Tests live under `tests/<area>/test_*.py`, mirroring the platform area tested (`engine/`, `export/`, `mri/`, `plugin_contract/`).
 52. When functionality is added, a test that would have failed before the change lands in the same commit. No new feature ships untested.
+
+## lint
+
+53. **Ruff is the single linter.** Config is `[tool.ruff]` in `pyproject.toml` at the repo root; `pytest` config lives in the same file. Run `./venv/bin/python -m ruff check .` before declaring any code change done. It must not introduce a new violation.
+54. Ruff enforces the parts of this contract a machine can check: `T20` no stray `print` (rule 116), `ERA` no commented-out code and `TD`/`FIX` no TODO/FIXME (rule 16), `F` real bugs, `I` import order, `ARG` unused arguments, plus `E`/`W`/`UP`/`B`/`C4`/`PIE`/`RET`/`SIM`/`RUF`.
+55. The house style wins where it conflicts with stock pycodestyle, and the exceptions are declared in `pyproject.toml`, never suppressed inline: aligned assignment operators (`E221`/`E241`), one-line guard clauses (`E701`/`E702`), `l`/`L` as the canonical layer index (`E741`). `PTH` (pathlib over `os.path`) is deliberately NOT enabled: the codebase uses `os.path` consistently, and uniformity beats a mechanical rewrite of 1,500 call sites.
+56. `trainers/` is excluded from lint because it is an upstream-synced checkout (rule 34a). So are `models/`, `experiments/`, `temp/`, `venv/`, and `veritate_mri/web/`.
+57. Line length is 120. `noqa` needs a reason and is a last resort; fixing the code is the default.

@@ -14,23 +14,21 @@
 import threading
 import time
 import uuid
-
 from dataclasses import asdict
 
 from flask import Response, request
-
 from runtime import logs as logmod
 from runtime import settings as settings_mod
 
 from .protocol import (
+    JOB_STATUS_PENDING,
+    PROTOCOL_VERSION,
+    VALID_JOB_KINDS,
     Capabilities,
     Job,
     JobRequirements,
-    JOB_STATUS_PENDING,
-    VALID_JOB_KINDS,
-    PROTOCOL_VERSION,
 )
-from .registry import NodeRegistry, JobQueue
+from .registry import JobQueue, NodeRegistry
 
 # ------------------------------------------------------------------------------------
 # Constants

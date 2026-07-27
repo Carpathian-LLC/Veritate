@@ -19,7 +19,7 @@
 import ast
 import math
 import operator as op
-from typing import Any, Dict
+from typing import Any
 
 from . import Tool
 
@@ -139,7 +139,7 @@ def evaluate(expression: str) -> str:
     return str(result)
 
 
-def _execute(args: Dict[str, Any]) -> str:
+def _execute(args: dict[str, Any]) -> str:
     expression = args.get("expression")
     if expression is None:
         return "error: missing required arg 'expression'"
@@ -152,7 +152,8 @@ TOOL = Tool(
     args_schema={
         "expression": {
             "type": "string", "required": True,
-            "doc": "Python arithmetic, e.g. '2 + 3 * 4', 'sqrt(2) * pi'. Functions: abs, round, min, max, sum, sqrt, log, log2, log10, exp, sin, cos, tan, asin, acos, atan, floor, ceil.",
+            "doc": "Python arithmetic, e.g. '2 + 3 * 4', 'sqrt(2) * pi'. Functions: abs, round, min, max, "
+                   "sum, sqrt, log, log2, log10, exp, sin, cos, tan, asin, acos, atan, floor, ceil.",
         },
     },
     execute=_execute,

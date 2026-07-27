@@ -31,7 +31,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .model import (ACT_DEFAULT, REG_DEFAULT, _ACT_FNS, FFN, QuantLinear)
+from .model import _ACT_FNS, ACT_DEFAULT, FFN, REG_DEFAULT, QuantLinear
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -79,7 +79,7 @@ class MoEFFN(nn.Module):
         return max(1, math.ceil(self.capacity_factor * seq_len * self.top_k / self.num_experts))
 
     def _route(self, x, capacity):
-        B, T, _ = x.shape
+        _B, T, _ = x.shape
         E, K = self.num_experts, self.top_k
         logits = F.linear(x, self.gate.weight.float())
         probs  = F.softmax(logits, dim=-1)
@@ -113,7 +113,7 @@ class MoEFFN(nn.Module):
         return dispatch, combine
 
     def forward(self, x):
-        B, T, H = x.shape
+        _B, T, _H = x.shape
         shared = self.down(self._act_fn(self.up(x)))
         capacity = self._capacity(T)
         with torch.autocast(device_type=x.device.type, enabled=False):

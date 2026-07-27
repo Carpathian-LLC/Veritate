@@ -8,6 +8,9 @@
 #   config, coactivation, learning rate, surprise atlas, full timeline,
 #   eval_deep GET / POST / status, plus the legacy /timelines and
 #   /timeline/<>/<> compat paths.
+# - also owns /eval_sets: the smartness-meter eval sets every probe here is
+#   graded against are regenerated from this module, on a job thread with the
+#   same claim + status-poll shape as eval_deep.
 # veritate_mri/routes/runs_routes.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -19,12 +22,22 @@ import threading
 import time
 
 from flask import Response, current_app, request, send_from_directory
-
 from readers import (
-    capabilities as caps_reader, checkpoints, config as cfg_reader, hooks,
-    models, paths, train_csv,
+    capabilities as caps_reader,
+)
+from readers import (
+    checkpoints,
+    hooks,
+    models,
+    paths,
+    train_csv,
+)
+from readers import (
+    config as cfg_reader,
 )
 from runtime import logs as logmod
+from training.builders import eval as eval_builders
+from training.save import NON_LANGUAGE_TYPES
 
 from . import _brain
 from ._common import auto_thread_count, safe_name, user_error
@@ -37,11 +50,20 @@ COACT_TOP_PAIRS     = 200
 LR_TOP_ROWS         = 512
 EVAL_DEEP_SUBDIR    = "eval_deep"
 IFEVAL_DEFAULT_MAXN = 256
-TIMELINE_FNAME_RE   = re.compile(r"^(probe|classroom|grades|math|grammar|reasoning|concepts|surprise|quant_kl|writing_health|reading_comprehension)_step_(\d+)\.json$")
+EVAL_SUITES         = ("mmlu", "hellaswag", "ifeval")
+EVAL_SUITE_DEFAULT  = EVAL_SUITES[0]
+EVAL_SUITE_ALL      = "all"
+TIMELINE_FNAME_RE   = re.compile(r"^(probe|classroom|grades|math|grammar|reasoning|concepts|surprise"
+                                 r"|quant_kl|writing_health|reading_comprehension)_step_(\d+)\.json$")
 TIMELINE_STEP_RE    = re.compile(r"^step_(\d+)\.json$")
 TIMELINE_LENS_RE    = re.compile(r"^lens_step_(\d+)\.npz$")
 
 _EVAL_DEEP_STATE = {"runs": {}, "lock": threading.Lock()}
+
+EVAL_SETS_IDLE   = {"running": False, "started": None, "finished": None,
+                    "error": None, "builders": []}
+_EVAL_SETS_STATE = dict(EVAL_SETS_IDLE)
+_EVAL_SETS_LOCK  = threading.Lock()
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -242,13 +264,42 @@ def _eval_state_get(name, step):
         return dict(_EVAL_DEEP_STATE["runs"].get(key, {}))
 
 
+def _eval_sets_set(**kwargs):
+    with _EVAL_SETS_LOCK:
+        _EVAL_SETS_STATE.update(kwargs)
+
+
+def _eval_sets_claim():
+    with _EVAL_SETS_LOCK:
+        if _EVAL_SETS_STATE["running"]:
+            return False
+        _EVAL_SETS_STATE.update(running=True, started=time.time(), finished=None,
+                                error=None, builders=[])
+        return True
+
+
+def _eval_sets_job():
+    try:
+        built = eval_builders.rebuild_all()
+    except Exception as e:
+        logmod.error("eval_sets", f"rebuild failed: {type(e).__name__}: {e}")
+        _eval_sets_set(running=False, finished=time.time(), error=user_error(e))
+        return
+    logmod.ok("eval_sets", f"rebuilt {len(built)} eval sets")
+    _eval_sets_set(running=False, finished=time.time(), error=None, builders=built)
+
+
+def _eval_sets_spawn():
+    threading.Thread(target=_eval_sets_job, name="eval_sets:job", daemon=True).start()
+
+
 def _resolve_eval_brain(cfg, name, step, threads):
     cur_brain = cfg.get("BRAIN")
     cur_name  = cfg.get("BRAIN_MODEL")
     cur_step  = cfg.get("BRAIN_STEP")
     if cur_brain is not None and cur_name == name and int(cur_step or -1) == int(step):
         return cur_brain, "reused"
-    brain, n_, s_ = _brain.load_pytorch_brain(name, step, threads)
+    brain, _, _ = _brain.load_pytorch_brain(name, step, threads)
     return brain, "loaded"
 
 
@@ -297,7 +348,8 @@ def register(app):
             return ({"name": name, "model_dir": False, "items": []}, 404)
         items = []
         for s in hooks.list_steps(name):
-            for kind in ("classroom", "grades", "math", "grammar", "reasoning", "concepts", "writing_health", "reading_comprehension"):
+            for kind in ("classroom", "grades", "math", "grammar", "reasoning", "concepts",
+                         "writing_health", "reading_comprehension"):
                 if hooks.artifact_exists(name, s, kind):
                     items.append({"kind": kind, "step": s, "file": f"{kind}_step_{s}.json"})
         items.sort(key=lambda r: (r["step"], r["kind"]))
@@ -350,7 +402,7 @@ def register(app):
                         pass
                 fp = os.path.join(root, fn)
                 try:
-                    with open(fp, "r", encoding="utf-8") as f:
+                    with open(fp, encoding="utf-8") as f:
                         blob = json.load(f)
                 except Exception as e:
                     logmod.warn("eval_deep", f"failed to read {fp}: {e}")
@@ -392,26 +444,25 @@ def register(app):
         if not safe_name(name) or not models.exists(name):
             return ({"error": "model not found"}, 404)
         body = request.get_json(silent=True) or {}
-        suite = body.get("suite") or "mmlu"
+        suite = body.get("suite") or EVAL_SUITE_DEFAULT
         if isinstance(suite, list):
             suites = [str(x).lower() for x in suite]
         else:
             s = str(suite).lower().strip()
-            if s == "all":
-                suites = ["mmlu", "hellaswag", "ifeval"]
+            if s == EVAL_SUITE_ALL:
+                suites = list(EVAL_SUITES)
             else:
                 suites = [t.strip() for t in s.split(",") if t.strip()]
-        valid = {"mmlu", "hellaswag", "ifeval"}
-        suites = [s for s in suites if s in valid]
+        suites = [s for s in suites if s in EVAL_SUITES]
         if not suites:
-            return ({"error": f"no valid suites in {body.get('suite')!r}; expected one of {sorted(valid)} or 'all'"}, 400)
+            return ({"error": f"no valid suites in {body.get('suite')!r}; "
+                              f"expected one of {sorted(EVAL_SUITES)} or {EVAL_SUITE_ALL!r}"}, 400)
 
         # MMLU/HellaSwag/IFEval consume text; allow them for `language` AND `code`
-        # (both train on text corpora). Refuse only for `statistical` / `other`,
+        # (both train on text corpora). Refuse only for the non-language types,
         # which train on non-text data where these suites would score nonsense.
-        # Mirrors the save.py NON_LANGUAGE_TYPES gate.
         mtype = ((cfg_reader.load(name) or {}).get("training_args") or {}).get("model_type")
-        if mtype and str(mtype).lower() in ("statistical", "other"):
+        if mtype and str(mtype).lower() in NON_LANGUAGE_TYPES:
             return ({"error": f"deep eval requires a text-consuming model; {name!r} is type {mtype!r}."}, 400)
 
         step = body.get("step")
@@ -495,6 +546,24 @@ def register(app):
             "files":  written_files,
             "report": suite_results,
         }
+
+    @app.route("/eval_sets", methods=["GET"])
+    def eval_sets_status():
+        """Progress of the eval-set rebuild job."""
+        with _EVAL_SETS_LOCK:
+            state = dict(_EVAL_SETS_STATE)
+        state["ok"] = True
+        state["known_builders"] = list(eval_builders.BUILDERS)
+        return state
+
+    @app.route("/eval_sets", methods=["POST"])
+    def eval_sets_rebuild():
+        """Regenerate every smartness-meter eval set the checkpoint probes grade against."""
+        if not _eval_sets_claim():
+            return ({"ok": False, "error": "an eval-set rebuild is already running"}, 409)
+        logmod.info("eval_sets", f"rebuilding {len(eval_builders.BUILDERS)} eval sets")
+        _eval_sets_spawn()
+        return {"ok": True, "running": True, "known_builders": list(eval_builders.BUILDERS)}
 
     @app.route("/timelines")
     def timelines_compat():

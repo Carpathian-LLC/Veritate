@@ -28,7 +28,6 @@ import uuid
 from collections import namedtuple
 
 from flask import Response, current_app, request
-
 from readers import checkpoints, models, paths
 from runtime import logs as logmod
 
@@ -73,11 +72,11 @@ STOP_HOLD       = max(len(m) for m in STOP_MARKERS)  # per-token holdback so a f
 def _dynamic_stop_hold(text):
     """Return how many trailing chars must be held back to avoid streaming a
     partial stop marker. Zero unless the tail actually looks like a growing
-    prefix of some STOP_MARKER — so most bytes stream instantly instead of
+    prefix of some STOP_MARKER: so most bytes stream instantly instead of
     waiting behind a fixed STOP_HOLD lag (13 chars on the "<|endoftext|>"
     marker adds ~450 ms at 35 ms/byte, which is what causes the streaming
     bimodal ~108 ms inter-arrival spike measured 2026-07-20). O(STOP_HOLD)
-    per call via the precomputed prefix set — no full re-scan of `text`."""
+    per call via the precomputed prefix set: no full re-scan of `text`."""
     n = len(text)
     if n == 0:
         return 0
@@ -303,7 +302,8 @@ def _ensure_pytorch(cfg, name):
 
 def _ensure_c(cfg, name):
     from readers import bin as binr
-    from .backends_routes import _spawn_c_subprocess, warm_select, warm_is_pinned
+
+    from .backends_routes import _spawn_c_subprocess, warm_is_pinned, warm_select
     if not binr.exists(name):
         raise FileNotFoundError(f"{name} has no veritate.bin; export it or use the pytorch engine")
     exe = paths.engine_binary_path()
@@ -363,17 +363,20 @@ def _local_events(cfg, backend, prompt, mri=False, gen=None):
     coarse fast_byte / Brain.stream_fast lookahead), byte-for-byte as before.
     gen carries per-request overrides (see _gen_params_in); an empty gen reproduces
     the values the box hardcoded before overrides existed."""
-    from .backends_routes import BYTE_VOCAB, MAX_NEW_CAP, _chat_stop_seq
     from inference.decode import (
-        NO_REPEAT_NGRAM_DEFAULT, REP_PENALTY_DEFAULT, REP_WINDOW_DEFAULT,
+        NO_REPEAT_NGRAM_DEFAULT,
+        REP_PENALTY_DEFAULT,
+        REP_WINDOW_DEFAULT,
     )
+
+    from .backends_routes import BYTE_VOCAB, MAX_NEW_CAP, _chat_stop_seq
     g = gen or {}
     temperature = g.get("temperature", TEMPERATURE_DEFAULT)
     top_k = min(g.get("top_k", TOP_K_DEFAULT), BYTE_VOCAB)
     max_new = min(g.get("max_new", MAX_NEW), MAX_NEW_CAP)
-    rep = dict(rep_window=g.get("rep_window", REP_WINDOW_DEFAULT),
-               rep_penalty=g.get("rep_penalty", REP_PENALTY_DEFAULT),
-               no_repeat_ngram=g.get("no_repeat_ngram", NO_REPEAT_NGRAM_DEFAULT))
+    rep = {"rep_window": g.get("rep_window", REP_WINDOW_DEFAULT),
+           "rep_penalty": g.get("rep_penalty", REP_PENALTY_DEFAULT),
+           "no_repeat_ngram": g.get("no_repeat_ngram", NO_REPEAT_NGRAM_DEFAULT)}
     if backend == "c":
         from .backends_routes import _c_engine_stream
         events = _c_engine_stream(cfg, prompt, max_new, temperature=temperature,
@@ -400,8 +403,9 @@ def _pytorch_mri_events(brain, prompt, rep, temperature=TEMPERATURE_DEFAULT,
 
 
 def _generate_local(cfg, backend, prompt):
-    from .backends_routes import _stop_on_bytes
     from inference.decode import abstention
+
+    from .backends_routes import _stop_on_bytes
     events, stop_seq = _local_events(cfg, backend, prompt)
     text = _trim(collect(_stop_on_bytes(events, stop_seq)))
     return abstention.wrap_response_text(text)
@@ -444,7 +448,8 @@ def _provider_model_names(pid, prov, cfg):
     model. API providers offer the model the user saved (or the provider
     default). Enumeration uses a short timeout so a down host can't stall the
     picker."""
-    from teacher import client as teacher_client, providers as teacher_providers
+    from teacher import client as teacher_client
+    from teacher import providers as teacher_providers
     configured = (cfg.get("model") or "").strip()
     if prov["kind"] == "local":
         try:
@@ -552,7 +557,8 @@ def _resolve_route(cfg, model, backend):
     from runtime import settings as settings_mod
 
     if model == TEACHER_ID or model.startswith(TEACHER_PREFIX):
-        from teacher import client as teacher_client, providers as teacher_providers
+        from teacher import client as teacher_client
+        from teacher import providers as teacher_providers
         s = settings_mod.get()
         if model == TEACHER_ID:
             provider = (s.get("teacher_provider") or "").strip()
@@ -569,8 +575,8 @@ def _resolve_route(cfg, model, backend):
                 raise ChatUnavailable("no teacher model selected")
             try:
                 prov = teacher_providers.get_provider(provider)
-            except ValueError:
-                raise ChatUnavailable(f"unknown teacher provider: {provider}")
+            except ValueError as e:
+                raise ChatUnavailable(f"unknown teacher provider: {provider}") from e
             api_key = teacher_providers.resolve_api_key(provider, stored_key)
             if prov.get("requires_key") and not api_key:
                 raise ChatUnavailable(f"teacher {provider} needs an API key (set it in Settings)")
@@ -578,7 +584,7 @@ def _resolve_route(cfg, model, backend):
                 return teacher_client.complete(provider, model_name, messages,
                                                api_key=api_key, base_url=base_url, system=system)
             except teacher_client.TeacherError as e:
-                raise ChatUnavailable(user_error(e, "teacher chat"))
+                raise ChatUnavailable(user_error(e, "teacher chat")) from e
         return (complete, f"{provider}: {model_name}", "teacher", "remote",
                 context_limit_chars("remote", provider, model_name))
 
@@ -1010,7 +1016,7 @@ def _chat_prepare(cfg, body):
     facts, sources = [], []
     if use_rag and has_corpus():
         facts, scores = retrieve(message, k, scope=scope)
-        sources = [{"text": t, "score": s} for t, s in zip(facts, scores)]
+        sources = [{"text": t, "score": s} for t, s in zip(facts, scores, strict=True)]
     if docs_mode or use_logs:
         log_facts = training_log_lines()
         facts = facts + log_facts
@@ -1019,7 +1025,7 @@ def _chat_prepare(cfg, body):
     complete, label, resp_backend, kind, char_limit = _resolve_route(cfg, model, backend)
     if docs_mode:
         label = "Veritate (platform docs)"
-    messages = history + [{"role": "user", "content": message}]
+    messages = [*history, {"role": "user", "content": message}]
     system = (_fit_local_system(model, messages, summary, facts)
               if kind == "local" else _system_text(kind, summary, facts))
     return _ChatCtx(message, history, summary, facts, sources, complete, label,
@@ -1031,8 +1037,8 @@ def _chat_result(ctx, answer, frames=None):
     build the response dict returned by /hybrid/chat and the stream's done frame.
     frames (opt-in MRI) attaches the captured per-byte frames under the mri key; the
     stream emits them inline instead, so it passes None here to avoid duplicating them."""
-    new_turns = ctx.history + [{"role": "user", "content": ctx.message},
-                               {"role": "assistant", "content": answer}]
+    new_turns = [*ctx.history, {"role": "user", "content": ctx.message},
+                 {"role": "assistant", "content": answer}]
     mem_summary, mem_turns = _compact(ctx.complete, ctx.summary, new_turns, ctx.char_limit, ctx.kind)
     out = {"ok": True, "answer": answer, "model": ctx.label, "backend": ctx.resp_backend,
            "confident": bool(ctx.facts), "sources": ctx.sources,

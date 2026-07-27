@@ -22,7 +22,12 @@ REPO_ROOT       = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(
 MODELS_ROOT     = os.path.join(REPO_ROOT, "models")
 PLUGINS_ROOT    = os.path.join(REPO_ROOT, "trainers")
 CORPUS_ROOT     = os.path.join(PLUGINS_ROOT, "corpus")
+# Raw Project Gutenberg text cache the chat / agent corpus builders read from.
+PG_CACHE_ROOT   = os.path.join(CORPUS_ROOT, "_pg_cache")
 MRI_ROOT        = os.path.join(REPO_ROOT, "veritate_mri")
+# Scratch tree for corpus builder input / output. Gitignored.
+TEMP_ROOT       = os.path.join(REPO_ROOT, "temp")
+REQUIREMENTS_PATH = os.path.join(REPO_ROOT, "requirements.txt")
 # Platform-level data lives under veritate_mri/data/. eval/grade/ holds the
 # committed grade-level eval corpora; eval/samples/ holds the small smoke
 # subsets of MMLU / HellaSwag / IFEval; wiki/ holds dashboard wiki markdown;
@@ -35,7 +40,15 @@ MRI_ROOT        = os.path.join(REPO_ROOT, "veritate_mri")
 DATA_ROOT          = os.path.join(MRI_ROOT, "data")
 EVAL_ROOT          = os.path.join(DATA_ROOT, "eval")
 GRADE_EVAL_ROOT    = os.path.join(EVAL_ROOT, "grade")
+# Hand-authored passages the grade / comprehension builders read, and the three
+# generated smartness-meter axes the checkpoint probe scores against.
+GRADE_EVAL_SOURCES_ROOT   = os.path.join(GRADE_EVAL_ROOT, "sources")
+GRADE_EVAL_MATH_ROOT      = os.path.join(GRADE_EVAL_ROOT, "math")
+GRADE_EVAL_REASONING_ROOT = os.path.join(GRADE_EVAL_ROOT, "reasoning")
+GRADE_EVAL_GRAMMAR_ROOT   = os.path.join(GRADE_EVAL_ROOT, "grammar")
 EVAL_SAMPLES_ROOT  = os.path.join(EVAL_ROOT, "samples")
+# Held-out question/answer sets the RAG corpus builder writes beside its bins.
+RAG_EVAL_ROOT      = os.path.join(EVAL_ROOT, "rag")
 WIKI_ROOT          = os.path.join(DATA_ROOT, "wiki")
 NATIVE_CORPUS_ROOT = os.path.join(DATA_ROOT, "corpus")
 SYNTH_JOBS_ROOT    = os.path.join(DATA_ROOT, "synth_jobs")
@@ -45,6 +58,9 @@ ENGINE_ROOT     = os.path.join(REPO_ROOT, "veritate_engine")
 ENGINE_PRIMARY  = os.path.join(ENGINE_ROOT, "v1")
 ENGINE_BIN      = os.path.join(ENGINE_PRIMARY, "bin")
 ENGINE_BUILD    = os.path.join(ENGINE_PRIMARY, "build")
+ENGINE_SRC      = os.path.join(ENGINE_PRIMARY, "src")
+ENGINE_KERNELS  = os.path.join(ENGINE_PRIMARY, "kernels")
+ENGINE_SOURCE_SUFFIXES = (".c", ".h", ".S")
 ENGINE_VERSIONS_JSON = os.path.join(ENGINE_PRIMARY, "engine_versions.json")
 
 OS_WINDOWS = "windows"
@@ -69,8 +85,17 @@ BUILD_SCRIPT_BY_OS = {
 CONFIG_NAME       = "config.json"
 TRAIN_CSV_NAME    = "train.csv"
 BIN_NAME          = "veritate.bin"
+BIN_V2_NAME       = "veritate_v2.bin"   # ternary export sits beside the int8 bin
 CHECKPOINTS_DIR   = "checkpoints"
 HOOKS_DIR         = "hooks"
+
+GRADE_SOURCE_PREFIX = "grade_"
+GRADE_SOURCE_SUFFIX = "_source.txt"
+COMPREHENSION_PREFIX      = "comprehension_"
+COMPREHENSION_HARD_PREFIX = "comprehension_hard_"
+COMPREHENSION_SUFFIX      = ".json"
+JSONL_SUFFIX              = ".jsonl"
+RAG_EVAL_SUFFIX           = "_test.json"
 
 WIKI_ENTRY_SUFFIX = ".md"
 
@@ -148,6 +173,23 @@ def grade_eval_path(level):
     return os.path.join(GRADE_EVAL_ROOT, f"{GRADE_EVAL_PREFIX}{level}{GRADE_EVAL_SUFFIX}")
 
 
+def grade_source_path(level):
+    return os.path.join(GRADE_EVAL_SOURCES_ROOT, f"{GRADE_SOURCE_PREFIX}{level}{GRADE_SOURCE_SUFFIX}")
+
+
+def comprehension_path(level, hard=False):
+    prefix = COMPREHENSION_HARD_PREFIX if hard else COMPREHENSION_PREFIX
+    return os.path.join(GRADE_EVAL_ROOT, f"{prefix}{level}{COMPREHENSION_SUFFIX}")
+
+
+def rag_eval_path(stem):
+    return os.path.join(RAG_EVAL_ROOT, f"{stem}{RAG_EVAL_SUFFIX}")
+
+
+def eval_axis_item_path(axis_root, name):
+    return os.path.join(axis_root, f"{name}{JSONL_SUFFIX}")
+
+
 def bundled_corpus_train_path(bundle_corpus_dir, stem):
     return os.path.join(bundle_corpus_dir, f"{stem}{CORPUS_TRAIN_SUFFIX}")
 
@@ -166,6 +208,10 @@ def train_csv_path(name):
 
 def bin_path(name):
     return os.path.join(model_dir(name), BIN_NAME)
+
+
+def bin_v2_path(name):
+    return os.path.join(model_dir(name), BIN_V2_NAME)
 
 
 def checkpoints_dir(name):
@@ -219,10 +265,13 @@ def engine_binary_name(os_name=None):
     return BINARY_NAME_BY_OS.get(os_name or current_os(), "veritate")
 
 
+def engine_binary_dir(os_name=None, arch=None):
+    return os.path.join(ENGINE_BIN, os_name or current_os(), arch or current_arch())
+
+
 def engine_binary_path(os_name=None, arch=None):
     o = os_name or current_os()
-    a = arch or current_arch()
-    return os.path.join(ENGINE_BIN, o, a, engine_binary_name(o))
+    return os.path.join(engine_binary_dir(o, arch), engine_binary_name(o))
 
 
 def build_script_path(os_name=None):

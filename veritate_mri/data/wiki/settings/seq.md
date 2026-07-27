@@ -1,26 +1,30 @@
 ---
-title: Sequence Length
-summary: How many bytes of context the model reads at once per row; longer context teaches more per step but costs more memory.
-tags: training, settings
+title: sequence length
+date: 2026-07-27
+tags: [settings, training]
+summary: How many bytes of context the model sees at once, and the context window baked into the trained model.
 ---
 
-# Sequence Length
+# sequence length
 
-Sequence length is how much text the model sees in one row, measured in bytes (roughly characters). It is the size of the window the model reads before predicting what comes next. A short sequence is like reading one sentence; a long one is like reading a whole paragraph before answering.
+The width of one chunk of text in bytes. Because this platform trains on raw bytes, 1024 means 1024 characters of plain ASCII text, fewer for text with multi-byte characters.
 
-## Why it matters
+## what it does
 
-A longer sequence lets the model learn longer-range patterns and gives it more to learn from in each step. If you want the model to track context across long passages, it needs a long enough sequence to have seen that context during training.
+Two effects, one temporary and one permanent.
 
-## Weak-hardware angle
+During training it sets how far back the model can look while predicting the next byte. Attention cost on a dense trunk grows with the square of this number, so doubling it roughly quadruples the attention work per row.
 
-Longer sequences cost more memory, and the cost grows fast. Here the memory grows **linearly** with sequence length when flash-attention is available, but **quadratically without it** (doubling the length nearly quadruples that part of the cost). On a modest machine, sequence length is one of the biggest memory levers, so keep it only as long as you actually need.
+Permanently, it sizes the learned position table stored in the checkpoint. A model trained at 1024 has 1024 position slots and cannot attend beyond them later, whatever the inference code asks for. This is why the field appears on a scratch run and not on a continue run: the shape is fixed once the model exists.
 
-## When to change it
+## range and default
 
-- Raise it when your task genuinely needs long context and you have memory to spare.
-- Lower it to make a run fit, or to train faster when short context is enough.
+Any positive integer. The corpus must hold at least `seq * n_chunks + 2` bytes or the loader refuses to build a row.
 
-## Gotcha
+Every trainer manifest defaults to 1024 except `veritate_10m`, which defaults to 512.
 
-- A model rarely handles context much longer than it trained on. If you need long conversations at use time, train with a long enough sequence.
+## when to change it
+
+Raise it when the task needs longer context than 1024 bytes, and accept the cost: on a dense trunk that cost is quadratic. The `patched` and `recurrent` trunks exist precisely to make long sequences affordable, so pair a large `seq` with one of them rather than paying full attention cost.
+
+Lower it to fit a bigger batch on a small box, or when the corpus is made of short records anyway.

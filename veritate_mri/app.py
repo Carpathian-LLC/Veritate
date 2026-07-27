@@ -25,12 +25,12 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, REPO_ROOT)
 
-from readers import checkpoints, config as cfg_reader, models
-from runtime import logs as logmod
-from runtime import lifecycle
-from runtime import sys_metrics
-from runtime import settings as settings_mod
+from readers import checkpoints, models, paths
+from readers import config as cfg_reader
 from runtime import heartbeat as heartbeat_mod
+from runtime import lifecycle, sys_metrics
+from runtime import logs as logmod
+from runtime import settings as settings_mod
 from training import build_runner
 from training import trainer_runner as plugin_runner
 from training.sync import app_sync as app_sync_mod
@@ -40,15 +40,26 @@ from training.sync import app_sync as app_sync_mod
 
 STATIC_DIR = os.path.join(HERE, "web")
 
+DEFAULT_PORT = 8001
+BIND_HOST    = "0.0.0.0"
+DEFAULT_MODEL_ARG = "auto"
+AUTO_THREADS = 0
+IDLE_WATCH_INTERVAL_S = 30.0
+IDLE_UNLOAD_FALLBACK_S = 600.0
+# Any models/<name>/train.csv touched inside this window counts as a live run.
+# log_every=25 at ~1s/step means ~25s between writes.
+CSV_ACTIVE_WINDOW_S = 120.0
+# Shape fields lifted into the heartbeat payload.
+SHAPE_SUMMARY_KEYS = ("hidden", "layers", "ffn", "heads", "seq", "n_predict", "rope_base")
+
 # Power-save mode. Set by `python veritate.py --minimal` (propagated via env so
 # it survives the venv re-exec and any lifecycle restart). Disables brain
 # eager-load, idle watcher, heartbeat/analytics, platform sync, and sys-metrics
-# warm. Read-only training/log/sys-state routes still work — the user sees
+# warm. Read-only training/log/sys-state routes still work: the user sees
 # train.csv, log ring, and CPU/mem just fine.
 MINIMAL = os.environ.get("VERITATE_MINIMAL") == "1"
 
 from routes._common import auto_thread_count
-
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
 # Preserve JSON key insertion order in responses (Flask 2.2 default is True,
@@ -100,8 +111,10 @@ def _route_exception_to_log(e):
 
 
 from routes._brain import (
+    load_pytorch_brain as _load_pytorch_brain,
+)
+from routes._brain import (
     resolve_pytorch_model as _resolve_pytorch_model,
-    load_pytorch_brain   as _load_pytorch_brain,
 )
 
 
@@ -110,7 +123,7 @@ def _pytorch_idle_watcher():
     has been idle longer than pytorch_idle_unload_secs, unload it. Skips while
     a generation/neuron lookup holds brain.lock so we never unload mid-stream."""
     while True:
-        time.sleep(30)
+        time.sleep(IDLE_WATCH_INTERVAL_S)
         try:
             s = settings_mod.get()
             if s.get("pytorch_load_mode") != "on_demand":
@@ -121,7 +134,7 @@ def _pytorch_idle_watcher():
             if brain.lock.locked():
                 continue
             idle_for = time.time() - (app.config.get("BRAIN_LAST_USED") or 0)
-            if idle_for >= float(s.get("pytorch_idle_unload_secs") or 600):
+            if idle_for >= float(s.get("pytorch_idle_unload_secs") or IDLE_UNLOAD_FALLBACK_S):
                 app.config["BRAIN"] = None
                 app.config["BRAIN_MODEL"] = None
                 app.config["BRAIN_STEP"]  = None
@@ -131,12 +144,30 @@ def _pytorch_idle_watcher():
 
 
 from routes import (
-    atlas_routes, backends_routes, corpus_routes, engine_routes,
-    lifecycle_routes, logs_routes, mesh_routes, models_routes,
-    trainers_routes, pruning_routes, runs_routes, settings_routes, sys_routes,
-    teacher_routes, train_routes, wiki_routes, hybrid_routes, rag_routes,
-    auth_routes, api_auth_routes, extensions_routes, hallucination_routes,
+    api_auth_routes,
+    atlas_routes,
+    auth_routes,
+    backends_routes,
+    corpus_routes,
+    engine_routes,
+    extensions_routes,
+    hallucination_routes,
+    hybrid_routes,
+    lifecycle_routes,
+    logs_routes,
+    mesh_routes,
+    models_routes,
+    pruning_routes,
+    rag_routes,
+    runs_routes,
+    settings_routes,
+    sys_routes,
+    teacher_routes,
+    train_routes,
+    trainers_routes,
+    wiki_routes,
 )
+
 auth_routes.register(app)
 api_auth_routes.register(app)
 atlas_routes.register(app)
@@ -161,6 +192,7 @@ extensions_routes.register(app)
 hallucination_routes.register(app)
 
 from extensions import registry as extensions_registry
+
 extensions_registry.register_all(app)
 
 _mesh_role = (settings_mod.get().get("mesh_role") or "off").lower()
@@ -182,10 +214,11 @@ if _mesh_role in ("node", "both"):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model",   default="auto", help="default model for both backends. 'auto' picks the freshest.")
+    ap.add_argument("--model",   default=DEFAULT_MODEL_ARG,
+                    help=f"default model for both backends. '{DEFAULT_MODEL_ARG}' picks the freshest.")
     ap.add_argument("--step",    type=int, default=None)
-    ap.add_argument("--port",    type=int, default=8001)
-    ap.add_argument("--threads", type=int, default=0,
+    ap.add_argument("--port",    type=int, default=DEFAULT_PORT)
+    ap.add_argument("--threads", type=int, default=AUTO_THREADS,
                     help="pytorch CPU threads. 0 = auto: physical cores capped at 16.")
     args = ap.parse_args()
 
@@ -222,7 +255,8 @@ def main():
     build_runner.set_pre_build_hook(_close_c_for_rebuild)
 
     if MINIMAL:
-        logmod.info("run", "MINIMAL mode: skipping idle watcher, sys-warm, app-sync, brain eager-load (heartbeat still active)")
+        logmod.info("run", "MINIMAL mode: skipping idle watcher, sys-warm, app-sync, brain eager-load "
+                           "(heartbeat still active)")
     else:
         threading.Thread(target=_pytorch_idle_watcher, name="pytorch-idle-watcher", daemon=True).start()
         sys_metrics.warm()
@@ -246,9 +280,8 @@ def main():
             out["model_name"] = name
             n_params = cfg.get("n_params_total") or ta.get("n_params_total")
             out["n_params"]   = int(n_params or 0) or None
-            keep = ("hidden", "layers", "ffn", "heads", "seq", "n_predict", "rope_base")
             summary = {}
-            for k in keep:
+            for k in SHAPE_SUMMARY_KEYS:
                 v = shape.get(k, ta.get(k))
                 if v is not None:
                     summary[k] = v
@@ -258,30 +291,23 @@ def main():
             pass
 
     def _detect_csv_based_training():
-        """Fallback detector: any models/<name>/train.csv touched within the
-        last CSV_ACTIVE_WINDOW seconds is treated as a live training run.
-        Catches direct-script trainers launched outside plugin_runner. The canonical save.append_train_row() contract
-        is what we rely on — any trainer that writes train.csv per the
-        contract gets picked up automatically. Without this fallback, presence
-        pings would falsely report "idle" for the entire duration of such a
-        run and the server would flip the device offline mid-training."""
-        CSV_ACTIVE_WINDOW = 120  # seconds (log_every=25 at ~1s/step => ~25s between writes)
-        try:
-            root = os.path.join(REPO_ROOT, "models")
-            if not os.path.isdir(root):
-                return None
-        except OSError:
+        """Fallback detector: any models/<name>/train.csv touched within
+        CSV_ACTIVE_WINDOW_S is treated as a live training run. Catches
+        direct-script trainers launched outside plugin_runner via the canonical
+        save.append_train_row() contract. Without it, presence pings report
+        "idle" for such a run and the server flips the device offline
+        mid-training."""
+        if not os.path.isdir(paths.MODELS_ROOT):
             return None
         now    = time.time()
         latest = None  # (mtime, name)
         try:
-            for entry in os.listdir(root):
-                csv_path = os.path.join(root, entry, "train.csv")
+            for entry in os.listdir(paths.MODELS_ROOT):
                 try:
-                    mt = os.path.getmtime(csv_path)
+                    mt = os.path.getmtime(paths.train_csv_path(entry))
                 except OSError:
                     continue
-                if now - mt > CSV_ACTIVE_WINDOW:
+                if now - mt > CSV_ACTIVE_WINDOW_S:
                     continue
                 if latest is None or mt > latest[0]:
                     latest = (mt, entry)
@@ -350,7 +376,8 @@ def main():
                 app.config["BRAIN_LAST_ERROR"] = msg
                 cur = app.config.get("DEFAULT_MODEL")
                 if isinstance(e, RuntimeError) and "PyTorch inference is not enabled" in str(e):
-                    logmod.warn("backends", f"pytorch backend skipped for {cur}: non-vanilla architecture (use C engine)")
+                    logmod.warn("backends", f"pytorch backend skipped for {cur}: "
+                                            "non-vanilla architecture (use C engine)")
                 else:
                     logmod.error("backends", f"pytorch eager load failed: {msg}")
             finally:
@@ -363,8 +390,8 @@ def main():
     if not MINIMAL and warm_models:
         backends_routes.warm_eager_start(app.config, warm_models)
 
-    print(f"http://0.0.0.0:{args.port}")
-    app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True,
+    print(f"http://{BIND_HOST}:{args.port}")
+    app.run(host=BIND_HOST, port=args.port, debug=False, threaded=True,
             request_handler=_QuietWSGIRequestHandler)
 
 

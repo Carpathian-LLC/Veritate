@@ -19,6 +19,8 @@ The data-access layer at [veritate_mri/readers/](../../../veritate_mri/readers/)
 | [hooks.py](../../../veritate_mri/readers/hooks.py)                                | Load `hooks/step_<N>/` artifacts (probe.json, lens.npz...) |
 | [bin.py](../../../veritate_mri/readers/bin.py)                                    | `.bin` export metadata                                     |
 | [trainers.py](../../../veritate_mri/readers/trainers.py)                          | Plugin manifests; available plugin listing                 |
+| [trainer_tuning.py](../../../veritate_mri/readers/trainer_tuning.py)              | Machine-local per-trainer arg overrides; see [trainer_tuning.md](trainer_tuning.md) |
+| [wiki.py](../../../veritate_mri/readers/wiki.py)                                  | In-app wiki index + entry load, with the safe markdown-subset renderer |
 
 ## The contract
 
@@ -35,4 +37,4 @@ The data-access layer at [veritate_mri/readers/](../../../veritate_mri/readers/)
 
 - Don't add `os.path.join` calls inside routes. Refactor into a reader if a new path is needed.
 - `train_csv.py` enforces the canonical CSV header. Trainers that add or rename columns break every reader that consumes it; coordinate before changing the schema.
-- File mtimes are surfaced for ordering (newest checkpoint, last-modified run). Time-skewed clocks across NFS or virtualized environments can produce non-monotonic results — readers do not paper over this.
+- File mtimes are surfaced for ordering (newest checkpoint, last-modified run). Time-skewed clocks across NFS or virtualized environments can produce non-monotonic results, readers do not paper over this.

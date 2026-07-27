@@ -268,6 +268,49 @@ static char* fgets_drain(char* buf, int size, FILE* f) {
     return buf;
 }
 
+// Stop sequences. Parsed from the optional trailing header field, comma
+// separated, 0x01 escaping an embedded newline exactly as the prompt line does.
+// Absent field means zero sequences and the generation loop keeps its previous
+// behavior byte for byte.
+#define VERITATE_MAX_STOPS     8
+#define VERITATE_MAX_STOP_LEN  32
+
+typedef struct {
+    int   count;
+    int   len[VERITATE_MAX_STOPS];
+    char  seq[VERITATE_MAX_STOPS][VERITATE_MAX_STOP_LEN];
+} stop_set_t;
+
+static void stop_set_parse(stop_set_t* out, const char* csv) {
+    out->count = 0;
+    if (csv == NULL || csv[0] == '\0' || strcmp(csv, "-") == 0) return;
+    const char* p = csv;
+    while (*p != '\0' && out->count < VERITATE_MAX_STOPS) {
+        const char* comma = strchr(p, ',');
+        size_t n = (comma != NULL) ? (size_t)(comma - p) : strlen(p);
+        if (n > 0) {
+            if (n > VERITATE_MAX_STOP_LEN - 1) n = VERITATE_MAX_STOP_LEN - 1;
+            char* dst = out->seq[out->count];
+            for (size_t i = 0; i < n; i++) dst[i] = (p[i] == '\x01') ? '\n' : p[i];
+            dst[n] = '\0';
+            out->len[out->count] = (int)n;
+            out->count++;
+        }
+        if (comma == NULL) break;
+        p = comma + 1;
+    }
+}
+
+// True when the tail of the generated stream matches any stop sequence.
+static int stop_set_hit(const stop_set_t* s, const uint8_t* gen, int32_t gen_len) {
+    for (int i = 0; i < s->count; i++) {
+        int n = s->len[i];
+        if (n == 0 || gen_len < n) continue;
+        if (memcmp(gen + gen_len - n, s->seq[i], (size_t)n) == 0) return 1;
+    }
+    return 0;
+}
+
 static int chat_loop(void) {
     static model_t model;
     const char* model_path = getenv("VERITATE_MODEL_PATH");
@@ -358,6 +401,13 @@ static int chat_loop(void) {
 // emits a coarse 'FFRM' frame per token instead:
 //   'FFRM' u32_pos u32_real_len u8_byte u8_argmax_byte u8_pad[2]   (16 bytes, no payload)
 // sampling is identical to the traced path, so output bytes match for one request.
+//
+// stop sequences: the header carries an optional trailing comma-separated field
+// (0x01 escapes an embedded newline, as in the prompt line). When any sequence
+// matches the tail of the generated stream the turn ends and TEND is emitted,
+// so the caller never has to abandon a generator mid-stream. Omitting the field
+// disables the check and leaves generation byte-identical to a caller or binary
+// that predates it. Up to VERITATE_MAX_STOPS sequences, VERITATE_MAX_STOP_LEN each.
 // ------------------------------------------------------------------------------------
 
 static int chat_traced_loop(void) {
@@ -437,7 +487,7 @@ static int chat_traced_loop(void) {
     fprintf(stderr, "ready\n");
     fflush(stderr);
 
-    char header[256];
+    char header[512];
     char* prompt_line = (char*)malloc((size_t)S + 4);
     char  prev_addons_csv[128] = "";
 
@@ -454,15 +504,21 @@ static int chat_traced_loop(void) {
         int   no_repeat_ngram = 0;
         int   do_trace = 1;
         int   compact = 0;
-        // header format: "temp top_k max_new ablate_l ablate_n [addons_csv [rep_window rep_penalty no_repeat_ngram [trace [compact]]]]\n"
+        char  stop_csv[160] = "";
+        // header format: "temp top_k max_new ablate_l ablate_n [addons_csv [rep_window rep_penalty no_repeat_ngram [trace [compact [stop_csv]]]]]\n"
         // addons_csv is optional; missing means "use the env-var chain or none".
         // empty token "-" explicitly clears any previously-installed chain. the
         // trailing rep fields default to 0 (repetition control off) when absent;
         // trace defaults to 1 (full frames) when absent; compact defaults to 0
         // (raw TFRM v8 frames). compact=1 with trace=1 emits reduced TFRC v9 frames.
-        sscanf(header, "%f %d %d %d %d %127s %d %f %d %d %d",
+        // stop_csv is optional and defaults to empty: a header without it leaves
+        // generation byte-identical to the previous protocol, so an older caller
+        // and an older binary both keep working.
+        sscanf(header, "%f %d %d %d %d %127s %d %f %d %d %d %159s",
                &temp, &top_k, &max_new, &ablate_layer, &ablate_neuron, addons_csv,
-               &rep_window, &rep_penalty, &no_repeat_ngram, &do_trace, &compact);
+               &rep_window, &rep_penalty, &no_repeat_ngram, &do_trace, &compact, stop_csv);
+        stop_set_t stops;
+        stop_set_parse(&stops, stop_csv);
         veritate_set_ablation(ablate_layer, ablate_neuron);
 
         // per-request addon chain swap. only rebuild when csv changes; common
@@ -536,6 +592,7 @@ static int chat_traced_loop(void) {
                 fflush(stdout);
                 if (step == 0) model_store_state_cache(&model, tokens, n);
                 if (b == 0) break;
+                if (stop_set_hit(&stops, gen_bytes, gen_len)) break;
                 if (cache.len >= S) break;
                 forward_decode(&model, &cache, next, hidden, NULL);
                 continue;
@@ -802,6 +859,7 @@ static int chat_traced_loop(void) {
 
             if (step == 0) model_store_state_cache(&model, tokens, n);
             if (b == 0) break;
+            if (stop_set_hit(&stops, gen_bytes, gen_len)) break;
             if (cache.len >= S) break;
 
             forward_decode(&model, &cache, next, hidden, trace);

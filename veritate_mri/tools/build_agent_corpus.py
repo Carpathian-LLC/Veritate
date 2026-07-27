@@ -49,6 +49,11 @@ DEFAULT_TARGET_MB = 150
 
 PASSAGE_CLIP_CHARS = 300
 
+# Corpus mix ratio. Weighted toward calculator (the densest tool-call pattern);
+# no_tool stays high so the model learns when to skip the call entirely.
+SCENARIO_KINDS   = ("calc", "fs", "fetch", "retrieve", "error", "no_tool", "chain")
+SCENARIO_WEIGHTS = (30, 15, 15, 10, 10, 15, 5)
+
 TOOL_SIGS = {
     "calculator": "calculator(expression: str) -> number",
     "fs_read":    "fs_read(path: str) -> str",
@@ -137,7 +142,7 @@ def _fs(rng):
     if kind == "config":
         host, port = rng.choice(HOSTS), rng.choice(PORTS)
         content = json.dumps({"host": host, "port": port, "debug": rng.random() < 0.3})
-        return (f"What port does the service in config.json use?", "config.json",
+        return ("What port does the service in config.json use?", "config.json",
                 content, f"The service is configured for port {port}.")
     if kind == "notes":
         items = rng.sample(["water the plants", "call the bank", "renew the domain",
@@ -234,10 +239,8 @@ def _call_turns(tool, args, result=None, error=None):
 
 
 def _conversation(rng, passages, qa_pool):
-    """One framed conversation. Scenario mix is weighted toward calculator,
-    with direct no-tool answers kept in so the model learns to skip the call."""
-    kind = rng.choices(["calc", "fs", "fetch", "retrieve", "error", "no_tool", "chain"],
-                       weights=[30, 15, 15, 10, 10, 15, 5])[0]
+    """One framed conversation drawn from SCENARIO_KINDS at SCENARIO_WEIGHTS."""
+    kind = rng.choices(SCENARIO_KINDS, weights=SCENARIO_WEIGHTS)[0]
     turns, used = [], []
     if kind == "calc":
         q, expr = _calc(rng)
@@ -291,7 +294,7 @@ def _load_passages(rng, count=800):
     rng.shuffle(files)
     for fname in files[:20]:
         try:
-            with open(os.path.join(chat.PG_CACHE_DIR, fname), "r", encoding="utf-8", errors="replace") as f:
+            with open(os.path.join(chat.PG_CACHE_DIR, fname), encoding="utf-8", errors="replace") as f:
                 text = f.read()
         except OSError:
             continue

@@ -12,7 +12,6 @@
 import json
 
 from flask import Response, request
-
 from runtime import logs as logmod
 
 # ------------------------------------------------------------------------------------

@@ -13,8 +13,8 @@
 
 from flask import request
 
-from extensions import registry
 from extensions import data as ext_data
+from extensions import registry
 
 # ------------------------------------------------------------------------------------
 # Functions

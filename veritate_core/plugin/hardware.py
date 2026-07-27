@@ -92,9 +92,7 @@ def bf16_supported(device):
     import torch
     if device == "cuda":
         return bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
-    if device == "mps":
-        return True
-    return False
+    return device == "mps"
 
 
 def resolve_precision(requested, device):
@@ -140,6 +138,7 @@ def _probe_infer_threads(hidden, ffn, layers, max_threads):
     (bandwidth-rich) curve settles low with no speed loss; a spin-wait curve lands
     on its real minimum. Each count is timed INFER_PROBE_REPEATS times, min kept."""
     import time
+
     import torch
     reps = max(1, min(int(layers), INFER_PROBE_MAX_REPS))
     prev = torch.get_num_threads()
@@ -181,7 +180,7 @@ def _probe_infer_threads(hidden, ffn, layers, max_threads):
 def optimal_infer_threads(device, hidden, ffn, layers, max_threads):
     """CPU inference thread count for THIS box, measured once and cached. On an
     accelerator (mps/cuda) the forward runs off-core, so the full count is kept
-    with no probe. On CPU the box self-calibrates via _probe_infer_threads — no
+    with no probe. On CPU the box self-calibrates via _probe_infer_threads: no
     per-machine constant. INFER_THREADS_ENV (int) overrides everything."""
     override = (os.environ.get(INFER_THREADS_ENV, "") or "").strip()
     if override:

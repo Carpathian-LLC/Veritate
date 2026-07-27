@@ -1,26 +1,37 @@
 ---
-title: BPTT Window
-summary: How far back in a long sequence the model actually learns from each step; smaller windows save memory, the full window learns the most but costs the most.
-tags: training, settings
+title: BPTT window
+date: 2026-07-27
+tags: [settings, training, advanced]
+summary: How many chunks of history one backward pass reaches through, and the main driver of peak activation memory.
 ---
 
-# BPTT Window
+# BPTT window
 
-When a step processes a long sequence, it is broken into chunks. The BPTT window sets **how many of those chunks stay "live" for learning**, meaning the trainer traces its mistakes back through them and updates accordingly. BPTT is short for "backpropagation through time," the process of learning across a sequence.
+BPTT is backpropagation through time: carrying the gradient backwards across chunk boundaries so the model learns from context earlier than the current chunk. This setting is how many chunks that reach covers.
 
-Picture reading a long paragraph and then being asked to fix your understanding: do you re-examine only the last sentence, or the last few sentences, or the whole paragraph? The window is how far back you look.
+## what it does
 
-## Why it matters
+A training step walks `n_chunks` chunks in order. This value, call it K, says how many of those chunks are held live before a backward pass runs and their memory is released.
 
-Looking back over more chunks lets the model learn longer-range patterns, but every live chunk has to be held in memory for the backward pass. So the window is a direct memory-versus-learning dial.
+```
+backward passes per step = n_chunks / bptt_window   (rounded up)
+peak activation memory   scales with bptt_window
+```
 
-## Weak-hardware angle
+`bptt_window = 1` frees each chunk immediately: cheapest memory, no gradient signal crossing chunk boundaries. `bptt_window = n_chunks` holds the whole step live: full BPTT, highest memory. Setting it above `n_chunks` behaves the same as setting it equal.
 
-- **1 (frozen)** : only the current chunk learns. Lowest memory. The earlier chunks still feed context, they just are not traced back through.
-- **4 (balanced)** : a middle ground; learns some longer-range structure without a big memory bill.
-- **n_chunks (full BPTT)** : every chunk stays live. Learns the most across the sequence but uses the **most memory**.
+Implemented in `chunked_step` in `trainers/common/vanilla_trainer.py`, which clamps the value with `K = max(1, bptt_window)`.
 
-## When to change it
+This is the setting the dashboard memory estimator multiplies activation memory by. `n_chunks` does not appear in that estimate at all.
 
-- On a tight machine, keep it at **1** or **4**.
-- Raise it toward the full value only when you have memory to spare and need long-range learning.
+## range and default
+
+Any integer of 1 or more.
+
+Manifest defaults: 4 for `veritate_10m`, 2 for `veritate_80m` through `veritate_800m`, 1 for `veritate_1b3` and every larger trainer.
+
+## when to change it
+
+Raise it when the model needs to connect information across chunk boundaries, which is the common case on the `recurrent` and `memory` trunks where state is threaded from one chunk to the next. Watch memory: the increase is close to linear.
+
+Lower it to 1 as the first move when a run aborts on memory but batch size must stay where it is.

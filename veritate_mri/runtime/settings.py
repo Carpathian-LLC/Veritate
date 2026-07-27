@@ -90,6 +90,13 @@ DEFAULTS = {
     "corpus_mix_max_epochs": 4,
     "corpus_mix_default_profile": "pretrain",
     "corpus_mix_profiles_path": "",
+    # Corpus compose (mix_planner.compose). chunk_bytes is the interleave grain: a
+    # plan is cut into chunks this size and shuffled, so one unified corpus is not
+    # source-ordered blocks. val_ratio is held out from a disjoint tail region of
+    # every source, so train and val never share bytes.
+    "corpus_compose_chunk_bytes": 1048576,
+    "corpus_compose_val_ratio": 0.005,
+    "corpus_compose_seed": 20260727,
     "teacher_provider": "",
     "teacher_model": "",
     "teacher_base_url": "",
@@ -126,14 +133,11 @@ TEACHER_CONFIG_FIELDS = ("api_key", "model", "base_url")
 VALID_MESH_ROLES = ("off", "node", "hub", "both")
 
 # Build notices surface a modal in the dashboard for breaking-build changes the
-# user needs to act on. Add an entry only when a build introduces something the
-# user must read/do; quiet builds add nothing here. Dismissed by setting
-# last_acknowledged_build >= the highest key.
-BUILD_NOTICES = {
-    5: "Build 5 contains substantial engine changes. Please pull the latest source and fully restart the application; older runtime state may not be compatible. Requires a reinstall of requirements (pip install -r requirements.txt).",
-    6: "Build 6 reworks the in-app updater. The 'Update' button now overwrites local tracked source to match upstream so diverging branches and dirty trees no longer block updates; user data in data/, models/, and veritate_mri/trainers/ is gitignored and untouched. If your repo is stuck from a previously failed update, delete and re-clone the Veritate repository (your data/, models/, and veritate_mri/trainers/ folders carry over). Click the yellow 'reload python' button once after this update to load the new updater logic. Build 6 also adds a Corpus library in Settings (apt-style installer for training data into veritate_mri/trainers/corpus/) shipping a local catalog of known corpora from Tiny Shakespeare up to RedPajama-V2, with one-click install and downloads above 10 GB gated by a confirm dialog. New Python dependencies are required for HuggingFace-sourced corpora: run 'pip install -r requirements.txt' to pull in datasets and pyarrow before installing any non-direct corpus.",
-    7: "Build 7 renames the trainer plugins folder and bundle entry file. If you have a local 'plugins/' folder, rename it to 'trainers/', and rename each bundle's 'plugin.py' to 'trainer.py'. Example — before: plugins/veritate_85m/plugin.py — after: trainers/veritate_85m/trainer.py. Manifests and corpus/ subfolders are unchanged.",
-}
+# user must act on. Keyed by versions.json::build. Add an entry only when a build
+# needs the user to delete, rebuild, or rerun something; quiet builds add nothing.
+# Dismissed by setting last_acknowledged_build >= the highest key.
+# Empty at the 1.0.0 launch: there is no pre-1.0 state to migrate from.
+BUILD_NOTICES = {}
 
 _LOCK = threading.Lock()
 _CACHE = None
@@ -153,7 +157,7 @@ def _ensure_settings():
         _write(fresh)
         return fresh
     try:
-        with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
             cur = json.load(f)
         if not isinstance(cur, dict):
             cur = {}
@@ -238,6 +242,15 @@ def _validate(patch):
         v = patch["corpus_mix_max_epochs"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
             raise ValueError("corpus_mix_max_epochs must be a positive number")
+    for ikey in ("corpus_compose_chunk_bytes", "corpus_compose_seed"):
+        if ikey in patch:
+            v = patch[ikey]
+            if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+                raise ValueError(f"{ikey} must be a positive integer")
+    if "corpus_compose_val_ratio" in patch:
+        v = patch["corpus_compose_val_ratio"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < 1:
+            raise ValueError("corpus_compose_val_ratio must be in [0, 1)")
     for skey in ("corpus_mix_default_profile", "corpus_mix_profiles_path"):
         if skey in patch:
             v = patch[skey]

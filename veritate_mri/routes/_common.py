@@ -21,6 +21,14 @@ from runtime import logs as logmod
 
 THREADS_AUTO_MAX = 16
 
+# File-manager launcher per platform.system(). Keyed so adding an OS is a table
+# entry, not a new branch (rule 34c).
+FILE_MANAGER_BY_OS = {
+    "Windows": "explorer.exe",
+    "Darwin":  "open",
+}
+FILE_MANAGER_DEFAULT = "xdg-open"
+
 # ------------------------------------------------------------------------------------
 # Functions
 
@@ -29,7 +37,7 @@ def safe_route(source, fn, *a, **kw):
     ring, return a JSON-friendly error body + 500 status so the frontend gets
     parseable bytes instead of Flask's HTML error page. WebKit reports
     HTML-where-JSON-expected as 'string did not match the expected pattern',
-    which is unhelpful — using this wrapper keeps the error visible and
+    which is unhelpful: using this wrapper keeps the error visible and
     diagnosable."""
     try:
         return fn(*a, **kw)
@@ -41,9 +49,8 @@ def safe_route(source, fn, *a, **kw):
 def safe_name(name):
     if not name: return False
     if ".." in name.split("/") or ".." in name.split("\\"): return False
-    if name.startswith("/") or name.startswith("\\"): return False
-    if ":" in name: return False
-    return True
+    if name.startswith(("/", "\\")): return False
+    return ":" not in name
 
 
 def auto_thread_count():
@@ -87,14 +94,9 @@ def is_loopback(remote_addr):
 
 def open_folder(folder):
     os.makedirs(folder, exist_ok=True)
-    sysname = platform.system()
+    opener = FILE_MANAGER_BY_OS.get(platform.system(), FILE_MANAGER_DEFAULT)
     try:
-        if sysname == "Windows":
-            subprocess.Popen(["explorer.exe", folder])
-        elif sysname == "Darwin":
-            subprocess.Popen(["open", folder])
-        else:
-            subprocess.Popen(["xdg-open", folder])
+        subprocess.Popen([opener, folder])
     except OSError as e:
         return ({"ok": False, "error": str(e), "path": folder}, 500)
     return {"ok": True, "path": folder}

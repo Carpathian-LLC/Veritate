@@ -18,7 +18,8 @@ import sys
 import threading
 import time
 
-from readers import paths, trainers as plugins_reader
+from readers import paths
+from readers import trainers as plugins_reader
 from runtime import logs as logmod
 from runtime import settings as settings_mod
 
@@ -58,6 +59,13 @@ DEVICE_ENV = "VERITATE_DEVICE"
 # Sane upper bound for BLAS / OpenMP threads. Going above this rarely helps and
 # often hurts (NUMA / thread-thrash / memory-bandwidth saturation).
 _BLAS_THREAD_CAP = 16
+
+# procfs cmdline probe. Linux only: macOS and Windows have no /proc, so the
+# PID-reuse guard falls back to the bare pid check there.
+PROC_CMDLINE_PATH = "/proc/{pid}/cmdline"
+
+# Intel Macs report mps.is_available() == True but crash mid-step on it.
+FORCE_CPU_DEVICE = "cpu"
 
 # Bools the canonical trainers register as argparse BooleanOptionalAction, so a
 # False must be sent as --no-<flag> to override a manifest default of true
@@ -109,7 +117,7 @@ def _read_pid_file():
     if not os.path.isfile(PID_FILE):
         return None
     try:
-        with open(PID_FILE, "r", encoding="utf-8") as f:
+        with open(PID_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
@@ -139,16 +147,15 @@ def _process_alive(pid, cmd_marker=None):
                 except Exception:
                     return True  # tasklist confirmed; can't verify cmdline → trust it
             return True
-        else:
-            os.kill(int(pid), 0)
-            if cmd_marker:
-                try:
-                    with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
-                        cmdline = f.read().decode("utf-8", "replace")
-                    return cmd_marker in cmdline
-                except Exception:
-                    return True
-            return True
+        os.kill(int(pid), 0)
+        if cmd_marker:
+            try:
+                with open(PROC_CMDLINE_PATH.format(pid=int(pid)), "rb") as f:
+                    cmdline = f.read().decode("utf-8", "replace")
+                return cmd_marker in cmdline
+            except Exception:
+                return True
+        return True
     except Exception:
         return False
 
@@ -174,7 +181,7 @@ def _tail_run_log(plugin_id, start_pos, stop_event):
     while not stop_event.is_set():
         try:
             if os.path.isfile(RUN_LOG_FILE):
-                with open(RUN_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                with open(RUN_LOG_FILE, encoding="utf-8", errors="replace") as f:
                     f.seek(pos)
                     chunk = f.read()
                     pos = f.tell()
@@ -315,9 +322,8 @@ def _run(plugin, args):
     # but MPS only works on Apple Silicon and crashes mid-step there. Force CPU on
     # that tier regardless of preference (incl. an explicit mps pick), since the
     # synced trainer pick_device() copies do not all arch-guard MPS yet.
-    import platform as _plat
-    if _plat.system() == "Darwin" and _plat.machine().lower() != "arm64":
-        env[DEVICE_ENV] = "cpu"
+    if paths.current_os() == paths.OS_MACOS and paths.current_arch() != paths.ARCH_ARM64:
+        env[DEVICE_ENV] = FORCE_CPU_DEVICE
     # Match BLAS and OpenMP thread budgets to the physical-core count so libtorch
     # and oneDNN parallelize across the same number of cores the trainer asks for.
     # Caller-set values win; we only fill in when the user hasn't already.
@@ -334,7 +340,8 @@ def _run(plugin, args):
         env.setdefault("VECLIB_MAXIMUM_THREADS", _budget)
         env.setdefault("NUMEXPR_NUM_THREADS",   _budget)
     try:
-        log_fp = open(RUN_LOG_FILE, "w", encoding="utf-8", buffering=1)
+        # long-lived handle: handed to Popen as the child stdout; it outlives this function.
+        log_fp = open(RUN_LOG_FILE, "w", encoding="utf-8", buffering=1)   # noqa: SIM115
     except Exception as e:
         logmod.error("plugin", f"open run log failed: {e}")
         _set(status=STATUS_FAILED, finished_at=time.time(), exit_code=None)

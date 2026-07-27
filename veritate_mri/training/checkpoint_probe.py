@@ -17,6 +17,7 @@
 
 import argparse
 import heapq
+import itertools
 import json
 import math
 import os
@@ -27,9 +28,10 @@ import time
 import numpy as np
 import torch
 import torch.nn.functional as F
-
 from readers import paths
 from runtime import logs as logmod
+from tools import build_bigram_index as bigram_index
+
 from . import confidence as confidence_mod
 
 # ------------------------------------------------------------------------------------
@@ -102,9 +104,13 @@ GRADE_PPL_CEILING   = 32.0        # absolute sanity ceiling: above this the mode
 GRADE_BYTES     = 8192            # probe window per band; sources author at >=8 KB to give it room
 
 # smartness-meter axes beyond reading. each axis is a directory of jsonl
-# tier files under veritate_mri/data/eval/grade/<axis>/. tier order here drives
-# the dashboard ladder order.
-EVAL_ROOT       = paths.GRADE_EVAL_ROOT
+# tier files under veritate_mri/data/eval/grade/<axis>/ (paths.GRADE_EVAL_*_ROOT).
+# tier order here drives the dashboard ladder order.
+
+# Precision tags. The model declares its own via precision_tag() (rule 11a);
+# these name the values the dashboard branches on.
+PRECISION_TAG_FP32 = "fp32"
+PRECISION_TAG_QAT2 = "qat2"
 MATH_TIERS      = ["t1_arith1", "t2_arith2", "t3_algebra", "t4_word", "t5_multi"]
 GRAMMAR_TYPES   = ["sv_agreement", "articles", "tense", "word_order"]
 REASONING_TIERS = ["recall", "pattern", "deduction1", "deduction_n"]
@@ -134,7 +140,6 @@ MEMORY_PROBE_MIN_STORY   = 32
 MEMORY_PROBE_MIN_WINDOW  = 64
 MEMORY_PROBE_MIN_CORPUS  = 64
 MEMORY_PROBE_CHUNK_BYTES = 1024 * 1024
-REPO_ROOT                = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 _STORY_CACHE     = {}
 _STORY_CACHE_MAX = 2
@@ -381,7 +386,7 @@ def _load_probe_stories(corpus_path: str, seed: int, n_stories: int, max_story_b
         stories = [bytes(arr[int(seg_starts[i]):int(seg_ends[i])]) for i in sel]
     else:
         win = min(max_story_bytes, max(MEMORY_PROBE_MIN_WINDOW, N // (n_stories * 4) or MEMORY_PROBE_MIN_WINDOW))
-        if N <= win + 1:
+        if win + 1 >= N:
             stories = [bytes(arr[:N])]
         else:
             win_starts = rng.integers(0, N - win - 1, size=n_stories, dtype=np.int64)
@@ -401,7 +406,7 @@ def _build_memory_from_corpus(model, cap_ffn, stories, top_k: int):
     counter = 0
     heaps = [[[] for _ in range(ffn)] for _ in range(layers)]
     for story in stories:
-        ids = torch.tensor([b for b in story[:seq]], dtype=torch.long, device=device).unsqueeze(0)
+        ids = torch.tensor(list(story[:seq]), dtype=torch.long, device=device).unsqueeze(0)
         if ids.size(1) < seq:
             pad = torch.zeros(seq - ids.size(1), dtype=torch.long, device=device).unsqueeze(0)
             ids = torch.cat([ids, pad], dim=1)
@@ -462,7 +467,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
                     max_new: int = GEN_MAX_NEW,
                     temperature: float = GEN_TEMPERATURE,
                     top_k: int = GEN_TOP_K,
-                    corpus_path: str = None):
+                    corpus_path: str | None = None):
     """Run model auto-regressively for max_new tokens; per token emit a frame
     matching the live TFRM v7 set produced by mri/server/app.py::_build_c_mri_frame.
     Write models/<name>/step_<N>.json in {meta, frames} format. Field-symmetry
@@ -493,7 +498,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
         ds -= 1
 
     prompt_bytes = (prompt or " ").encode("utf-8", errors="replace")
-    ids = torch.tensor([b for b in prompt_bytes], dtype=torch.long, device=device).unsqueeze(0)
+    ids = torch.tensor(list(prompt_bytes), dtype=torch.long, device=device).unsqueeze(0)
     if ids.size(1) >= seq:
         ids = ids[:, -(seq - 1):]
 
@@ -573,7 +578,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
                 ffn_argmax.append(argmax_u8_all[L].tolist())
                 saturation.append(round(float(sat_all[L]), 5))
                 ffn_top.append([{"id": int(i), "v": round(float(x), 3)}
-                                for x, i in zip(top_v_all[L], top_i_all[L])])
+                                for x, i in zip(top_v_all[L], top_i_all[L], strict=True)])
 
             # attention: recompute per layer using captured block input.
             # canonical block applies RMSNorm (n1) then attn.qkv linear. slot-
@@ -612,14 +617,14 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
                     heads_data.append({
                         "ent": round(float(ent_cpu[L][hh]), 3),
                         "top": [{"p": int(p), "w": round(float(x), 3)}
-                                for x, p in zip(top_v_cpu[L][hh], top_i_cpu[L][hh])],
+                                for x, p in zip(top_v_cpu[L][hh], top_i_cpu[L][hh], strict=True)],
                     })
                 attn.append(heads_data)
 
             flow_v, flow_i = torch.topk(attn_to_pos, min(GEN_INFO_FLOW_TOP, T))
             flow_max = float(attn_to_pos.max().clamp(min=1e-9).item())
             info_flow = [{"p": int(p), "w": round(float(x) / flow_max, 3)}
-                         for x, p in zip(flow_v.tolist(), flow_i.tolist())]
+                         for x, p in zip(flow_v.tolist(), flow_i.tolist(), strict=True)]
 
             # res / contrib: vectorized norms.
             rin_stack  = torch.stack([cap_block_in[L][0, cols[L]]  for L in range(layers)]).float()
@@ -638,13 +643,13 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
             lens_argmax = lens_argmax_all
             for L in range(layers):
                 lens.append([{"b": int(b), "p": round(float(pp), 3)}
-                             for pp, b in zip(lens_top_p_cpu[L], lens_top_i_cpu[L])])
+                             for pp, b in zip(lens_top_p_cpu[L], lens_top_i_cpu[L], strict=True)])
 
             probs = F.softmax(last_logits, dim=-1)
             entropy_bits = float(-(probs * (probs + 1e-12).log2()).sum().item())
             cv, ci = torch.topk(probs, GEN_NEXT_CANDIDATES)
             candidates = [{"b": int(b), "p": round(float(pp), 3)}
-                          for pp, b in zip(cv.tolist(), ci.tolist())]
+                          for pp, b in zip(cv.tolist(), ci.tolist(), strict=True)]
 
             scaled = last_logits / max(temperature, 1e-6)
             sv, si = torch.topk(scaled, top_k)
@@ -675,7 +680,7 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
 
             # DLA top-K, mirrors engine model.c::dla_top.
             # contrib = ffn_act * BD[L][n, byte]. reuse pre-stacked acts_all.
-            def _dla_for(target_byte):
+            def _dla_for(target_byte, acts_all=acts_all):
                 bd_col  = bd_full[:, :, target_byte]              # (layers, ffn)
                 contrib = acts_all * bd_col                       # (layers, ffn)
                 flat    = contrib.abs().reshape(-1)
@@ -805,7 +810,7 @@ def dump_classroom(model, out_dir: str, step: int):
         try:
             z = np.load(prev_path, allow_pickle=False)
             if "names" in z.files and "norms" in z.files:
-                prev_norms = dict(zip([str(s) for s in z["names"]], [float(x) for x in z["norms"]]))
+                prev_norms = dict(zip([str(s) for s in z["names"]], [float(x) for x in z["norms"]], strict=True))
             for k in z.files:
                 if k.startswith("rows_"):
                     prev_rows[k[5:]] = z[k]
@@ -994,15 +999,16 @@ def dump_grades(model, out_dir: str, step: int):
 # as 0.50+ on easier bands.
 #
 # Probe data lives at veritate_mri/data/eval/grade/comprehension_<band>.json;
-# build with veritate_mri/tools/build_comprehension_probe.py.
+# build with veritate_mri/training/builders/eval/build_comprehension_probe.py.
 
 COMPREHENSION_LEVELS = GRADE_LEVELS    # share grade ordering with the fluency tile
-COMPREHENSION_MODES  = ("easy", "hard")  # easy = local context; hard = long-range entity reference
+COMPREHENSION_MODE_EASY = "easy"       # local context
+COMPREHENSION_MODE_HARD = "hard"       # long-range entity reference
+COMPREHENSION_MODES  = (COMPREHENSION_MODE_EASY, COMPREHENSION_MODE_HARD)
 
 
-def _comprehension_path(level: str, mode: str = "easy") -> str:
-    fname = f"comprehension_{level}.json" if mode == "easy" else f"comprehension_hard_{level}.json"
-    return os.path.join(EVAL_ROOT, fname)
+def _comprehension_path(level: str, mode: str = COMPREHENSION_MODE_EASY) -> str:
+    return paths.comprehension_path(level, hard=(mode != COMPREHENSION_MODE_EASY))
 
 
 def _score_candidates_for_prefix(model, prompt_bytes: bytes,
@@ -1054,7 +1060,7 @@ def _score_candidates_for_prefix(model, prompt_bytes: bytes,
     # Per-row, slice positions [effective_P - 1 .. effective_P - 1 + C_i) to
     # get logits predicting cand bytes [0..C_i). Targets are cand bytes.
     results = []
-    for i, cand in enumerate(candidate_bytes_list):
+    for i in range(len(candidate_bytes_list)):
         C = cand_lens[i]
         if C == 0:
             results.append(float("nan"))
@@ -1074,7 +1080,7 @@ def _score_mode_for_level(model, device, level: str, mode: str) -> dict | None:
     if not os.path.isfile(path):
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             probe = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
@@ -1094,7 +1100,7 @@ def _score_mode_for_level(model, device, level: str, mode: str) -> dict | None:
             prompt_b = prefix.encode("utf-8")
         except (AttributeError, UnicodeEncodeError):
             continue
-        candidates = [correct] + list(distractors)
+        candidates = [correct, *distractors]
         cand_bytes_list = []
         ok = True
         for cand in candidates:
@@ -1258,7 +1264,6 @@ WH_VERB_STOPS = {
     "tried", "try", "tries", "trying",
     "started", "start", "starts", "starting",
     "stopped", "stop", "stops", "stopping",
-    "said", "told", "asked",
     "very", "much", "more", "most", "many", "some", "such", "even", "just", "still",
     "then", "than", "when", "where", "what", "who", "whom", "whose", "which", "while",
     "with", "into", "onto", "from", "about", "above", "below", "before", "after", "during",
@@ -1267,13 +1272,19 @@ WH_VERB_STOPS = {
 # Cap on how many bigram-index loads we keep cached (per process). Each is
 # small (~3 MB) so this is generous; resets on process restart anyway.
 WH_PMI_CACHE_MAX = 8
+# Byte cap for an on-demand index build. Bounds how long a checkpoint save can
+# block on a corpus that has no sidecar yet; a full-corpus index comes from
+# tools/build_bigram_index.py --all.
+WH_PMI_MAX_SCAN_BYTES = 512 * 1024 * 1024
 _WH_PMI_CACHE = {}  # corpus_path -> {tok2idx, uni_c, bi_lookup, n_tokens, n_bigrams, oov_penalty}
 
 
 def _wh_load_pmi_index(corpus_path: str):
-    """Load a corpus's bigram index. Returns the cached dict or None if the
-    corpus has no <stem>_bigrams.npz sidecar yet. Lazily caches in process
-    memory so subsequent checkpoints reuse the same index."""
+    """Load a corpus's bigram index, building the sidecar on first use so PMI is
+    never silently skipped. The build is capped at WH_PMI_MAX_SCAN_BYTES so a
+    multi-GB corpus cannot stall a checkpoint save; `build_bigram_index --all`
+    pre-builds uncapped indexes. Lazily caches in process memory so subsequent
+    checkpoints reuse the same index."""
     if not corpus_path:
         return None
     abs_path = os.path.abspath(corpus_path)
@@ -1281,12 +1292,10 @@ def _wh_load_pmi_index(corpus_path: str):
         return _WH_PMI_CACHE[abs_path]
     if not os.path.isfile(abs_path):
         return None
-    if abs_path.endswith(".bin"):
-        idx_path = abs_path[:-4] + "_bigrams.npz"
-    else:
-        idx_path = abs_path + ".bigrams.npz"
+    idx_path = bigram_index.sidecar_path(abs_path)
     if not os.path.isfile(idx_path):
-        return None
+        logmod.info("writing_health", f"building bigram index for {os.path.basename(abs_path)}")
+        bigram_index.write_index(abs_path, max_bytes=WH_PMI_MAX_SCAN_BYTES)
     try:
         with np.load(idx_path, allow_pickle=False) as z:
             vocab    = z["vocab"]
@@ -1298,7 +1307,7 @@ def _wh_load_pmi_index(corpus_path: str):
     except (OSError, ValueError, KeyError):
         return None
     tok2idx = {str(v): i for i, v in enumerate(vocab.tolist())}
-    bi_lookup = {int(k): int(c) for k, c in zip(bi_keys.tolist(), bi_c.tolist())}
+    bi_lookup = {int(k): int(c) for k, c in zip(bi_keys.tolist(), bi_c.tolist(), strict=True)}
     # We use NORMALIZED PMI (NPMI), bounded to [-1, +1]:
     #   NPMI(w1,w2) = PMI(w1,w2) / -log(p(w1,w2))
     # +1 = perfect co-occurrence; 0 = independent; -1 = never together.
@@ -1340,7 +1349,7 @@ def _wh_pmi_score(words: list, index) -> float:
     n_bigs    = max(index["n_bigrams"], 1)
     oov_pen   = index["oov_penalty"]
     npmis = []
-    for a, b in zip(words[:-1], words[1:]):
+    for a, b in itertools.pairwise(words):
         ia = tok2idx.get(a)
         ib = tok2idx.get(b)
         if ia is None or ib is None:
@@ -1383,7 +1392,7 @@ def _wh_generate(model, prompt: str, device) -> str:
     """Generate WH_MAX_NEW bytes from prompt using top-k temperature sampling.
     Returns the generated suffix only (excludes the prompt)."""
     prompt_bytes = (prompt or " ").encode("utf-8", errors="replace")
-    ids = torch.tensor([b for b in prompt_bytes], dtype=torch.long, device=device).unsqueeze(0)
+    ids = torch.tensor(list(prompt_bytes), dtype=torch.long, device=device).unsqueeze(0)
     seq = model.seq
     out_bytes = bytearray()
     for _ in range(WH_MAX_NEW):
@@ -1437,7 +1446,7 @@ def _wh_lex_chain_density(words: list) -> float:
 def _wh_repeat_rate(words: list) -> float:
     if len(words) < 2:
         return 0.0
-    dups = sum(1 for a, b in zip(words[:-1], words[1:]) if a == b)
+    dups = sum(1 for a, b in itertools.pairwise(words) if a == b)
     return dups / (len(words) - 1)
 
 
@@ -1506,14 +1515,13 @@ def _wh_self_ppl(model, text: str, device) -> float:
 
 
 @torch.no_grad()
-def dump_writing_health(model, out_dir: str, step: int, corpus_path: str = None):
+def dump_writing_health(model, out_dir: str, step: int, corpus_path: str | None = None):
     """Write writing_health_step_<N>.json with mathematical proxies for
     writing structure quality, computed over WH_PROMPTS generations.
 
-    `corpus_path` enables PMI scoring: pass the same training corpus .bin so
-    the probe can load the matching <stem>_bigrams.npz sidecar. Build the
-    sidecar with `python veritate_mri/tools/build_bigram_index.py
-    --corpus <stem>`. If absent, PMI is null and the dashboard skips it.
+    `corpus_path` enables PMI scoring: pass the same training corpus .bin and
+    the probe loads its <stem>_bigrams.npz sidecar, building it on first use.
+    PMI is null only when no corpus path reaches the dump.
 
     NOT a measure of narrative sense, world-knowledge correctness, or
     comprehension. The dashboard surfaces this caveat alongside the score."""
@@ -1602,7 +1610,7 @@ def _load_jsonl(path):
     if not os.path.isfile(path):
         return []
     out = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -1649,17 +1657,16 @@ def _extract_answer_token(decoded: bytes) -> str:
 
 
 @torch.no_grad()
-def _score_qa_axis(model, axis_dir_name: str, tiers, device):
+def _score_qa_axis(model, axis_root: str, tiers, device):
     """Generic scorer for argmax-decode-and-string-match axes (math + reasoning).
 
     Returns dict: {tier_name: {"correct": int, "total": int, "accuracy": float, "examples": [...]}}.
     A few sample (prompt, expected, predicted) triples are kept per tier for
     debugging; the dashboard does not display them but they are useful in JSON.
     """
-    axis_dir = os.path.join(EVAL_ROOT, axis_dir_name)
     out = {}
     for tier in tiers:
-        items = _load_jsonl(os.path.join(axis_dir, f"{tier}.jsonl"))
+        items = _load_jsonl(paths.eval_axis_item_path(axis_root, tier))
         if not items:
             continue
         correct = 0
@@ -1716,7 +1723,7 @@ def dump_math(model, out_dir: str, step: int):
     device = next(model.parameters()).device
     was_training = model.training
     model.eval()
-    tiers = _score_qa_axis(model, "math", MATH_TIERS, device)
+    tiers = _score_qa_axis(model, paths.GRADE_EVAL_MATH_ROOT, MATH_TIERS, device)
     if was_training: model.train()
     out = {
         "step":      int(step),
@@ -1738,7 +1745,7 @@ def dump_reasoning(model, out_dir: str, step: int):
     device = next(model.parameters()).device
     was_training = model.training
     model.eval()
-    tiers = _score_qa_axis(model, "reasoning", REASONING_TIERS, device)
+    tiers = _score_qa_axis(model, paths.GRADE_EVAL_REASONING_ROOT, REASONING_TIERS, device)
     if was_training: model.train()
     out = {
         "step":      int(step),
@@ -1765,10 +1772,9 @@ def dump_grammar(model, out_dir: str, step: int):
     was_training = model.training
     model.eval()
 
-    grammar_dir = os.path.join(EVAL_ROOT, "grammar")
     types = {}
     for typ in GRAMMAR_TYPES:
-        pairs = _load_jsonl(os.path.join(grammar_dir, f"{typ}.jsonl"))
+        pairs = _load_jsonl(paths.eval_axis_item_path(paths.GRADE_EVAL_GRAMMAR_ROOT, typ))
         if not pairs:
             continue
         correct_pref = 0
@@ -1860,7 +1866,7 @@ def _read_concept_neurons(cap_ffn, layers, position):
 def dump_concepts(model, out_dir: str, step: int):
     """Write concepts_step_<N>.json: per-concept surprise (bits/byte) plus
     per-layer top-K firing FFN neurons at the commit position, on the fixed
-    list of 50 concept probes. Backwards-compatible with old readers — the
+    list of 50 concept probes. Backwards-compatible with old readers: the
     `top_neurons` field is additive."""
     t0 = time.time()
     os.makedirs(out_dir, exist_ok=True)
@@ -1898,14 +1904,10 @@ def dump_concepts(model, out_dir: str, step: int):
 
 
 def _precision_tag(model):
-    """Map a model instance to the precision string the dashboard reads.
-    qat2 simulators carry the QAT2Block class name; mamba2 trainer uses
-    Mamba2Veritate; everything else is fp32 baseline."""
-    cls = type(model).__name__
-    if "QAT2" in cls:    return "qat2"
-    if "Mamba2" in cls:  return "mamba2-fp32"
-    if "QAT" in cls:     return "qat"
-    return "fp32"
+    """Precision string the dashboard reads, declared by the model itself
+    (rule 11a). Plugin models predating the contract report the fp32 baseline."""
+    declared = getattr(model, "precision_tag", None)
+    return declared() if declared is not None else PRECISION_TAG_FP32
 
 
 @torch.no_grad()
@@ -1951,12 +1953,12 @@ def dump_quant_kl(model, prompt: str, out_dir: str, step: int, n_levels: int = 1
     mri/server/brain.py::compute_quant_kl. The dashboard's FP32-vs-INT8 logit
     divergence panel reads this value. Skipped quietly on QAT2 sim models since
     the running forward already simulates INT8, value would always be ~0."""
-    if _precision_tag(model) == "qat2":
+    if _precision_tag(model) == PRECISION_TAG_QAT2:
         # QAT2 forward already simulates INT8 throughout. The legacy panel's
         # value is always near zero for QAT2 models; emit it as such for shape.
         out_path = os.path.join(out_dir, f"quant_kl_step_{step}.json")
         with open(out_path, "w", encoding="utf-8") as f:
-            json.dump({"step": int(step), "precision": "qat2",
+            json.dump({"step": int(step), "precision": PRECISION_TAG_QAT2,
                        "quant_kl_bits": 0.0, "n_levels": n_levels,
                        "note": "qat2 forward simulates int8 inline; gap is zero by construction"},
                       f, ensure_ascii=False)
@@ -1967,7 +1969,7 @@ def dump_quant_kl(model, prompt: str, out_dir: str, step: int, n_levels: int = 1
     was_training = model.training
     model.eval()
     prompt_bytes = (prompt or " ").encode("utf-8")
-    ids = torch.tensor([b for b in prompt_bytes], dtype=torch.long, device=device).unsqueeze(0)
+    ids = torch.tensor(list(prompt_bytes), dtype=torch.long, device=device).unsqueeze(0)
     if ids.size(1) >= model.seq:
         ids = ids[:, -(model.seq - 1):]
     logits_fp, _ = model(ids)
@@ -2001,7 +2003,8 @@ def dump_quant_kl(model, prompt: str, out_dir: str, step: int, n_levels: int = 1
 
 
 def _load_checkpoint(ckpt_path):
-    sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
+    if paths.REPO_ROOT not in sys.path:
+        sys.path.insert(0, paths.REPO_ROOT)
     from veritate_core.model import Veritate
     s = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     cfg = dict(s.get("args") or {})

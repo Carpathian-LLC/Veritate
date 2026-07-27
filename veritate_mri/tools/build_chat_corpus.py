@@ -10,14 +10,14 @@
 # - Source 1: public-domain Project Gutenberg text already cached at
 #     trainers/corpus/_pg_cache/*.txt
 # - Source 2: hand-written templates (facts, definitions, simple math).
-# - Output: framed U/A turns per documentation/corpus/framing.md.
+# - Output: framed U/A turns per developer_documentation/corpus/framing.md.
 # - Deterministic: a fixed PRNG seed means every run produces the same bytes.
 #   This matters because corpus content is shipped as a binary asset on GitHub
 #   and we want the sha256 stable across rebuilds.
 # - Run:
 #     python veritate_mri/tools/build_chat_corpus.py \
-#       --out-train  C:/GitHub/Veritate-Corpus/chat_50mb_train.bin \
-#       --out-val    C:/GitHub/Veritate-Corpus/chat_50mb_val.bin \
+#       --out-train  temp/chat_50mb_train.bin \
+#       --out-val    temp/chat_50mb_val.bin \
 #       --target-mb  50
 # veritate_mri/tools/build_chat_corpus.py
 # ------------------------------------------------------------------------------------
@@ -29,10 +29,16 @@ import random
 import re
 import sys
 
+_MRI_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+if _MRI_ROOT not in sys.path:
+    sys.path.insert(0, _MRI_ROOT)
+
+from readers import paths  # noqa: E402
+
 # ------------------------------------------------------------------------------------
 # Constants
 
-PG_CACHE_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "trainers", "corpus", "_pg_cache"))
+PG_CACHE_DIR = paths.PG_CACHE_ROOT
 
 IM_START = "<|im_start|>"
 IM_END   = "<|im_end|>"
@@ -41,6 +47,22 @@ EOT      = "<|endoftext|>"
 DEFAULT_SEED        = 20260514
 DEFAULT_VAL_RATIO   = 0.02
 DEFAULT_TARGET_MB   = 30   # train size in megabytes
+
+# Project Gutenberg boilerplate fences. Both spellings ship in the cache.
+PG_START_MARKERS = ("*** START OF THIS PROJECT GUTENBERG", "*** START OF THE PROJECT GUTENBERG")
+PG_END_MARKERS   = ("*** END OF THIS PROJECT GUTENBERG",   "*** END OF THE PROJECT GUTENBERG")
+
+# Conversation shape. QA_PER_CONVO_* is the corpus mix ratio for turn depth.
+OPENER_PROB          = 0.3
+CLOSER_PROB          = 0.15
+QA_PER_CONVO_COUNTS  = (1, 2, 3, 4)
+QA_PER_CONVO_WEIGHTS = (40, 35, 15, 10)
+
+CLOSER_PAIRS = (
+    ("Thanks!",         "You're welcome."),
+    ("Thank you.",      "Glad to help."),
+    ("Got it, thanks.", "Anytime."),
+)
 
 # ------------------------------------------------------------------------------------
 # Source: hand-written Q/A templates
@@ -101,7 +123,8 @@ FACT_QA = [
     ("What is the longest river in the world?", "The Nile."),
     ("What is the largest ocean on Earth?", "The Pacific Ocean."),
     ("What is the tallest mountain in the world?", "Mount Everest."),
-    ("What is the largest desert in the world?", "The Sahara, if you count hot deserts. Antarctica, if you count cold deserts."),
+    ("What is the largest desert in the world?", "The Sahara, if you count hot deserts. Antarctica, if you count cold "
+                                                 "deserts."),
     ("How many bones are in the adult human body?", "About two hundred and six."),
     ("What organ pumps blood through the body?", "The heart."),
     ("What organ is responsible for filtering blood?", "The kidneys."),
@@ -136,8 +159,10 @@ DEFINITION_QA = [
     ("What is a percentage?", "A number expressed as a fraction of one hundred."),
     ("What is an integer?",   "A whole number, positive or negative, including zero."),
     ("What is a prime number?", "A number greater than one that has no divisors other than one and itself."),
-    ("What is the difference between speed and velocity?", "Speed is how fast something moves. Velocity is speed in a specific direction."),
-    ("What is the difference between mass and weight?", "Mass is the amount of matter in an object. Weight is the force of gravity on that mass."),
+    ("What is the difference between speed and velocity?", "Speed is how fast something moves. Velocity is speed in a "
+                                                           "specific direction."),
+    ("What is the difference between mass and weight?", "Mass is the amount of matter in an object. Weight is the "
+                                                        "force of gravity on that mass."),
 ]
 
 WRITING_NUMS = ["one","two","three","four","five","six","seven","eight","nine","ten",
@@ -203,9 +228,7 @@ _SENT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'])")
 
 def _strip_gutenberg_header(text):
     """Trim the long Project Gutenberg header and footer if present."""
-    start_markers = ["*** START OF THIS PROJECT GUTENBERG", "*** START OF THE PROJECT GUTENBERG"]
-    end_markers   = ["*** END OF THIS PROJECT GUTENBERG", "*** END OF THE PROJECT GUTENBERG"]
-    for m in start_markers:
+    for m in PG_START_MARKERS:
         i = text.find(m)
         if i >= 0:
             # advance past the line
@@ -213,7 +236,7 @@ def _strip_gutenberg_header(text):
             if j >= 0:
                 text = text[j+1:]
             break
-    for m in end_markers:
+    for m in PG_END_MARKERS:
         i = text.find(m)
         if i >= 0:
             text = text[:i]
@@ -263,7 +286,7 @@ def _pg_passage_qa(rng, count, max_pg_files=10):
     for fname in files:
         path = os.path.join(PG_CACHE_DIR, fname)
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            with open(path, encoding="utf-8", errors="replace") as f:
                 text = f.read()
         except OSError:
             continue
@@ -297,19 +320,13 @@ def _assemble(rng, qa_pool, opener_pool, target_bytes):
     written = 0
     while written < target_bytes:
         pairs = []
-        # 30% of conversations start with a friendly opener
-        if rng.random() < 0.3 and opener_pool:
+        if rng.random() < OPENER_PROB and opener_pool:
             pairs.append(rng.choice(opener_pool))
-        n_qa = rng.choices([1, 2, 3, 4], weights=[40, 35, 15, 10])[0]
+        n_qa = rng.choices(QA_PER_CONVO_COUNTS, weights=QA_PER_CONVO_WEIGHTS)[0]
         for _ in range(n_qa):
             pairs.append(rng.choice(qa_pool))
-        # 15% close with a thanks/goodbye
-        if rng.random() < 0.15:
-            pairs.append(rng.choice([
-                ("Thanks!", "You're welcome."),
-                ("Thank you.", "Glad to help."),
-                ("Got it, thanks.", "Anytime."),
-            ]))
+        if rng.random() < CLOSER_PROB:
+            pairs.append(rng.choice(CLOSER_PAIRS))
         chunk = _wrap_conversation(pairs).encode("utf-8")
         out.append(chunk)
         written += len(chunk)
@@ -356,7 +373,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     stats = build(args.out_train, args.out_val, args.target_mb, args.val_ratio, args.seed)
-    print(f"chat built:")
+    print("chat built:")
     print(f"  train: {stats['train_path']}  ({stats['train_bytes']/1e6:.2f} MB)")
     print(f"  val:   {stats['val_path']}    ({stats['val_bytes']/1e6:.2f} MB)")
     print(f"  qa_pool size: {stats['qa_pool_size']}")

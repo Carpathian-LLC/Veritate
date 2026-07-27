@@ -11,18 +11,11 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
-import os
-import sys
 
 import torch
-
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+from training import trainer_runner
 
 from veritate_core.plugin import hardware
-from training import trainer_runner
 
 # ------------------------------------------------------------------------------------
 # Functions

@@ -403,7 +403,7 @@ The launcher detects the host (OS + arch + CPU features) and dispatches per-tier
 | **GPU (NVIDIA)** | CUDA on any tier above | — | `torch.cuda` | bfloat16 AMP | N/A (CPU engine) |
 | **GPU (AMD on macOS)** | Discrete AMD on Intel Mac | — | not supported by torch on macOS | CPU only | planned Metal compute path |
 
-Capability flags (`has_avx2`, `has_avx512vnni`, `can_use_mps`, `can_use_cuda`, etc.) are exposed in the hardware dump for any code that needs to gate features at runtime. See [`dev_documentation/platform/tiers.md`](dev_documentation/platform/tiers.md) for how the tier dispatch works.
+Capability flags (`has_avx2`, `has_avx512vnni`, `can_use_mps`, `can_use_cuda`, etc.) are exposed in the hardware dump for any code that needs to gate features at runtime. See [`developer_documentation/platform/tiers.md`](developer_documentation/platform/tiers.md) for how the tier dispatch works.
 
 <br/>
 
@@ -447,8 +447,11 @@ A project by **[Carpathian, LLC](https://carpathian.ai/veritate)**. **Distributi
 | folder | what |
 |---|---|
 | [`veritate_engine/`](veritate_engine/) | C inference engine. Versioned subtrees (currently [`v1/`](veritate_engine/v1/)) hold `src/`, `kernels/<arch>/`, `build/`, `bin/<os>/<arch>/`, and `engine_versions.json`. |
-| [`veritate_mri/`](veritate_mri/) | MRI server, dashboard, [`save.py`](veritate_mri/save.py) (checkpoint + dump suite), [`readers/`](veritate_mri/readers/), [`atlas.py`](veritate_mri/atlas.py). |
+| [`veritate_mri/`](veritate_mri/) | MRI server, dashboard, [`training/save.py`](veritate_mri/training/save.py) (checkpoint + dump suite), [`readers/`](veritate_mri/readers/), [`training/atlas.py`](veritate_mri/training/atlas.py), and the in-app wiki content at [`data/wiki/`](veritate_mri/data/wiki/). |
 | [`veritate_core/`](veritate_core/) | Python package. `veritate_core.plugin` is the only surface trainers may import. |
+| [`veritate_mesh/`](veritate_mesh/) | Hub and node roles for running across more than one box. |
+| [`extensions/`](extensions/) | Extension framework: registry, install/uninstall, and the bundled canonical sources. |
 | [`trainers/`](trainers/) | Trainer implementations. [`common/`](trainers/common/) for shared helpers, [`corpus/`](trainers/corpus/) for `.bin` training data. See [`trainers/readme.md`](trainers/readme.md). |
 | `models/` | One self-contained subdir per model (gitignored). |
-| [`documentation/`](documentation/) | Current platform contracts (committed). Subfolders: [`hooks/`](documentation/hooks/), [`kernels/`](documentation/kernels/). |
+| [`developer_documentation/`](developer_documentation/) | Internal platform and per-component contracts (committed). One file per component. |
+| [`tests/`](tests/) | Regression suite, mirroring the platform area under test. |

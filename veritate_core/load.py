@@ -26,6 +26,12 @@ DEFAULT_HEADS_DIVISOR = 64
 N_PREDICT_DEFAULT_800M = 4
 N_PREDICT_DEFAULT_85M  = 2
 ROPE_BASE_DEFAULT      = 10000.0
+TRUNK_DENSE      = "dense"
+TRUNK_RECURRENT  = "recurrent"
+TRUNK_PATCHED    = "patched"
+TRUNK_HYBRID     = "hybrid"
+TRUNK_HYBRID_MOE = "hybrid_moe"
+TRUNK_LOOPED     = "looped"
 TRAINERS_SUBDIR = "trainers"
 TRAINER_800M_DIR = "veritate_800m"
 TRAINER_85M_DIR  = "veritate_85m"
@@ -83,25 +89,34 @@ def _import_trainer_model(trainer_dirname, class_name):
 def _load_variant_trunk(sd, cfg, trunk, shape):
     """Research-trunk branch (trunk recorded in training_args). Patched/hybrid
     global-block count = total blocks minus the fixed local enc/dec blocks."""
-    state_rule = str(cfg.get("state_rule") or "gla")
+    from veritate_core.model_recurrent import STATE_RULE_DEFAULT
+    state_rule = str(cfg.get("state_rule") or STATE_RULE_DEFAULT)
     activation = cfg.get("activation") or _act_default()
-    common = dict(vocab=shape["vocab"], hidden=shape["hidden"], ffn=shape["ffn"],
-                  heads=shape["heads"], seq=shape["seq"], activation=activation)
-    if trunk == "recurrent":
+    common = {"vocab": shape["vocab"], "hidden": shape["hidden"], "ffn": shape["ffn"],
+                  "heads": shape["heads"], "seq": shape["seq"], "activation": activation}
+    if trunk == TRUNK_RECURRENT:
         from veritate_core.model_recurrent import VeritateRecurrent
         model = VeritateRecurrent(layers=shape["layers"], state_rule=state_rule, **common)
-    elif trunk in ("patched", "hybrid", "hybrid_moe", "looped"):
-        from veritate_core.model_patched import VeritatePatched, N_LOCAL_ENC, N_LOCAL_DEC, LOOP_MAX
+    elif trunk in (TRUNK_PATCHED, TRUNK_HYBRID, TRUNK_HYBRID_MOE, TRUNK_LOOPED):
+        from veritate_core.model_patched import (
+            GLOBAL_FFN_MOE,
+            GLOBAL_MIXER_RECURRENT,
+            LOOP_MAX,
+            LOOP_UNIQUE_DIV,
+            N_LOCAL_DEC,
+            N_LOCAL_ENC,
+            VeritatePatched,
+        )
         glob = shape["layers"] - N_LOCAL_ENC - N_LOCAL_DEC
         kwargs = {}
-        if trunk in ("hybrid", "hybrid_moe"):
-            kwargs["global_mixer"] = "recurrent"
+        if trunk in (TRUNK_HYBRID, TRUNK_HYBRID_MOE):
+            kwargs["global_mixer"] = GLOBAL_MIXER_RECURRENT
             kwargs["state_rule"] = state_rule
-        if trunk == "hybrid_moe":
-            kwargs["global_ffn"] = "moe"
-        if trunk == "looped":
+        if trunk == TRUNK_HYBRID_MOE:
+            kwargs["global_ffn"] = GLOBAL_FFN_MOE
+        if trunk == TRUNK_LOOPED:
             kwargs["global_loops"] = int(cfg.get("global_loops") or LOOP_MAX)
-            glob = glob * 2  # constructor halves unique blocks when looping
+            glob = glob * LOOP_UNIQUE_DIV  # constructor halves unique blocks when looping
         model = VeritatePatched(layers=glob, **common, **kwargs)
     else:
         raise RuntimeError(
@@ -128,8 +143,8 @@ def load_from_state_dict(sd, cfg, strict_canonical=True):
             "state_dict has no tok_emb.weight; not a Veritate checkpoint."
         )
     shape = shape_from_state_dict(sd, cfg)
-    trunk = str((cfg or {}).get("trunk") or "dense")
-    if trunk != "dense":
+    trunk = str((cfg or {}).get("trunk") or TRUNK_DENSE)
+    if trunk != TRUNK_DENSE:
         return _load_variant_trunk(sd, cfg, trunk, shape)
     has_pos_emb = POS_EMB_KEY in sd
     has_mtp = any(k.startswith(MTP_PREFIX) for k in sd)
@@ -168,7 +183,7 @@ def load_from_state_dict(sd, cfg, strict_canonical=True):
         model.load_state_dict(sd, strict=False)
         return model
 
-    from veritate_core.model import Veritate, ACT_DEFAULT
+    from veritate_core.model import ACT_DEFAULT, Veritate
     activation = cfg.get("activation") or ACT_DEFAULT
     model = Veritate(**shape, activation=activation)
     model.load_state_dict(sd, strict=strict_canonical)

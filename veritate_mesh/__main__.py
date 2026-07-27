@@ -25,20 +25,25 @@ sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, MRI_ROOT)
 
 from flask import Flask
-
 from runtime import logs as logmod
 from runtime import settings as settings_mod
 
 from veritate_mesh import hub as hub_mod
 from veritate_mesh import node as node_mod
-from veritate_mesh.protocol import ROLE_HUB, ROLE_NODE, ROLE_BOTH, VALID_ROLES
+from veritate_mesh.protocol import ROLE_BOTH, ROLE_HUB, ROLE_NODE, ROLE_OFF, VALID_ROLES
 
 # ------------------------------------------------------------------------------------
 # Constants
 
 DEFAULT_PORT_HUB  = 8201
 DEFAULT_PORT_NODE = 8101
+DEFAULT_BIND_HOST = "0.0.0.0"
+# 0 means "pick the port matching the resolved role".
+ROLE_DEFAULT_PORT = 0
+# Role sentinel meaning "read mesh_role from settings" rather than force one.
+ROLE_AUTO = "auto"
 
+SETTING_ROLE = "mesh_role"
 LOG_SOURCE = "mesh.main"
 
 # ------------------------------------------------------------------------------------
@@ -59,21 +64,23 @@ def _build_app(role: str) -> Flask:
 
 def main():
     ap = argparse.ArgumentParser(prog="veritate_mesh")
-    ap.add_argument("role", nargs="?", default="auto",
-                    help="role: hub / node / both / off / auto. auto reads mesh_role from settings.")
-    ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--port", type=int, default=0,
-                    help="0 = role default (hub=8201, node=8101)")
+    ap.add_argument("role", nargs="?", default=ROLE_AUTO,
+                    help=f"role: {' / '.join((*VALID_ROLES, ROLE_AUTO))}. "
+                         f"{ROLE_AUTO} reads {SETTING_ROLE} from settings.")
+    ap.add_argument("--host", default=DEFAULT_BIND_HOST)
+    ap.add_argument("--port", type=int, default=ROLE_DEFAULT_PORT,
+                    help=f"{ROLE_DEFAULT_PORT} = role default "
+                         f"({ROLE_HUB}={DEFAULT_PORT_HUB}, {ROLE_NODE}={DEFAULT_PORT_NODE})")
     args = ap.parse_args()
 
     cli_role = args.role
-    if cli_role and cli_role != "auto":
+    if cli_role and cli_role != ROLE_AUTO:
         if cli_role not in VALID_ROLES:
             raise SystemExit(f"invalid role: {cli_role!r}; expected one of {VALID_ROLES}")
         role = cli_role
     else:
-        role = (settings_mod.get().get("mesh_role") or "off").lower()
-    if role == "off":
+        role = (settings_mod.get().get(SETTING_ROLE) or ROLE_OFF).lower()
+    if role == ROLE_OFF:
         raise SystemExit("mesh_role is off; nothing to run. pass `hub`, `node`, or `both`.")
     port = args.port or (DEFAULT_PORT_HUB if role == ROLE_HUB else DEFAULT_PORT_NODE)
     app = _build_app(role)

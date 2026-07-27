@@ -29,17 +29,26 @@ All paths relative to `models/<name>/hooks/step_<N>/`. Every artifact below is p
 `save.py` does NOT always emit every artifact above. The run's `model_type`
 (`language`|`code`|`statistical`|`other`, set on the dashboard run form, carried via the
 `VERITATE_MODEL_TYPE` env var, stamped into `config.training_args.model_type`) gates the
-language dumps. When `model_type` is anything other than `language`, `save()` skips
-`LANGUAGE_DUMPS` (`save.py:57-60`): `grades`, `reading_comprehension`, `math`,
-`grammar`, `reasoning`, `concepts`, `writing_health`, `generation`. The architecture probes
+language dumps. The gate is a membership test against a two-element set
+(`save.py:57-60`):
+
+```python
+NON_LANGUAGE_TYPES = frozenset({"statistical", "other"})
+if (mtype or "").lower() in NON_LANGUAGE_TYPES:
+    skip |= LANGUAGE_DUMPS
+```
+
+So `save()` skips `LANGUAGE_DUMPS` (`grades`, `reading_comprehension`, `math`, `grammar`,
+`reasoning`, `concepts`, `writing_health`, `generation`) for `statistical` and `other` only.
+`language` and `code` both train on text and both get the full set. The architecture probes
 (`probe`/`lens`, `classroom`, `surprise`, `quant_kl`) and the checkpoint itself always run,
 regardless of `model_type`. `lens.npz` (from `dump_probe`) feeds the confidence-evolution and
 lens-drift panels, which the dashboard renders for every model type, so `probe` is NOT gated.
 
-`model_type` ABSENT from a config defaults to `language` (`save.py:500`,
-`(mtype or "language").lower()`), so a market/statistical model trained without setting it
-accrues the full meaningless language suite. Set `model_type` per run; market/byte-series
-models = `statistical`. Full contract:
+An absent or empty `model_type` (`save.py:500`) is not in `NON_LANGUAGE_TYPES`, so it falls
+through to the full language suite: a statistical model trained without setting it accrues
+the full meaningless language suite. Set `model_type` per run; byte-series models =
+`statistical`. Full contract:
 [launching_runs.md](../training/launching_runs.md#model_type-is-mandatory-read-this-before-launching-anything-non-text).
 
 ## tfrm v7 frame fields (per generated token)

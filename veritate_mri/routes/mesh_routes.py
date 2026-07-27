@@ -6,7 +6,8 @@
 # Notes:
 # - mesh dashboard routes: status, token mgmt, test-connection, role switch.
 # - settings keys read/written: mesh_role, mesh_hub_address, mesh_auth_token.
-# - token is shown unmasked only to localhost callers.
+# - the token is read and rotated by localhost callers only. rotating it evicts
+#   every connected node, so the write is gated the same as the read.
 # veritate_mri/routes/mesh_routes.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -17,7 +18,6 @@ import urllib.error
 import urllib.request
 
 from flask import request
-
 from runtime import settings as settings_mod
 
 from ._common import user_error
@@ -25,22 +25,35 @@ from ._common import user_error
 # ------------------------------------------------------------------------------------
 # Constants
 
-VALID_ROLES = ("off", "node", "hub", "both")
+VALID_ROLES = settings_mod.VALID_MESH_ROLES
 LOCAL_ADDRS = ("127.0.0.1", "::1", "localhost")
 TEST_TIMEOUT_S = 5
 TOKEN_BYTES = 32
 NODES_PATH = "/mesh/hub/nodes"
+MS_PER_S = 1000
+HTTP_OK_MIN = 200
+HTTP_OK_MAX = 300
+
+SETTING_ROLE     = "mesh_role"
+SETTING_HUB_ADDR = "mesh_hub_address"
+SETTING_TOKEN    = "mesh_auth_token"
+
+ERR_REMOTE_TOKEN_WRITE = "The mesh token can only be changed from the machine running this dashboard."
 
 # ------------------------------------------------------------------------------------
 # Functions
+
+def _is_local_caller():
+    return request.remote_addr in LOCAL_ADDRS
+
 
 def register(app):
     @app.route("/mesh/status")
     def mesh_status_route():
         s = settings_mod.get()
-        role = s.get("mesh_role") or "off"
-        hub_address = s.get("mesh_hub_address") or ""
-        has_token = bool(s.get("mesh_auth_token"))
+        role = s.get(SETTING_ROLE) or settings_mod.DEFAULTS[SETTING_ROLE]
+        hub_address = s.get(SETTING_HUB_ADDR) or settings_mod.DEFAULTS[SETTING_HUB_ADDR]
+        has_token = bool(s.get(SETTING_TOKEN))
 
         try:
             from veritate_mesh import node as node_mod
@@ -69,17 +82,19 @@ def register(app):
     @app.route("/mesh/token", methods=["GET"])
     def mesh_token_get_route():
         s = settings_mod.get()
-        token = s.get("mesh_auth_token") or ""
+        token = s.get(SETTING_TOKEN) or settings_mod.DEFAULTS[SETTING_TOKEN]
         has_token = bool(token)
-        if request.remote_addr not in LOCAL_ADDRS:
+        if not _is_local_caller():
             return {"has_token": has_token, "token": None}
         return {"has_token": has_token, "token": token if has_token else None}
 
     @app.route("/mesh/token/regenerate", methods=["POST"])
     def mesh_token_regenerate_route():
+        if not _is_local_caller():
+            return {"ok": False, "error": ERR_REMOTE_TOKEN_WRITE}, 403
         new_token = secrets.token_urlsafe(TOKEN_BYTES)
         try:
-            settings_mod.update({"mesh_auth_token": new_token})
+            settings_mod.update({SETTING_TOKEN: new_token})
         except ValueError as ve:
             return {"ok": False, "error": user_error(ve)}, 400
         return {"ok": True, "token": new_token}
@@ -88,8 +103,8 @@ def register(app):
     def mesh_test_connection_route():
         body = request.get_json(silent=True) or {}
         s = settings_mod.get()
-        hub_address = (body.get("hub_address") or s.get("mesh_hub_address") or "").rstrip("/")
-        auth_token  = body.get("auth_token")  or s.get("mesh_auth_token")  or ""
+        hub_address = (body.get("hub_address") or s.get(SETTING_HUB_ADDR) or "").rstrip("/")
+        auth_token  = body.get("auth_token")  or s.get(SETTING_TOKEN)  or ""
         if not hub_address:
             return {"ok": False, "status": None, "error": "hub_address is empty", "response_ms": 0}
 
@@ -102,13 +117,14 @@ def register(app):
         try:
             with urllib.request.urlopen(req, timeout=TEST_TIMEOUT_S) as resp:
                 status = resp.getcode()
-                elapsed_ms = int((time.monotonic() - start) * 1000)
-                return {"ok": 200 <= int(status) < 300, "status": int(status), "error": None, "response_ms": elapsed_ms}
+                elapsed_ms = int((time.monotonic() - start) * MS_PER_S)
+                return {"ok": HTTP_OK_MIN <= int(status) < HTTP_OK_MAX,
+                        "status": int(status), "error": None, "response_ms": elapsed_ms}
         except urllib.error.HTTPError as he:
-            elapsed_ms = int((time.monotonic() - start) * 1000)
+            elapsed_ms = int((time.monotonic() - start) * MS_PER_S)
             return {"ok": False, "status": int(he.code), "error": user_error(he), "response_ms": elapsed_ms}
         except Exception as e:
-            elapsed_ms = int((time.monotonic() - start) * 1000)
+            elapsed_ms = int((time.monotonic() - start) * MS_PER_S)
             return {"ok": False, "status": None, "error": user_error(e), "response_ms": elapsed_ms}
 
     @app.route("/mesh/role", methods=["POST"])
@@ -118,7 +134,7 @@ def register(app):
         if role not in VALID_ROLES:
             return {"ok": False, "error": f"invalid role: {role!r}; expected one of {VALID_ROLES}"}, 400
         try:
-            settings_mod.update({"mesh_role": role})
+            settings_mod.update({SETTING_ROLE: role})
         except ValueError as ve:
             return {"ok": False, "error": user_error(ve)}, 400
         return {"ok": True, "role": role, "restart_required": True}

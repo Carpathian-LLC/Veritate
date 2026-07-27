@@ -35,12 +35,12 @@ The architecture commitment that makes this work:
 # Tier matrix
 # ------------------------------------------------------------------------------------
 
-Ranked by realistic install base in 2026. Each row is a kernel
-implementation we ship.
+Ranked by realistic install base in 2026. Each row is a shipped kernel
+implementation.
 
 | # | Tier                                  | Hardware example                            | Install base                  | Status |
 |---|---------------------------------------|---------------------------------------------|-------------------------------|--------|
-| 1 | x86_64 + AVX-512 + VNNI               | Ryzen 9800X3D, Sapphire Rapids+, Zen 4+     | Modern dev/server             | **Done — current target** |
+| 1 | x86_64 + AVX-512 + VNNI               | Ryzen 9800X3D, Sapphire Rapids+, Zen 4+     | Modern dev/server             | **Done, current target** |
 | 2 | x86_64 + AVX2                         | Intel Mac mini 2018, Haswell→Ice Lake       | 10+ years of consumer x86     | Matmul done; rest of model.c not |
 | 3 | ARM64 + NEON SDOT                     | Apple M1+, modern Android, Cortex-A76+      | Apple Silicon, modern phones  | **Initial port landed** (matmul + transformer hot-path; bench TBD) |
 | 4 | ARM64 + NEON only (no SDOT)           | Pi 4, older Android, M1 base path           | Cheap Linux SBCs, embedded    | matmul_int8_neon raw only; prep/transformer ride NEON SDOT TU |
@@ -49,15 +49,15 @@ implementation we ship.
 
 Skipped intentionally:
 
-- **AVX-512 without VNNI** — tiny install base (Skylake-X, Cannon Lake).
+- **AVX-512 without VNNI**: tiny install base (Skylake-X, Cannon Lake).
   AVX2 fallback covers them.
-- **Pre-2013 SSE-only x86** — fading. AVX2 covers anything from 2013+.
-- **WASM** — entirely separate target, deferred.
-- **GPU backends (CUDA, Metal, Vulkan compute)** — out of scope. Veritate
+- **Pre-2013 SSE-only x86**: fading. AVX2 covers anything from 2013+.
+- **WASM**: entirely separate target, deferred.
+- **GPU backends (CUDA, Metal, Vulkan compute)**: out of scope. Veritate
   is the CPU-first inference engine. GPU is the *training* substrate.
 
 # ------------------------------------------------------------------------------------
-# Refactor status — extracted from model.c
+# Refactor status: extracted from model.c
 #
 
 Five hot-path primitives split out of `veritate_engine/v1/src/model.c` into
@@ -78,10 +78,10 @@ versions via header swap at compile time.
 
 The other three are direct calls today (one ISA tier, AVX-512). When
 a second arch lands (NEON / AVX2), introduce a function-pointer
-typedef + dispatch on first need — the call sites in `model.c` swap
+typedef + dispatch on first need; the call sites in `model.c` swap
 to the indirect call at that point. ~30 seconds of wiring.
 
-GELU LUT stays in `model.c` — already pure C, portable.
+GELU LUT stays in `model.c`: already pure C, portable.
 
 # ------------------------------------------------------------------------------------
 # Cross-platform signatures (locked)
@@ -110,7 +110,7 @@ void layernorm_i16_to_i8(const int16_t* x, int8_t* out, const int8_t* w,
 For the per-pair attention helpers (`attn_dot`, `attn_hsum`), each port
 defines `static inline` versions in `model.c` (or an arch-specific
 header included from it). These run inside the `for (j ...)` inner
-loop — function-pointer overhead dominates their tiny bodies. Compile-
+loop, and function-pointer overhead dominates their tiny bodies. Compile-
 time binding is the only viable design.
 
 ```c
@@ -123,14 +123,14 @@ static inline int32_t attn_hsum_inline(const int8_t* x);
 the signed/unsigned correction; ARM SDOT can ignore it.
 
 # ------------------------------------------------------------------------------------
-# Adding the second arch — three-step dispatch wiring
+# Adding the second arch: three-step dispatch wiring
 # ------------------------------------------------------------------------------------
 
 When a second arch ships its first kernel (NEON, SDOT, AVX2, etc.),
 introduce runtime dispatch in one commit. Until then the x86_64 build
 calls the `_avx512` versions directly to avoid wrapping a single impl.
 
-**Step 1 — `veritate_engine/v1/src/veritate.h`:** add the typedef and extern next
+**Step 1, `veritate_engine/v1/src/veritate.h`:** add the typedef and extern next
 to the matmul block.
 
 ```c
@@ -148,7 +148,7 @@ void score_dot_v_neon  (const int16_t* scores, const int8_t* v_base,
 arch lands those too. Same shape: `_fn` typedef, extern, forward decls
 for each implementation.)
 
-**Step 2 — `veritate_engine/v1/src/dispatch.c`:** add the global default and the
+**Step 2, `veritate_engine/v1/src/dispatch.c`:** add the global default and the
 runtime selection.
 
 ```c
@@ -162,7 +162,7 @@ void dispatch_init(const cpu_features_t* feat, dispatch_info_t* out) {
 }
 ```
 
-**Step 3 — `veritate_engine/v1/src/model.c`:** swap call sites from the direct
+**Step 3, `veritate_engine/v1/src/model.c`:** swap call sites from the direct
 name to the dispatch name.
 
 ```c
@@ -176,8 +176,8 @@ score_dot_v(row_q, v_base, qkv_stride, i + 1, out_row);
 for `softmax_rows_avx512` and `layernorm_i16_to_i8_avx512`.
 
 That's the whole wiring. About 30 seconds of editing. The AVX-512
-implementations stay where they are — `veritate_engine/v1/kernels/x86_64/transformer_avx512.c`
-— and become one of two (or more) backends behind the dispatch.
+implementations stay where they are, in `veritate_engine/v1/kernels/x86_64/transformer_avx512.c`,
+and become one of two (or more) backends behind the dispatch.
 
 # ------------------------------------------------------------------------------------
 # Kernel correctness contract
@@ -196,7 +196,7 @@ Every kernel implementation must satisfy:
    appended to a cached prefill must match a fresh `forward` over the
    appended sequence to ≤1 LSB. Enforced by `VERITATE_VERIFY_DECODE`.
 4. **Sub-millisecond matmul gate** on the platform's stated bench
-   target. The number is per-platform — not all chips can hit 0.09 ms.
+   target. The number is per-platform; not all chips can hit 0.09 ms.
 
 # ------------------------------------------------------------------------------------
 # Per-platform bench targets
@@ -222,8 +222,8 @@ specific platform for every bench number going forward.
 
 The "killer performance on old hardware" threshold is **coherent text +
 sub-100 ms decode**. Anything in that range feels instant in a chat
-context (human perception floor is ~150 ms). We hit that easily on
-2014-era hardware once the AVX2 port lands.
+context (human perception floor is ~150 ms). 2014-era hardware clears it
+once the AVX2 port lands.
 
 # ------------------------------------------------------------------------------------
 # Build matrix
@@ -231,10 +231,10 @@ context (human perception floor is ~150 ms). We hit that easily on
 
 Today:
 
-- `build.bat` — Windows x86_64. Working.
-- `build.sh` — POSIX (Linux + macOS, x86_64 + arm64). Working.
-- `setup.ps1` — Windows toolchain (LLVM-mingw + NASM via winget). Working.
-- `setup.sh` — POSIX toolchain check (Apple clang on macOS, distro
+- `build.bat`: Windows x86_64. Working.
+- `build.sh`: POSIX (Linux + macOS, x86_64 + arm64). Working.
+- `setup.ps1`: Windows toolchain (LLVM-mingw + NASM via winget). Working.
+- `setup.sh`: POSIX toolchain check (Apple clang on macOS, distro
   package on Linux). Working.
 
 `build.sh` detects host via `uname -s/-m`, picks the matching kernel
@@ -248,7 +248,7 @@ x86_64). Output: `bin/<os>/<arch>/veritate`.
 # ------------------------------------------------------------------------------------
 
 1. **Lock function-pointer signatures.** Done above in this doc.
-2. **Extract from `model.c` to `veritate_engine/v1/kernels/x86_64/`** — keep current
+2. **Extract from `model.c` to `veritate_engine/v1/kernels/x86_64/`**: keep current
    AVX-512 work, refactor as standalone `.c` files exposing the
    function-pointer signatures. Add `veritate_engine/v1/kernels/scalar/` references for
    each (correctness oracle).
@@ -257,14 +257,14 @@ x86_64). Output: `bin/<os>/<arch>/veritate`.
    already does the work.
 4. **Verify zero regression** on the 9800X3D. Bench numbers in
    workbook should be identical (within noise) to pre-refactor.
-5. **AVX2 port** — implement the same five functions in
+5. **AVX2 port**: implement the same five functions in
    `veritate_engine/v1/kernels/x86_64/matmul_avx2.c` style. Old Mac mini Intel + old PC.
-6. **NEON SDOT port** — `veritate_engine/v1/kernels/arm64/matmul_neon_sdot.c`. Apple Silicon mini, M4
+6. **NEON SDOT port**: `veritate_engine/v1/kernels/arm64/matmul_neon_sdot.c`. Apple Silicon mini, M4
    Studio, modern Android.
-7. **NEON-only port** — `veritate_engine/v1/kernels/arm64/transformer_neon.c`. Pi 4 baseline.
-8. **AMX port (stretch)** — M-series stretch goal.
+7. **NEON-only port**: `veritate_engine/v1/kernels/arm64/transformer_neon.c`. Pi 4 baseline.
+8. **AMX port (stretch)**: M-series stretch goal.
 
-After step 4, every subsequent platform is contained work — same
+After step 4, every subsequent platform is contained work: same
 skeleton, different intrinsics. No platform port can regress another
 because they're separate translation units.
 
@@ -276,7 +276,7 @@ because they're separate translation units.
 - **A Pi 5 with 8 GB RAM** ($80) runs a coherent chatbot for hobbyist
   projects.
 - **An old gaming laptop** with AVX2 + 16 GB RAM runs Veritate at
-  ~5 ms/token — chat-instant, no internet, no API key.
+  ~5 ms/token: chat-instant, no internet, no API key.
 - **The Mac Studio M4 inbound** becomes the production performance
   target alongside the 9800X3D, with NEON SDOT + AMX competing for
   the speed crown.
@@ -284,5 +284,5 @@ because they're separate translation units.
 The strategic angle: **Veritate doesn't need users to upgrade
 hardware**. The market for "AI on hardware you already own" is much
 bigger than the market for "AI on a brand-new GPU rig." This is the
-same constraint-driven framing as the 0.09 ms target — make the
+same constraint-driven framing as the 0.09 ms target: make the
 software so efficient that the hardware ceases to be a problem.

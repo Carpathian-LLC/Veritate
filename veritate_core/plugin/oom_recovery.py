@@ -78,4 +78,4 @@ def reexec_with_flags(safe_flags):
             argv.append(yes_form)
     env = os.environ.copy()
     env[COUNTER_ENV] = str(fallback_count() + 1)
-    os.execve(sys.executable, [sys.executable, sys.argv[0]] + argv, env)
+    os.execve(sys.executable, [sys.executable, sys.argv[0], *argv], env)

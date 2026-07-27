@@ -20,7 +20,9 @@
 import hashlib
 import os
 
-from . import paths, models, config as cfg_reader, trainers as plugins_reader
+from . import config as cfg_reader
+from . import models, paths
+from . import trainers as plugins_reader
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -139,7 +141,7 @@ def _usage_mixed(spec):
     parsed = multicorpus.parse_spec(spec)
     members = [_member_block(st) for st, _ in parsed]
     weights = _mix_weights(parsed, [m["train"]["bytes"] if m["train"] else 0 for m in members])
-    for m, w in zip(members, weights):
+    for m, w in zip(members, weights, strict=True):
         m["weight"] = w
     merged = {}
     for m in members:

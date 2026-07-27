@@ -226,7 +226,7 @@ class Deduper:
 
     def __init__(self):
         self.exact = set()
-        self.bands = [dict() for _ in range(SIMHASH_BANDS)]
+        self.bands = [{} for _ in range(SIMHASH_BANDS)]
 
     def is_dup(self, text):
         key = hashlib.sha1(text.encode("utf-8", "ignore")).digest()
@@ -258,7 +258,7 @@ def _record_source(staging_dir, key, meta):
     path = os.path.join(staging_dir, "sources.json")
     data = {}
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     data[key] = meta
     with open(path, "w", encoding="utf-8") as f:
@@ -325,8 +325,9 @@ def stage_stack_edu(family, target_mb, staging_dir):
 
 def stage_repos(staging_dir):
     os.makedirs(staging_dir, exist_ok=True)
-    outs = {"html": open(_staging_path(staging_dir, "html"), "w", encoding="utf-8"),
-            "css":  open(_staging_path(staging_dir, "css"), "w", encoding="utf-8")}
+    # long-lived handle: staging writers stay open across every repo below, closed once at the end.
+    outs = {"html": open(_staging_path(staging_dir, "html"), "w", encoding="utf-8"),   # noqa: SIM115
+            "css":  open(_staging_path(staging_dir, "css"), "w", encoding="utf-8")}   # noqa: SIM115
     totals = {"html": 0, "css": 0}
     tarball_hashes = {}
     for repo, ref in REPOS:
@@ -347,7 +348,7 @@ def stage_repos(staging_dir):
                 if fam and m.isfile() and MIN_DOC_BYTES[fam] <= m.size <= MAX_DOC_BYTES[fam]:
                     members.append((m.name, fam, m))
             members.sort(key=lambda t: t[0])
-            for name, fam, m in members:
+            for _, fam, m in members:
                 if cap is not None and taken >= cap:
                     break
                 try:
@@ -422,7 +423,7 @@ def stage_qa(target_mb, staging_dir):
 def _load_docs(staging_dir, family):
     path = _staging_path(staging_dir, family)
     docs = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             docs.append(json.loads(line))
     return docs
@@ -433,7 +434,7 @@ def _load_textbook_docs():
     for fname in sorted(os.listdir(TEXTBOOK_CACHE)):
         if not fname.endswith(".jsonl"):
             continue
-        with open(os.path.join(TEXTBOOK_CACHE, fname), "r", encoding="utf-8") as f:
+        with open(os.path.join(TEXTBOOK_CACHE, fname), encoding="utf-8") as f:
             for line in f:
                 docs.append(json.loads(line))
     return docs
@@ -572,7 +573,7 @@ def main(argv=None):
 
     bp = sub.add_parser("build", help="assemble bins from the staging cache")
     bp.add_argument("--family", required=True,
-                    choices=CODE_FAMILIES + ("qa", "textbook") + MIXED_VARIANTS)
+                    choices=(*CODE_FAMILIES, "qa", "textbook", *MIXED_VARIANTS))
     bp.add_argument("--staging-dir", default=DEFAULT_STAGING)
     bp.add_argument("--out-train", required=True)
     bp.add_argument("--out-val", required=True)

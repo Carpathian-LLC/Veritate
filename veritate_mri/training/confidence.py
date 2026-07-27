@@ -41,7 +41,7 @@ def load_weights(out_dir):
     if not os.path.isfile(path):
         return (*WEIGHTS_FALLBACK, False)
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             cw = json.load(f)
         return (float(cw["w_M"]), float(cw["w_E"]),
                 float(cw["w_L"]), float(cw["w_S"]),
@@ -112,8 +112,8 @@ def score(components, weights=None):
         if loaded:
             z = w_M * m + w_E * e + w_L * l + w_S * s + b
             return _sigmoid(z)
-    z = 0.5 * (m + e + l + s) - 1.0
-    return _sigmoid(z)
+    w_M, w_E, w_L, w_S, b = WEIGHTS_FALLBACK
+    return _sigmoid(w_M * m + w_E * e + w_L * l + w_S * s + b)
 
 
 def frame_fields(last_logits, probs, nxt, lens_argmax, res_stack, embed_row, vocab, weights=None):
@@ -121,11 +121,10 @@ def frame_fields(last_logits, probs, nxt, lens_argmax, res_stack, embed_row, voc
     fields that go straight into the TFRM frame: margin, entropy, lens_consistency,
     residual_stab, confidence."""
     c = compute_components(last_logits, probs, nxt, lens_argmax, res_stack, embed_row, vocab)
-    out = {
+    return {
         "margin":           round(c["margin"],           ROUND_DIGITS),
         "entropy":          round(c["entropy_score"],    ROUND_DIGITS),
         "lens_consistency": round(c["lens_consistency"], ROUND_DIGITS),
         "residual_stab":    round(c["residual_stab"],    ROUND_DIGITS),
         "confidence":       round(score(c, weights),     ROUND_DIGITS),
     }
-    return out

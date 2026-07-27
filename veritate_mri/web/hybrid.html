@@ -6,7 +6,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Veritate — chat</title>
+<title>Veritate: chat</title>
 <style>
   :root { --bg:#06090f; --panel:#0d111a; --line:#1d2536; --text:#e6ecf5;
           --soft:#9fb0c8; --dim:#5f6f88; --accent:#6aa6ff; --me:#15233a; --field:#11161f; }
@@ -342,7 +342,7 @@
       $("kbFile").value = ""; $("kbFileName").textContent = "no file selected";
       refreshHealth().finally(() => {
         renderControls();
-        $("kbHint").textContent = `added ${d.filename} — ${nFiles} file${nFiles === 1 ? "" : "s"} indexed`;
+        $("kbHint").textContent = `added ${d.filename}, ${nFiles} file${nFiles === 1 ? "" : "s"} indexed`;
       });
     }).catch(() => { busy = false; renderKb(); $("kbHint").textContent = "upload failed"; });
   }

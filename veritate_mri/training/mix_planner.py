@@ -18,13 +18,16 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import hashlib
 import json
 import os
+import random
 
-from readers import corpus as corpus_reader, paths
+from readers import corpus as corpus_reader
+from readers import paths
 from runtime import settings as settings_mod
-from training.sync import corpus_sync
 
+from training.sync import corpus_sync
 from veritate_core.plugin import multicorpus
 
 # ------------------------------------------------------------------------------------
@@ -33,6 +36,11 @@ from veritate_core.plugin import multicorpus
 SETTING_MAX_EPOCHS    = "corpus_mix_max_epochs"
 SETTING_PROFILE       = "corpus_mix_default_profile"
 SETTING_PROFILES_PATH = "corpus_mix_profiles_path"
+SETTING_CHUNK_BYTES   = "corpus_compose_chunk_bytes"
+SETTING_VAL_RATIO     = "corpus_compose_val_ratio"
+SETTING_COMPOSE_SEED  = "corpus_compose_seed"
+
+HASH_READ_BYTES = 1 << 20
 
 PROFILES_KEY   = "profiles"
 PROFILE_TOPICS = "topics"
@@ -55,7 +63,7 @@ def profiles_path():
 
 
 def load_profiles():
-    with open(profiles_path(), "r", encoding=ENCODING) as f:
+    with open(profiles_path(), encoding=ENCODING) as f:
         return json.load(f)[PROFILES_KEY]
 
 
@@ -227,7 +235,7 @@ def plan(stems, target_bytes, profile=None, max_epochs=None, model_params=None, 
         warnings.extend(_suitability_warnings(sources, model_params))
 
     rows = []
-    for s, w in zip(sources, final):
+    for s, w in zip(sources, final, strict=True):
         drawn = w * planned
         rows.append({**s, "weight": w, "bytes_drawn": int(drawn),
                      "epochs": (drawn / s["bytes_available"]) if s["bytes_available"] else 0.0})
@@ -245,4 +253,124 @@ def plan(stems, target_bytes, profile=None, max_epochs=None, model_params=None, 
                    "profile": profile_used, "max_epochs": max_epochs,
                    "model_params": model_params,
                    "weights": dict(weights) if weights else None},
+    }
+
+
+# ------------------------------------------------------------------------------------
+# Compose
+
+def _cyclic_read(fh, region_start, region_len, offset, n):
+    """n bytes from `offset` inside a region, wrapping at the region end. A source
+    drawn for more than one epoch reads its own bytes again rather than running out."""
+    out = bytearray()
+    pos = offset % region_len
+    while len(out) < n:
+        fh.seek(region_start + pos)
+        buf = fh.read(min(n - len(out), region_len - pos))
+        if not buf:
+            break
+        out += buf
+        pos = (pos + len(buf)) % region_len
+    return bytes(out)
+
+
+def _chunk_plan(sources, chunk_bytes, seed):
+    """Cut every source's draw into chunk_bytes pieces and shuffle the pieces
+    together, so the composed corpus interleaves its sources instead of
+    concatenating them as blocks. Deterministic for a given seed."""
+    pieces = []
+    for i, src in enumerate(sources):
+        offset = 0
+        while offset < src["draw"]:
+            pieces.append((i, offset, min(chunk_bytes, src["draw"] - offset)))
+            offset += chunk_bytes
+    random.Random(seed).shuffle(pieces)
+    return pieces
+
+
+def _write_split(out_path, sources, chunk_bytes, seed, progress=None):
+    digest, written = hashlib.sha256(), 0
+    pieces = _chunk_plan(sources, chunk_bytes, seed)
+    total = sum(s["draw"] for s in sources)
+    handles = {}
+    try:
+        with open(out_path, "wb") as out:
+            for idx, offset, length in pieces:
+                src = sources[idx]
+                fh = handles.get(idx)
+                if fh is None:
+                    # long-lived handle: source handles are cached across pieces, closed in the finally.
+                    fh = handles[idx] = open(src["path"], "rb")  # noqa: SIM115
+                buf = _cyclic_read(fh, src["region_start"], src["region_len"], offset, length)
+                out.write(buf)
+                digest.update(buf)
+                written += len(buf)
+                if progress:
+                    progress(written, total)
+    finally:
+        for fh in handles.values():
+            fh.close()
+    return {"bytes": written, "sha256": digest.hexdigest()}
+
+
+def compose(stem, plan_result, val_ratio=None, seed=None, chunk_bytes=None, progress=None):
+    """Materialize a plan into ONE unified corpus: <stem>_train.bin + <stem>_val.bin.
+
+    Every source is split by byte offset into a head (train) and a tail (val)
+    region first, so a composed corpus can never leak val bytes into train no
+    matter how many epochs a source is drawn for."""
+    cfg         = settings_mod.get()
+    val_ratio   = float(cfg[SETTING_VAL_RATIO] if val_ratio is None else val_ratio)
+    seed        = int(cfg[SETTING_COMPOSE_SEED] if seed is None else seed)
+    chunk_bytes = int(cfg[SETTING_CHUNK_BYTES] if chunk_bytes is None else chunk_bytes)
+    if not 0 <= val_ratio < 1:
+        raise ValueError("val_ratio must be in [0, 1)")
+    if chunk_bytes <= 0:
+        raise ValueError("chunk_bytes must be a positive integer")
+
+    drawn = [r["stem"] for r in plan_result["sources"] if r["bytes_drawn"] > 0]
+    if stem in drawn:
+        raise ValueError(f"{stem!r} is both the output and one of the sources: composing would "
+                         f"overwrite the source while reading it. Give the output a new name.")
+
+    train_sources, val_sources, rows = [], [], []
+    for row in plan_result["sources"]:
+        if row["bytes_drawn"] <= 0:
+            continue
+        path, _ = corpus_reader.resolve_paths(row["stem"])
+        if not path:
+            raise ValueError(f"{row['stem']!r} has no train bin on disk: install it first")
+        size    = os.path.getsize(path)
+        val_len = int(size * val_ratio)
+        if val_ratio > 0 and val_len <= 0:
+            raise ValueError(f"{row['stem']!r} is too small to hold out a val region")
+        train_len  = size - val_len
+        train_draw = int(row["bytes_drawn"])
+        val_draw   = int(train_draw * val_ratio)
+        train_sources.append({"path": path, "region_start": 0, "region_len": train_len,
+                              "draw": train_draw})
+        if val_draw > 0:
+            val_sources.append({"path": path, "region_start": train_len,
+                                "region_len": val_len, "draw": val_draw})
+        rows.append({"stem": row["stem"], "weight": row["weight"],
+                     "bytes_available": row["bytes_available"], "train_bytes": train_draw,
+                     "val_bytes": val_draw, "epochs": round(row["epochs"], 4),
+                     "source_path": path})
+
+    if not train_sources:
+        raise ValueError("plan draws no bytes: nothing to compose")
+
+    train = _write_split(paths.corpus_train_path(stem), train_sources, chunk_bytes, seed, progress)
+    val   = ({"bytes": 0, "sha256": hashlib.sha256().hexdigest()} if not val_sources else
+             _write_split(paths.corpus_val_path(stem), val_sources, chunk_bytes, seed + 1))
+    if not val_sources:
+        with open(paths.corpus_val_path(stem), "wb"):
+            pass
+    return {
+        "ok": True, "stem": stem,
+        "train_path": paths.corpus_train_path(stem), "val_path": paths.corpus_val_path(stem),
+        "train_bytes": train["bytes"], "val_bytes": val["bytes"],
+        "sha256_train": train["sha256"], "sha256_val": val["sha256"],
+        "sources": rows, "spec": plan_result["spec"], "warnings": plan_result["warnings"],
+        "compose": {"val_ratio": val_ratio, "seed": seed, "chunk_bytes": chunk_bytes},
     }

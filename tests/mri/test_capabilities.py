@@ -11,13 +11,6 @@
 # Imports:
 
 import json
-import os
-import sys
-
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 from readers import capabilities as caps
 
@@ -42,12 +35,16 @@ def test_read_legacy_flat_block(monkeypatch, tmp_path):
     assert caps.read("m")["chat"]["status"] == "trained"
 
 
-def test_read_missing_block_falls_back_autocomplete(monkeypatch, tmp_path):
-    """A config with no capabilities key reads autocomplete=trained, rest untrained."""
+def test_read_missing_block_defaults_autocomplete_trained(monkeypatch, tmp_path):
+    """A config with no capabilities key reads autocomplete as trained."""
     _seed(monkeypatch, tmp_path, None)
-    b = caps.read("m")
-    assert b["autocomplete"]["status"] == "trained"
-    assert b["chat"]["status"] == "untrained"
+    assert caps.read("m")["autocomplete"]["status"] == "trained"
+
+
+def test_read_missing_block_defaults_chat_untrained(monkeypatch, tmp_path):
+    """A config with no capabilities key reads chat as untrained."""
+    _seed(monkeypatch, tmp_path, None)
+    assert caps.read("m")["chat"]["status"] == "untrained"
 
 
 def test_read_new_schema_block(monkeypatch, tmp_path):
@@ -73,11 +70,12 @@ def test_modes_for_corpus_custom_stem_empty():
 
 
 def test_mark_writes_versioned_schema(monkeypatch, tmp_path):
-    """mark() persists the versioned HF-aligned block on disk."""
+    """mark() persists the versioned schema, pipeline tag, and tasks block on disk."""
     cfg = _seed(monkeypatch, tmp_path, None)
     caps.mark("m", "chat", "trained", trainer="native/trainer", step=10)
-    disk = json.loads(open(cfg, encoding="utf-8").read())["capabilities"]
-    assert disk["schema"] == 1 and disk["pipeline_tag"] == "text-generation" and "tasks" in disk
+    with open(cfg, encoding="utf-8") as f:
+        disk = json.load(f)["capabilities"]
+    assert (disk["schema"], disk["pipeline_tag"], "tasks" in disk) == (1, "text-generation", True)
 
 
 def test_mark_additivity_lifts_lower_tier(monkeypatch, tmp_path):
@@ -87,7 +85,7 @@ def test_mark_additivity_lifts_lower_tier(monkeypatch, tmp_path):
                                   "agent": {"status": "untrained"}})
     caps.mark("m", "chat", "trained", trainer="native/trainer", step=10)
     entry = caps.read("m")["autocomplete"]
-    assert entry["status"] == "trained" and entry.get("implied") is True
+    assert (entry["status"], entry.get("implied")) == ("trained", True)
 
 
 def test_mark_failed_does_not_regress_trained(monkeypatch, tmp_path):

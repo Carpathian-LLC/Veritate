@@ -53,6 +53,8 @@ def main():
 
 The canonical set (preflight rule 34b). New trainers are not added without explicit permission; new capabilities extend existing trainers or `veritate_core/plugin/`.
 
+One trainer per size, named for its size. Nineteen trainers plus two shared directories:
+
 | Plugin          | Purpose                                                          |
 | --------------- | --------------------------------------------------------------- |
 | `veritate_10m`  | Smallest byte-level base                                         |
@@ -60,11 +62,20 @@ The canonical set (preflight rule 34b). New trainers are not added without expli
 | `veritate_200m` | Default base trainer, two-phase QAT, exports to v9 INT8          |
 | `veritate_400m` | Base trainer at 400M                                             |
 | `veritate_800m` | Base trainer at 800M                                             |
-| `veritate_1b`   | Base trainer at 1B                                               |
 | `veritate_1b3`  | Base trainer at 1.3B                                             |
 | `veritate_3b`   | Base trainer at 3B                                               |
 | `veritate_13b`  | Base trainer at 13B                                              |
-| `veritate_50b`  | Largest base trainer                                             |
+| `veritate_50b`  | Base trainer at 50B                                              |
+| `veritate_70b`  | Base trainer at 70B                                              |
+| `veritate_100b` | Base trainer at 100B                                             |
+| `veritate_120b` | Base trainer at 120B                                             |
+| `veritate_160b` | Base trainer at 160B                                             |
+| `veritate_200b` | Base trainer at 200B                                             |
+| `veritate_250b` | Base trainer at 250B                                             |
+| `veritate_350b` | Base trainer at 350B                                             |
+| `veritate_500b` | Base trainer at 500B                                             |
+| `veritate_700b` | Base trainer at 700B                                             |
+| `veritate_1t`   | Largest base trainer, 1T                                         |
 | `common/`       | Shared trainer code (`vanilla_trainer.py`) and corpus builders   |
 | `corpus/`       | Built corpus `.bin` files                                        |
 
@@ -82,7 +93,7 @@ Per-file three-state sync against the upstream repo, implemented in [training/sy
 
 ## Machine-local tuning
 
-`trainers/` is upstream-synced, so per-machine settings cannot live in `manifest.json` (a sync would overwrite them and they would leak to other machines). `readers.trainers.update_defaults(plugin_id, args)` no longer writes `trainers/<id>/manifest.json`: it keeps only keys already present in the manifest defaults (dropping run-only fields like corpus/model/description), coerces each to the default's type, and writes the machine-local store via [readers.trainer_tuning](trainer_tuning.md). `scan()` calls `_overlay_tuning()` to overlay that stored tuning onto each record's `manifest.defaults` at read time (native trainer included), so the dashboard form prefills the machine's benchmarked values while the on-disk manifest is never mutated.
+`trainers/` is upstream-synced, so per-machine settings cannot live in `manifest.json` (a sync would overwrite them and they would leak to other machines). `readers.trainers.update_defaults(plugin_id, args)` never writes `trainers/<id>/manifest.json`. It keeps only keys already present in the manifest defaults (dropping run-only fields like corpus/model/description), coerces each to the default's type, and writes the machine-local store via [readers.trainer_tuning](trainer_tuning.md). `scan()` calls `_overlay_tuning()` to overlay that stored tuning onto each record's `manifest.defaults` at read time (native trainer included), so the dashboard form prefills the machine's benchmarked values while the on-disk manifest is never mutated.
 
 ## Dependencies
 

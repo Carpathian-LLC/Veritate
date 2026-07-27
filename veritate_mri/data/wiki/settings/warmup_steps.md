@@ -1,23 +1,30 @@
 ---
-title: Warmup Steps
-summary: How many steps the run spends ramping the learning rate up from zero to its peak, so training starts gently instead of lurching.
-tags: training, settings
+title: warmup steps
+date: 2026-07-27
+tags: [settings, training]
+summary: How many steps the learning rate spends climbing from zero to its peak before the schedule takes over.
 ---
 
-# Warmup Steps
+# warmup steps
 
-Warmup steps set how long the run spends easing the learning rate up from zero to its peak (base_lr) at the very start. Instead of hitting full learning speed on step one, the model builds up to it. It is the gentle pull-away before the car reaches cruising speed.
+The number of steps at the start of a run during which the learning rate rises linearly from zero to `base_lr`.
 
-## Why it matters
+## what it does
 
-A freshly started model is fragile. Taking a big learning step immediately can throw it off and make the loss spike or blow up. Warming up gradually lets the model find stable footing first, then pick up speed. More warmup = a slower, safer ramp.
+A freshly initialized model has random weights and produces large, badly aimed gradients. A full-size update on step one can push the weights somewhere the run never recovers from. Warmup starts the updates tiny and grows them, giving the optimizer time to build its running statistics before it takes a real step.
 
-## Good defaults
+Warmup runs under every schedule, including `constant`. `lr_at()` in `trainers/common/vanilla_trainer.py` applies it before any schedule shape is considered, and the field is hidden on the form when the schedule is `constant`, where the flat rate makes the ramp the only shaping there is.
 
-- The recipes set a sensible number for you; leave it alone for most runs.
-- Larger models and higher peak learning rates generally benefit from **more** warmup.
-- On a **continue** run (resuming an already-trained model), warmup is usually irrelevant: the model is already stable, so it is fine to keep this low or at its default.
+## range and default
 
-## Gotcha
+Any non-negative integer. Zero skips warmup entirely.
 
-- Warmup is measured in steps, not a percentage. If you greatly change the total number of steps in a run, a fixed warmup count becomes a different fraction of the run, so revisit it.
+Manifest defaults rise with model size: 120 at `veritate_10m`, 500 at `veritate_80m` and `veritate_400m`, 1000 at `veritate_800m`, 1500 at `veritate_1b3`, 2000 to 3000 in the multi-billion range, and 8000 to 10000 for the largest trainers. `veritate_200m` sets 0.
+
+Auto tune sets it to 3 percent of the total step count, with a floor of 50.
+
+## when to change it
+
+Raise it for a large model or an aggressive `base_lr`: the bigger the peak rate, the longer the ramp needs to be.
+
+On a continue run it usually has no effect. The step counter picks up where the previous run stopped, which is already past the warmup window, so the schedule resumes mid-curve.

@@ -25,7 +25,6 @@ from readers import paths
 
 from .score import score_sequence
 
-
 # ------------------------------------------------------------------------------------
 # Constants
 
@@ -41,7 +40,7 @@ LETTERS = ["A", "B", "C", "D"]
 def _format_prompt(question: str, choices: list[str]) -> str:
     """Standard MMLU few-shot-free prompt format."""
     lines = [f"Question: {question}"]
-    for letter, choice in zip(LETTERS, choices):
+    for letter, choice in zip(LETTERS, choices, strict=True):
         lines.append(f"{letter}. {choice}")
     lines.append("Answer:")
     return "\n".join(lines)
@@ -59,7 +58,7 @@ def run_mmlu(model, data_path: str = DEFAULT_DATA, mode: str = "text",
         raise FileNotFoundError(
             f"MMLU data not found at {data_path}. See README.md for download instructions."
         )
-    with open(data_path, "r", encoding="utf-8") as f:
+    with open(data_path, encoding="utf-8") as f:
         blob = json.load(f)
     questions = blob["questions"]
     if limit is not None:

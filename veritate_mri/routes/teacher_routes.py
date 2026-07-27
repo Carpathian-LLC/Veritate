@@ -9,13 +9,15 @@
 #   only has_api_key. job handles live in a process-local dict guarded by a
 #   lock and queried by reading state.json + samples.jsonl on disk.
 # - /teacher/authoring/* runs the self-authored corpus pipeline: spec read/write,
-#   start (plans calls from a byte target and gates every record), build (packs
-#   ChatML bins, zips them, registers a coming_soon catalog entry). Status, stop,
-#   samples, and delete are shared with /teacher/synth/*.
+#   import (gates an externally-authored jsonl directory into a job the same way
+#   as a teacher call), start (plans calls from a byte target and gates every
+#   record), build (packs ChatML bins, zips them, registers a coming_soon catalog
+#   entry). Status, stop, samples, and delete are shared with /teacher/synth/*.
 # veritate_mri/routes/teacher_routes.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import contextlib
 import hashlib
 import importlib
 import json
@@ -25,11 +27,10 @@ import shutil
 import threading
 import uuid
 import zipfile
+from collections import Counter
 
 from flask import request
-
 from readers import paths as paths_mod
-from readers.paths import REPO_ROOT
 from runtime import logs as logmod
 from runtime import settings as settings_mod
 from teacher import authoring as authoring_mod
@@ -49,7 +50,8 @@ JOB_META_FILE = "meta.json"
 SAMPLES_PREVIEW_DEFAULT = 20
 SAMPLES_PREVIEW_MAX = 100
 TEACHER_PKG = "teacher"
-SEEDS_DIR = os.path.join(REPO_ROOT, "veritate_mri", "data", "seeds")
+SEEDS_DIRNAME = "seeds"
+SEEDS_DIR = os.path.join(paths_mod.DATA_ROOT, SEEDS_DIRNAME)
 SEED_CATALOG_FILE = "seed_catalog.json"
 CATALOG_VERSION = 1
 SYNTH_RESPONSE_KEY = "response"
@@ -57,6 +59,8 @@ SYNTH_VAL_RATIO = 0.02
 STEM_RE = re.compile(r"^[a-z0-9_]+$")
 
 AUTHORING_ID_PREFIX = "auth_"
+IMPORT_ID_PREFIX = "import_"
+IMPORT_STEM_RE = re.compile(r"[^a-z0-9]+")
 AUTHORING_FAMILIES_DIR = "families"
 AUTHORING_DIST_DIR = "dist"
 AUTHORING_PURPOSE = "Self-authored Veritate chat and reading corpus."
@@ -70,11 +74,21 @@ CATALOG_INDENT = 1
 MB = 1024 * 1024
 SHA_CHUNK = 1 << 20
 
+# Sampling knobs the synth/complete paths send to the teacher. Fallbacks come
+# from settings.DEFAULTS, so changing a default in one place actually changes
+# what these routes send.
+SETTING_MAX_TOKENS  = "teacher_max_tokens"
+SETTING_TEMPERATURE = "teacher_temperature"
+
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
 
 # ------------------------------------------------------------------------------------
 # Functions
+
+def _setting(s, key):
+    return s.get(key, settings_mod.DEFAULTS[key])
+
 
 def _teacher_mods():
     return (importlib.import_module(TEACHER_PKG),
@@ -130,7 +144,7 @@ def _count_lines(path):
     if not os.path.isfile(path):
         return 0
     n = 0
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 n += 1
@@ -141,7 +155,7 @@ def _load_seed_catalog():
     path = os.path.join(SEEDS_DIR, SEED_CATALOG_FILE)
     if not os.path.isfile(path):
         return {"version": CATALOG_VERSION, "seeds": []}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -162,7 +176,7 @@ def _read_seed_prompts(seed_id):
     if not os.path.isfile(path):
         return []
     out = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -180,7 +194,7 @@ def _read_job_meta(output_dir):
     if not os.path.isfile(path):
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
@@ -204,7 +218,7 @@ def _read_recent_samples(output_dir, limit):
     if not os.path.isfile(path):
         return []
     rows = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -243,7 +257,7 @@ def _read_state_counts(output_dir):
     state_path = os.path.join(output_dir, STATE_FILE)
     if os.path.isfile(state_path):
         try:
-            with open(state_path, "r", encoding="utf-8") as f:
+            with open(state_path, encoding="utf-8") as f:
                 st = json.load(f)
             failed = int(st.get("failed", 0))
             skipped = int(st.get("skipped_dup", 0))
@@ -273,6 +287,46 @@ def _sha256_file(path):
     return h.hexdigest()
 
 
+def _import_stem(filename):
+    stem = os.path.splitext(os.path.basename(filename))[0].lower()
+    return IMPORT_STEM_RE.sub("_", stem).strip("_")
+
+
+def _import_file(path, stem, spec, gate, out_f):
+    """Gate every bare record in one externally-authored jsonl file, append accepted
+    rows to samples.jsonl in {"id", "record"} shape, and count outcomes by reason."""
+    accepted = 0
+    rejects = Counter()
+    with open(path, encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                rejects[authoring_mod.REJECT_JSON] += 1
+                continue
+            if not isinstance(rec, dict):
+                rejects[authoring_mod.REJECT_SCHEMA] += 1
+                continue
+            genre_id = rec.get(authoring_mod.GENRE_KEY)
+            genre = authoring_mod.genre_by_id(spec, genre_id) if genre_id else None
+            if genre is None:
+                rejects[f"{authoring_mod.REJECT_UNKNOWN_GENRE}: {genre_id}"] += 1
+                continue
+            kept, why = gate({"genre": genre_id}, json.dumps(rec, ensure_ascii=False))
+            if not kept:
+                for reason in why:
+                    rejects[reason] += 1
+                continue
+            rid = f"{IMPORT_ID_PREFIX}{stem}_{line_no:06d}"
+            out_f.write(json.dumps({"id": rid, authoring_mod.RECORD_KEY: kept[0]},
+                                   ensure_ascii=False) + "\n")
+            accepted += 1
+    return accepted, dict(rejects.most_common())
+
+
 def _write_families(output_dir, spec):
     """Split gated authoring records into per-genre jsonl the ChatML packer eats."""
     fam_dir = os.path.join(output_dir, AUTHORING_FAMILIES_DIR)
@@ -280,7 +334,8 @@ def _write_families(output_dir, spec):
         shutil.rmtree(fam_dir)
     os.makedirs(fam_dir, exist_ok=True)
     handles, counts = {}, {}
-    with open(os.path.join(output_dir, SAMPLES_FILE), "r", encoding="utf-8") as f:
+    with contextlib.ExitStack() as open_handles, \
+         open(os.path.join(output_dir, SAMPLES_FILE), encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -296,13 +351,12 @@ def _write_families(output_dir, spec):
                 continue
             gid = genre["id"]
             if gid not in handles:
-                handles[gid] = open(os.path.join(fam_dir, f"{gid}.jsonl"), "w", encoding="utf-8")
+                handles[gid] = open_handles.enter_context(
+                    open(os.path.join(fam_dir, f"{gid}.jsonl"), "w", encoding="utf-8"))
                 counts[gid] = 0
             handles[gid].write(json.dumps(_to_family_row(rec, genre["schema"]),
                                           ensure_ascii=False) + "\n")
             counts[gid] += 1
-    for fp in handles.values():
-        fp.close()
     return fam_dir, counts
 
 
@@ -316,7 +370,7 @@ def _to_family_row(rec, schema):
 def _zip_bins(dist_dir, stem):
     zip_path = os.path.join(dist_dir, f"{stem}.zip")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-        for suffix in ("_train.bin", "_val.bin"):
+        for suffix in (paths_mod.CORPUS_TRAIN_SUFFIX, paths_mod.CORPUS_VAL_SUFFIX):
             name = f"{stem}{suffix}"
             z.write(os.path.join(dist_dir, name), arcname=name)
     return zip_path
@@ -324,7 +378,7 @@ def _zip_bins(dist_dir, stem):
 
 def _register_catalog_entry(stem, label, description, manifest, min_params, max_params):
     """Append a coming_soon zip_bundle entry so the corpus shows in the library."""
-    with open(LOCAL_CATALOG_PATH, "r", encoding="utf-8") as f:
+    with open(LOCAL_CATALOG_PATH, encoding="utf-8") as f:
         cat = json.load(f)
     entry = {
         "stem": stem,
@@ -437,8 +491,8 @@ def register(app):
         if not provider:
             return {"ok": False, "error": "no teacher configured"}, 400
         opts = {"base_url": base_url, "api_key": api_key,
-                "max_tokens": int(body.get("max_tokens") or s.get("teacher_max_tokens", 2048)),
-                "temperature": float(body.get("temperature", s.get("teacher_temperature", 0.7)))}
+                "max_tokens": int(body.get("max_tokens") or _setting(s, SETTING_MAX_TOKENS)),
+                "temperature": float(body.get("temperature", _setting(s, SETTING_TEMPERATURE)))}
         if body.get("system"):
             opts["system"] = body["system"]
         try:
@@ -482,8 +536,8 @@ def register(app):
             format=fmt,
             base_url=s.get("teacher_base_url") or None,
             api_key=api_key,
-            temperature=float(s.get("teacher_temperature", 0.7)),
-            max_tokens=int(s.get("teacher_max_tokens", 2048)),
+            temperature=float(_setting(s, SETTING_TEMPERATURE)),
+            max_tokens=int(_setting(s, SETTING_MAX_TOKENS)),
             max_concurrency=_resolve_concurrency(s, provider),
         )
         thread = threading.Thread(target=job.run, name=f"teacher-synth-{job_id}", daemon=True)
@@ -569,6 +623,43 @@ def register(app):
             return authoring_mod.load_spec()
         return authoring_mod.load_spec()
 
+    @app.route("/teacher/authoring/import", methods=["POST"])
+    def teacher_authoring_import_route():
+        body = request.get_json(silent=True) or {}
+        source_dir = (body.get("source_dir") or "").strip()
+        if not source_dir or not os.path.isdir(source_dir):
+            return {"error": "source_dir must be an existing directory"}, 400
+        existing_id = (body.get("job_id") or "").strip()
+        if existing_id:
+            with _JOBS_LOCK:
+                entry = _JOBS.get(existing_id)
+            if entry is not None and entry["thread"].is_alive():
+                return {"error": "job still running"}, 409
+            job_id = existing_id
+        else:
+            job_id = uuid.uuid4().hex[:JOB_ID_LEN]
+        out_root = paths_mod.synth_job_dir(job_id)
+        os.makedirs(out_root, exist_ok=True)
+        samples_path = os.path.join(out_root, SAMPLES_FILE)
+        spec = authoring_mod.load_spec()
+        gate = authoring_mod.RecordGate(spec)
+        gate.seed_from_file(samples_path)
+        files = sorted(f for f in os.listdir(source_dir) if f.endswith(".jsonl"))
+        results = []
+        accepted_total = 0
+        with open(samples_path, "a", encoding="utf-8") as out_f:
+            for fname in files:
+                accepted, rejected = _import_file(os.path.join(source_dir, fname),
+                                                  _import_stem(fname), spec, gate, out_f)
+                accepted_total += accepted
+                results.append({"file": fname, "accepted": accepted, "rejected": rejected})
+        stats = gate.stats()
+        logmod.info(LOG_SOURCE, f"authoring import: job={job_id} files={len(files)} "
+                                f"accepted={accepted_total} ratio={stats['ngram_ratio']}")
+        return {"job_id": job_id, "output_dir": out_root, "files": results,
+                "accepted_total": accepted_total, "ngram_ratio": stats["ngram_ratio"],
+                "ngram_floor": stats["ngram_floor"], "ngram_below_floor": stats["ngram_below_floor"]}
+
     @app.route("/teacher/authoring/start", methods=["POST"])
     def teacher_authoring_start_route():
         body = request.get_json(silent=True) or {}
@@ -609,8 +700,8 @@ def register(app):
             job_id, provider, s.get("teacher_model") or None, prompts, out_root,
             base_url=s.get("teacher_base_url") or None,
             api_key=os.environ.get(TEACHER_API_KEY_ENV) or s.get("teacher_api_key") or None,
-            temperature=float(s.get("teacher_temperature", 0.7)),
-            max_tokens=int(s.get("teacher_max_tokens", 2048)),
+            temperature=float(_setting(s, SETTING_TEMPERATURE)),
+            max_tokens=int(_setting(s, SETTING_MAX_TOKENS)),
             max_concurrency=conc,
             record_gate=gate,
         )
@@ -660,8 +751,8 @@ def register(app):
                 f"{stem}_val.bin at the top level.",
                 f"COS returns a link. Paste it into corpus_catalog.json as the train_url "
                 f"for stem '{stem}', replacing the PLACEHOLDER value.",
-                f"Remove \"coming_soon\": true from that same entry to release the corpus "
-                f"in the corpus library.",
+                "Remove \"coming_soon\": true from that same entry to release the corpus "
+                "in the corpus library.",
             ],
         }
 

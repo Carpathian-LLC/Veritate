@@ -24,7 +24,6 @@ import urllib.request
 import zipfile
 
 import certifi
-
 from runtime import logs as logmod
 
 from . import registry
@@ -54,7 +53,7 @@ def _entries(ext_id):
     if not os.path.isfile(path):
         return []
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return (json.load(f) or {}).get("datasets") or []
     except (OSError, ValueError) as e:
         logmod.error(LOG_SOURCE, f"data_catalog read failed for {ext_id}: {e}")

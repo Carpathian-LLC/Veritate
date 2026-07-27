@@ -12,23 +12,15 @@
 # Imports:
 
 import json
-import os
 import struct
-import sys
 
 import numpy as np
 import pytest
 import torch
-
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-for p in (REPO_ROOT, os.path.join(REPO_ROOT, "veritate_mri")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
 from readers import paths
 from training import export
-from veritate_core.model_patched import (N_LOCAL_DEC, N_LOCAL_ENC, PATCH_STRIDE,
-                                         VeritatePatched, _boundary_table)
+
+from veritate_core.model_patched import N_LOCAL_DEC, N_LOCAL_ENC, PATCH_STRIDE, VeritatePatched, _boundary_table
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -66,7 +58,6 @@ def _make_model_dir(tmp_path, trunk="hybrid", state_rule="gla"):
 
 
 def _expected_tensor_floats():
-    n_total = N_LOCAL_ENC + GLOBAL + N_LOCAL_DEC
     slots = SEQ // PATCH_STRIDE
     per_attn = HIDDEN + 3 * HIDDEN * HIDDEN + HIDDEN * HIDDEN + HIDDEN \
         + FFN * HIDDEN + HIDDEN * FFN
@@ -76,42 +67,80 @@ def _expected_tensor_floats():
             + (N_LOCAL_ENC + N_LOCAL_DEC) * per_attn + GLOBAL * per_rec + HIDDEN)
 
 
-def test_v13_roundtrip_fp32(tmp_path, monkeypatch):
-    """v13 fp32 export writes a parseable header + exact payload byte count."""
+@pytest.fixture
+def fp32_export(tmp_path, monkeypatch):
+    """Export a tiny hybrid checkpoint as fp32 and hand back the parsed file."""
     model = _make_model_dir(tmp_path)
     monkeypatch.setattr(paths, "MODELS_ROOT", str(tmp_path))
     res = export.export_checkpoint(NAME, STEP, dtype="fp32")
-    assert res["version"] == export.VERITATE_MODEL_VERSION_HYBRID
     with open(res["path"], "rb") as f:
-        magic, ver, vocab, hidden, layers, ffn, heads, seq = struct.unpack(
-            export.HEADER_FMT, f.read(HEADER_BYTES))
-        dtype, n_enc, n_glob, n_dec, stride, slots, ck, rule = struct.unpack(
-            export.HYBRID_HEADER_EXT_FMT, f.read(EXT_BYTES))
+        head = struct.unpack(export.HEADER_FMT, f.read(HEADER_BYTES))
+        ext  = struct.unpack(export.HYBRID_HEADER_EXT_FMT, f.read(EXT_BYTES))
         boundary = np.frombuffer(f.read(VOCAB), dtype=np.uint8)
-        payload = f.read()
-    assert (magic, ver) == (export.VERITATE_MODEL_MAGIC, 13)
-    assert (vocab, hidden, layers, ffn, heads, seq) == \
+        payload  = f.read()
+    return {"res": res, "head": head, "ext": ext, "boundary": boundary,
+            "payload": payload, "model": model}
+
+
+def test_v13_reports_the_hybrid_version(fp32_export):
+    """export_checkpoint reports the hybrid format version."""
+    assert fp32_export["res"]["version"] == export.VERITATE_MODEL_VERSION_HYBRID
+
+
+def test_v13_header_magic_and_version(fp32_export):
+    """The written header opens with the Veritate magic and format version 13."""
+    assert fp32_export["head"][:2] == (export.VERITATE_MODEL_MAGIC, 13)
+
+
+def test_v13_header_carries_the_model_shape(fp32_export):
+    """The header records the flattened trunk shape (vocab, hidden, layers, ffn, heads, seq)."""
+    assert fp32_export["head"][2:] == \
         (VOCAB, HIDDEN, N_LOCAL_ENC + GLOBAL + N_LOCAL_DEC, FFN, HEADS, SEQ)
-    assert (dtype, n_enc, n_glob, n_dec, stride, slots, ck, rule) == \
+
+
+def test_v13_header_extension_describes_the_hybrid_stack(fp32_export):
+    """The hybrid header extension records dtype, layer split, stride, slots, chunk, and state rule."""
+    assert fp32_export["ext"] == \
         (0, N_LOCAL_ENC, GLOBAL, N_LOCAL_DEC, PATCH_STRIDE, SEQ // PATCH_STRIDE, 4, 0)
-    assert np.array_equal(boundary, _boundary_table().numpy().astype(np.uint8))
-    assert len(payload) == _expected_tensor_floats() * 4
-    tok = np.frombuffer(payload[:VOCAB * HIDDEN * 4], dtype="<f4").reshape(VOCAB, HIDDEN)
-    ref = model.tok_emb.weight.detach().numpy()
-    assert np.array_equal(tok, ref)
 
 
-def test_v13_fp16_payload_half_size(tmp_path, monkeypatch):
-    """dtype=fp16 halves the tensor payload and flags dtype=1 in the header."""
+def test_v13_writes_the_boundary_table(fp32_export):
+    """The exported boundary table matches the model's own byte-boundary table."""
+    assert np.array_equal(fp32_export["boundary"], _boundary_table().numpy().astype(np.uint8))
+
+
+def test_v13_fp32_payload_byte_count(fp32_export):
+    """The fp32 tensor payload is exactly four bytes per exported float."""
+    assert len(fp32_export["payload"]) == _expected_tensor_floats() * 4
+
+
+def test_v13_token_embedding_survives_the_roundtrip(fp32_export):
+    """The token embedding reads back from the payload bit-identical to the checkpoint."""
+    tok = np.frombuffer(fp32_export["payload"][:VOCAB * HIDDEN * 4],
+                        dtype="<f4").reshape(VOCAB, HIDDEN)
+    assert np.array_equal(tok, fp32_export["model"].tok_emb.weight.detach().numpy())
+
+
+def _dtype_flag(path):
+    with open(path, "rb") as f:
+        f.seek(HEADER_BYTES)
+        return struct.unpack("<i", f.read(4))[0]
+
+
+def test_v13_fp16_payload_is_half_size(tmp_path, monkeypatch):
+    """dtype=fp16 halves the tensor payload byte count."""
     _make_model_dir(tmp_path)
     monkeypatch.setattr(paths, "MODELS_ROOT", str(tmp_path))
     res = export.export_checkpoint(NAME, STEP, dtype="fp16")
-    expected = HEADER_BYTES + EXT_BYTES + VOCAB + _expected_tensor_floats() * 2
-    assert res["bytes"] == expected
-    with open(res["path"], "rb") as f:
-        f.seek(HEADER_BYTES)
-        (dtype,) = struct.unpack("<i", f.read(4))
-    assert dtype == 1
+    assert res["bytes"] == HEADER_BYTES + EXT_BYTES + VOCAB + _expected_tensor_floats() * 2
+
+
+def test_v13_fp16_flags_dtype_one(tmp_path, monkeypatch):
+    """dtype=fp16 records dtype flag 1 in the hybrid header extension."""
+    _make_model_dir(tmp_path)
+    monkeypatch.setattr(paths, "MODELS_ROOT", str(tmp_path))
+    res = export.export_checkpoint(NAME, STEP, dtype="fp16")
+    assert _dtype_flag(res["path"]) == 1
 
 
 def _expected_int8_bytes():
@@ -129,17 +158,20 @@ def _expected_int8_bytes():
     return smalls * 4 + big_elems + big_rows * 4
 
 
-def test_v13_int8_layout(tmp_path, monkeypatch):
-    """dtype=int8 writes q + fp32 row scales for big tensors, fp32 smalls, dtype=2."""
+def test_v13_int8_payload_byte_count(tmp_path, monkeypatch):
+    """dtype=int8 writes quantized big tensors plus fp32 row scales and fp32 smalls."""
     _make_model_dir(tmp_path)
     monkeypatch.setattr(paths, "MODELS_ROOT", str(tmp_path))
     res = export.export_checkpoint(NAME, STEP, dtype="int8")
-    expected = HEADER_BYTES + EXT_BYTES + VOCAB + _expected_int8_bytes()
-    assert res["bytes"] == expected
-    with open(res["path"], "rb") as f:
-        f.seek(HEADER_BYTES)
-        (dtype,) = struct.unpack("<i", f.read(4))
-    assert dtype == 2
+    assert res["bytes"] == HEADER_BYTES + EXT_BYTES + VOCAB + _expected_int8_bytes()
+
+
+def test_v13_int8_flags_dtype_two(tmp_path, monkeypatch):
+    """dtype=int8 records dtype flag 2 in the hybrid header extension."""
+    _make_model_dir(tmp_path)
+    monkeypatch.setattr(paths, "MODELS_ROOT", str(tmp_path))
+    res = export.export_checkpoint(NAME, STEP, dtype="int8")
+    assert _dtype_flag(res["path"]) == 2
 
 
 def test_v13_refuses_non_gla(tmp_path, monkeypatch):

@@ -32,8 +32,7 @@ MRI_ROOT  = REPO_ROOT / "veritate_mri"
 sys.path.insert(0, str(MRI_ROOT))
 sys.path.insert(0, str(REPO_ROOT))
 
-from readers import paths, checkpoints  # noqa: E402
-
+from readers import checkpoints, paths  # noqa: E402
 
 # ------------------------------------------------------------------------------------
 # Constants

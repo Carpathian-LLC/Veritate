@@ -25,40 +25,15 @@ import sys
 # ------------------------------------------------------------------------------------
 # Constants
 
-PIP_TIMEOUT_SECS = 300
+PIP_TIMEOUT_SECS         = 300
+PIP_WAIT_TIMEOUT_SECS    = 5
+PIP_LINE_MAX_CHARS       = 4096
+IMPORT_PROBE_TIMEOUT_SECS = 30
+GPU_PROBE_TIMEOUT_SECS   = 10
+POWERSHELL_TIMEOUT_SECS  = 8
+WINGET_LIST_TIMEOUT_SECS = 60
+
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-
-
-def _in_venv():
-    """True when the current interpreter is running inside a virtualenv or a
-    stdlib venv. `pip install --user` writes to the user site-packages, which
-    a venv does NOT import from by default — a silent "success" that leaves
-    the venv unchanged and every torch.cuda.is_available() call still False.
-    We skip the --user rung entirely in this case."""
-    return (getattr(sys, "base_prefix", sys.prefix) != sys.prefix
-            or hasattr(sys, "real_prefix"))
-
-
-def _verify_installed_in_this_python(pkg):
-    """Confirm `pkg` is importable by THIS interpreter — i.e. it actually
-    landed on the sys.path this dashboard uses. Guards against `--user`-style
-    scope mismatches where pip reports success but the running venv's site
-    hasn't changed. Uses a subprocess against sys.executable so a stale
-    already-imported copy in the current process doesn't mask a bad install."""
-    try:
-        # Try importing in a subprocess against the exact interpreter that
-        # will run trainers, so a scope mismatch here IS the truth. We check
-        # the import name (dash -> underscore) — cheap, no torch load.
-        out = subprocess.check_output(
-            [sys.executable, "-c",
-             f"import importlib.util as u; "
-             f"print(1 if u.find_spec({pkg.replace('-','_')!r}) is not None else 0)"],
-            text=True, stderr=subprocess.STDOUT, timeout=30,
-            creationflags=_NO_WINDOW,
-        ).strip()
-        return out.endswith("1")
-    except Exception:
-        return False
 
 # Wheel indices used by install_torch(). Kept in sync with veritate.py's
 # launcher (which uses the same values for the first-boot install). If the
@@ -74,7 +49,7 @@ TORCH_CUDA_INDEX      = "https://download.pytorch.org/whl/cu128"
 TORCH_CPU_INDEX       = "https://download.pytorch.org/whl/cpu"
 # ROCm: AMD's CUDA equivalent, Linux x86 only (no ROCm on macOS or Windows).
 # PyTorch's ROCm wheels expose the same torch.cuda.* API surface as the CUDA
-# wheels, so the trainer code path is identical — only the wheel index changes.
+# wheels, so the trainer code path is identical: only the wheel index changes.
 TORCH_ROCM_INDEX      = "https://download.pytorch.org/whl/rocm6.2"
 # DirectML: AMD/Intel GPUs on Windows. Ships as a SEPARATE package
 # (torch-directml) that plugs into a stock CPU torch install, exposing a
@@ -84,11 +59,115 @@ TORCH_ROCM_INDEX      = "https://download.pytorch.org/whl/rocm6.2"
 TORCH_DIRECTML_PKG    = "torch-directml"
 # Intel XPU: Arc/Battlemage discrete GPUs and integrated Xe. Requires
 # intel-extension-for-pytorch + a matching torch build. Like DirectML, current
-# trainers do not target `xpu` — detection only for now.
+# trainers do not target `xpu`: detection only for now.
 TORCH_INTEL_XPU_PKG   = "intel-extension-for-pytorch"
+
+# GPU probe surface. Linux reads PCI vendor ids out of the DRM sysfs tree and
+# the driver device nodes; Windows reads the driver DLL and the WMI adapter
+# names. Same table is mirrored by veritate.py's launcher and
+# veritate_mri/runtime/sys_metrics.py.
+DRM_SYSFS_ROOT     = "/sys/class/drm"
+DRM_DEVICE_SUBDIR  = "device"
+DRM_VENDOR_FILE    = "vendor"
+PCI_VENDOR_NVIDIA  = "0x10de"
+PCI_VENDOR_AMD     = "0x1002"
+PCI_VENDOR_INTEL   = "0x8086"
+DEV_NVIDIA0        = "/dev/nvidia0"
+DEV_NVIDIACTL      = "/dev/nvidiactl"
+DEV_KFD            = "/dev/kfd"
+LIBCUDA_SONAME     = "libcuda.so.1"
+NVCUDA_DLL         = "nvcuda"
+PS_VIDEO_CONTROLLER_QUERY = ("(Get-CimInstance Win32_VideoController | "
+                             "Select-Object -ExpandProperty Name) -join '|'")
+NVIDIA_NAME_TOKENS = ("nvidia", "geforce", "rtx", "gtx", "quadro", "tesla")
+INTEL_DISCRETE_NAME_TOKENS = ("arc a", "arc b", "arc ", "battlemage", "iris xe max")
+
+# Native-helper installer for OS-level tools the platform depends on but pip
+# cannot install (temperature sensors, WMI providers). Keyed by a short id so
+# the caller doesn't reason about brew/apt package names.
+HELPERS = {
+    "mac_temp_arm":     {"os": "darwin", "manager": "brew",   "pkg": "macmon"},
+    "mac_temp_intel":   {"os": "darwin", "manager": "brew",   "pkg": "osx-cpu-temp"},
+    "linux_lm_sensors": {"os": "linux",  "manager": "apt",    "pkg": "lm-sensors"},
+    # Windows: LibreHardwareMonitor is the WMI provider the HUD reads for CPU
+    # and GPU temperatures. Installable via winget without UAC; the user still
+    # has to launch it once and tick Options > "Enable WMI Provider" for the
+    # sensors to actually publish. The install call succeeds after the
+    # winget install; the frontend surfaces the manual-launch step in the
+    # post-install message.
+    "win_temp_lhm":     {"os": "win",    "manager": "winget", "pkg": "LibreHardwareMonitor.LibreHardwareMonitor"},
+}
 
 # ------------------------------------------------------------------------------------
 # Functions
+
+
+def _in_venv():
+    """True when the current interpreter is running inside a virtualenv or a
+    stdlib venv. `pip install --user` writes to the user site-packages, which
+    a venv does NOT import from by default: a silent "success" that leaves
+    the venv unchanged and every torch.cuda.is_available() call still False.
+    We skip the --user rung entirely in this case."""
+    return (getattr(sys, "base_prefix", sys.prefix) != sys.prefix
+            or hasattr(sys, "real_prefix"))
+
+
+def _verify_installed_in_this_python(pkg):
+    """Confirm `pkg` is importable by THIS interpreter: i.e. it actually
+    landed on the sys.path this dashboard uses. Guards against `--user`-style
+    scope mismatches where pip reports success but the running venv's site
+    hasn't changed. Uses a subprocess against sys.executable so a stale
+    already-imported copy in the current process doesn't mask a bad install."""
+    try:
+        # Try importing in a subprocess against the exact interpreter that
+        # will run trainers, so a scope mismatch here IS the truth. We check
+        # the import name (dash -> underscore): cheap, no torch load.
+        out = subprocess.check_output(
+            [sys.executable, "-c",
+             f"import importlib.util as u; "
+             f"print(1 if u.find_spec({pkg.replace('-','_')!r}) is not None else 0)"],
+            text=True, stderr=subprocess.STDOUT, timeout=IMPORT_PROBE_TIMEOUT_SECS,
+            creationflags=_NO_WINDOW,
+        ).strip()
+        return out.endswith("1")
+    except Exception:
+        return False
+
+
+def _drm_vendor_present(vendor_id):
+    """True when any Linux DRM device reports PCI `vendor_id`."""
+    try:
+        entries = os.listdir(DRM_SYSFS_ROOT)
+    except OSError:
+        return False
+    for entry in entries:
+        vend = os.path.join(DRM_SYSFS_ROOT, entry, DRM_DEVICE_SUBDIR, DRM_VENDOR_FILE)
+        if not os.path.isfile(vend):
+            continue
+        try:
+            with open(vend) as f:
+                if f.read().strip().lower() == vendor_id:
+                    return True
+        except OSError:
+            pass
+    return False
+
+
+def _video_controller_names():
+    """Lowercased Win32_VideoController adapter names, or "" when PowerShell
+    is unavailable or the query fails."""
+    ps = shutil.which("pwsh") or shutil.which("powershell")
+    if not ps:
+        return ""
+    try:
+        out = subprocess.check_output(
+            [ps, "-NoProfile", "-Command", PS_VIDEO_CONTROLLER_QUERY],
+            text=True, stderr=subprocess.DEVNULL, timeout=POWERSHELL_TIMEOUT_SECS,
+            creationflags=_NO_WINDOW,
+        )
+        return out.lower()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def is_installed(pkg):
@@ -128,13 +207,13 @@ def _run_pip(args, use_shell_runas=False):
         rc = ctypes.windll.shell32.ShellExecuteW(
             None, "runas", sys.executable, f"-m pip {params}", None, 1)
         ok = rc > 32
-        _emit_line(f"ShellExecute returned {rc} — ok={ok}")
+        _emit_line(f"ShellExecute returned {rc}: ok={ok}")
         return ok, "", ("" if ok else f"ShellExecute returned {rc}")
     _emit_line(f"$ pip {' '.join(args)}")
     stdout_lines = []
     try:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "pip"] + args,
+            [sys.executable, "-m", "pip", *args],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1, creationflags=_NO_WINDOW,
         )
@@ -146,15 +225,15 @@ def _run_pip(args, use_shell_runas=False):
         deadline = _time.time() + PIP_TIMEOUT_SECS
         assert proc.stdout is not None
         for line in proc.stdout:
-            if len(line) > 4096:
-                line = line[:4096] + " ...[truncated]"
+            if len(line) > PIP_LINE_MAX_CHARS:
+                line = line[:PIP_LINE_MAX_CHARS] + " ...[truncated]"
             stdout_lines.append(line)
             _emit_line(line)
             if _time.time() > deadline:
                 proc.kill()
-                _emit_line("[deps] pip timed out — killed")
+                _emit_line("[deps] pip timed out: killed")
                 return False, "".join(stdout_lines), "timeout"
-        proc.wait(timeout=5)
+        proc.wait(timeout=PIP_WAIT_TIMEOUT_SECS)
     except (OSError, subprocess.SubprocessError) as exc:
         try: proc.kill()
         except OSError: pass
@@ -176,13 +255,13 @@ def install(pkg, index_url=None):
     args_base = ["install", "--disable-pip-version-check"]
     if index_url:
         args_base += ["--index-url", index_url]
-    args = args_base + [pkg]
+    args = [*args_base, pkg]
 
     # Inside a venv, --user installs to a scope the venv doesn't import from.
     # Skipping the --user rung entirely so the install actually lands in the
     # venv's site-packages where the trainer will import from next boot.
     if not _in_venv():
-        ok, out, err = _run_pip(args + ["--user"])
+        ok, out, err = _run_pip([*args, "--user"])
         # Even outside a venv, verify the install landed where THIS python
         # can import it. If not, the --user scope isn't on this python's
         # sys.path (custom PYTHONPATH, embedded interpreter) and we escalate.
@@ -216,7 +295,7 @@ def _run_sudo(args):
     would prompt for a password, so the request thread never hangs."""
     try:
         out = subprocess.run(
-            ["sudo", "-n", sys.executable, "-m", "pip"] + args,
+            ["sudo", "-n", sys.executable, "-m", "pip", *args],
             capture_output=True, text=True, timeout=PIP_TIMEOUT_SECS,
             check=False,
         )
@@ -255,7 +334,7 @@ def has_nvidia_gpu():
         try:
             out = subprocess.check_output(
                 ["nvidia-smi", "-L"], text=True, stderr=subprocess.DEVNULL,
-                timeout=10, creationflags=_NO_WINDOW,
+                timeout=GPU_PROBE_TIMEOUT_SECS, creationflags=_NO_WINDOW,
             )
             if "GPU" in out:
                 return True
@@ -266,59 +345,33 @@ def has_nvidia_gpu():
         try:
             import ctypes
             try:
-                ctypes.WinDLL("nvcuda")
+                ctypes.WinDLL(NVCUDA_DLL)
                 return True
             except OSError:
                 pass
         except Exception:
             pass
-        ps = shutil.which("pwsh") or shutil.which("powershell")
-        if ps:
-            try:
-                out = subprocess.check_output(
-                    [ps, "-NoProfile", "-Command",
-                     "(Get-CimInstance Win32_VideoController | "
-                     "Select-Object -ExpandProperty Name) -join '|'"],
-                    text=True, stderr=subprocess.DEVNULL, timeout=8,
-                    creationflags=_NO_WINDOW,
-                )
-                low = out.lower()
-                if any(t in low for t in ("nvidia", "geforce", "rtx", "gtx", "quadro", "tesla")):
-                    return True
-            except (OSError, subprocess.SubprocessError):
-                pass
-        return False
+        low = _video_controller_names()
+        return any(t in low for t in NVIDIA_NAME_TOKENS)
     if plat.startswith("linux"):
-        if os.path.exists("/dev/nvidia0") or os.path.exists("/dev/nvidiactl"):
+        if os.path.exists(DEV_NVIDIA0) or os.path.exists(DEV_NVIDIACTL):
             return True
         try:
             import ctypes
             try:
-                ctypes.CDLL("libcuda.so.1")
+                ctypes.CDLL(LIBCUDA_SONAME)
                 return True
             except OSError:
                 pass
         except Exception:
             pass
-        drm = "/sys/class/drm"
-        try:
-            for entry in os.listdir(drm):
-                vend = os.path.join(drm, entry, "device", "vendor")
-                if os.path.isfile(vend):
-                    try:
-                        with open(vend, "r") as f:
-                            if f.read().strip().lower() == "0x10de":
-                                return True
-                    except OSError:
-                        pass
-        except OSError:
-            pass
+        return _drm_vendor_present(PCI_VENDOR_NVIDIA)
     return False
 
 
 def has_amd_gpu():
     """True when a ROCm-capable AMD GPU is present on Linux. ROCm exists on
-    Linux only — macOS never had ROCm, Windows has DirectML instead. Signals:
+    Linux only: macOS never had ROCm, Windows has DirectML instead. Signals:
     `/dev/kfd` (kernel-fusion driver device node, ROCm-specific), `rocm-smi`
     on PATH, or PCI vendor 0x1002 in `/sys/class/drm/*/device/vendor`.
 
@@ -328,70 +381,29 @@ def has_amd_gpu():
     justify installing the ROCm wheel."""
     if not sys.platform.startswith("linux"):
         return False
-    if os.path.exists("/dev/kfd"):
+    if os.path.exists(DEV_KFD):
         return True
     if shutil.which("rocm-smi") or shutil.which("rocminfo"):
         return True
-    drm = "/sys/class/drm"
-    try:
-        for entry in os.listdir(drm):
-            vend = os.path.join(drm, entry, "device", "vendor")
-            if os.path.isfile(vend):
-                try:
-                    with open(vend, "r") as f:
-                        if f.read().strip().lower() == "0x1002":
-                            return True
-                except OSError:
-                    pass
-    except OSError:
-        pass
-    return False
+    return _drm_vendor_present(PCI_VENDOR_AMD)
 
 
 def has_intel_discrete_gpu():
     """True when an Intel Arc / Battlemage / Xe-HPG discrete GPU is present.
     Detection is by name substring plus PCI vendor 0x8086 (Intel), because
     every Intel iGPU also shares vendor 0x8086 and we want the discrete cards
-    the XPU backend can actually accelerate. Currently informational only —
+    the XPU backend can actually accelerate. Currently informational only:
     trainers do not target Intel XPU."""
     plat = sys.platform
     # Windows: WMI adapter name lookup.
     if plat.startswith("win") or os.name == "nt":
-        ps = shutil.which("pwsh") or shutil.which("powershell")
-        if not ps:
-            return False
-        try:
-            out = subprocess.check_output(
-                [ps, "-NoProfile", "-Command",
-                 "(Get-CimInstance Win32_VideoController | "
-                 "Select-Object -ExpandProperty Name) -join '|'"],
-                text=True, stderr=subprocess.DEVNULL, timeout=8,
-                creationflags=_NO_WINDOW,
-            )
-            low = out.lower()
-            return any(tok in low for tok in ("arc a", "arc b", "arc ", "battlemage", "iris xe max"))
-        except (OSError, subprocess.SubprocessError):
-            return False
+        low = _video_controller_names()
+        return any(tok in low for tok in INTEL_DISCRETE_NAME_TOKENS)
     # Linux: DRM sysfs + name match. Any Intel adapter is vendor 0x8086; we
     # accept it as "discrete-ish" only when the model name doesn't look like a
     # standard iGPU (UHD, HD, Iris Plus without "Max").
     if plat.startswith("linux"):
-        drm = "/sys/class/drm"
-        try:
-            for entry in os.listdir(drm):
-                vend = os.path.join(drm, entry, "device", "vendor")
-                if os.path.isfile(vend):
-                    try:
-                        with open(vend, "r") as f:
-                            if f.read().strip().lower() == "0x8086":
-                                # We could parse the model name from lspci to
-                                # filter iGPUs out — for now, presence + the
-                                # trainer opt-in gate is enough.
-                                return True
-                    except OSError:
-                        pass
-        except OSError:
-            pass
+        return _drm_vendor_present(PCI_VENDOR_INTEL)
     return False
 
 
@@ -420,7 +432,7 @@ def torch_state():
 def _torch_wheel_index_for_host():
     """Which wheel index install_torch() should hit for the running box.
     Priority: NVIDIA CUDA > AMD ROCm (Linux only) > CPU. None means "let pip
-    resolve from PyPI" — used on macOS (PyPI serves the right build per arch;
+    resolve from PyPI": used on macOS (PyPI serves the right build per arch;
     arm64 gets MPS, Intel gets CPU) and Linux ARM (no accelerator wheels
     published). Rule 34c: every arch picks a wheel that matches its actual
     hardware; the resolver never assumes a specific box shape."""
@@ -432,7 +444,7 @@ def _torch_wheel_index_for_host():
         # published. NVIDIA wins over AMD when both are present (rare, but
         # ROCm can't be built against a CUDA-only card and vice versa;
         # NVIDIA-first is the safer default because torch's ROCm wheel does
-        # NOT fall back to CPU when kfd fails — it errors on import).
+        # NOT fall back to CPU when kfd fails: it errors on import).
         import platform as _plat
         mach = (_plat.machine() or "").lower()
         if mach not in ("x86_64", "amd64"):
@@ -484,14 +496,14 @@ def install_torch(force_cuda=None, force_rocm=None):
         # boxes with NVIDIA GPUs end up with CPU torch. --index-url locks pip
         # to the pytorch index for this install call.
         args_base += ["--index-url", index_url]
-    args = args_base + ["torch"]
+    args = [*args_base, "torch"]
 
     ok, out, err = (False, "", "")
     # Skip --user entirely inside a venv: --user writes to the user site-
     # packages, which the venv doesn't import from, so the install "succeeds"
     # but torch.cuda.is_available() stays False forever.
     if not _in_venv():
-        ok, out, err = _run_pip(args + ["--user"])
+        ok, out, err = _run_pip([*args, "--user"])
         # Verify the wheel lives on THIS python's sys.path. If not, the user
         # site-packages isn't reachable from here (embedded interpreter,
         # PYTHONNOUSERSITE, custom paths) and we escalate.
@@ -500,7 +512,7 @@ def install_torch(force_cuda=None, force_rocm=None):
     if not ok:
         ok, out, err = _run_pip(args)
     if ok and not _verify_installed_in_this_python("torch"):
-        # Site scope succeeded but the running interpreter can't import it —
+        # Site scope succeeded but the running interpreter can't import it:
         # rare (site-packages isn't on sys.path) but real on some tightly
         # configured Linux distros. Force it to fail so the elevation branch
         # runs and the user sees a real error instead of a silent no-op.
@@ -516,7 +528,7 @@ def install_torch(force_cuda=None, force_rocm=None):
     if ok and not _verify_installed_in_this_python("torch"):
         ok = False
         err = (err or "") + "\ntorch installed but not importable from " + sys.executable
-    result = {
+    return {
         "ok":              bool(ok),
         "method":          "install_torch",
         "stdout":          out,
@@ -525,7 +537,6 @@ def install_torch(force_cuda=None, force_rocm=None):
         "wheel_index":     index_url or "pypi",
         "restart_required": bool(ok),
     }
-    return result
 
 
 def status_snapshot():
@@ -549,7 +560,7 @@ def status_snapshot():
     # ROCm's torch wheel exposes torch.cuda.* API surface but is built against
     # AMD's runtime. `needs_torch_rocm` = "AMD is here, no NVIDIA (so we
     # picked ROCm), and torch's advertised cuda_runtime string is empty or
-    # doesn't look like an NVIDIA CUDA version". Best-effort — a false
+    # doesn't look like an NVIDIA CUDA version". Best-effort: a false
     # negative just means the user gets the same "restart to fix" prompt.
     needs_torch_rocm = bool(
         (not nv) and amd and sys.platform.startswith("linux")
@@ -583,7 +594,7 @@ def status_snapshot():
         "needs_temp_sensor": needs_temp_sensor,
         "temp_sensor_helper": temp_helper,
         # Non-CUDA/non-ROCm accelerators the runtime can't yet target from
-        # inside a trainer — currently informational so the UI can show
+        # inside a trainer: currently informational so the UI can show
         # "detected but not wired". A future rev that adds DirectML/XPU
         # trainer hooks flips these into `needs_*` flags with matching pkg
         # names.
@@ -601,7 +612,7 @@ def _temp_sensor_helper_id():
     """Pick the temperature-sensor helper for this arch, or None when no
     helper exists. Windows now auto-installs LibreHardwareMonitor via winget
     (the WMI provider the HUD reads for CPU/GPU temps); the user still has to
-    launch LHM once and enable Options > WMI Provider — the frontend states
+    launch LHM once and enable Options > WMI Provider: the frontend states
     that in the post-install message."""
     import platform as _plat
     plat = sys.platform
@@ -612,23 +623,6 @@ def _temp_sensor_helper_id():
     if plat.startswith("win") or os.name == "nt":
         return "win_temp_lhm" if shutil.which("winget") else None
     return None
-
-
-# Native-helper installer for OS-level tools the platform depends on but pip
-# cannot install (temperature sensors, WMI providers). Keyed by a short id so
-# the caller doesn't reason about brew/apt package names.
-HELPERS = {
-    "mac_temp_arm":     {"os": "darwin", "manager": "brew",   "pkg": "macmon"},
-    "mac_temp_intel":   {"os": "darwin", "manager": "brew",   "pkg": "osx-cpu-temp"},
-    "linux_lm_sensors": {"os": "linux",  "manager": "apt",    "pkg": "lm-sensors"},
-    # Windows: LibreHardwareMonitor is the WMI provider the HUD reads for CPU
-    # and GPU temperatures. Installable via winget without UAC; the user still
-    # has to launch it once and tick Options > "Enable WMI Provider" for the
-    # sensors to actually publish. The install call succeeds after the
-    # winget install; the frontend surfaces the manual-launch step in the
-    # post-install message.
-    "win_temp_lhm":     {"os": "win",    "manager": "winget", "pkg": "LibreHardwareMonitor.LibreHardwareMonitor"},
-}
 
 
 def install_helper(helper_id):
@@ -675,7 +669,7 @@ def _run_brew(pkg):
 def _run_winget(pkg):
     """winget install without UAC. --silent skips the GUI installer, --accept-*
     handles the first-run TOS prompts so the request thread never hangs. The
-    result may still return non-zero if winget isn't on PATH (older Win10) —
+    result may still return non-zero if winget isn't on PATH (older Win10):
     the frontend surfaces a manual-install hint in that case."""
     if not shutil.which("winget"):
         return {"ok": False, "method": "winget", "stdout": "",
@@ -689,7 +683,7 @@ def _run_winget(pkg):
         listed = subprocess.run(
             ["winget", "list", "--id", pkg, "-e",
              "--accept-source-agreements"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=WINGET_LIST_TIMEOUT_SECS,
             check=False, creationflags=_NO_WINDOW,
         )
         if listed.returncode == 0 and pkg.lower() in (listed.stdout or "").lower():
@@ -708,8 +702,8 @@ def _run_winget(pkg):
         )
         ok = out.returncode == 0
         if not ok:
-            # 0x8A15002B (APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE) and the
-            # "already installed" variant surface as text — pre-check above
+            # 0x8A15002B APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE and the
+            # "already installed" variant surface as text: pre-check above
             # catches most cases, but a race between list and install can still
             # land here on a slow box.
             combined = ((out.stdout or "") + "\n" + (out.stderr or "")).lower()

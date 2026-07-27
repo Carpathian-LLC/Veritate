@@ -40,7 +40,7 @@ def run_git(args, cwd, timeout=DEFAULT_TIMEOUT_SECS):
     env = {**os.environ, **_GIT_ENV}
     try:
         r = subprocess.run(
-            ["git"] + list(args),
+            ["git", *args],
             cwd=cwd,
             capture_output=True,
             text=True,

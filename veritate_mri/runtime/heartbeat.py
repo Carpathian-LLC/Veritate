@@ -26,18 +26,19 @@ import json
 import os
 import platform
 import random
-import socket
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
 
-from readers import paths, models as models_reader
+from readers import models as models_reader
+from readers import paths
+
 from . import logs as logmod
-from . import net
+from . import net, sys_metrics
 from . import settings as settings_mod
-from . import sys_metrics
+from .settings import DEVICE_NAME_MAX_LEN
 
 _SSL_CTX = net.ssl_context()
 
@@ -106,7 +107,7 @@ def _read_state():
     if not os.path.isfile(STATE_PATH):
         return {}
     try:
-        with open(STATE_PATH, "r", encoding="utf-8") as f:
+        with open(STATE_PATH, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
@@ -208,9 +209,8 @@ def _default_device_id():
 def _effective_device_id():
     name = settings_mod.get().get("device_name") or ""
     name = name.strip() if isinstance(name, str) else ""
-    max_len = getattr(settings_mod, "DEVICE_NAME_MAX_LEN", 15)
     if name:
-        return name[:max_len]
+        return name[:DEVICE_NAME_MAX_LEN]
     return _default_device_id()
 
 
@@ -491,7 +491,7 @@ def _diagnostics_block():
     try:
         from training import trainer_runner as _tr
         if os.path.isfile(_tr.RUN_LOG_FILE):
-            with open(_tr.RUN_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+            with open(_tr.RUN_LOG_FILE, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()[-DIAGNOSTICS_PLUGIN_TAIL:]
                 plugin_tail = "".join(lines)[-DIAGNOSTICS_PLUGIN_BYTES:]
     except Exception:
@@ -504,7 +504,7 @@ def _diagnostics_block():
     block = _scrub_paths(block, _path_scrub_pairs())
     # Final budget check: if scrubbed block is still too big (e.g. an unusually
     # large `specs` from an exotic host), drop recent_logs/plugin_run_tail in
-    # order of size until under the cap. specs is preserved — that's the
+    # order of size until under the cap. specs is preserved: that's the
     # value-bearing payload for debugging.
     encoded = json.dumps(block, separators=(",", ":")).encode("utf-8")
     if len(encoded) > DIAGNOSTICS_PAYLOAD_MAX:
@@ -577,7 +577,7 @@ def _send_once():
             pass
         reason = f"http {e.code}: {body_excerpt or e.reason}"
         # HTTP errors are a live-but-unhappy server (auth, 413, 5xx): keep these
-        # at full volume — they're not the offline-machine spam we throttle.
+        # at full volume: they're not the offline-machine spam we throttle.
         logmod.warn("heartbeat", f"send failed: {reason}")
         _update_state({
             "last_send_ts":     int(time.time()),
@@ -585,7 +585,7 @@ def _send_once():
             "last_send_error":  reason,
         })
         return False
-    except (urllib.error.URLError, socket.timeout, OSError) as e:
+    except (TimeoutError, urllib.error.URLError, OSError) as e:
         reason = f"{type(e).__name__}: {e}"
         # Transport-level failures (no route to host, DNS, TLS timeout) are the
         # expected state of an offline device. Throttle so a machine that spends
@@ -619,7 +619,7 @@ def _send_diagnostics_once():
             pass
         logmod.warn("diagnostics", f"send failed: http {e.code}: {body_excerpt or e.reason}")
         return False
-    except (urllib.error.URLError, socket.timeout, OSError) as e:
+    except (TimeoutError, urllib.error.URLError, OSError) as e:
         # Same offline-device throttling as presence sends (see _send_once).
         logmod.emit_throttled("warn", "diagnostics", f"send failed: {type(e).__name__}: {e}",
                               key=_DIAG_THROTTLE_KEY)
@@ -708,7 +708,7 @@ def status():
         "device_id":          _effective_device_id(),
         "device_id_default":  _default_device_id(),
         "device_name":        (settings_mod.get().get("device_name") or ""),
-        "device_name_max":    getattr(settings_mod, "DEVICE_NAME_MAX_LEN", 15),
+        "device_name_max":    DEVICE_NAME_MAX_LEN,
         "enabled":            _enabled(),
         "interval_secs":      HEARTBEAT_INTERVAL_SECS,
         "interval_training_secs": HEARTBEAT_INTERVAL_TRAINING_SECS,
@@ -731,7 +731,7 @@ def send_bench_report(bench_result=None, sysprobe_result=None, trainer_id=None):
     the sysprobe hardware bench + the trainer-specific bench.run result so
     Carpathian aggregates real-machine tuning data across the fleet. Gated by
     analytics_advanced_enabled: no-op silently when the user hasn't opted in.
-    Returns {ok, sent, reason} — never raises, so a modal call site can ignore
+    Returns {ok, sent, reason}: never raises, so a modal call site can ignore
     the return without try/except."""
     if not bool(settings_mod.get().get("analytics_advanced_enabled")):
         return {"ok": True, "sent": False, "reason": "analytics opt-out"}
@@ -752,5 +752,5 @@ def send_bench_report(bench_result=None, sysprobe_result=None, trainer_id=None):
         return {"ok": True, "sent": True, "status": int(status)}
     except urllib.error.HTTPError as e:
         return {"ok": False, "sent": False, "reason": f"http {e.code}"}
-    except (urllib.error.URLError, socket.timeout, OSError) as e:
+    except (TimeoutError, urllib.error.URLError, OSError) as e:
         return {"ok": False, "sent": False, "reason": f"{type(e).__name__}: {e}"}

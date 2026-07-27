@@ -13,9 +13,10 @@
 import os
 
 from flask import current_app, request
-
 from inference.backends.c_engine import CTracedSubprocess
-from readers import bin as binr, config as cfg_reader, engine, models, paths
+from readers import bin as binr
+from readers import config as cfg_reader
+from readers import engine, models, paths
 from runtime import logs as logmod
 from training import build_runner
 
@@ -110,7 +111,8 @@ def register(app):
         boost = binr.act_boost(name) if name else None
         qat = cfg_reader.qat_enabled(name) if name else False
         if boost is not None and boost > 1 and not qat:
-            logmod.warn("backends", f"c-config: {name} act_boost={boost} and config.qat_enabled is not set; output may be gibberish")
+            logmod.warn("backends", f"c-config: {name} act_boost={boost} and config.qat_enabled "
+                                    "is not set; output may be gibberish")
         try:
             sub = CTracedSubprocess(new_exe, new_model)
         except Exception as e:

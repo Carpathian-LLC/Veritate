@@ -15,7 +15,7 @@
 import hmac
 import os
 
-from flask import request, session, redirect, send_from_directory
+from flask import redirect, request, send_from_directory, session
 
 # ------------------------------------------------------------------------------------
 # Constants

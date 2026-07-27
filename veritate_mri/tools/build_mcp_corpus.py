@@ -79,7 +79,7 @@ SERVERS = {
                                         f" for the next {a['days']} day(s)."),
         "get_alerts":   ("Get active weather alerts for a US state.",
                          lambda rng: {"state": rng.choice(STATES)},
-                         lambda rng, a: rng.choice(["No active alerts.", "Wind advisory until 22:00.",
+                         lambda rng, _a: rng.choice(["No active alerts.", "Wind advisory until 22:00.",
                                                     "Flood watch in northern counties."])),
     },
     "github-server": {
@@ -95,16 +95,16 @@ SERVERS = {
     "database-server": {
         "query": ("Run a read-only SQL query.",
                   lambda rng: {"sql": f"SELECT COUNT(*) FROM {rng.choice(TABLES)}"},
-                  lambda rng, a: json.dumps([{"count": rng.randint(3, 90000)}])),
+                  lambda rng, _a: json.dumps([{"count": rng.randint(3, 90000)}])),
     },
     "filesystem-server": {
         "read_file":      ("Read a file and return its text.",
                            lambda rng: {"path": rng.choice(FILEPATHS)},
-                           lambda rng, a: rng.choice(["status=ok\nretries=2", "# Notes\n- ship v2",
+                           lambda rng, _a: rng.choice(["status=ok\nretries=2", "# Notes\n- ship v2",
                                                       "INFO started\nWARN slow disk"])),
         "list_directory": ("List directory entries.",
                            lambda rng: {"path": rng.choice(["/data", "/etc/app", "/var/log"])},
-                           lambda rng, a: json.dumps(rng.sample(
+                           lambda rng, _a: json.dumps(rng.sample(
                                ["a.txt", "b.csv", "config.json", "old/", "cache/"], 3))),
     },
     "stocks-server": {
@@ -116,12 +116,12 @@ SERVERS = {
     "translate-server": {
         "translate": ("Translate text to a target language.",
                       lambda rng: {"text": rng.choice(PHRASES), "target": rng.choice(LANGS)},
-                      lambda rng, a: f"[{a['target']}] {a['text']} (translated)"),
+                      lambda _rng, a: f"[{a['target']}] {a['text']} (translated)"),
     },
     "home-server": {
         "set_light":       ("Turn a room light on or off.",
                             lambda rng: {"room": rng.choice(ROOMS), "state": rng.choice(["on", "off"])},
-                            lambda rng, a: f"Light in {a['room']} is now {a['state']}."),
+                            lambda _rng, a: f"Light in {a['room']} is now {a['state']}."),
         "get_temperature": ("Read a room thermostat.",
                             lambda rng: {"room": rng.choice(ROOMS)},
                             lambda rng, a: f"{a['room']}: {rng.randint(17, 26)} C."),
@@ -129,7 +129,7 @@ SERVERS = {
     "search-server": {
         "web_search": ("Search the web and return top results.",
                        lambda rng: {"query": rng.choice(QUERIES)},
-                       lambda rng, a: f"Top result: '{a['query']} best practices', 2 more results."),
+                       lambda _rng, a: f"Top result: '{a['query']} best practices', 2 more results."),
     },
 }
 
@@ -137,61 +137,83 @@ SERVERS = {
 # bundled as the mcp_docs native corpus.
 MCP_QA = [
     ("What is the Model Context Protocol?",
-     "An open standard that connects AI applications to external tools, data sources, and workflows over a common protocol, so any compliant client can talk to any compliant server."),
+     "An open standard that connects AI applications to external tools, data sources, and workflows over a common "
+     "protocol, so any compliant client can talk to any compliant server."),
     ("What wire format does MCP use?",
-     "JSON-RPC 2.0. Requests carry an id, method, and params; responses carry the matching id with a result or an error."),
+     "JSON-RPC 2.0. Requests carry an id, method, and params; responses carry the matching id with a result or an "
+     "error."),
     ("What are the three server primitives in MCP?",
-     "Tools (model-invoked actions), resources (readable data addressed by URI), and prompts (reusable templates the user can invoke)."),
+     "Tools (model-invoked actions), resources (readable data addressed by URI), and prompts (reusable templates the "
+     "user can invoke)."),
     ("What client capabilities can an MCP client offer a server?",
-     "Sampling (let the server request an LLM completion), roots (tell the server which directories are in scope), and elicitation (let the server ask the user for input)."),
+     "Sampling (let the server request an LLM completion), roots (tell the server which directories are in scope), and "
+     "elicitation (let the server ask the user for input)."),
     ("How does an MCP session start?",
-     "The client sends an initialize request with its protocol version and capabilities. The server replies with its own version, capabilities, and server info. The client then sends the notifications/initialized notification."),
+     "The client sends an initialize request with its protocol version and capabilities. The server replies with its "
+     "own version, capabilities, and server info. The client then sends the notifications/initialized notification."),
     ("What transports does MCP define?",
-     "stdio for local subprocess servers and Streamable HTTP for remote servers. An older HTTP+SSE transport is superseded by Streamable HTTP."),
+     "stdio for local subprocess servers and Streamable HTTP for remote servers. An older HTTP+SSE transport is "
+     "superseded by Streamable HTTP."),
     ("How does a client discover a server's tools?",
-     "It calls tools/list, which returns each tool's name, description, and JSON Schema inputSchema. Results may be paginated with a cursor."),
+     "It calls tools/list, which returns each tool's name, description, and JSON Schema inputSchema. Results may be "
+     "paginated with a cursor."),
     ("How does a client invoke a tool?",
-     "It sends tools/call with the tool name and an arguments object. The result carries a content array (text, image, audio, or resource blocks) and an isError flag."),
+     "It sends tools/call with the tool name and an arguments object. The result carries a content array (text, image, "
+     "audio, or resource blocks) and an isError flag."),
     ("How are MCP protocol versions named?",
      "By date, YYYY-MM-DD. Client and server negotiate a shared version during initialize."),
     ("What happens when a tool call fails inside the tool?",
-     "The server returns a normal tools/call result with isError true and the failure text in content, so the model can read the error and recover. Protocol-level failures use JSON-RPC errors instead."),
+     "The server returns a normal tools/call result with isError true and the failure text in content, so the model "
+     "can read the error and recover. Protocol-level failures use JSON-RPC errors instead."),
     ("What is a resource in MCP?",
-     "Server-exposed data addressed by a URI, such as a file, log, or database row. Clients read it with resources/read; resources/list enumerates what's available."),
+     "Server-exposed data addressed by a URI, such as a file, log, or database row. Clients read it with "
+     "resources/read; resources/list enumerates what's available."),
     ("What is a prompt in MCP?",
-     "A reusable template the server exposes. prompts/list enumerates them; prompts/get returns the messages with arguments substituted."),
+     "A reusable template the server exposes. prompts/list enumerates them; prompts/get returns the messages with "
+     "arguments substituted."),
     ("What does the notifications/tools/list_changed notification mean?",
-     "The server's tool set changed and the client should call tools/list again. Servers declare the listChanged capability to send it."),
+     "The server's tool set changed and the client should call tools/list again. Servers declare the listChanged "
+     "capability to send it."),
     ("What is MCP sampling?",
-     "A server-to-client request (sampling/createMessage) asking the client's LLM to generate a completion. It keeps the API key on the client and lets the user stay in control."),
+     "A server-to-client request (sampling/createMessage) asking the client's LLM to generate a completion. It keeps "
+     "the API key on the client and lets the user stay in control."),
     ("What are roots in MCP?",
      "Client-declared directory URIs that tell a server which parts of the filesystem the session may operate on."),
     ("What is elicitation in MCP?",
-     "A server-to-client request asking the user for structured input mid-session, defined by a JSON schema the client renders as a form."),
+     "A server-to-client request asking the user for structured input mid-session, defined by a JSON schema the client "
+     "renders as a form."),
     ("What JSON-RPC error code does an unknown method return?",
      "-32601, method not found. Invalid params return -32602 and internal errors -32603."),
     ("Who maintains MCP?",
-     "It began at Anthropic and is developed as an open-source project with an open specification, SDKs in many languages, and community governance."),
+     "It began at Anthropic and is developed as an open-source project with an open specification, SDKs in many "
+     "languages, and community governance."),
     ("What is the MCP registry?",
-     "A public index of available MCP servers with their names, descriptions, and install metadata, so clients can discover servers programmatically."),
+     "A public index of available MCP servers with their names, descriptions, and install metadata, so clients can "
+     "discover servers programmatically."),
     ("What is the MCP Inspector?",
-     "A developer tool that connects to a server, lists its tools, resources, and prompts, and lets you exercise them interactively while debugging."),
+     "A developer tool that connects to a server, lists its tools, resources, and prompts, and lets you exercise them "
+     "interactively while debugging."),
     ("How should an MCP server report progress on a long call?",
      "With notifications/progress tied to the request's progressToken, carrying progress and an optional total."),
     ("Can a request be cancelled in MCP?",
-     "Yes. Either side sends notifications/cancelled with the request id; the receiver stops work and does not send a response."),
+     "Yes. Either side sends notifications/cancelled with the request id; the receiver stops work and does not send a "
+     "response."),
     ("What does the ping method do?",
-     "Either side may send ping; the receiver must answer promptly with an empty result. It verifies the connection is alive."),
+     "Either side may send ping; the receiver must answer promptly with an empty result. It verifies the connection is "
+     "alive."),
     ("How is authorization handled for remote MCP servers?",
-     "Streamable HTTP servers use OAuth 2.1: the client obtains a token scoped to the server and must not forward tokens it received from elsewhere."),
+     "Streamable HTTP servers use OAuth 2.1: the client obtains a token scoped to the server and must not forward "
+     "tokens it received from elsewhere."),
     ("Why does MCP separate protocol errors from tool errors?",
-     "Protocol errors (JSON-RPC error objects) mean the machinery failed; tool errors (isError true in the result) mean the action failed in a way the model should read and react to."),
+     "Protocol errors (JSON-RPC error objects) mean the machinery failed; tool errors (isError true in the result) "
+     "mean the action failed in a way the model should read and react to."),
     ("What is in a tools/call result content array?",
      "Blocks typed text, image, audio, resource_link, or embedded resource. Most tools return one text block."),
     ("Does MCP require a specific LLM?",
      "No. The protocol is model-agnostic; any host application with any model can implement an MCP client."),
     ("What is an MCP host versus a client versus a server?",
-     "The host is the AI application. It runs one client per server connection; each client holds a stateful session with one server that provides context and tools."),
+     "The host is the AI application. It runs one client per server connection; each client holds a stateful session "
+     "with one server that provides context and tools."),
 ]
 
 DOC_PROMPTS = [
@@ -207,7 +229,7 @@ def _turn(role, text):
     return f"{IM_START}{role}\n{text}{IM_END}"
 
 
-def _rpc(rng, session_id, method, params=None, result=None, error=None, notify=False):
+def _rpc(session_id, method, params=None, result=None, error=None, notify=False):
     """One transcript line. Client requests '-> ', server replies '<- '."""
     if notify:
         msg = {"jsonrpc": "2.0", "method": method}
@@ -238,39 +260,39 @@ def _protocol_record(rng):
     client = rng.choice(CLIENT_NAMES)
     lines = [f"# MCP session: {client} <-> {server} ({rng.choice(TRANSPORTS)})"]
     rid = 1
-    lines.append(_rpc(rng, rid, "initialize", {
+    lines.append(_rpc(rid, "initialize", {
         "protocolVersion": version,
         "capabilities": {"sampling": {}} if rng.random() < 0.3 else {},
         "clientInfo": {"name": client, "version": f"{rng.randint(0, 3)}.{rng.randint(0, 9)}.0"}}))
-    lines.append(_rpc(rng, rid, None, result={
+    lines.append(_rpc(rid, None, result={
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": True}},
         "serverInfo": {"name": server, "version": f"1.{rng.randint(0, 9)}.0"}}))
-    lines.append(_rpc(rng, None, "notifications/initialized", notify=True))
+    lines.append(_rpc(None, "notifications/initialized", notify=True))
     rid += 1
-    lines.append(_rpc(rng, rid, "tools/list"))
-    lines.append(_rpc(rng, rid, None, result={"tools": _tool_defs(server)}))
+    lines.append(_rpc(rid, "tools/list"))
+    lines.append(_rpc(rid, None, result={"tools": _tool_defs(server)}))
     for _ in range(rng.randint(1, 3)):
         rid += 1
-        name, (desc, arg_maker, res_maker) = rng.choice(sorted(SERVERS[server].items()))
+        name, (_desc, arg_maker, res_maker) = rng.choice(sorted(SERVERS[server].items()))
         args = arg_maker(rng)
-        lines.append(_rpc(rng, rid, "tools/call", {"name": name, "arguments": args}))
+        lines.append(_rpc(rid, "tools/call", {"name": name, "arguments": args}))
         if rng.random() < 0.12:
-            lines.append(_rpc(rng, rid, None, result={
+            lines.append(_rpc(rid, None, result={
                 "content": [{"type": "text", "text": f"error: {name} backend unavailable"}],
                 "isError": True}))
         else:
-            lines.append(_rpc(rng, rid, None, result={
+            lines.append(_rpc(rid, None, result={
                 "content": [{"type": "text", "text": res_maker(rng, args)}], "isError": False}))
     if rng.random() < 0.15:
         rid += 1
         bad = rng.choice(["resources/subscribe", "tools/enable", "prompts/run"])
-        lines.append(_rpc(rng, rid, bad))
-        lines.append(_rpc(rng, rid, None, error={"code": -32601, "message": "Method not found"}))
+        lines.append(_rpc(rid, bad))
+        lines.append(_rpc(rid, None, error={"code": -32601, "message": "Method not found"}))
     if rng.random() < 0.2:
         rid += 1
-        lines.append(_rpc(rng, rid, "ping"))
-        lines.append(_rpc(rng, rid, None, result={}))
+        lines.append(_rpc(rid, "ping"))
+        lines.append(_rpc(rid, None, result={}))
     return "\n".join(lines) + "\n" + EOT + "\n"
 
 
@@ -337,7 +359,7 @@ def _load_doc_passages():
 
 
 def _assemble(rng, doc_passages, target_bytes):
-    kinds, weights = zip(*RECORD_WEIGHTS.items())
+    kinds, weights = zip(*RECORD_WEIGHTS.items(), strict=True)
     out, written = [], 0
     while written < target_bytes:
         kind = rng.choices(kinds, weights=weights)[0]

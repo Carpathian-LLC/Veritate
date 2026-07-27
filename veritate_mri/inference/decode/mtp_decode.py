@@ -19,7 +19,6 @@ import time
 
 import torch
 
-
 # ------------------------------------------------------------------------------------
 # Constants
 
@@ -51,8 +50,7 @@ class MTPDecoder:
         x = m.embed(tokens)
         x = m.run_blocks(x)
         x = m.n_out(x)
-        all_logits = m.mtp(x)
-        return all_logits
+        return m.mtp(x)
 
     # --------------------------------------------------------------------------
     # Sampling. Greedy for determinism; temperature is a multiplier on logits
@@ -123,7 +121,7 @@ class MTPDecoder:
     #      produced (so it's "verified" for free).
     #   2. Run a SECOND forward at C ++ d_0..d_{K-2} (length K-1 appended). For
     #      i in 1..K-1, the head-0 prediction at position (T + i - 1) in pass 2
-    #      is the head-0 byte-at-that-context — i.e. what straight head0_only
+    #      is the head-0 byte-at-that-context: i.e. what straight head0_only
     #      decode would produce after observing d_0..d_{i-1}. Accept d_i if it
     #      matches that head-0 prediction.
     #   3. Take the longest prefix that matches, ALWAYS extend by one
@@ -191,7 +189,7 @@ class MTPDecoder:
                     mismatch_at = i
                     # On mismatch, take the head-0 byte instead. This is the
                     # byte that head0_only would have produced from the same
-                    # context — so the output is byte-exact lossless.
+                    # context: so the output is byte-exact lossless.
                     accepted.append(vp)
                     break
 

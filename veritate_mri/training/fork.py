@@ -33,7 +33,9 @@ import json
 import os
 import shutil
 
-from readers import checkpoints, config as cfg_reader, models as models_reader, paths
+from readers import checkpoints, paths
+from readers import config as cfg_reader
+from readers import models as models_reader
 from runtime import logs as logmod
 
 # ------------------------------------------------------------------------------------
@@ -95,11 +97,11 @@ def fork_model(source, new_name):
     # filesystems; we copy to a .part path and rename.
     try:
         os.makedirs(new_ckpt_dir, exist_ok=False)
-    except FileExistsError:
+    except FileExistsError as e:
         # Someone else created it between the exists() check and now.
-        raise ForkError(f"directory for {new_name!r} appeared during fork")
+        raise ForkError(f"directory for {new_name!r} appeared during fork") from e
     except OSError as e:
-        raise ForkError(f"could not create {new_dir}: {e}")
+        raise ForkError(f"could not create {new_dir}: {e}") from e
 
     try:
         # Copy the checkpoint.
@@ -136,7 +138,7 @@ def fork_model(source, new_name):
         if os.path.isfile(src_csv):
             dst_csv = paths.train_csv_path(new_name)
             tmp_csv = dst_csv + ".part"
-            with open(src_csv, "r", encoding="utf-8") as f_in, \
+            with open(src_csv, encoding="utf-8") as f_in, \
                  open(tmp_csv, "w", encoding="utf-8", newline="") as f_out:
                 header = f_in.readline()
                 f_out.write(header)
@@ -196,9 +198,10 @@ def fork_model(source, new_name):
         # Roll back the partial directory so the user isn't left with a
         # broken model entry.
         shutil.rmtree(new_dir, ignore_errors=True)
-        raise ForkError(f"fork failed during copy: {e}")
+        raise ForkError(f"fork failed during copy: {e}") from e
 
-    logmod.ok("training-fork", f"forked {source}@{latest} -> {new_name} (hooks: {hook_files} files, csv rows: {csv_rows_kept})")
+    logmod.ok("training-fork",
+              f"forked {source}@{latest} -> {new_name} (hooks: {hook_files} files, csv rows: {csv_rows_kept})")
     return {
         "ok":             True,
         "source":         source,

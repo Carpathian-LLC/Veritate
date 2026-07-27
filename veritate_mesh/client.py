@@ -14,11 +14,9 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-
 from dataclasses import asdict
-from typing import Optional
 
-from .protocol import Capabilities, Job, PROTOCOL_VERSION
+from .protocol import PROTOCOL_VERSION, Capabilities, Job
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -53,7 +51,7 @@ def _decode_body(raw: bytes) -> dict:
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
-        raise HubClientError(f"invalid json from hub: {e}")
+        raise HubClientError(f"invalid json from hub: {e}") from e
     if not isinstance(data, dict):
         raise HubClientError(f"expected json object, got {type(data).__name__}")
     return data
@@ -80,14 +78,14 @@ class HubClient:
 
     # --------------------------------------------------------------------------------
 
-    def _url(self, path: str, query: Optional[dict] = None) -> str:
+    def _url(self, path: str, query: dict | None = None) -> str:
         url = self.hub_address + path
         if query:
             url = url + "?" + urllib.parse.urlencode(query)
         return url
 
-    def _request(self, method: str, path: str, body: Optional[dict] = None,
-                 query: Optional[dict] = None, timeout: Optional[float] = None):
+    def _request(self, method: str, path: str, body: dict | None = None,
+                 query: dict | None = None, timeout: float | None = None):
         url = self._url(path, query)
         data = json.dumps(body, separators=(",", ":")).encode("utf-8") if body is not None else None
         req = urllib.request.Request(url, data=data, method=method)
@@ -109,9 +107,9 @@ class HubClient:
                 raw = b""
             _raise_http(e.code, raw)
         except urllib.error.URLError as e:
-            raise HubClientError(f"network error: {e.reason}")
+            raise HubClientError(f"network error: {e.reason}") from e
         except (TimeoutError, OSError) as e:
-            raise HubClientError(f"socket error: {e}")
+            raise HubClientError(f"socket error: {e}") from e
 
     # --------------------------------------------------------------------------------
 
@@ -131,7 +129,7 @@ class HubClient:
             _raise_http(status, raw)
         return _decode_body(raw)
 
-    def poll_job(self, caps: Capabilities, long_poll_secs: float = 25.0) -> Optional[Job]:
+    def poll_job(self, caps: Capabilities, long_poll_secs: float = 25.0) -> Job | None:
         """GET /mesh/job/next?node_id=...&long_poll=N. returns Job or None on 204.
         long_poll_secs MUST be honored by the hub; this client just sets a slightly
         higher http timeout to cover the wait."""
@@ -150,7 +148,7 @@ class HubClient:
         try:
             return Job.from_dict(data)
         except (KeyError, TypeError, ValueError) as e:
-            raise HubClientError(f"malformed job payload: {e}")
+            raise HubClientError(f"malformed job payload: {e}") from e
 
     def report_progress(self, job_id: str, progress: dict) -> bool:
         """POST /mesh/job/{job_id}/progress."""

@@ -21,7 +21,7 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict
+from typing import Any
 
 from . import Tool
 
@@ -54,7 +54,7 @@ def _validate_url(url: str) -> str:
     try:
         infos = socket.getaddrinfo(p.hostname, p.port or (443 if p.scheme == "https" else 80))
     except socket.gaierror as e:
-        raise ValueError(f"dns resolution failed: {e}")
+        raise ValueError(f"dns resolution failed: {e}") from e
     for info in infos:
         addr = info[4][0]
         try:
@@ -91,7 +91,7 @@ def _fetch(url: str, length: int = _MAX_BYTES) -> str:
             try:
                 _validate_url(new_url)
             except ValueError as e:
-                raise urllib.error.HTTPError(req.full_url, 403, f"refused redirect: {e}", headers, fp)
+                raise urllib.error.HTTPError(req.full_url, 403, f"refused redirect: {e}", headers, fp) from e
             return super().http_error_302(req, fp, code, msg, headers)
         http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
 
@@ -111,11 +111,10 @@ def _fetch(url: str, length: int = _MAX_BYTES) -> str:
         return f"error: {type(e).__name__}: {e}"
 
     # Decode using a best-effort charset.
-    text = raw.decode("utf-8", errors="replace")
-    return text
+    return raw.decode("utf-8", errors="replace")
 
 
-def _execute(args: Dict[str, Any]) -> str:
+def _execute(args: dict[str, Any]) -> str:
     url = args.get("url")
     if url is None:
         return "error: missing required arg 'url'"
