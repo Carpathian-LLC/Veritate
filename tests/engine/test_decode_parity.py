@@ -4,11 +4,11 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - canonical-compat regression for the v13 engine changes: a v9 fixture must
-#   greedy-decode byte-identically to the golden transcript recorded from the
-#   pre-v13 engine build. plus a v13 fixture load + generate smoke.
+# - greedy-decode parity for the engine: the canonical int8 fixture must match
+#   the golden transcript byte for byte, and the hybrid-trunk fixture must match
+#   itself across the scalar, SIMD, and threaded matvec paths.
 # - requires the built engine binary; skips when absent.
-# tests/engine/test_v13_compat.py
+# tests/engine/test_decode_parity.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
@@ -23,9 +23,9 @@ from readers import paths
 # Constants
 
 FIXTURES     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
-V9_FIXTURE   = os.path.join(FIXTURES, "canon_v9_fixture.bin")
-V9_GOLDEN    = os.path.join(FIXTURES, "canon_v9_greedy_golden.bin")
-V13_FIXTURE  = os.path.join(FIXTURES, "hybrid_v13_fixture.bin")
+CANON_FIXTURE  = os.path.join(FIXTURES, "canonical_fixture.bin")
+CANON_GOLDEN   = os.path.join(FIXTURES, "canonical_greedy_golden.bin")
+HYBRID_FIXTURE = os.path.join(FIXTURES, "hybrid_fixture.bin")
 PROMPTS      = b"Hello world\nabc def\nOnce upon a time\n"
 BUDGET       = "32"
 N_TURNS      = 3
@@ -61,23 +61,23 @@ def _greedy(exe, bin_path, scalar=False, threads=None):
     return p.stdout
 
 
-def test_v9_greedy_matches_golden():
-    """v9 fixture greedy transcript is byte-identical to the pre-v13 recording."""
-    with open(V9_GOLDEN, "rb") as f:
+def test_canonical_greedy_matches_golden():
+    """Canonical int8 fixture greedy transcript is byte-identical to the golden recording."""
+    with open(CANON_GOLDEN, "rb") as f:
         golden = f.read()
-    assert _greedy(_engine(), V9_FIXTURE) == golden
+    assert _greedy(_engine(), CANON_FIXTURE) == golden
 
 
-def test_v13_fixture_loads_and_generates():
-    """v13 fixture loads and emits the full greedy budget for every turn."""
-    out = _greedy(_engine(), V13_FIXTURE)
+def test_hybrid_fixture_loads_and_generates():
+    """Hybrid-trunk fixture loads and emits the full greedy budget for every turn."""
+    out = _greedy(_engine(), HYBRID_FIXTURE)
     assert len(out) == N_TURNS * (int(BUDGET) + 1)
 
 
-def test_v13_simd_matches_scalar():
-    """v13 hybrid SIMD matvec (neon/avx2) greedy-decodes byte-identically to scalar."""
+def test_hybrid_simd_matches_scalar():
+    """Hybrid fp32 SIMD matvec (neon/avx2) greedy-decodes byte-identically to scalar."""
     exe = _engine()
-    assert _greedy(exe, V13_FIXTURE) == _greedy(exe, V13_FIXTURE, scalar=True)
+    assert _greedy(exe, HYBRID_FIXTURE) == _greedy(exe, HYBRID_FIXTURE, scalar=True)
 
 
 def _export_fixture(tmp_path, monkeypatch, shape, name, dtype):
@@ -100,22 +100,22 @@ def _export_fixture(tmp_path, monkeypatch, shape, name, dtype):
     return export.export_checkpoint(name, I8_STEP, dtype=dtype)["path"]
 
 
-def test_v13_int8_simd_matches_scalar(tmp_path, monkeypatch):
-    """v13 int8 hybrid SIMD matvec (avx2/sdot) greedy-decodes byte-identically to scalar."""
+def test_hybrid_int8_simd_matches_scalar(tmp_path, monkeypatch):
+    """Hybrid int8 SIMD matvec (avx2/sdot) greedy-decodes byte-identically to scalar."""
     exe = _engine()
     bin_path = _export_fixture(tmp_path, monkeypatch, I8_SHAPE, I8_NAME, "int8")
     assert _greedy(exe, bin_path) == _greedy(exe, bin_path, scalar=True)
 
 
-def test_v13_threaded_matches_single_thread(tmp_path, monkeypatch):
-    """v13 row-split threaded matvec greedy-decodes byte-identically to VERITATE_HYBRID_THREADS=1."""
+def test_hybrid_threaded_matches_single_thread(tmp_path, monkeypatch):
+    """Row-split threaded matvec greedy-decodes byte-identically to VERITATE_HYBRID_THREADS=1."""
     exe = _engine()
     bin_path = _export_fixture(tmp_path, monkeypatch, MT_SHAPE, MT_NAME, "fp16")
     assert _greedy(exe, bin_path, threads=MT_THREADS) == _greedy(exe, bin_path, threads=1)
 
 
-def test_v13_auto_matches_single_thread(tmp_path, monkeypatch):
-    """v13 auto-calibrated thread count greedy-decodes byte-identically to VERITATE_HYBRID_THREADS=1."""
+def test_hybrid_auto_matches_single_thread(tmp_path, monkeypatch):
+    """Auto-calibrated thread count greedy-decodes byte-identically to VERITATE_HYBRID_THREADS=1."""
     exe = _engine()
     monkeypatch.delenv("VERITATE_HYBRID_THREADS", raising=False)
     bin_path = _export_fixture(tmp_path, monkeypatch, MT_SHAPE, MT_NAME, "fp16")

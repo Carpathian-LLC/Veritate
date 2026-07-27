@@ -101,31 +101,58 @@ def _free(device):
         torch.cuda.empty_cache()
 
 
-def _step(model, opt, batch, seq, vocab, device):
+def _step(model, opt, batch, seq, vocab, device, amp_dtype=None,
+          n_chunks=1, bptt_window=1):
+    """One probe step shaped like the real training step, not a proxy of it.
+
+    Two things the trainer does that a single seq-sized forward does not:
+      - it draws seq * n_chunks bytes per step and walks them chunk by chunk,
+        so per-step COMPUTE scales with n_chunks;
+      - it holds bptt_window chunk losses in the graph before each backward,
+        so peak ACTIVATION MEMORY scales with bptt_window, not with 1.
+    Probing one chunk under-reports the memory peak by ~bptt_window and
+    over-reports throughput, which picks a batch size that then thrashes."""
     import torch
-    toks = torch.randint(0, vocab, (batch, seq), device=device)
-    tgts = torch.randint(0, vocab, (batch, seq), device=device)
+    total_len = seq * max(1, int(n_chunks))
+    nch = max(1, total_len // seq)
+    K = max(1, int(bptt_window))
+    toks = torch.randint(0, vocab, (batch, total_len), device=device)
+    tgts = torch.randint(0, vocab, (batch, total_len), device=device)
     opt.zero_grad(set_to_none=True)
-    out = model(toks, tgts)
-    loss = out[1] if isinstance(out, (tuple, list)) else out
-    loss.backward()
+    window = []
+    for cstart in range(0, total_len, seq):
+        ct = toks[:, cstart:cstart + seq]
+        cg = tgts[:, cstart:cstart + seq]
+        if ct.size(1) < 2:
+            break
+        with torch.autocast(device_type=device, dtype=amp_dtype, enabled=(amp_dtype is not None)):
+            out = model(ct, cg)
+            loss = out[1] if isinstance(out, (tuple, list)) else out
+        window.append(loss)
+        if len(window) >= K or (cstart + seq) >= total_len:
+            (torch.stack(window).sum() / nch).backward()
+            window = []
     opt.step()
-    del toks, tgts, loss
+    del toks, tgts, window
 
 
-def _measure_batch(model, opt, batch, seq, vocab, device):
-    """Run warmup + timed steps at one batch size. Returns (mem_bytes, tok_per_s)."""
+def _measure_batch(model, opt, batch, seq, vocab, device, amp_dtype=None,
+                   n_chunks=1, bptt_window=1):
+    """Run warmup + timed steps at one batch size. Returns (mem_bytes, tok_per_s).
+    Tokens counted per step are batch * seq * n_chunks, which is what the
+    trainer actually consumes per step."""
     import torch
     for _ in range(WARMUP_STEPS):
-        _step(model, opt, batch, seq, vocab, device)
+        _step(model, opt, batch, seq, vocab, device, amp_dtype, n_chunks, bptt_window)
     _reset_high_water(device)
     start = time.perf_counter()
     for _ in range(TIMED_STEPS):
-        _step(model, opt, batch, seq, vocab, device)
+        _step(model, opt, batch, seq, vocab, device, amp_dtype, n_chunks, bptt_window)
     if device in ("mps", "cuda"):
         getattr(torch, device).synchronize()
     elapsed = time.perf_counter() - start
-    tok_per_s = (batch * seq * TIMED_STEPS) / elapsed if elapsed > 0 else 0.0
+    step_tokens = batch * seq * max(1, int(n_chunks))
+    tok_per_s = (step_tokens * TIMED_STEPS) / elapsed if elapsed > 0 else 0.0
     return _device_high_water(device), tok_per_s
 
 
@@ -146,7 +173,8 @@ def plan_result(plan, device, seq):
             **_bucket_gb(plan)}
 
 
-def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=None, plan=None):
+def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=None, plan=None,
+        amp_dtype=None, n_chunks=1, bptt_window=1):
     """Ramp batch size on `model` until OOM; return the measured memory ceiling and
     throughput. When `plan` is an optimizer-offload tier the probe optimizer is the
     NVMe-paged AdamW, so the measured tok/s reflects the real paged regime, not a
@@ -206,7 +234,8 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
                      f"({ceiling_label} found)")
                 break
         try:
-            mem, tok_per_s = _measure_batch(model, opt, batch, seq, vocab, device)
+            mem, tok_per_s = _measure_batch(model, opt, batch, seq, vocab, device, amp_dtype,
+                                            n_chunks, bptt_window)
         except RuntimeError as exc:
             _free(device)
             if oom_recovery.is_oom_error(exc):

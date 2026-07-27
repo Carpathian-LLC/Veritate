@@ -172,8 +172,8 @@ _RAG_CACHE_LOCK = threading.Lock()
 # Functions
 
 def _reduce_full(raw, shape):
-    """Compute the four heavy-array reductions from a raw TFRM v8 frame (the Python
-    path). Produces the same reduced fields the engine emits directly in a TFRC v9
+    """Compute the four heavy-array reductions from a raw TFRM frame (the Python
+    path). Produces the same reduced fields the engine emits directly in a TFRC
     frame, so _assemble_frame is backend-agnostic."""
     n_layers = shape["layers"]
     n_heads  = shape["heads"]
@@ -237,7 +237,7 @@ def _reduce_full(raw, shape):
 
 
 def _reduce_compact(raw, shape):
-    """Assemble the reduced fields from a TFRC v9 frame, where the engine already did
+    """Assemble the reduced fields from a TFRC frame, where the engine already did
     the heavy reductions. Only light formatting/rounding + base64-packing remains, so
     per-byte numpy work on the box drops to near zero."""
     n_ffn = shape["ffn"]
@@ -340,12 +340,12 @@ def _assemble_frame(raw, reduced, fwd_ms, shape):
 
 
 def _build_c_mri_frame(raw, fwd_ms, shape):
-    """Raw TFRM v8 path: reduce the heavy arrays in Python, then assemble."""
+    """Raw TFRM path: reduce the heavy arrays in Python, then assemble."""
     return _assemble_frame(raw, _reduce_full(raw, shape), fwd_ms, shape)
 
 
 def _build_c_mri_frame_compact(raw, fwd_ms, shape):
-    """Compact TFRC v9 path: the engine already reduced the heavy arrays; just format
+    """Compact TFRC path: the engine already reduced the heavy arrays; just format
     and assemble. Same output schema as the full path, ~30x smaller wire frame."""
     return _assemble_frame(raw, _reduce_compact(raw, shape), fwd_ms, shape)
 
@@ -380,7 +380,7 @@ def _c_engine_stream(cfg, prompt, max_new, temperature=TEMPERATURE_DEFAULT, top_
         "c_model_dir": model_name,
         "c_model_path": model_path,
     }
-    # Compact TFRC v9 frames are opt-in from Settings -> Advanced (persisted in
+    # Compact TFRC frames are opt-in from Settings -> Advanced (persisted in
     # mri_settings.json, survives deploys). Read per stream so a GUI toggle takes
     # effect on the next chat with no restart.
     want_compact = bool(trace and settings_mod.get().get("mri_compact_frames", False))
@@ -919,8 +919,6 @@ def register(app):
             "c_exe":      os.path.basename(cur_exe) if cur_exe else None,
             "c_exe_path": cur_exe,
             "c_engine_version": eng["version"] if eng else None,
-            "c_engine_label":   eng["label"]   if eng else None,
-            "c_engine_perf_ms_per_byte": eng["perf_ms_per_byte"] if eng else None,
             "c_model":      os.path.basename(c_model_path) if c_model_path else None,
             "c_model_dir":  c_model_dir,
             "c_model_path": c_model_path,

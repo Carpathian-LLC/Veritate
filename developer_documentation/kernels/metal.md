@@ -4,8 +4,8 @@
 
 GPU compute backend for the C engine on macOS, used where PyTorch has no backend at all (discrete AMD GPUs on Intel Macs and AMD eGPUs: MPS is Apple-Silicon-only, ROCm is Linux-only). Two pieces: an Objective-C bridge that probes the device and dispatches shaders, and the Metal Shading Language kernels themselves.
 
-- Bridge: [`veritate_engine/v1/src/metal_dispatch.h`](../../veritate_engine/v1/src/metal_dispatch.h) + `metal_dispatch.m`. C-callable so the rest of the engine (plain C) links against it without ObjC.
-- Shader: [`veritate_engine/v1/kernels/metal/matmul_int8.metal`](../../veritate_engine/v1/kernels/metal/matmul_int8.metal). Naive int8 matmul, one thread per output element, no threadgroup shared memory. Metal 1 family compatible.
+- Bridge: [`veritate_engine/src/metal_dispatch.h`](../../veritate_engine/src/metal_dispatch.h) + `metal_dispatch.m`. C-callable so the rest of the engine (plain C) links against it without ObjC.
+- Shader: [`veritate_engine/kernels/metal/matmul_int8.metal`](../../veritate_engine/kernels/metal/matmul_int8.metal). Naive int8 matmul, one thread per output element, no threadgroup shared memory. Metal 1 family compatible.
 
 `METAL_DISPATCH_AVAILABLE` is 1 on `__APPLE__` and 0 elsewhere, so the header compiles to no-ops on other platforms and the engine links unchanged.
 
@@ -35,7 +35,7 @@ Both subcommands are compiled in only under `METAL_DISPATCH_AVAILABLE` (`src/mai
 
 ## build
 
-[`veritate_engine/v1/build/build.sh`](../../veritate_engine/v1/build/build.sh) pass 2.5 (macOS only):
+[`veritate_engine/build/build.sh`](../../veritate_engine/build/build.sh) pass 2.5 (macOS only):
 
 1. The ObjC bridge always compiles on macOS so the `metal_*` symbols resolve at link time; links `-framework Metal -framework Foundation -framework CoreGraphics`.
 2. Every `.metal` under `kernels/metal/` compiles to `.air` via `xcrun -sdk macosx metal -c`, then links to `default.metallib` via `xcrun metallib`.

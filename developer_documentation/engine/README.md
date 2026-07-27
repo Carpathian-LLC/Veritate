@@ -6,14 +6,13 @@ Veritate's inference engine. Hand-coded INT8 transformer forward and decode in C
 
 ```
 veritate_engine/
-└── v1/                                  # primary engine
-    ├── src/{main,model,dispatch,...}.c
-    ├── kernels/{scalar,arm64,x86_64,inline}/
-    ├── build/{build.sh,build.bat,setup.*}
-    └── bin/<os>/<arch>/veritate
+├── src/{main,model,dispatch,...}.c
+├── kernels/{scalar,arm64,x86_64,inline}/
+├── build/{build.sh,build.bat,setup.*}
+└── bin/<os>/<arch>/veritate
 ```
 
-`v1/` is the only engine that builds and ships. See `v1.md` for engine details.
+See [reference.md](reference.md) for engine details, [hybrid_trunk.md](hybrid_trunk.md) for the hybrid trunk, and [state_cache.md](state_cache.md) for the prompt/state cache. The engine version is the `engine` key in [versions.json](../../versions.json).
 
 ## supported `.bin` formats
 
@@ -32,8 +31,8 @@ The engine reads any `VRTE` `.bin` whose version is in this table. Format select
 ## build
 
 ```bash
-bash veritate_engine/v1/build/build.sh
-# -> veritate_engine/v1/bin/<os>/<arch>/veritate
+bash veritate_engine/build/build.sh
+# -> veritate_engine/bin/<os>/<arch>/veritate
 ```
 
 The script detects `uname -s/-m` and selects the matching kernel translation units. Apple M1 gets `-mcpu=apple-m1` (NEON + SDOT implied). x86_64 builds with AVX2 + AVX-512 + VNNI. Linux ARM64 uses `-march=armv8.2-a+dotprod`.
@@ -42,17 +41,17 @@ The script detects `uname -s/-m` and selects the matching kernel translation uni
 
 ```bash
 export VERITATE_MODEL_PATH=$(pwd)/models/<name>/veritate.bin
-veritate_engine/v1/bin/<os>/<arch>/veritate chat_greedy 200
+veritate_engine/bin/<os>/<arch>/veritate chat_greedy 200
 ```
 
-Subcommands: `chat`, `chat_greedy`, `trace`, `bench`. Optional environment overrides: `VERITATE_ACT_BOOST=N`, `VERITATE_MAX_LAYERS=N`, `VERITATE_STATE_CACHE=<dir>` (persistent v13 prefill cache, see `state_cache.md`). See `v1.md` for the full reference.
+Subcommands: `chat`, `chat_greedy`, `trace`, `bench`. Optional environment overrides: `VERITATE_ACT_BOOST=N`, `VERITATE_MAX_LAYERS=N`, `VERITATE_STATE_CACHE=<dir>` (persistent hybrid-trunk prefill cache, see [state_cache.md](state_cache.md)). See [reference.md](reference.md) for the full reference.
 
 ## resolving the binary path
 
 ```python
 from veritate_mri.readers import paths
 paths.engine_binary_path()
-# -> .../veritate_engine/v1/bin/<os>/<arch>/veritate
+# -> .../veritate_engine/bin/<os>/<arch>/veritate
 ```
 
 `paths.engine_binary_path()` is the single source of truth; the dashboard, build runner, and any tool that invokes the engine read from it.

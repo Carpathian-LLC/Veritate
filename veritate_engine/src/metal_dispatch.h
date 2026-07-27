@@ -13,7 +13,7 @@
 //   has not been validated for correctness or tuned for any specific GPU.
 //   Treat outputs as "shape-correct, values-uncertain" until verify-metal
 //   reports bit-match against the CPU reference on the target machine.
-// veritate_engine/v1/src/metal_dispatch.h
+// veritate_engine/src/metal_dispatch.h
 // ------------------------------------------------------------------------------------
 
 #ifndef VERITATE_METAL_DISPATCH_H

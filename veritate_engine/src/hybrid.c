@@ -4,11 +4,11 @@
 // Legal Notice: Distribution Not Authorized.
 // ------------------------------------------------------------------------------------
 // Notes:
-// - v13 hybrid loader + fp32 scalar forward. one byte per hybrid_step: embed,
+// - hybrid-trunk loader + fp32 scalar forward. one byte per hybrid_step: embed,
 //   n_enc local attn blocks, boundary-gated recurrent slot stack, n_dec local
 //   attn blocks, tied lm_head. matches veritate_core/model_patched.py +
 //   model_recurrent.py decode-form math. spec:
-//   developer_documentation/engine/engine_v13_hybrid.md.
+//   developer_documentation/engine/hybrid_trunk.md.
 // - scalar matvec accumulates in 4 interleaved partial sums; SIMD ports must be
 //   bitwise-identical (rule 24).
 // ------------------------------------------------------------------------------------
@@ -247,7 +247,7 @@ void hybrid_dispatch_init(int32_t dtype) {
 // ------------------------------------------------------------------------------------
 
 #define HYBRID_MT_MIN_WORK     (1 << 18)
-#define HYBRID_MT_MIN_WORK_I8  (1 << 23)
+#define HYBRID_MT_MIN_ELEMS    (1 << 8)
 #define HYBRID_MT_MAX          32
 
 // micro-calibration: warmup + a decode burst per rung whose median matches the
@@ -341,15 +341,14 @@ static void hybrid_mv_split(const hybrid_t* h, const void* w, const float* x,
     veritate_pool_run(hybrid_mv_worker, args, used);
 }
 
-// big-weight matvec entry: split at the calibrated worker count above the dtype
-// work floor, else single-thread. int8 keeps a higher floor: the sdot kernel
-// runs ~4x the fp rate, so it stays 1T-optimal until re-measured on an int8 bin.
+// big-weight matvec entry: split at the calibrated worker count above the pool
+// work floor, else single-thread. one floor for every dtype: it bounds pool
+// dispatch overhead, which does not vary with weight width, and the per-box
+// calibration decides whether the split pays.
 static void hybrid_mv(const hybrid_t* h, const void* w, const float* x,
                       float* out, int32_t n, int32_t k) {
-    const int i8 = h->dtype == VERITATE_HYBRID_DTYPE_INT8;
-    const int64_t min_work = i8 ? HYBRID_MT_MIN_WORK_I8 : HYBRID_MT_MIN_WORK;
     int32_t nt = hybrid_threads();
-    if (nt <= 1 || (int64_t)n * k < min_work) {
+    if (nt <= 1 || (int64_t)n * k < HYBRID_MT_MIN_WORK) {
         hybrid_matvec_wt(w, x, out, n, k);
         return;
     }
@@ -409,7 +408,7 @@ static void hybrid_mm_split(const void* w, const float* X, float* out, int32_t n
 }
 
 // batched-matmul entry: hoist int8 activation quant, then j-split at the
-// calibrated worker count above the dtype work floor (a matmul's work is B times
+// calibrated worker count above the pool work floor (a matmul's work is B times
 // a matvec's, so the gate clears far more readily), else single-thread.
 static void hybrid_mm(const hybrid_t* h, const void* w, const float* X,
                       float* out, int32_t n, int32_t k, int32_t B) {
@@ -418,9 +417,8 @@ static void hybrid_mm(const hybrid_t* h, const void* w, const float* X,
     if (i8)
         for (int32_t b = 0; b < B; b++)
             a_scale[b] = hybrid_quant_act(X + (size_t)b * k, k, h->pf_qx + (size_t)b * k);
-    const int64_t min_work = i8 ? HYBRID_MT_MIN_WORK_I8 : HYBRID_MT_MIN_WORK;
     int32_t nt = hybrid_threads();
-    if (nt <= 1 || (int64_t)n * k * B < min_work) {
+    if (nt <= 1 || (int64_t)n * k * B < HYBRID_MT_MIN_WORK) {
         hybrid_matmul_wt(w, X, out, n, k, B, h->pf_qx, a_scale, 0, n);
         return;
     }
@@ -466,11 +464,9 @@ static uint64_t calib_time_rung(hybrid_t* h, int32_t nt, int32_t byte) {
 }
 
 static int32_t hybrid_calibrate(hybrid_t* h) {
-    // reserve one core for the dispatching thread: veritate_pool_run busy-spins
-    // on the completion count while workers run, so proposing pool_size workers
-    // guarantees the dispatcher oversubscribes. the override still reaches the
-    // full pool; auto-calibration never does.
-    int32_t cap = veritate_pool_size() - 1;
+    // the full pool is proposable: veritate_pool_run runs the last span on the
+    // calling thread, so an n-way split occupies n cores, not n + a spinner.
+    int32_t cap = veritate_pool_size();
     if (cap > HYBRID_MT_MAX) cap = HYBRID_MT_MAX;
     if (cap < 2) return 1;
     int32_t byte = 0;
@@ -509,11 +505,13 @@ static int32_t hybrid_calibrate(hybrid_t* h) {
     return rungs[pick];
 }
 
-// fnv-1a over the shape fields that move the calibrated pick plus the core
-// count. a mismatch (re-export, different box) invalidates the cached value.
+// fnv-1a over the shape fields that move the calibrated pick, the core count,
+// and the split floor. a mismatch (re-export, different box, an engine build
+// that changed which matvecs split at all) invalidates the cached value.
 static uint64_t hybrid_shape_sig(const hybrid_t* h) {
     int32_t f[] = { h->hidden, h->layers, h->ffn, h->heads, h->seq, h->dtype,
-                    h->n_enc, h->n_global, h->n_dec, veritate_pool_size() };
+                    h->n_enc, h->n_global, h->n_dec, veritate_pool_size(),
+                    HYBRID_MT_MIN_WORK };
     uint64_t s = HYBRID_TCACHE_FNV_OFF;
     for (size_t i = 0; i < sizeof(f) / sizeof(f[0]); i++)
         s = (s ^ (uint64_t)(uint32_t)f[i]) * HYBRID_TCACHE_FNV_PRM;
@@ -603,6 +601,35 @@ static void gelu_f32(float* x, int32_t n) {
     }
 }
 
+// exact-erf GELU is scalar libm and dominates the FFN once the matvecs are
+// threaded (measured 79 ns/element on an i7-9700T, 1.3 ms per byte over the
+// local blocks alone). It is elementwise, so a contiguous split is
+// bitwise-identical at any worker count and needs no reduction.
+typedef struct { float* x; int32_t n; } hybrid_gelu_span_t;
+
+static void hybrid_gelu_worker(void* arg, int32_t idx) {
+    (void)idx;
+    const hybrid_gelu_span_t* s = (const hybrid_gelu_span_t*)arg;
+    gelu_f32(s->x, s->n);
+}
+
+static void hybrid_gelu(float* x, int32_t n) {
+    int32_t nt = hybrid_threads();
+    if (nt <= 1 || n < HYBRID_MT_MIN_ELEMS) { gelu_f32(x, n); return; }
+    hybrid_gelu_span_t spans[HYBRID_MT_MAX];
+    void* args[HYBRID_MT_MAX];
+    int32_t per = (n + nt - 1) / nt, used = 0;
+    for (int32_t t = 0; t < nt; t++) {
+        int32_t i0 = t * per;
+        if (i0 >= n) break;
+        spans[used].x = x + i0;
+        spans[used].n = (i0 + per > n ? n : i0 + per) - i0;
+        args[used] = &spans[used];
+        used++;
+    }
+    veritate_pool_run(hybrid_gelu_worker, args, used);
+}
+
 static float softplus_f32(float x) {
     return x > HYBRID_SOFTPLUS_THR ? x : log1pf(expf(x));
 }
@@ -667,19 +694,27 @@ static void local_block_step(hybrid_t* h, const hybrid_block_t* b, int32_t li,
     memcpy(k_base + (size_t)pos * H, h->qkv + H,     (size_t)H * sizeof(float));
     memcpy(v_base + (size_t)pos * H, h->qkv + 2 * H, (size_t)H * sizeof(float));
 
+    // position-outer, head-inner: each cached K/V row is streamed once for all
+    // heads instead of once per head. per (head, d) the j accumulation order is
+    // unchanged, so every output float is bitwise-equal to the head-outer form.
+    for (int32_t j = 0; j <= pos; j++) {
+        const float* kr = k_base + (size_t)j * H;
+        for (int32_t hd = 0; hd < NH; hd++)
+            h->scores[(size_t)hd * S + j] = dot_f32(h->qkv + hd * D, kr + hd * D, D) * scale;
+    }
     for (int32_t hd = 0; hd < NH; hd++) {
-        const float* q = h->qkv + hd * D;
-        for (int32_t j = 0; j <= pos; j++) {
-            h->scores[j] = dot_f32(q, k_base + (size_t)j * H + hd * D, D) * scale;
-        }
-        softmax_f32(h->scores, pos + 1);
-        if (trace && trace->attention_scores) trace_attn_rows(trace, h, L, h->scores, hd);
-        float* o = h->attn_out + hd * D;
-        memset(o, 0, (size_t)D * sizeof(float));
-        for (int32_t j = 0; j <= pos; j++) {
-            const float p = h->scores[j];
-            const float* vr = v_base + (size_t)j * H + hd * D;
-            for (int32_t d = 0; d < D; d++) o[d] += p * vr[d];
+        softmax_f32(h->scores + (size_t)hd * S, pos + 1);
+        if (trace && trace->attention_scores)
+            trace_attn_rows(trace, h, L, h->scores + (size_t)hd * S, hd);
+    }
+    memset(h->attn_out, 0, (size_t)H * sizeof(float));
+    for (int32_t j = 0; j <= pos; j++) {
+        const float* vr = v_base + (size_t)j * H;
+        for (int32_t hd = 0; hd < NH; hd++) {
+            const float p = h->scores[(size_t)hd * S + j];
+            float* o = h->attn_out + hd * D;
+            const float* v = vr + hd * D;
+            for (int32_t d = 0; d < D; d++) o[d] += p * v[d];
         }
     }
 
@@ -688,11 +723,15 @@ static void local_block_step(hybrid_t* h, const hybrid_block_t* b, int32_t li,
 
     rmsnorm_f32(h->x, b->n2_w, h->u, H);
     hybrid_mv(h, b->up_w, h->u, h->ffn_buf, F, H);
-    gelu_f32(h->ffn_buf, F);
+    hybrid_gelu(h->ffn_buf, F);
     hybrid_mv(h, b->down_w, h->ffn_buf, h->tmp, H, F);
     for (int32_t i = 0; i < H; i++) h->x[i] += h->tmp[i];
 }
 
+// The GLA head loop stays single-thread on purpose: rec_state is
+// heads*D*D floats per block and stays L2-resident, so a head-band split buys no
+// bandwidth and only adds a rendezvous per block (measured 15% slower end to end
+// on an 8-core i7-9700T at 16 blocks per boundary byte).
 static void recurrent_block_step(hybrid_t* h, const hybrid_block_t* b, int32_t gi) {
     const int32_t H = h->hidden, NH = h->heads, D = h->head_dim, F = h->ffn;
     const int32_t CK = h->conv_kernel;
@@ -746,7 +785,7 @@ static void recurrent_block_step(hybrid_t* h, const hybrid_block_t* b, int32_t g
 
     rmsnorm_f32(h->g, b->n2_w, h->u, H);
     hybrid_mv(h, b->up_w, h->u, h->ffn_buf, F, H);
-    gelu_f32(h->ffn_buf, F);
+    hybrid_gelu(h->ffn_buf, F);
     hybrid_mv(h, b->down_w, h->ffn_buf, h->tmp, H, F);
     for (int32_t i = 0; i < H; i++) h->g[i] += h->tmp[i];
 }
@@ -894,7 +933,7 @@ void hybrid_reset(hybrid_t* h) {
 // sweep) via hybrid_mm, which j-splits each across the pool; the recurrent
 // stack, conv ring, and slot scan stay sequential per position so their float
 // reductions match hybrid_step exactly. spec:
-// developer_documentation/engine/engine_v13_hybrid.md.
+// developer_documentation/engine/hybrid_trunk.md.
 // ------------------------------------------------------------------------------------
 
 int32_t hybrid_prefill_batch(void) {
@@ -932,17 +971,20 @@ static void prefill_local_block(hybrid_t* h, const hybrid_block_t* b, int32_t li
         const int32_t pos = pos0 + r;
         const float* qkv = h->pf_qkv + (size_t)r * 3 * H;
         float* aout = h->pf_attn + (size_t)r * H;
-        for (int32_t hd = 0; hd < NH; hd++) {
-            const float* q = qkv + hd * D;
-            for (int32_t j = 0; j <= pos; j++)
-                h->scores[j] = dot_f32(q, k_base + (size_t)j * H + hd * D, D) * scale;
-            softmax_f32(h->scores, pos + 1);
-            float* o = aout + hd * D;
-            memset(o, 0, (size_t)D * sizeof(float));
-            for (int32_t j = 0; j <= pos; j++) {
-                const float p = h->scores[j];
-                const float* vr = v_base + (size_t)j * H + hd * D;
-                for (int32_t d = 0; d < D; d++) o[d] += p * vr[d];
+        for (int32_t j = 0; j <= pos; j++) {
+            const float* kr = k_base + (size_t)j * H;
+            for (int32_t hd = 0; hd < NH; hd++)
+                h->scores[(size_t)hd * S + j] = dot_f32(qkv + hd * D, kr + hd * D, D) * scale;
+        }
+        for (int32_t hd = 0; hd < NH; hd++) softmax_f32(h->scores + (size_t)hd * S, pos + 1);
+        memset(aout, 0, (size_t)H * sizeof(float));
+        for (int32_t j = 0; j <= pos; j++) {
+            const float* vr = v_base + (size_t)j * H;
+            for (int32_t hd = 0; hd < NH; hd++) {
+                const float p = h->scores[(size_t)hd * S + j];
+                float* o = aout + hd * D;
+                const float* v = vr + hd * D;
+                for (int32_t d = 0; d < D; d++) o[d] += p * v[d];
             }
         }
     }
@@ -957,7 +999,7 @@ static void prefill_local_block(hybrid_t* h, const hybrid_block_t* b, int32_t li
     for (int32_t r = 0; r < Bc; r++)
         rmsnorm_f32(h->pf_x + (size_t)r * H, b->n2_w, h->pf_u + (size_t)r * H, H);
     hybrid_mm(h, b->up_w, h->pf_u, h->pf_ff, F, H, Bc);
-    for (int32_t r = 0; r < Bc; r++) gelu_f32(h->pf_ff + (size_t)r * F, F);
+    hybrid_gelu(h->pf_ff, Bc * F);
     hybrid_mm(h, b->down_w, h->pf_ff, h->pf_tmp, H, F, Bc);
     for (int32_t r = 0; r < Bc; r++) {
         float* xr = h->pf_x + (size_t)r * H;
@@ -966,20 +1008,121 @@ static void prefill_local_block(hybrid_t* h, const hybrid_block_t* b, int32_t li
     }
 }
 
-// recurrent stack for one position: mirrors hybrid_step's middle section on
-// h->x/h->g/h->pos, reusing recurrent_block_step so state advances identically.
-static void prefill_recurrent_pos(hybrid_t* h, int32_t tok) {
-    const int32_t H = h->hidden;
-    const int is_boundary = h->boundary[tok] || h->pos == 0;
-    const int slot_live = is_boundary && h->slot_count < h->slots;
-    if (slot_live) {
-        const float* se = h->slot_pos_emb + (size_t)h->slot_count * H;
-        for (int32_t i = 0; i < H; i++) h->g[i] = h->x[i] + se[i];
-        for (int32_t gidx = 0; gidx < h->n_global; gidx++)
-            recurrent_block_step(h, &h->blocks[h->n_enc + gidx], gidx);
-        for (int32_t i = 0; i < H; i++) h->x[i] += h->g[i];
+// One recurrent block over the live slots of a chunk. The five big matrices are
+// batched over the slots exactly as the local blocks batch over positions; only
+// the conv ring and the GLA state stay per-slot, and they carry no big weights.
+// Block gi finishes every slot before gi+1 starts, so the ring and state advance
+// in the same slot order as the per-position path, and each slot's float
+// reductions are the ones recurrent_block_step performs, so the end state is
+// bitwise-identical. Slots are the boundary positions of the chunk, so a run of
+// prose amortizes one weight stream over every boundary byte in the chunk
+// instead of paying one stream per boundary byte.
+static void prefill_recurrent_block(hybrid_t* h, const hybrid_block_t* b, int32_t gi,
+                                    const int32_t* slot_row, int32_t ns) {
+    const int32_t H = h->hidden, NH = h->heads, D = h->head_dim, F = h->ffn;
+    const int32_t CK = h->conv_kernel;
+    const float qscale = 1.0f / sqrtf((float)D);
+
+    for (int32_t s = 0; s < ns; s++)
+        rmsnorm_f32(h->pf_g + (size_t)slot_row[s] * H, b->n1_w, h->pf_u + (size_t)s * H, H);
+    hybrid_mm(h, b->qkv_w, h->pf_u, h->pf_qkv, 3 * H, H, ns);
+
+    float* ring = h->conv_ring + (size_t)gi * (CK - 1) * 3 * H;
+    for (int32_t s = 0; s < ns; s++) {
+        float* qkv = h->pf_qkv + (size_t)s * 3 * H;
+        for (int32_t c = 0; c < 3 * H; c++) {
+            const float* wr = b->conv_w + (size_t)c * CK;
+            float acc = wr[CK - 1] * qkv[c];
+            for (int32_t i = 0; i < CK - 1; i++) acc += wr[i] * ring[(size_t)i * 3 * H + c];
+            h->conv_out[c] = acc;
+        }
+        memmove(ring, ring + 3 * H, (size_t)(CK - 2) * 3 * H * sizeof(float));
+        memcpy(ring + (size_t)(CK - 2) * 3 * H, qkv, (size_t)3 * H * sizeof(float));
+
+        float* q = h->conv_out;
+        const float* kk = h->conv_out + H;
+        const float* vv = h->conv_out + 2 * H;
+        for (int32_t i = 0; i < H; i++) q[i] *= qscale;
+        const float* u_s = h->pf_u + (size_t)s * H;
+        float* aout = h->pf_attn + (size_t)s * H;
+        for (int32_t hd = 0; hd < NH; hd++) {
+            float la = -softplus_f32(dot_f32(b->a_proj_w + (size_t)hd * H, u_s, H)
+                                     + b->a_proj_b[hd]);
+            const float dec = expf(la);
+            const float* k_h = kk + hd * D;
+            const float* v_h = vv + hd * D;
+            float* st = h->rec_state + ((size_t)gi * NH + hd) * D * D;
+            for (int32_t dk = 0; dk < D; dk++) {
+                const float kv = k_h[dk];
+                float* row = st + (size_t)dk * D;
+                for (int32_t dv = 0; dv < D; dv++) row[dv] = dec * row[dv] + kv * v_h[dv];
+            }
+            float* o = aout + hd * D;
+            memset(o, 0, (size_t)D * sizeof(float));
+            const float* q_h = q + hd * D;
+            for (int32_t dk = 0; dk < D; dk++) {
+                const float qv = q_h[dk];
+                const float* row = st + (size_t)dk * D;
+                for (int32_t dv = 0; dv < D; dv++) o[dv] += qv * row[dv];
+            }
+            rmsnorm_f32(o, b->o_norm_w, o, D);
+        }
     }
-    if (is_boundary) h->slot_count++;
+
+    hybrid_mm(h, b->gate_w, h->pf_u, h->pf_tmp, H, H, ns);
+    for (int32_t s = 0; s < ns; s++) {
+        float* aout = h->pf_attn + (size_t)s * H;
+        const float* gate = h->pf_tmp + (size_t)s * H;
+        for (int32_t i = 0; i < H; i++) aout[i] *= silu_f32(gate[i]);
+    }
+    hybrid_mm(h, b->proj_w, h->pf_attn, h->pf_tmp, H, H, ns);
+    for (int32_t s = 0; s < ns; s++) {
+        float* gr = h->pf_g + (size_t)slot_row[s] * H;
+        const float* pr = h->pf_tmp + (size_t)s * H;
+        for (int32_t i = 0; i < H; i++) gr[i] += pr[i];
+    }
+
+    for (int32_t s = 0; s < ns; s++)
+        rmsnorm_f32(h->pf_g + (size_t)slot_row[s] * H, b->n2_w, h->pf_u + (size_t)s * H, H);
+    hybrid_mm(h, b->up_w, h->pf_u, h->pf_ff, F, H, ns);
+    hybrid_gelu(h->pf_ff, ns * F);
+    hybrid_mm(h, b->down_w, h->pf_ff, h->pf_tmp, H, F, ns);
+    for (int32_t s = 0; s < ns; s++) {
+        float* gr = h->pf_g + (size_t)slot_row[s] * H;
+        const float* dr = h->pf_tmp + (size_t)s * H;
+        for (int32_t i = 0; i < H; i++) gr[i] += dr[i];
+    }
+}
+
+// Recurrent stack over a whole chunk: collect the live slots, run every block
+// across them, scatter back. Positions without a live slot are untouched, which
+// is what the per-position path does.
+static void prefill_recurrent_chunk(hybrid_t* h, const int32_t* tokens,
+                                    int32_t pos0, int32_t Bc) {
+    const int32_t H = h->hidden, V = h->vocab;
+    int32_t slot_row[V_PREFILL_BMAX];
+    int32_t ns = 0;
+    for (int32_t r = 0; r < Bc; r++) {
+        int32_t tok = tokens[pos0 + r];
+        if (V > 0) tok = ((tok % V) + V) % V;
+        const int is_boundary = h->boundary[tok] || (pos0 + r) == 0;
+        if (is_boundary && h->slot_count < h->slots) {
+            const float* se = h->slot_pos_emb + (size_t)h->slot_count * H;
+            const float* xr = h->pf_x + (size_t)r * H;
+            float* gr = h->pf_g + (size_t)r * H;
+            for (int32_t i = 0; i < H; i++) gr[i] = xr[i] + se[i];
+            slot_row[ns++] = r;
+        }
+        if (is_boundary) h->slot_count++;
+    }
+    if (ns == 0) return;
+    for (int32_t gidx = 0; gidx < h->n_global; gidx++)
+        prefill_recurrent_block(h, &h->blocks[h->n_enc + gidx], gidx, slot_row, ns);
+    for (int32_t s = 0; s < ns; s++) {
+        float* xr = h->pf_x + (size_t)slot_row[s] * H;
+        const float* gr = h->pf_g + (size_t)slot_row[s] * H;
+        for (int32_t i = 0; i < H; i++) xr[i] += gr[i];
+    }
 }
 
 void hybrid_prefill(hybrid_t* h, const int32_t* tokens, int32_t n, int32_t B) {
@@ -1006,14 +1149,7 @@ void hybrid_prefill(hybrid_t* h, const int32_t* tokens, int32_t n, int32_t B) {
         for (int32_t e = 0; e < h->n_enc; e++)
             prefill_local_block(h, &h->blocks[e], e, pos0, Bc);
 
-        for (int32_t r = 0; r < Bc; r++) {
-            int32_t tok = tokens[pos0 + r];
-            if (V > 0) tok = ((tok % V) + V) % V;
-            memcpy(h->x, h->pf_x + (size_t)r * H, (size_t)H * sizeof(float));
-            h->pos = pos0 + r;
-            prefill_recurrent_pos(h, tok);
-            memcpy(h->pf_x + (size_t)r * H, h->x, (size_t)H * sizeof(float));
-        }
+        prefill_recurrent_chunk(h, tokens, pos0, Bc);
 
         for (int32_t d = 0; d < h->n_dec; d++)
             prefill_local_block(h, &h->blocks[h->n_enc + h->n_global + d], h->n_enc + d, pos0, Bc);
@@ -1266,7 +1402,7 @@ hybrid_t* hybrid_load(FILE* f, const char* path, int32_t vocab, int32_t hidden,
     h->qkv      = (float*)veritate_aligned_alloc((size_t)3 * H * sizeof(float), 64);
     h->conv_out = (float*)veritate_aligned_alloc((size_t)3 * H * sizeof(float), 64);
     h->attn_out = (float*)veritate_aligned_alloc((size_t)H * sizeof(float), 64);
-    h->scores   = (float*)veritate_aligned_alloc((size_t)seq * sizeof(float), 64);
+    h->scores   = (float*)veritate_aligned_alloc((size_t)heads * seq * sizeof(float), 64);
     h->ffn_buf  = (float*)veritate_aligned_alloc((size_t)ffn * sizeof(float), 64);
     h->gate_buf = (float*)veritate_aligned_alloc((size_t)H * sizeof(float), 64);
     h->tmp      = (float*)veritate_aligned_alloc((size_t)H * sizeof(float), 64);
@@ -1275,6 +1411,7 @@ hybrid_t* hybrid_load(FILE* f, const char* path, int32_t vocab, int32_t hidden,
     h->lens_f   = (float*)veritate_aligned_alloc((size_t)vocab * sizeof(float), 64);
     const size_t bm = V_PREFILL_BMAX;
     h->pf_x     = (float*)veritate_aligned_alloc(bm * (size_t)H * sizeof(float), 64);
+    h->pf_g     = (float*)veritate_aligned_alloc(bm * (size_t)H * sizeof(float), 64);
     h->pf_u     = (float*)veritate_aligned_alloc(bm * (size_t)H * sizeof(float), 64);
     h->pf_qkv   = (float*)veritate_aligned_alloc(bm * (size_t)3 * H * sizeof(float), 64);
     h->pf_attn  = (float*)veritate_aligned_alloc(bm * (size_t)H * sizeof(float), 64);
@@ -1286,7 +1423,7 @@ hybrid_t* hybrid_load(FILE* f, const char* path, int32_t vocab, int32_t hidden,
         !h->u || !h->qkv || !h->conv_out || !h->attn_out || !h->scores ||
         !h->ffn_buf || !h->gate_buf || !h->tmp || !h->logits ||
         !h->lens_u || !h->lens_f || !h->pf_x || !h->pf_u || !h->pf_qkv ||
-        !h->pf_attn || !h->pf_ff || !h->pf_tmp ||
+        !h->pf_attn || !h->pf_ff || !h->pf_tmp || !h->pf_g ||
         (dtype == VERITATE_HYBRID_DTYPE_INT8 && !h->pf_qx)) {
         hybrid_free(h); return NULL;
     }
@@ -1323,6 +1460,7 @@ void hybrid_free(hybrid_t* h) {
     veritate_aligned_free(h->logits);
     veritate_aligned_free(h->lens_u);   veritate_aligned_free(h->lens_f);
     veritate_aligned_free(h->pf_x);     veritate_aligned_free(h->pf_u);
+    veritate_aligned_free(h->pf_g);
     veritate_aligned_free(h->pf_qkv);   veritate_aligned_free(h->pf_attn);
     veritate_aligned_free(h->pf_ff);    veritate_aligned_free(h->pf_tmp);
     veritate_aligned_free(h->pf_qx);

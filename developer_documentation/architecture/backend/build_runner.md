@@ -8,7 +8,7 @@ Orchestrates rebuilds of the C engine at [veritate_mri/training/build_runner.py]
 
 `set_pre_build_hook(fn)` registers a function called before each build. [app.py:197](../../../veritate_mri/app.py#L197) wires this to `_close_c_for_rebuild`, which closes the C engine subprocess so the build doesn't fail with a binary-lock error.
 
-Builds invoke the platform-specific build script under [veritate_engine/v1/build/](../../../veritate_engine/v1/build/). Output binaries land in [veritate_engine/v1/bin/](../../../veritate_engine/v1/bin/) per platform (`macos/arm64`, `macos/x86_64`, `linux/x86_64`, etc.).
+Builds invoke the platform-specific build script under [veritate_engine/build/](../../../veritate_engine/build/). Output binaries land in [veritate_engine/bin/](../../../veritate_engine/bin/) per platform (`macos/arm64`, `macos/x86_64`, `linux/x86_64`, etc.).
 
 ## Dependencies
 

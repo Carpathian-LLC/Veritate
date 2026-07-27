@@ -23,9 +23,6 @@ from ._common import user_error
 # ------------------------------------------------------------------------------------
 # Constants
 
-VERSIONS_JSON = "versions.json"
-VERSIONS_PATH = os.path.join(paths.REPO_ROOT, VERSIONS_JSON)
-
 # Power-save mode contract with veritate.py launcher. The launcher sets the
 # env var when invoked with --minimal; app.py reads it; this route exposes
 # both pieces so the frontend can gate UI and toggle without hardcoding either
@@ -129,7 +126,7 @@ def register(app):
 
     @app.route("/versions")
     def versions_route():
-        if not os.path.isfile(VERSIONS_PATH):
-            return ({"error": f"versions file not found: {VERSIONS_PATH}"}, 404)
-        with open(VERSIONS_PATH, encoding="utf-8") as f:
+        if not os.path.isfile(paths.VERSIONS_JSON_PATH):
+            return ({"error": f"versions file not found: {paths.VERSIONS_JSON_PATH}"}, 404)
+        with open(paths.VERSIONS_JSON_PATH, encoding="utf-8") as f:
             return Response(f.read(), mimetype="application/json")

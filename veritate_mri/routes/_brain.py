@@ -113,6 +113,6 @@ def resolve_c_model_bin(name):
 def resolve_c_engine_exe(explicit):
     if explicit and os.path.isfile(explicit): return explicit
     for e in engine.engines():
-        ap = os.path.abspath(e.get("path") or "")
+        ap = os.path.abspath(e["path"])
         if os.path.isfile(ap): return ap
     return None

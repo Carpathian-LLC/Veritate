@@ -1,14 +1,14 @@
-# engine v13: hybrid trunk (.bin format + decode path)
+# hybrid trunk (.bin format + decode path)
 
-v13 is the engine format for the hybrid trunk (`VeritatePatched` with
+Bin format version 13 is the engine format for the hybrid trunk (`VeritatePatched` with
 `global_mixer="recurrent"`, `state_rule="gla"`): local attention blocks on every
 byte, constant-state recurrent global blocks on boundary-anchored patch slots.
 Written by `export_checkpoint` in [veritate_mri/training/export.py](../../veritate_mri/training/export.py)
 when `config.training_args.trunk == "hybrid"`; loaded and decoded by
-[veritate_engine/v1/src/hybrid.c](../../veritate_engine/v1/src/hybrid.c).
-Canonical dense formats v3-v12 are untouched: v13 is a new version byte with its
+[veritate_engine/src/hybrid.c](../../veritate_engine/src/hybrid.c).
+Canonical dense formats v3-v12 are untouched: 13 is a new version byte with its
 own loader and forward path, dispatched in `model_load`
-([model.c](../../veritate_engine/v1/src/model.c)).
+([model.c](../../veritate_engine/src/model.c)).
 
 ## numeric contract
 
@@ -96,6 +96,14 @@ recurrence, which are mathematically identical to the training forward):
    fp32, out-proj, residual add) then FFN (RMSNorm, up, exact-GELU via erf,
    down, residual add). KV bounded by seq: cache is [seq, H] per block per K/V,
    decode refuses pos >= seq exactly like the dense path.
+   The causal scan runs **position-outer, head-inner** in both
+   `local_block_step` and `prefill_local_block`: each cached K (then V) row is
+   `H` contiguous fp32 and is streamed once for all `heads` heads, where the
+   head-outer form re-read the whole cache once per head (a head touches
+   `head_dim` floats out of every `H`-float row, so it faulted the same lines
+   `heads` times). `h->scores` is therefore `[heads x seq]`, one row per head.
+   Per `(head, d)` the accumulation order over `j` is unchanged, so every output
+   float is bitwise-equal to the head-outer form.
 3. Boundary test: `boundary[byte] || pos == 0`. Non-boundary bytes skip to 5.
 4. Boundary byte with slot ordinal `s = n_boundaries_so_far - 1 < slots`:
    `g = x + slot_pos_emb[s]`, then 12 recurrent blocks, each:
@@ -161,7 +169,7 @@ Prefill streams every weight from RAM once per prompt byte (measured 20.8 s for
 amortizing the RAM traffic. With the traffic amortized the batched matmul is
 compute-bound on one core, so each is also j-split across the worker pool (see
 "threaded batched matmul" below). Engine default is off; `VERITATE_PREFILL_BATCH=<B>`
-turns it on (clamped to `V_PREFILL_BMAX=64`, [veritate.h:244](../../veritate_engine/v1/src/veritate.h)).
+turns it on (clamped to `V_PREFILL_BMAX=64`, [veritate.h:244](../../veritate_engine/src/veritate.h)).
 The platform spawns `chat_traced` with `B = PREFILL_BATCH = 32`
 ([c_engine.py](../../veritate_mri/inference/backends/c_engine.py), setdefault so a
 parent env value wins). 32 measured best on an 8-core i7-9700T (B=64 was worst on
@@ -170,15 +178,16 @@ recurrent stack stays sequential per position, so the win is bounded by the
 local/recurrent block ratio.
 
 - Hook: the `forward` hybrid branch composes AFTER the Feature A state-cache
-  restore ([model.c:742](../../veritate_engine/v1/src/model.c)). With
-  `remaining = real_len - restored` and `B = hybrid_prefill_batch()`:
-  untraced (`trace == NULL && B > 1 && remaining >= B`) batches the whole span
-  via `hybrid_prefill(tokens, real_len, B)`; traced (`trace != NULL && B > 1 &&
-  remaining > B`) batches all but the last position via
-  `hybrid_prefill(tokens, real_len - 1, B)` UNTRACED then runs one
+  restore ([model.c:742](../../veritate_engine/src/model.c)). With
+  `B = hybrid_prefill_batch()` and `end = trace ? real_len - 1 : real_len`, any
+  span with `B > 1 && end - restored > 1` batches via
+  `hybrid_prefill(tokens, end, B)`. `hybrid_prefill` clamps its own chunk to
+  `min(rem, B)`, so a span shorter than `B` batches as one partial chunk instead
+  of falling back to per-byte stepping. Untraced that covers the whole prompt;
+  traced it covers all but the last position, then one
   `hybrid_step(tokens[real_len-1], trace)` so only `pos = real_len-1` is
   traced. That is the sole prompt frame `chat_traced` emits (step 0 reads
-  `pos = n-1`, [main.c:513](../../veritate_engine/v1/src/main.c)); positions
+  `pos = n-1`, [main.c:513](../../veritate_engine/src/main.c)); positions
   `[restored, n-2]` had their trace buffers filled then discarded, so batching
   them untraced loses nothing displayed. Batched state is bitwise-identical to
   sequential, so the emitted `pos = n-1` frame is byte-identical to a
@@ -186,20 +195,30 @@ local/recurrent block ratio.
   and old-vs-new binary over 3 prompts x 2 models). Otherwise (either mode too
   short to batch, or unset / `<= 1`) the sequential per-byte loop runs, byte-for-byte
   the unbatched path.
-- `hybrid_prefill` ([hybrid.c:913](../../veritate_engine/v1/src/hybrid.c))
+- `hybrid_prefill` ([hybrid.c:913](../../veritate_engine/src/hybrid.c))
   chunks `tokens[h->pos .. n-1]` into `ceil(rem/B)` blocks. Per chunk: batched
   embed, then each local (enc/dec) block via `prefill_local_block`
-  ([hybrid.c:842](../../veritate_engine/v1/src/hybrid.c)) which batches the five
+  ([hybrid.c:842](../../veritate_engine/src/hybrid.c)) which batches the five
   matmuls over the chunk and runs RMSNorm / causal attention / GELU per row;
-  then the recurrent stack via `prefill_recurrent_pos`
-  ([hybrid.c:899](../../veritate_engine/v1/src/hybrid.c)), a sequential per-
-  position reuse of `recurrent_block_step` so the conv ring, GLA state scan, and
-  slot ordinal advance exactly as the sequential path. The final chunk computes
+  then the recurrent stack via `prefill_recurrent_chunk`
+  ([hybrid.c](../../veritate_engine/src/hybrid.c)), which collects the chunk's
+  live slots and runs each recurrent block across all of them via
+  `prefill_recurrent_block` before moving to the next block. The five big
+  matrices batch over the slots exactly as the local blocks batch over
+  positions; only the conv ring and the GLA state stay per-slot, and they carry
+  no big weights. Block `gi` finishes every slot before `gi+1` starts, so the
+  ring, state, and slot ordinal advance in the same slot order the per-position
+  path used, and each slot's float reductions are unchanged. Without this the
+  recurrent stack was the one part of prefill that never amortized: prose at a
+  fifth boundary bytes paid one full stream of every global block per boundary
+  byte, so a punctuated 136-byte prompt spent more time in the global stack than
+  in everything else combined (measured 1075 ms -> 768 ms TTFB on an i7-9700T).
+  `pf_g` holds the slot residuals for the chunk. The final chunk computes
   the last position's `rmsnorm(x) + lm_head` (matvec) into `h->u` / `h->logits`,
   matching what `hybrid_final_act_i8` and the sampler read; intermediate logits
   are discarded, which sequential prefill also does.
-- Batched matmul ([hybrid.c:135](../../veritate_engine/v1/src/hybrid.c) scalar,
-  [kernels/x86_64/matmul_prefill_avx2.c](../../veritate_engine/v1/kernels/x86_64/matmul_prefill_avx2.c)):
+- Batched matmul ([hybrid.c:135](../../veritate_engine/src/hybrid.c) scalar,
+  [kernels/x86_64/matmul_prefill_avx2.c](../../veritate_engine/kernels/x86_64/matmul_prefill_avx2.c)):
   `X = [B x k]`, `out = [B x n]`, looped `for j in [j0,j1) { for b }` so weight
   row `j` stays L1-hot across the `b` sweep; `n` is the output-row stride, and a
   call fills only the row band `[j0, j1)`. Dispatched by `hybrid_matmul_wt`
@@ -209,12 +228,12 @@ local/recurrent block ratio.
 ### threaded batched matmul
 
 `prefill_local_block` calls each matmul through `hybrid_mm`
-([hybrid.c:397](../../veritate_engine/v1/src/hybrid.c)), the batched twin of
+([hybrid.c:397](../../veritate_engine/src/hybrid.c)), the batched twin of
 `hybrid_mv`: it **j-splits** the output rows across the same worker pool at the
 calibrated `hybrid_threads()` count (`hybrid_mm_split`
-[hybrid.c:366](../../veritate_engine/v1/src/hybrid.c) hands worker `t` the band
+[hybrid.c:366](../../veritate_engine/src/hybrid.c) hands worker `t` the band
 `[j0, j1)`), else runs single-thread. A matmul's work is `n*k*B`, `B` times a
-matvec's, so it clears the `HYBRID_MT_MIN_WORK` (2^18 fp / 2^23 int8) gate far
+matvec's, so it clears the `HYBRID_MT_MIN_WORK` (2^18) gate far
 more readily than decode does. Each `out[b][j]` is written by exactly one worker
 with the identical per-`(j,b)` fold, so the result is bitwise-identical at every
 worker count (rule 24).
@@ -223,7 +242,7 @@ worker count (rule 24).
 race the shared `pf_qx` scratch (and redundantly quantize) once workers run.
 `hybrid_mm` quantizes the `B` rows once on the calling thread into `pf_qx` plus a
 stack `a_scale[B]` before dispatch, and the kernel contract takes `const int8_t*
-qx` + `const float* a_scale` already filled ([hybrid.h](../../veritate_engine/v1/src/hybrid.h));
+qx` + `const float* a_scale` already filled ([hybrid.h](../../veritate_engine/src/hybrid.h));
 f32/f16 kernels ignore both.
 
 **Bitwise argument.** Batching is over the position/output axis only, never the
@@ -241,7 +260,7 @@ all byte-identical.
 
 ## sampler: repetition control (chat_traced)
 
-`sample_token_ext` ([model.c](../../veritate_engine/v1/src/model.c)) takes an optional
+`sample_token_ext` ([model.c](../../veritate_engine/src/model.c)) takes an optional
 `rep_ctx_t*` (NULL disables). `chat_traced` accumulates the turn's generated bytes
 and passes them each step; the wire header gains three optional trailing fields
 `rep_window rep_penalty no_repeat_ngram` (0/0/0 = off, so old headers and the
@@ -254,7 +273,7 @@ demotion is scale-free despite the `x1024` hybrid logit view. Constants
 (`VERITATE_REP_MIN_MATCH=4`, `VERITATE_REP_MATCH_CAP=64`) are kept in sync with
 `repetition.py`. With `rep` disabled `rep_soft` is never read and logits are
 untouched, so the sampler is bitwise-identical to a build without repetition control, the v9
-greedy golden ([tests/engine/test_v13_compat.py](../../tests/engine/test_v13_compat.py))
+greedy golden ([tests/engine/test_decode_parity.py](../../tests/engine/test_decode_parity.py))
 still matches, which is the penalty-off parity assertion.
 
 ## stop sequences (chat_traced)
@@ -289,8 +308,8 @@ raising it is compat-neutral for v3-v12 bins.
 ## compat + parity test plan
 
 1. **Canonical fixture regression**: a tiny v9 fixture bin checked against a
-   recorded greedy transcript before and after the v13 changes
-   (`tests/engine/test_v13_compat.py`); byte-identical output required.
+   recorded greedy transcript before and after the hybrid-trunk changes
+   (`tests/engine/test_decode_parity.py`); byte-identical output required.
 2. **Exporter round-trip** (`tests/export/test_export_v13.py`): write v13 from
    a small synthetic hybrid state dict, re-parse with a Python reader, verify
    header fields, tensor shapes, boundary table, and byte counts.
@@ -303,16 +322,26 @@ raising it is compat-neutral for v3-v12 bins.
 
 ## threaded decode: row-split across the persistent pool
 
-`hybrid_mv` ([hybrid.c](../../veritate_engine/v1/src/hybrid.c)) splits the output
-rows of every weight matvec with `n*k >= HYBRID_MT_MIN_WORK` (2^18 fp / 2^23 int8)
+`hybrid_mv` ([hybrid.c](../../veritate_engine/src/hybrid.c)) splits the output
+rows of every weight matvec with `n*k >= HYBRID_MT_MIN_WORK` (2^18, one floor for
+every dtype: it bounds pool dispatch overhead, which does not vary with weight
+width, and calibration decides whether the split pays)
 across the persistent worker pool
-([threadpool.c](../../veritate_engine/v1/src/threadpool.c)); each `out[j]` is
+([threadpool.c](../../veritate_engine/src/threadpool.c)); each `out[j]` is
 computed entirely by one worker with the unchanged single-thread kernel, so the
 result is **bitwise-identical to single-thread at every thread count** (rule 24;
-gated by `tests/engine/test_v13_compat.py::test_v13_threaded_matches_single_thread`,
+gated by `tests/engine/test_decode_parity.py::test_hybrid_threaded_matches_single_thread`,
 which exports a threading-sized fp16 fixture and A/Bs default vs
 `VERITATE_HYBRID_THREADS=1`). The tiny vector ops (attention dot, recurrent state
 update, norms, sampler) stay single-thread.
+
+`veritate_pool_run` runs the **last span on the calling thread** and wakes
+`n - 1` workers for the rest, so an n-way split occupies n cores instead of n
+workers plus a driver spinning on the completion count. Splitting as wide as the
+core count used to oversubscribe and collapse (measured 92 -> 7.5 tok/s at
+`n = cores` on an 8-core i7-9700T), which is why callers had to cap one below the
+pool; with the driver participating the whole pool is usable and the curve stays
+monotonic to the core count.
 
 The pool is **spin-then-park**: `veritate_pool_run` wakes workers by setting a
 lock-free atomic flag and blocks on a lock-free `done_count`; a condvar (POSIX)
@@ -335,11 +364,9 @@ contention-driven, not core-count-driven (on the 24-P-core M3 Ultra, scaling is
 1T 1.74, 4T 0.80, 8T 0.68, 16T 0.75, 24T 1.97 ms/byte, so raw core count does not
 predict it), so only a measurement on the running box finds it.
 `hybrid_threads_init` runs once at `hybrid_load` (skipped when the override is
-set) and `hybrid_calibrate` ([hybrid.c](../../veritate_engine/v1/src/hybrid.c))
+set) and `hybrid_calibrate` ([hybrid.c](../../veritate_engine/src/hybrid.c))
 times the ACTUAL non-boundary decode step (`hybrid_step` on the real loaded
-weights) at a `1,2,4,..` ladder up to `pool_size - 1` (the dispatching thread
-busy-spins on the completion count, so it keeps a core; the override may still
-reach the full `pool_size`). Each rung's per-step median (matching the decode
+weights) at a `1,2,4,..` ladder up to `pool_size`. Each rung's per-step median (matching the decode
 p50) is medianed over direction-alternating passes; the pick is the diminishing-
 returns knee: climb while a rung beats the previous by at least
 `HYBRID_CALIB_KNEE`, stop otherwise. The knee is reached before the over-threaded
@@ -352,7 +379,8 @@ load, dtype-independent (it calibrates the real dtype kernel).
 
 The calibrated pick persists across spawns: `hybrid_threads_init` first checks
 `hybrid_threads.txt` in the `VERITATE_STATE_CACHE` dir (fnv-1a key over shape
-fields + core count; mismatch re-derives), so only the first spawn per
+fields + core count + `HYBRID_MT_MIN_WORK`, so a build that changes which
+matvecs split at all re-derives instead of pinning a stale pick), so only the first spawn per
 (box, model) pays the burst: later spawns log `(cached)` and start in ~0.1 ms.
 `VERITATE_HYBRID_THREADS` still overrides both.
 
@@ -360,21 +388,66 @@ fields + core count; mismatch re-derives), so only the first spawn per
 (each `out[j]` is computed once by one worker with the single-thread kernel), so
 the calibrated pick, and any run-to-run variance in it, can NEVER change decode
 output. Gated by
-`tests/engine/test_v13_compat.py::test_v13_auto_matches_single_thread` (auto path
+`tests/engine/test_decode_parity.py::test_hybrid_auto_matches_single_thread` (auto path
 == `VERITATE_HYBRID_THREADS=1`, byte-identical) alongside the env-pinned
-`test_v13_threaded_matches_single_thread`.
+`test_hybrid_threaded_matches_single_thread`.
 
 `VERITATE_HYBRID_CALIB_LOG=1` prints the picked count, pool size, calibration
 wall cost, and the per-rung `ms/byte` curve to stderr (off by default), to verify
 the pick on any new box.
 
-Measured picks (same binary, both boxes): M3 Ultra 24-P-core lands at 8-16
-(the bandwidth knee; never the 24T collapse); Intel i7-9700T (8 cores, no
-hyperthreading) lands at 4-7 and never 8, where 8 workers + the dispatcher
-oversubscribe the 8 cores and decode collapses (measured 49-62 ms/byte forced-8
-vs 2.2-2.6 auto). A fixed `min(pool_size, 8)` default over-threads the
-i7 (its dual-channel DDR4 and core count saturate well below 8); auto-calibration
-makes hand-setting `VERITATE_HYBRID_THREADS` on that box unnecessary.
+Measured picks (same binary, both boxes), 270M int8:
+
+| box | rung curve, ms/byte non-boundary | pick |
+|---|---|---|
+| M3 Ultra, 24 P-cores | 1T 2.494, 2T 1.294, 4T 0.704, 8T 0.536, 16T 0.463, 24T 0.483 | 16 |
+| i7-9700T, 8 cores, no HT | 1T 12.607, 2T 6.843, 4T 4.763, 8T 3.987 | 8 |
+
+Both curves are real bandwidth knees now. The i7 is monotonic to its core count
+and the M3 Ultra turns over at 24, which is the memory system, not
+oversubscription. A fixed default cannot find either; only measurement on the
+running box does.
+
+## bandwidth roofline (why the decode floor is what it is)
+
+Decode streams every weight of every block it runs, so ms/byte is
+`bytes-touched / achievable-DRAM-bandwidth`, not a FLOP count. On an i7-9700T
+(8 cores, no HT) sustained read bandwidth measures 4.5 GB/s at 1 thread, 12.9 at
+4, 15.6 at 8 (saturated). For a 270M int8 hybrid (`hidden=1024, ffn=4096,
+layers=20, n_enc=2, n_global=16, n_dec=2`):
+
+| what runs | weights touched | floor at 15.6 GB/s |
+|---|---|---|
+| ordinary byte (4 local blocks + unembed) | 51 MB | 3.3 ms |
+| boundary byte (+16 recurrent blocks) | 269 MB | 17.2 ms |
+| English-text average (~18% boundary) | ~90 MB | ~5.8 ms |
+
+Two consequences. First, kernel and thread work can only close the gap to that
+floor; it cannot go under it. Second, a byte-level hybrid is already
+MoE-shaped: the global stack is the expensive part and it fires only on
+boundary bytes, so cutting boundary-byte cost moves the average roughly twice
+as much as cutting ordinary-byte cost. Reducing ms/byte past the floor requires
+touching fewer bytes per byte emitted (narrower weights, contextual FFN
+sparsity, or verifying several drafted bytes per weight stream), not faster
+arithmetic.
+
+What is left in the gap is scalar fp32 work, not bandwidth, and it does not all
+respond to threading. Two measured non-results worth not repeating:
+
+- **The GLA head loop does not want threading.** `rec_state` is
+  `heads*D*D` floats per block and stays L2-resident, so a head-band split adds
+  a pool rendezvous per block without buying bandwidth: 15% slower end to end at
+  20 blocks per boundary byte. The elementwise GELU is the opposite case (scalar
+  libm at 79 ns/element, 1.3 ms per byte over the local blocks alone) and does
+  want it.
+- **The pool's spin budget is already right.** `VERITATE_POOL_SPIN=0` (park
+  immediately) halves decode throughput, and raising it above the default
+  changes nothing, so rendezvous latency, not worker count, is what a new
+  dispatch costs. Add dispatches only where the work behind them is
+  bandwidth-bound.
+
+For scale on the other end: the same binary and a same-shape 200M model on an
+M3 Ultra decodes at 0.577 ms/byte p50, where DRAM bandwidth is ~50x higher.
 
 ## prefill thread count (VERITATE_HYBRID_PREFILL_THREADS)
 
@@ -382,7 +455,7 @@ Calibration measures decode, and decode is memory-bandwidth-bound: the whole mod
 streams once per token, so worker count barely moves it. Prefill batches positions
 (`VERITATE_PREFILL_BATCH`) and does scale with workers. One number for both phases
 therefore serves decode correctly and under-threads prefill. Measured on the
-i7-9700T at a 200M v13 shape: `nt=1/pb=32` gives 27.3 ms per prompt byte,
+i7-9700T at a 200M hybrid shape: `nt=1/pb=32` gives 27.3 ms per prompt byte,
 `nt=6/pb=32` gives 19.6 ms, a 1.4x prefill win at the same decode speed.
 
 `VERITATE_HYBRID_PREFILL_THREADS=<n>` sets the worker count used for the duration of

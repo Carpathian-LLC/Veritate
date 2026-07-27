@@ -122,10 +122,10 @@ xcode-select --install
 Or run the bundled checker, which verifies the toolchain is in place:
 
 ```sh
-bash veritate_engine/v1/build/setup.sh
+bash veritate_engine/build/setup.sh
 ```
 
-See [`veritate_engine/v1/build/setup.sh`](veritate_engine/v1/build/setup.sh).
+See [`veritate_engine/build/setup.sh`](veritate_engine/build/setup.sh).
 
 </details>
 
@@ -139,16 +139,16 @@ See [`veritate_engine/v1/build/setup.sh`](veritate_engine/v1/build/setup.sh).
 The bundled installer uses `winget` to install LLVM (clang) and NASM if they're missing. Run it from the repo root in Windows PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File veritate_engine\v1\build\setup.ps1
+powershell -ExecutionPolicy Bypass -File veritate_engine\build\setup.ps1
 ```
 
 If you have PowerShell 7+ installed, this also works:
 
 ```powershell
-pwsh -ExecutionPolicy Bypass -File veritate_engine\v1\build\setup.ps1
+pwsh -ExecutionPolicy Bypass -File veritate_engine\build\setup.ps1
 ```
 
-After it finishes, **open a new terminal** so the updated `PATH` takes effect, then re-launch the dashboard. See [`veritate_engine/v1/build/setup.ps1`](veritate_engine/v1/build/setup.ps1).
+After it finishes, **open a new terminal** so the updated `PATH` takes effect, then re-launch the dashboard. See [`veritate_engine/build/setup.ps1`](veritate_engine/build/setup.ps1).
 
 </details>
 
@@ -162,10 +162,10 @@ After it finishes, **open a new terminal** so the updated `PATH` takes effect, t
 The bundled script auto-detects your package manager (`apt`, `dnf`, `pacman`) and installs clang.
 
 ```sh
-bash veritate_engine/v1/build/setup.sh
+bash veritate_engine/build/setup.sh
 ```
 
-See [`veritate_engine/v1/build/setup.sh`](veritate_engine/v1/build/setup.sh).
+See [`veritate_engine/build/setup.sh`](veritate_engine/build/setup.sh).
 
 </details>
 
@@ -208,7 +208,7 @@ Six tabs at **[http://localhost:8001/](http://localhost:8001/)**.
 | **Generation** | Chat with the model. Watch every byte's activations live across all layers. |
 | **Models** | Scrub across saved training checkpoints. Watch the model organise itself over training. Confidence evolution, lens-consistency, grade evaluations. |
 | **Training** | Pick a trainer, configure a run, click start. Loss curve, plateau detection, throughput, gradient norm. All live from the trainer's CSV. |
-| **Wiki** | Built-in concept docs and build notes. See [`veritate_mri/wiki/`](veritate_mri/wiki/). |
+| **Wiki** | The REST API, extension authoring, a page per training setting, concepts, and build notes. See [`veritate_mri/data/wiki/`](veritate_mri/data/wiki/). |
 | **Logs** | Engine build output, route errors, runtime status. In-memory ring buffer (latest 1000 entries). |
 | **Settings** | Release channels, repo sync, PyTorch backend mode, engine rebuild. |
 
@@ -248,17 +248,17 @@ If you didn't let `veritate.py` auto-build, build manually.
 <br/>
 
 ```sh
-bash veritate_engine/v1/build/build.sh
+bash veritate_engine/build/build.sh
 ```
 
-Binary lands at `veritate_engine/v1/bin/macos/arm64/veritate`. Examples:
+Binary lands at `veritate_engine/bin/macos/arm64/veritate`. Examples:
 
 ```sh
-veritate_engine/v1/bin/macos/arm64/veritate chat
-veritate_engine/v1/bin/macos/arm64/veritate bench 50 200
+veritate_engine/bin/macos/arm64/veritate chat
+veritate_engine/bin/macos/arm64/veritate bench 50 200
 ```
 
-See [`veritate_engine/v1/build/build.sh`](veritate_engine/v1/build/build.sh).
+See [`veritate_engine/build/build.sh`](veritate_engine/build/build.sh).
 
 </details>
 
@@ -270,17 +270,17 @@ See [`veritate_engine/v1/build/build.sh`](veritate_engine/v1/build/build.sh).
 <br/>
 
 ```powershell
-veritate_engine\v1\build\build.bat
+veritate_engine\build\build.bat
 ```
 
-Binary lands at `veritate_engine\v1\bin\windows\x86_64\veritate.exe`:
+Binary lands at `veritate_engine\bin\windows\x86_64\veritate.exe`:
 
 ```powershell
-veritate_engine\v1\bin\windows\x86_64\veritate.exe chat
-veritate_engine\v1\bin\windows\x86_64\veritate.exe bench 50 200
+veritate_engine\bin\windows\x86_64\veritate.exe chat
+veritate_engine\bin\windows\x86_64\veritate.exe bench 50 200
 ```
 
-See [`veritate_engine/v1/build/build.bat`](veritate_engine/v1/build/build.bat).
+See [`veritate_engine/build/build.bat`](veritate_engine/build/build.bat).
 
 </details>
 
@@ -292,17 +292,17 @@ See [`veritate_engine/v1/build/build.bat`](veritate_engine/v1/build/build.bat).
 <br/>
 
 ```sh
-bash veritate_engine/v1/build/build.sh
+bash veritate_engine/build/build.sh
 ```
 
-Binary lands at `veritate_engine/v1/bin/linux/x86_64/veritate`:
+Binary lands at `veritate_engine/bin/linux/x86_64/veritate`:
 
 ```sh
-veritate_engine/v1/bin/linux/x86_64/veritate chat
-veritate_engine/v1/bin/linux/x86_64/veritate bench 50 200
+veritate_engine/bin/linux/x86_64/veritate chat
+veritate_engine/bin/linux/x86_64/veritate bench 50 200
 ```
 
-See [`veritate_engine/v1/build/build.sh`](veritate_engine/v1/build/build.sh).
+See [`veritate_engine/build/build.sh`](veritate_engine/build/build.sh).
 
 </details>
 
@@ -413,7 +413,7 @@ Capability flags (`has_avx2`, `has_avx512vnni`, `can_use_mps`, `can_use_cuda`, e
 
 ## Cross-platform plan
 
-[`build.bat`](veritate_engine/v1/build/build.bat) (Windows) and [`build.sh`](veritate_engine/v1/build/build.sh) (POSIX) compile shared translation units at the architecture's safe baseline (SSE4.2 on x86_64, ARMv8 on arm64) and apply per-kernel ISA flags only to the kernels that need them. `src/dispatch.c` picks at runtime via CPUID so a binary works on every CPU that meets the baseline, no matter how high the compile-time kernel ISA was. All kernels live under [`veritate_engine/v1/kernels/<arch>/`](veritate_engine/v1/kernels/) and [`veritate_engine/v1/kernels/scalar/`](veritate_engine/v1/kernels/scalar/). One binary per OS+arch. No fat universal binary.
+[`build.bat`](veritate_engine/build/build.bat) (Windows) and [`build.sh`](veritate_engine/build/build.sh) (POSIX) compile shared translation units at the architecture's safe baseline (SSE4.2 on x86_64, ARMv8 on arm64) and apply per-kernel ISA flags only to the kernels that need them. `src/dispatch.c` picks at runtime via CPUID so a binary works on every CPU that meets the baseline, no matter how high the compile-time kernel ISA was. All kernels live under [`veritate_engine/kernels/<arch>/`](veritate_engine/kernels/) and [`veritate_engine/kernels/scalar/`](veritate_engine/kernels/scalar/). One binary per OS+arch. No fat universal binary.
 
 | Kernel tier | Hardware | Status |
 |---|---|---|
@@ -446,7 +446,7 @@ A project by **[Carpathian, LLC](https://carpathian.ai/veritate)**. **Distributi
 
 | folder | what |
 |---|---|
-| [`veritate_engine/`](veritate_engine/) | C inference engine. Versioned subtrees (currently [`v1/`](veritate_engine/v1/)) hold `src/`, `kernels/<arch>/`, `build/`, `bin/<os>/<arch>/`, and `engine_versions.json`. |
+| [`veritate_engine/`](veritate_engine/) | C inference engine. Holds `src/`, `kernels/<arch>/`, `build/`, and `bin/<os>/<arch>/`. |
 | [`veritate_mri/`](veritate_mri/) | MRI server, dashboard, [`training/save.py`](veritate_mri/training/save.py) (checkpoint + dump suite), [`readers/`](veritate_mri/readers/), [`training/atlas.py`](veritate_mri/training/atlas.py), and the in-app wiki content at [`data/wiki/`](veritate_mri/data/wiki/). |
 | [`veritate_core/`](veritate_core/) | Python package. `veritate_core.plugin` is the only surface trainers may import. |
 | [`veritate_mesh/`](veritate_mesh/) | Hub and node roles for running across more than one box. |

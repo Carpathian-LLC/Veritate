@@ -27,7 +27,7 @@ The split that makes the GPU actually help: the **forward runs on the device**, 
 - **no-repeat-ngram (hard ban).** A candidate byte that would complete an `no_repeat_ngram`-byte sequence already emitted verbatim is masked to `-inf` before top-k. At byte level `n ~ 16` blocks verbatim phrase loops; single-byte penalties are too crude (every byte recurs).
 - **suffix-repeat penalty (soft).** A byte that extends the current longest verbatim suffix run (length `>= REP_MIN_MATCH = 4`, below the ngram threshold) is demoted by `rep_penalty * (run - min_match + 1)` nats on the selected top-k logits. Applied post-temperature so the demotion factor `exp(-p)` is scale-free, identical across the PyTorch and C samplers despite their different raw-logit scales.
 
-Defaults (chat): `rep_window=256`, `rep_penalty=0.5`, `no_repeat_ngram=16`. Threaded from `/generate` (`rep_window`/`rep_penalty`/`no_repeat_ngram`), on for chat mode, off (all zero) for autocomplete. With everything off the controller is a no-op and sampling is bitwise-identical to the pre-feature path (parity preserved). The C engine sampler ([model.c](../../../veritate_engine/v1/src/model.c)`::sample_token_ext`) mirrors this algorithm and constants byte-for-byte; keep the two in sync.
+Defaults (chat): `rep_window=256`, `rep_penalty=0.5`, `no_repeat_ngram=16`. Threaded from `/generate` (`rep_window`/`rep_penalty`/`no_repeat_ngram`), on for chat mode, off (all zero) for autocomplete. With everything off the controller is a no-op and sampling is bitwise-identical to the pre-feature path (parity preserved). The C engine sampler ([model.c](../../../veritate_engine/src/model.c)`::sample_token_ext`) mirrors this algorithm and constants byte-for-byte; keep the two in sync.
 
 ### Chat turn-stop
 

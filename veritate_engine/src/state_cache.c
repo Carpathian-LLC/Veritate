@@ -4,7 +4,7 @@
 // Legal Notice: Distribution Not Authorized.
 // ------------------------------------------------------------------------------------
 // Notes:
-// - persistent v13 prompt/state cache. the resumable per-request state is the six
+// - persistent hybrid-trunk prompt/state cache. the resumable per-request state is the six
 //   hybrid_t fields hybrid_reset touches (kv_k, kv_v, rec_state, conv_ring,
 //   slot_count, pos) plus the post-step logits + final hidden. snapshot at prefix
 //   length L, restore on the longest present prefix so prefill resumes mid-stream.

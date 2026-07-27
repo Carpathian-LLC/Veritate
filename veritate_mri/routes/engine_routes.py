@@ -48,14 +48,12 @@ def register(app):
         cur_exe = current_app.config.get("C_EXE")
         cur_abs = os.path.abspath(cur_exe) if cur_exe else None
         for e in engine.engines():
-            ap = os.path.abspath(e.get("path") or "")
-            if not os.path.isfile(ap): continue
+            ap = os.path.abspath(e["path"])
             try: st = os.stat(ap)
             except OSError: continue
             out.append({
                 **e,
                 "path": ap,
-                "exists": True,
                 "is_current": ap == cur_abs,
                 "mtime": st.st_mtime,
                 "size":  st.st_size,

@@ -18,7 +18,7 @@ veritate_mri/
     train_csv.py      parse train.csv.
     checkpoints.py    list step_<N>.pt / load one.
     hooks.py          per-step hook artifacts (8 dump types). single ingestion point.
-    engine.py         engine_versions.json registry.
+    engine.py         engine version + host binary path.
     bin.py            veritate.bin header (precision + bin format version).
   tools/              invokable utilities, not part of the request path.
     diff.py           PyTorch vs C-engine logit divergence harness.

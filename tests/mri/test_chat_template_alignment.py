@@ -34,13 +34,11 @@ HEAD_BYTES  = 256
 CHAT_PREFIX = "chat_"
 TRAIN_SUFFIX = "_train.bin"
 
-# Shipped corpora built before the ChatML standardisation. The data is the user's and is
-# not rewritten by the test suite; the list exists so a NEW legacy-framed bin fails loudly.
-KNOWN_LEGACY_CHAT_BINS = frozenset({
-    "chat_distill_v1_train.bin",
-    "chat_distill_v2_train.bin",
-    "chat_identity_v1_train.bin",
-})
+# The pre-ChatML fork. Any corpus carrying these frames turns the wrong way, and the
+# ChatML-only STOP_MARKERS will not cut them, so the marker leaks into the answer.
+# Scanned across EVERY corpus, not just chat_*: the grounded and py_distill families
+# carried the fork while a chat_*-only scan reported clean.
+LEGACY_MARKERS = (b"<|user|>", b"<|assistant|>", b"<|end|>")
 
 CORPUS_DIR = os.path.join(REPO_ROOT, "trainers", "corpus")
 BUILDERS_DIR = os.path.join(REPO_ROOT, "veritate_mri", "tools")
@@ -60,11 +58,17 @@ def _read_file(path):
         return f.read()
 
 
-def _shipped_chat_bins():
+def _shipped_train_bins():
     if not os.path.isdir(CORPUS_DIR):
         pytest.skip(f"{CORPUS_DIR} absent (trainers/ is gitignored)")
-    names = [fn for fn in sorted(os.listdir(CORPUS_DIR))
-             if fn.startswith(CHAT_PREFIX) and fn.endswith(TRAIN_SUFFIX)]
+    names = [fn for fn in sorted(os.listdir(CORPUS_DIR)) if fn.endswith(TRAIN_SUFFIX)]
+    if not names:
+        pytest.skip("no shipped *_train.bin to inspect")
+    return names
+
+
+def _shipped_chat_bins():
+    names = [fn for fn in _shipped_train_bins() if fn.startswith(CHAT_PREFIX)]
     if not names:
         pytest.skip("no shipped chat_*_train.bin to inspect")
     return names
@@ -137,19 +141,26 @@ def test_sft_builder_declares_chatml():
     assert 'IM_END   = "<|im_end|>"' in src
 
 
-def test_no_unknown_legacy_framed_chat_corpus():
-    """No shipped chat_*_train.bin is legacy-framed outside the known legacy set."""
-    _, legacy = _split_by_framing()
-    assert sorted(set(legacy) - KNOWN_LEGACY_CHAT_BINS) == []
+def test_no_shipped_corpus_carries_legacy_framing():
+    """No shipped *_train.bin carries the pre-ChatML <|user|> fork, names every offender."""
+    offenders = sorted(
+        fn for fn in _shipped_train_bins()
+        if any(m in _first_bytes(os.path.join(CORPUS_DIR, fn), HEAD_BYTES) for m in LEGACY_MARKERS)
+    )
+    assert offenders == [], f"legacy-framed corpora: {offenders}"
 
 
 def test_shipped_chat_corpora_are_chatml():
-    """Every shipped chat_*_train.bin frames turns in ChatML; skips naming the known legacy bins."""
-    chatml, legacy = _split_by_framing()
-    if legacy:
-        pytest.skip("legacy <|user|>-framed chat corpora shipped, mixing them with "
-                    f"ChatML {sorted(chatml)} trains the wrong turn framing: {sorted(legacy)}")
+    """Every shipped chat_*_train.bin frames turns in ChatML."""
+    _, legacy = _split_by_framing()
     assert legacy == []
+
+
+def test_rag_builder_declares_chatml():
+    """build_rag_corpus.py emits ChatML, so a fresh grounded corpus is not the legacy fork."""
+    src = _read_file(os.path.join(BUILDERS_DIR, "build_rag_corpus.py"))
+    assert 'IM_START    = "<|im_start|>"' in src
+    assert "<|user|>" not in src
 
 
 def test_shipped_sft_idk_corpus_is_chatml():

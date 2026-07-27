@@ -5,7 +5,7 @@
 // ------------------------------------------------------------------------------------
 // Notes:
 // - single-block transformer forward pass. int8 throughout, fp32 only inside softmax
-//   and layernorm stats. random weights for v3.
+//   and layernorm stats. random weights for bin format version 3.
 // ------------------------------------------------------------------------------------
 
 #include "veritate.h"
@@ -732,7 +732,7 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
     const veritate_shape_t* sh = &m->shape;
     const int32_t S = sh->seq, H = sh->hidden, F = sh->ffn, V = sh->vocab, NH = sh->heads;
 
-    // v13 hybrid: turn start. restore the longest cached prefix (env-gated), then
+    // hybrid trunk: turn start. restore the longest cached prefix (env-gated), then
     // walk the remaining prompt bytes. unset cache is byte-identical to a full reset.
     if (m->hybrid) {
         hybrid_t* hb = (hybrid_t*)m->hybrid;
@@ -744,13 +744,14 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
         // batch the bandwidth-bound prefill (state stays bitwise-identical to
         // sequential). untraced: batch the whole span. traced: batch all but the
         // last position, then step real_len-1 with trace so the sole emitted
-        // prompt frame (pos n-1) carries real per-byte telemetry.
-        if (bp > 1 && !trace && real_len - restored >= bp) {
-            hybrid_prefill(hb, tokens, real_len, bp);
-            i = real_len;
-        } else if (bp > 1 && trace && real_len - restored > bp) {
-            hybrid_prefill(hb, tokens, real_len - 1, bp);
-            i = real_len - 1;
+        // prompt frame (pos n-1) carries real per-byte telemetry. hybrid_prefill
+        // clamps its own chunk to the span, so any span over one position batches.
+        if (bp > 1) {
+            int32_t end = trace ? real_len - 1 : real_len;
+            if (end - restored > 1) {
+                hybrid_prefill(hb, tokens, end, bp);
+                i = end;
+            }
         }
         for (; i < real_len; i++) hybrid_step(hb, tokens[i], trace);
         cache->len = real_len;
@@ -922,7 +923,7 @@ void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
 }
 
 // ------------------------------------------------------------------------------------
-// v13 state-cache store, hoisted off the prefill TTFB path. forward() restores but no
+// hybrid state-cache store, hoisted off the prefill TTFB path. forward() restores but no
 // longer stores; the chat loops call this after the first frame flushes, before
 // forward_decode mutates rec_state. no-op for dense models or a disabled cache.
 // ------------------------------------------------------------------------------------
@@ -993,7 +994,7 @@ void forward_decode(const model_t* m, kv_cache_t* cache, int32_t token, int8_t* 
     int32_t pos = cache->len;
     if (pos >= S) return;
 
-    // v13 hybrid: one byte through the fp32 path.
+    // hybrid trunk: one byte through the fp32 path.
     if (m->hybrid) {
         hybrid_t* hb = (hybrid_t*)m->hybrid;
         hybrid_step(hb, token, trace);
@@ -1155,7 +1156,7 @@ void forward_decode(const model_t* m, kv_cache_t* cache, int32_t token, int8_t* 
         }
         gelu_int8(d->ffn_up8, F);
 
-        // causal ablation hook (v8). zero a single post-GELU neuron so ffn_down
+        // causal ablation hook. zero a single post-GELU neuron so ffn_down
         // and the trace capture both see the silenced neuron. no-op when global
         // ablation state is (-1, -1).
         if (g_ablate_layer == L && g_ablate_neuron >= 0 && g_ablate_neuron < F) {
@@ -1410,7 +1411,7 @@ int32_t sample_token_ext(const model_t* m, const int8_t* hidden, float temp, int
     float*   fp     = (float*)  malloc((size_t)V * sizeof(float));
 
     if (m->hybrid) {
-        // v13: fp32 logits from the last hybrid step, scaled to the shared
+        // hybrid trunk: fp32 logits from the last hybrid step, scaled to the shared
         // int32 sampler / telemetry convention. `hidden` is display-only here.
         hybrid_logits_i32((const hybrid_t*)m->hybrid, logits);
     } else {
@@ -1535,7 +1536,7 @@ int32_t sample_token_ext(const model_t* m, const int8_t* hidden, float temp, int
         free(heap);
     }
 
-    // v13 logits carry the x1024 telemetry scale; fold it into the temperature
+    // hybrid logits carry the x1024 telemetry scale; fold it into the temperature
     // so the softmax sees true logit/temp units (dense int8 logits keep their
     // historical scale). rep_soft then subtracts in the scale-free nat units
     // repetition.py defines.
@@ -1574,7 +1575,7 @@ int32_t sample_token(const model_t* m, const int8_t* hidden, float temp, int32_t
 }
 
 // ------------------------------------------------------------------------------------
-// random weight init — for v3 testing, no real training
+// random weight init: bin format version 3 testing, no real training
 // ------------------------------------------------------------------------------------
 
 static void fill_random_b(int32_t n, int32_t k, prepped_b_t* p, int keep_raw) {
@@ -1824,7 +1825,7 @@ int model_load(model_t* m, const char* path) {
 
     // dense kernels (score_dot_v, inline attn, hadamard) are specialized to
     // head_dim 64; other head dims silently corrupt heap. refuse at load. the
-    // v13 hybrid path below is head_dim-generic and exempt.
+    // the hybrid trunk path below is head_dim-generic and exempt.
     if (hdr.version != VERITATE_MODEL_VERSION_HYBRID &&
         m->shape.head_dim != V_HEAD_DIM) {
         fprintf(stderr, "model_load: dense path requires head_dim %d, got %d "
@@ -1834,7 +1835,7 @@ int model_load(model_t* m, const char* path) {
         return -1;
     }
 
-    // v13 hybrid: separate fp32 loader + forward path. int8 storage stays NULL;
+    // bin format version 13 (hybrid trunk): separate fp32 loader + forward path. int8 storage stays NULL;
     // byte_direction arrays are allocated zeroed so trace consumers see empty
     // tables instead of dereferencing NULL.
     if (hdr.version == VERITATE_MODEL_VERSION_HYBRID) {

@@ -14,7 +14,6 @@
 
 import argparse
 import glob
-import json
 import os
 import sys
 import time
@@ -55,19 +54,11 @@ def _stats(values):
 
 
 def _resolve_exe(override):
-    """--exe, then the binary this box builds, then any alternate build named in
-    engine_versions.json. All three resolve under veritate_engine/v1/bin/<os>/<arch>,
+    """--exe, else the binary this box builds under veritate_engine/bin/<os>/<arch>,
     so this works the same on macOS, Linux, and Windows."""
     if override and os.path.isfile(override): return override
     built = paths.engine_binary_path()
-    if os.path.isfile(built): return built
-    if not os.path.isfile(paths.ENGINE_VERSIONS_JSON): return None
-    with open(paths.ENGINE_VERSIONS_JSON, encoding="utf-8") as f:
-        manifest = json.load(f)
-    for entry in manifest.get("engines", []):
-        p = os.path.join(paths.engine_binary_dir(), entry["exe"])
-        if os.path.isfile(p): return p
-    return None
+    return built if os.path.isfile(built) else None
 
 
 def _resolve_model(override):

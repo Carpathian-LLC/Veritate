@@ -16,7 +16,7 @@ Terms are defined at first use. "Decode" is generating text one byte at a time. 
 
 ### The v13 format and the strict-additivity rule
 
-The engine is a C program, `veritate_engine/v1`, with a new module, `src/hybrid.c`, dedicated to the hybrid trunk, and a new on-disk format, version 13 of the `.bin` model file. The governing design rule was strict additivity. v13 is not a modification of the existing loader; it is a new version byte that carries its own loader and its own forward path, both selected at load time by reading that version byte and dispatching accordingly. The canonical formats, v3 through v12, are left untouched: their loaders, their kernels, and their decode loops are exactly the code they were before, reached by exactly the same dispatch they were reached by before. Nothing about serving an older model changes, because none of the code that serves an older model changes.
+The engine is a C program, `veritate_engine`, with a new module, `src/hybrid.c`, dedicated to the hybrid trunk, and a new on-disk format, version 13 of the `.bin` model file. The governing design rule was strict additivity. v13 is not a modification of the existing loader; it is a new version byte that carries its own loader and its own forward path, both selected at load time by reading that version byte and dispatching accordingly. The canonical formats, v3 through v12, are left untouched: their loaders, their kernels, and their decode loops are exactly the code they were before, reached by exactly the same dispatch they were reached by before. Nothing about serving an older model changes, because none of the code that serves an older model changes.
 
 This is a stronger guarantee than an assurance that nothing was broken. Backwards compatibility here is a property of the structure, not of diligence: because the old paths are physically the same code and the new path is reached only when the version byte says v13, an older model cannot take the new path and cannot be affected by it. The cost of that guarantee is a small amount of duplication at the dispatch boundary, which is cheap insurance for a format that has to keep a dozen prior model generations loadable indefinitely.
 
@@ -102,7 +102,7 @@ Honest limitations, stated plainly. Only fp32 and fp16 storage ship today; the i
 
 - Build chronology and the five staged gates: `worklog.md`, section dated 2026-07-07 ("v13 hybrid engine build"), and the same-day platform-integration section.
 - Serving status and the int8 lever: `worklog.md`, section dated 2026-07-07 ("v13 round 2").
-- Tests: `tests/engine/test_v13_compat.py` (canonical fixture regression), `tests/export/test_export_v13.py` (exporter round-trip).
+- Tests: `tests/engine/test_decode_parity.py` (canonical fixture regression), `tests/export/test_export_v13.py` (exporter round-trip).
 - Parity smoke: the v13 hybrid parity smoke, greedy decode against the PyTorch reference.
 - Checkpoint served: chat80m step 51000 (fp16 bin, 243.5 MB; the quality-gate battery above ran on step 48000, the bin was re-exported after the identity round moved the flagship to 51000).
 - Architecture served: the hybrid trunk of [The composed efficiency stack](https://carpathian.ai/publications/composed-efficiency-stack); the constant-state decode contract it depends on is the subject of [Long-context memory for constant-state models](https://carpathian.ai/publications/long-context-memory).

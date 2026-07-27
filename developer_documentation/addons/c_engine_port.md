@@ -112,11 +112,11 @@ The trace export (`out_logits` in `sample_token_ext`) captures the **unbiased** 
 # ------------------------------------------------------------------------------------
 # adding a new addon
 
-1. Drop `veritate_engine/v1/src/addons/<id>.c` next to `slot_table.c`.
+1. Drop `veritate_engine/src/addons/<id>.c` next to `slot_table.c`.
 2. Implement the four vtable functions plus a public factory `addon_<id>_new(void)`.
-3. Add a forward decl for the factory in `veritate_engine/v1/src/addons.h`.
+3. Add a forward decl for the factory in `veritate_engine/src/addons.h`.
 4. Add a row `{ "<id>", addon_<id>_new }` to `ADDON_FACTORIES` in `addons.c`.
-5. Add the `.c` to `veritate_engine/v1/build/build.bat` and `build.sh`.
+5. Add the `.c` to `veritate_engine/build/build.bat` and `build.sh`.
 6. Test bit-parity against the python addon by running both with the same prompts and a fixed RNG seed; sampled byte sequences must match while both backends are healthy.
 
 The C addon must produce the same biases as its python counterpart (bytewise). Tolerances: float32 logit space, so accept difference <= 1e-5 per byte. The sampler choice is identical when biased argmax is identical.
@@ -139,9 +139,9 @@ Method names, signatures, vtable layout, and chain functions are stable across p
 
 Adding, removing, or renaming any field above requires:
 
-1. The implementation in `veritate_engine/v1/src/addons.c` is updated.
-2. The header in `veritate_engine/v1/src/addons.h` is updated.
-3. The integration in `veritate_engine/v1/src/model.c::sample_token_ext` and `main.c` is updated.
-4. The build scripts (`veritate_engine/v1/build/build.bat`, `build.sh`) are updated.
+1. The implementation in `veritate_engine/src/addons.c` is updated.
+2. The header in `veritate_engine/src/addons.h` is updated.
+3. The integration in `veritate_engine/src/model.c::sample_token_ext` and `main.c` is updated.
+4. The build scripts (`veritate_engine/build/build.bat`, `build.sh`) are updated.
 5. This file's tables are updated in the same commit.
-6. Every shipped addon (`veritate_engine/v1/src/addons/*.c`) is verified to still compile and produce the same biases as its python counterpart.
+6. Every shipped addon (`veritate_engine/src/addons/*.c`) is verified to still compile and produce the same biases as its python counterpart.

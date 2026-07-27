@@ -14,7 +14,7 @@
 // - default.metallib is expected to live alongside the executable. The
 //   build script compiles kernels/metal/*.metal -> default.metallib and
 //   places it next to the binary.
-// veritate_engine/v1/src/metal_dispatch.m
+// veritate_engine/src/metal_dispatch.m
 // ------------------------------------------------------------------------------------
 
 #include "metal_dispatch.h"

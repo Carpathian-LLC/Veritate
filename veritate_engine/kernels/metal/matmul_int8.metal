@@ -13,7 +13,7 @@
 //   [M x N] row-major. c[m,n] = sum_k a[m,k] * b[k,n].
 // - PHASE 2: unverified on real hardware. expected to compile cleanly but
 //   may need driver-specific tweaks. paired with src/metal_dispatch.m.
-// veritate_engine/v1/kernels/metal/matmul_int8.metal
+// veritate_engine/kernels/metal/matmul_int8.metal
 // ------------------------------------------------------------------------------------
 
 #include <metal_stdlib>

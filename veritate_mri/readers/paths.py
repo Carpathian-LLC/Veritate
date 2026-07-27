@@ -54,14 +54,13 @@ NATIVE_CORPUS_ROOT = os.path.join(DATA_ROOT, "corpus")
 SYNTH_JOBS_ROOT    = os.path.join(DATA_ROOT, "synth_jobs")
 AUTHORING_ROOT     = os.path.join(DATA_ROOT, "authoring")
 ENGINE_ROOT     = os.path.join(REPO_ROOT, "veritate_engine")
-# v1 is the primary (and only built) engine.
-ENGINE_PRIMARY  = os.path.join(ENGINE_ROOT, "v1")
-ENGINE_BIN      = os.path.join(ENGINE_PRIMARY, "bin")
-ENGINE_BUILD    = os.path.join(ENGINE_PRIMARY, "build")
-ENGINE_SRC      = os.path.join(ENGINE_PRIMARY, "src")
-ENGINE_KERNELS  = os.path.join(ENGINE_PRIMARY, "kernels")
+ENGINE_BIN      = os.path.join(ENGINE_ROOT, "bin")
+ENGINE_BUILD    = os.path.join(ENGINE_ROOT, "build")
+ENGINE_SRC      = os.path.join(ENGINE_ROOT, "src")
+ENGINE_KERNELS  = os.path.join(ENGINE_ROOT, "kernels")
 ENGINE_SOURCE_SUFFIXES = (".c", ".h", ".S")
-ENGINE_VERSIONS_JSON = os.path.join(ENGINE_PRIMARY, "engine_versions.json")
+# Component version ledger for the whole platform.
+VERSIONS_JSON_PATH = os.path.join(REPO_ROOT, "versions.json")
 
 OS_WINDOWS = "windows"
 OS_LINUX   = "linux"
@@ -85,7 +84,7 @@ BUILD_SCRIPT_BY_OS = {
 CONFIG_NAME       = "config.json"
 TRAIN_CSV_NAME    = "train.csv"
 BIN_NAME          = "veritate.bin"
-BIN_V2_NAME       = "veritate_v2.bin"   # ternary export sits beside the int8 bin
+BIN_TERNARY_NAME  = "veritate_ternary.bin"   # ternary export sits beside the int8 bin
 CHECKPOINTS_DIR   = "checkpoints"
 HOOKS_DIR         = "hooks"
 
@@ -210,8 +209,8 @@ def bin_path(name):
     return os.path.join(model_dir(name), BIN_NAME)
 
 
-def bin_v2_path(name):
-    return os.path.join(model_dir(name), BIN_V2_NAME)
+def bin_ternary_path(name):
+    return os.path.join(model_dir(name), BIN_TERNARY_NAME)
 
 
 def checkpoints_dir(name):

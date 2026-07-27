@@ -19,7 +19,7 @@ from . import paths
 
 VERITATE_MODEL_MAGIC = b"VRTE"
 
-# Mirror of the C engine's accepted versions in veritate_engine/v1/src/model.c
+# Mirror of the C engine's accepted versions in veritate_engine/src/model.c
 # (model_load + model_load_int4 dispatch). The engine accepts every entry here
 # at load time with no runtime cost: version handling is load-time-only;
 # decode kernels are shared. Keep this list in lockstep with the C dispatch.
@@ -35,13 +35,13 @@ VERSION_LABELS = {
     13: "HYBRID-fp",
 }
 
-# v13 carries no act_boost: the first extension field is the weight dtype and
+# Bin format version 13 carries no act_boost: the first extension field is the weight dtype and
 # the numeric path is fp32/fp16, so the boost/QAT gibberish heuristic does not
 # apply. act_boost() returns None for these versions.
 NO_ACT_BOOST_VERSIONS = frozenset({13})
 
-# v10 was assigned twice on different branches (MoE-on-dev vs ternary-on-
-# experimental) and was retired during the v11 unification. Any .bin with
+# Bin format version 10 was assigned twice on different branches (MoE-on-dev vs
+# ternary-on-experimental) and was retired when version 11 unified them. Any .bin with
 # version=10 must be re-exported from its most recent .pt checkpoint.
 RETIRED_VERSIONS = frozenset({10})
 

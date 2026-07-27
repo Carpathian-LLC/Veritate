@@ -94,8 +94,8 @@ Validation is gated on the export pipeline writing a v11 binary from a QAT'd `hy
 
 Adding, removing, or renaming any field above requires:
 
-1. The implementation in `veritate_engine/v1/src/model.c` (`route_token_top1`, the FFN dispatch in `forward_decode`, and the v11 load path) is updated.
-2. The block_t / model_t fields in `veritate_engine/v1/src/veritate.h` are updated.
+1. The implementation in `veritate_engine/src/model.c` (`route_token_top1`, the FFN dispatch in `forward_decode`, and the v11 load path) is updated.
+2. The block_t / model_t fields in `veritate_engine/src/veritate.h` are updated.
 3. The export pipeline in `veritate_mri/training/export.py` is updated to match the on-disk layout.
 4. This file's tables and code samples are updated in the same commit.
 5. A build note ships the format change per claude_preflight rule 43.

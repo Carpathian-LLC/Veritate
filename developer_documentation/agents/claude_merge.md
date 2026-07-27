@@ -9,7 +9,7 @@ Contract for how Claude handles branch merges in the Veritate repo. This doc liv
 2. Branch flow is strictly one-directional: `experimental` → `dev` → `main`. `main` ↔ `experimental` direct merges never happen under any circumstance.
 3. `dev` is canonical and is UAT for `experimental`. Canonical README, canonical config, and canonical training reference all live on `dev`. `experimental` is the working forward-edge.
 4. Files that do NOT carry across an `experimental` → `dev` merge:
-    - `veritate_mri/wiki/build_notes/*` — per-build, stays on its branch.
+    - `veritate_mri/data/wiki/build_notes/*` — per-build, stays on its branch.
     - `versions.json` — never bumps as part of a merge; each branch keeps its own version line.
 5. Files that DO carry across: code, fixes, improvements. Take both sides' additive changes wherever they don't logically conflict. Surface only genuine "same line, different intent" content conflicts to the user for resolution.
 6. End state target: after an `experimental` ↔ `dev` merge, the two branches are at the same commit — neither ahead nor behind.

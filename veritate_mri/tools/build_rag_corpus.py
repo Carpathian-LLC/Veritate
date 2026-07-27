@@ -46,8 +46,18 @@ QA_TEMP         = 0.5
 MIN_FACT_CHARS  = 10
 PROGRESS_EVERY  = 20
 
-TEMPLATE    = "context: {fact}\n<|user|>\n{q}\n<|assistant|>\n{a}\n<|end|>\n"
-EVAL_PREFIX = "context: {fact}\n<|user|>\n{q}\n<|assistant|>\n"
+# ChatML, per developer_documentation/corpus/framing.md. Retrieved text rides a
+# system turn; the "context: " lead-in is kept because inference stops on it.
+# EVAL_PREFIX ends after the user turn so the model emits the assistant turn itself.
+IM_START    = "<|im_start|>"
+IM_END      = "<|im_end|>"
+EOT         = "<|endoftext|>"
+TEMPLATE    = (f"{IM_START}system\ncontext: {{fact}}{IM_END}\n"
+               f"{IM_START}user\n{{q}}{IM_END}\n"
+               f"{IM_START}assistant\n{{a}}{IM_END}\n{EOT}\n")
+EVAL_PREFIX = (f"{IM_START}system\ncontext: {{fact}}{IM_END}\n"
+               f"{IM_START}user\n{{q}}{IM_END}\n"
+               f"{IM_START}assistant\n")
 JSON_ONLY   = "You output JSON only."
 FACT_CATS   = ["geography", "science", "history", "sports", "art and culture",
                "technology", "nature", "space"]

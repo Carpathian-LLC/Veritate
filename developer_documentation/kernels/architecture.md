@@ -2,7 +2,7 @@
 
 How Veritate is built, and why.
 
-Paths below are relative to `veritate_engine/v1/`.
+Paths below are relative to `veritate_engine/`.
 
 # ------------------------------------------------------------------------------------
 # The big picture

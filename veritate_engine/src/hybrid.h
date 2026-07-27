@@ -7,7 +7,7 @@
 // - v13 hybrid trunk: fp32 decode path. local attention blocks on every byte,
 //   gla recurrent global blocks on boundary-anchored slots. O(1) state per byte:
 //   bounded KV over seq for local blocks, [heads x d x d] state + conv ring per
-//   global block. spec: developer_documentation/engine/engine_v13_hybrid.md.
+//   global block. spec: developer_documentation/engine/hybrid_trunk.md.
 // ------------------------------------------------------------------------------------
 
 #ifndef VERITATE_HYBRID_H
@@ -85,6 +85,7 @@ typedef struct {
     // batched-prefill scratch, [V_PREFILL_BMAX][...]. allocated once at load,
     // used only when VERITATE_PREFILL_BATCH engages. pf_qx is int8-only.
     float*  pf_x;           // [Bmax x H] residual stream per batched position
+    float*  pf_g;           // [Bmax x H] slot residual, recurrent chunk only
     float*  pf_u;           // [Bmax x H] rmsnorm output
     float*  pf_qkv;         // [Bmax x 3H]
     float*  pf_attn;        // [Bmax x H]

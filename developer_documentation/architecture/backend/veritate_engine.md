@@ -2,15 +2,15 @@
 
 ## What it is
 
-Compiled C inference engine at [veritate_engine/v1/](../../../veritate_engine/v1/). Loads `.bin` model files (versions v3 through v13) and serves fast byte-level generation. Used by the dashboard when the C backend is selected; co-exists with the PyTorch inference brain.
+Compiled C inference engine at [veritate_engine/](../../../veritate_engine/). Loads `.bin` model files (versions v3 through v13) and serves fast byte-level generation. Used by the dashboard when the C backend is selected; co-exists with the PyTorch inference brain.
 
 ## How it works
 
-- **Source** at [veritate_engine/v1/src/](../../../veritate_engine/v1/src/). Header [veritate.h](../../../veritate_engine/v1/src/veritate.h) defines the public API.
-- **Kernels** at [veritate_engine/v1/kernels/](../../../veritate_engine/v1/kernels/), INT8, INT4, ternary matmul + transformer ops with SIMD specializations.
-- **Dispatch** at [veritate_engine/v1/src/dispatch.c](../../../veritate_engine/v1/src/dispatch.c): runtime CPU feature detection (AVX2, AVX-512 VNNI on x86; SDOT, I8MM on ARM64). Function pointers selected once at engine load.
-- **Bin loader** at [veritate_engine/v1/src/model.c](../../../veritate_engine/v1/src/model.c), parses the header, dispatches per quantization mode (INT8, INT4, ternary).
-- **Binaries** at [veritate_engine/v1/bin/](../../../veritate_engine/v1/bin/) per platform (`macos/arm64`, `macos/x86_64`, `linux/x86_64`, etc.).
+- **Source** at [veritate_engine/src/](../../../veritate_engine/src/). Header [veritate.h](../../../veritate_engine/src/veritate.h) defines the public API.
+- **Kernels** at [veritate_engine/kernels/](../../../veritate_engine/kernels/), INT8, INT4, ternary matmul + transformer ops with SIMD specializations.
+- **Dispatch** at [veritate_engine/src/dispatch.c](../../../veritate_engine/src/dispatch.c): runtime CPU feature detection (AVX2, AVX-512 VNNI on x86; SDOT, I8MM on ARM64). Function pointers selected once at engine load.
+- **Bin loader** at [veritate_engine/src/model.c](../../../veritate_engine/src/model.c), parses the header, dispatches per quantization mode (INT8, INT4, ternary).
+- **Binaries** at [veritate_engine/bin/](../../../veritate_engine/bin/) per platform (`macos/arm64`, `macos/x86_64`, `linux/x86_64`, etc.).
 
 ## Format versions
 
@@ -25,11 +25,11 @@ Compiled C inference engine at [veritate_engine/v1/](../../../veritate_engine/v1
 | v10     | Ternary baseline                                      |
 | v11     | QAT mode flag, MoE (top-1 routing only)               |
 | v12     | MTP byte-0 transform, RMSNorm scale-64, untied lm_head|
-| v13     | hybrid trunk (local attn + gla recurrent global slots), fp32/fp16, own forward path in [src/hybrid.c](../../../veritate_engine/v1/src/hybrid.c) |
+| v13     | hybrid trunk (local attn + gla recurrent global slots), fp32/fp16, own forward path in [src/hybrid.c](../../../veritate_engine/src/hybrid.c) |
 
-Subprocess spawned via `app.config["C_SUBPROCESS"]` on demand. Routes control it via [engine_routes.py](../../../veritate_mri/routes/engine_routes.py). Format versions are declared in [engine_versions.json](../../../veritate_engine/v1/engine_versions.json).
+Subprocess spawned via `app.config["C_SUBPROCESS"]` on demand. Routes control it via [engine_routes.py](../../../veritate_mri/routes/engine_routes.py). The accepted `.bin` format versions are declared in [veritate.h](../../../veritate_engine/src/veritate.h) and mirrored in [readers/bin.py](../../../veritate_mri/readers/bin.py).
 
-`v1/` is the only engine tree under `veritate_engine/`, and it is the production engine.
+The engine version is the `engine` key in [versions.json](../../../versions.json); see [versioning.md](../../platform/versioning.md).
 
 ## Dependencies
 

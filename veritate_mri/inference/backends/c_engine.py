@@ -7,7 +7,7 @@
 # - persistent c-engine subprocess running `veritate.exe chat_traced`. one process
 #   per server, reused across requests. binary frame parser yields per-token raw
 #   activation slices for the orchestration layer to convert into mri json frames.
-# - protocol mirrors veritate_engine/v1/src/main.c chat_traced_loop:
+# - protocol mirrors veritate_engine/src/main.c chat_traced_loop:
 #     stdin  text:  "<temp> <top_k> <max_new> ... [stop_csv]\n<prompt>\n"
 #     stdout binary: TFRM frame per token, TEND marker per turn.
 # - passing stop sequences lets the engine end the turn itself, so a turn reaches
@@ -49,7 +49,7 @@ HEADER_BYTES         = 32
 HEADER_FMT           = "<4sIIIIIII"
 STATE_CACHE_DIRNAME  = "state_cache"
 # Wire escape for an embedded newline on the line-based prompt protocol. MUST
-# stay in lockstep with veritate_engine/v1/src/main.c, which maps it back
+# stay in lockstep with veritate_engine/src/main.c, which maps it back
 # before framing the prompt. Changing one side silently desyncs the engine.
 NEWLINE_WIRE_ESCAPE  = "\x01"
 CARRIAGE_RETURN      = "\r"
@@ -66,14 +66,14 @@ STOP_SEQ_MAX_LEN     = 31    # VERITATE_MAX_STOP_LEN - 1 in main.c
 # payload cap. Larger divisor means a finer cut and less wasted context, but the
 # anchor moves more often and each move costs a full prefill.
 PROMPT_ANCHOR_DIVISOR = 8
-# v13 batched prefill width (VERITATE_PREFILL_BATCH). Amortizes the local-block
+# Hybrid-trunk batched prefill width (VERITATE_PREFILL_BATCH). Amortizes the local-block
 # weight streaming across the chunk; bitwise-identical to sequential prefill
 # (tests/engine/test_prefill_batch.py). 32 measured best on the i7-9700T.
 PREFILL_BATCH        = 32
 
 DLA_TOPK            = 12
 DLA_ENTRY_BYTES     = 16   # u8 layer, u8 pad, u16 neuron, i32 act, i32 w, i32 contrib
-CAND_TOPK           = 12   # v8: per-candidate DLA count, must match VERITATE_CAND_TOPK in veritate.h
+CAND_TOPK           = 12   # per-candidate DLA count, must match VERITATE_CAND_TOPK in veritate.h
 CONFIDENCE_BYTES    = 5 * 4
 
 # drain bounds: when a client disconnects mid-stream we consume the engine's
@@ -102,9 +102,9 @@ STREAM_LOCK_TIMEOUT_S = 30.0
 # only when the holder has produced NO frame for STREAM_LOCK_TIMEOUT_S, so a
 # slow-but-healthy long generation (which keeps emitting frames) is never killed.
 RECLAIM_POLL_S = 2.0
-# v8 tail: u16 cand_count + u8[CAND_TOPK] cand_bytes + dla_entry[CAND_TOPK][DLA_TOPK]
+# Trace tail: u16 cand_count + u8[CAND_TOPK] cand_bytes + dla_entry[CAND_TOPK][DLA_TOPK]
 # + i16 ablation_layer + i16 ablation_neuron.
-V8_TAIL_BYTES       = 2 + CAND_TOPK + CAND_TOPK * DLA_TOPK * DLA_ENTRY_BYTES + 2 + 2
+TRACE_TAIL_BYTES    = 2 + CAND_TOPK + CAND_TOPK * DLA_TOPK * DLA_ENTRY_BYTES + 2 + 2
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
@@ -165,8 +165,8 @@ def _read_bin_shape(path):
     # everything else, defer to the C engine's actual dispatch (model.c).
     if int(version) == 10:
         raise RuntimeError(
-            f"veritate.bin v10 is retired (assigned twice on different branches "
-            f"during the v11 merge). Re-export from the latest .pt checkpoint. "
+            f"veritate.bin format version 10 is retired (assigned twice on different "
+            f"branches, superseded by version 11). Re-export from the latest .pt checkpoint. "
             f"Path: {path}"
         )
     return {
@@ -239,9 +239,9 @@ class CTracedSubprocess:
                                      + s["vocab"] * 4
                                      + self._decision_trace_bytes
                                      + CONFIDENCE_BYTES
-                                     + V8_TAIL_BYTES)
+                                     + TRACE_TAIL_BYTES)
 
-        # Compact (TFRC v9) geometry. DS/BUCKETS mirror _build_c_mri_frame exactly.
+        # Compact (TFRC) geometry. DS/BUCKETS mirror _build_c_mri_frame exactly.
         self._ds      = max(1, s["ffn"] // FFN_BUCKET_TARGET)
         self._buckets = s["ffn"] // self._ds
         # per layer: ffn_full + ffn_argmax (uint8 each) + ffn_top + res/contrib f32 + lens
@@ -257,7 +257,7 @@ class CTracedSubprocess:
                                        + s["vocab"] * 4
                                        + self._decision_trace_bytes
                                        + CONFIDENCE_BYTES
-                                       + V8_TAIL_BYTES)
+                                       + TRACE_TAIL_BYTES)
 
     def _spawn(self):
         env = os.environ.copy()
@@ -429,8 +429,8 @@ class CTracedSubprocess:
                 csv_token = "-"  # explicit clear when caller passed nothing
             # rep_* tail is optional in the protocol; 0/0 leaves the engine
             # sampler bitwise-identical to pre-repetition-control behavior.
-            # compact is only meaningful with tracing on; the engine emits TFRC v9
-            # (reduced) frames when both are set, else the raw TFRM v8 frames.
+            # compact is only meaningful with tracing on; the engine emits reduced
+            # TFRC frames when both are set, else the raw TFRM frames.
             use_compact = bool(compact and do_trace)
             # stop token ends the turn engine-side on a marker, so this stream reaches
             # TEND instead of being abandoned mid-generation and drained.
@@ -511,7 +511,7 @@ class CTracedSubprocess:
                                "byte": int(rest[8]), "argmax_byte": int(rest[9]),
                                "fast": True}
                         continue
-                    # TFRM = raw v8 frame; TFRC = compact v9 frame (engine-reduced).
+                    # TFRM = raw frame; TFRC = compact frame (engine-reduced).
                     is_compact = (marker == b"TFRC")
                     if marker != b"TFRM" and not is_compact:
                         # Pipe is desynced reading garbage instead of frame magic.
@@ -690,7 +690,7 @@ class CTracedSubprocess:
         }
 
     def _parse_compact_frame(self, buf, pos, real_len, byte, argmax_byte):
-        """Parse a TFRC v9 frame: the engine already reduced the four heavy arrays,
+        """Parse a TFRC frame: the engine already reduced the four heavy arrays,
         so this reads the compact per-layer summaries + an unchanged decision-trace
         trailer (minus final_act). Field order MUST match chat_traced_loop's TFRC
         writer in main.c. Returns a dict tagged compact for _build_c_mri_frame_compact."""

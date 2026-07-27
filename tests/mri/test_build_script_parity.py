@@ -14,10 +14,10 @@
 
 import os
 
-from conftest import REPO_ROOT
+from readers import paths
 from training import build_runner
 
-BUILD_DIR = os.path.join(REPO_ROOT, "veritate_engine", "v1", "build")
+BUILD_DIR = paths.ENGINE_BUILD
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -42,7 +42,7 @@ def test_referenced_kernels_exist_on_disk():
     """Every x86_64 kernel TU the scripts name must actually exist, so a rename
     that updates the source tree but not the scripts is caught too."""
     bat = build_runner._referenced_shared_tus(os.path.join(BUILD_DIR, "build.bat")) or set()
-    engine_root = os.path.join(REPO_ROOT, "veritate_engine", "v1")
+    engine_root = paths.ENGINE_ROOT
     for rel in sorted(bat):
         assert os.path.isfile(os.path.join(engine_root, rel)), f"referenced TU missing on disk: {rel}"
 

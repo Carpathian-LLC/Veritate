@@ -1,4 +1,4 @@
-# engine v1
+# engine reference
 
 The Veritate inference engine.
 
@@ -34,13 +34,13 @@ Every version below is accepted by the engine; version handling is load-time onl
 | v9 | `VERITATE_MODEL_VERSION_BOOST` | adds `act_boost` (residual-stream scale multiplier 1/2/4). default for `export_checkpoint` non-MoE INT8 |
 | v11 | `VERITATE_MODEL_VERSION_QAT` | unified format. header carries `act_boost` + `quant_mode` (INT8 / INT4 / TERNARY) + `n_experts` + `router_topk`. covers ternary-FFN and MoE-routed checkpoints under one version |
 | v12 | `VERITATE_MODEL_VERSION_MTP` | v11 header + an MTP byte-0 head (extra `mtp_norm0_w`, `mtp_transform0`, and untied `lm_head` blocks at end). non-MoE only. written by `_export_checkpoint_mtp` |
-| v13 | `VERITATE_MODEL_VERSION_HYBRID` | hybrid trunk (local attention + gla recurrent global slots), fp32/fp16 tensors, tied lm_head, baked boundary table. own fp32 forward path in `src/hybrid.c` (O(1) recurrent state per byte, KV bounded by seq). written by `_export_checkpoint_hybrid`. spec: `developer_documentation/engine/engine_v13_hybrid.md` |
+| v13 | `VERITATE_MODEL_VERSION_HYBRID` | hybrid trunk (local attention + gla recurrent global slots), fp32/fp16 tensors, tied lm_head, baked boundary table. own fp32 forward path in `src/hybrid.c` (O(1) recurrent state per byte, KV bounded by seq). written by `_export_checkpoint_hybrid`. spec: `developer_documentation/engine/hybrid_trunk.md` |
 
 ## build
 
 ```bash
-bash veritate_engine/v1/build/build.sh
-# -> veritate_engine/v1/bin/<os>/<arch>/veritate
+bash veritate_engine/build/build.sh
+# -> veritate_engine/bin/<os>/<arch>/veritate
 ```
 
 The script detects `uname -s/-m` and picks the matching kernel translation units. Apple M1 gets `-mcpu=apple-m1` (NEON + SDOT implied). x86_64 builds with AVX2 + AVX-512 + VNNI. Linux ARM64 uses `-march=armv8.2-a+dotprod`.
@@ -49,10 +49,10 @@ The script detects `uname -s/-m` and picks the matching kernel translation units
 
 ```bash
 export VERITATE_MODEL_PATH=$(pwd)/models/<name>/veritate.bin
-veritate_engine/v1/bin/<os>/<arch>/veritate chat_greedy 200      # greedy decode
-veritate_engine/v1/bin/<os>/<arch>/veritate chat 200             # T-sampled
-veritate_engine/v1/bin/<os>/<arch>/veritate trace "prompt" out.vrmr   # VRMR trace dump
-veritate_engine/v1/bin/<os>/<arch>/veritate bench 50 50          # forward + decode bench
+veritate_engine/bin/<os>/<arch>/veritate chat_greedy 200      # greedy decode
+veritate_engine/bin/<os>/<arch>/veritate chat 200             # T-sampled
+veritate_engine/bin/<os>/<arch>/veritate trace "prompt" out.vrmr   # VRMR trace dump
+veritate_engine/bin/<os>/<arch>/veritate bench 50 50          # forward + decode bench
 ```
 
 Optional environment overrides:

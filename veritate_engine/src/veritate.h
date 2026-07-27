@@ -13,8 +13,6 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define VERITATE_VERSION "0.1.0"
-
 // ------------------------------------------------------------------------------------
 // cpu features
 // ------------------------------------------------------------------------------------
@@ -365,7 +363,7 @@ typedef struct {
 // v12: v11 body + MTP byte-0 head (mtp.transforms[0], mtp.norms[0]) + untied lm_head.
 #define VERITATE_MODEL_VERSION_MTP 12
 // v13: hybrid trunk (local attn + gla recurrent global slots), fp32/fp16 tensors,
-// separate fp32 forward path. spec: developer_documentation/engine/engine_v13_hybrid.md.
+// separate fp32 forward path. spec: developer_documentation/engine/hybrid_trunk.md.
 #define VERITATE_MODEL_VERSION_HYBRID 13
 
 // quant_mode values stored in the v11 header.
@@ -407,7 +405,7 @@ static inline int8_t* cache_v_row(kv_cache_t* c, int32_t L, int32_t p) {
 // project mri — interpretability trace
 #define VERITATE_TRACE_TOPK 5
 #define VERITATE_DLA_TOPK   12
-// v8: count of next-byte candidates that get a per-candidate DLA. matches the
+// count of next-byte candidates that get a per-candidate DLA. matches the
 // dashboard's `cand` length so dla_cand[i] pairs with cand[i] by index.
 #define VERITATE_CAND_TOPK  12
 
@@ -416,7 +414,7 @@ typedef struct {
     int32_t logit;
 } trace_prediction_t;
 
-// v8 decision-trace entry. layer + neuron identify the source; act/w/contrib are the
+// decision-trace entry. layer + neuron identify the source; act/w/contrib are the
 // raw int values (act = post-GELU int8 activation, w = int16 byte_direction, contrib = act*w).
 typedef struct {
     uint8_t  layer;
@@ -472,7 +470,7 @@ typedef struct {
 void forward(const model_t* m, kv_cache_t* cache, const int32_t* tokens,
              int32_t real_len, int8_t* out_act, trace_record_t* trace, profile_t* prof);
 
-// v13 state-cache store, off the prefill TTFB path. call after the first frame flushes
+// hybrid state-cache store, off the prefill TTFB path. call after the first frame flushes
 // and before forward_decode. no-op for dense models or a disabled state cache.
 void model_store_state_cache(const model_t* m, const int32_t* tokens, int32_t real_len);
 
@@ -499,7 +497,7 @@ int32_t veritate_max_layers(const model_t* m);
 void veritate_mod_stats(int64_t* calls, int64_t* skipped);
 void veritate_mod_stats_reset(void);
 
-// causal ablation (v8). when (layer, neuron) is non-negative, forward_decode
+// causal ablation. when (layer, neuron) is non-negative, forward_decode
 // zeros ffn_neurons[layer][pos][neuron] post-GELU before ffn_down on every
 // position, every turn, until reset. process-global; chat_traced reads/writes
 // it per turn from the stdin header. layer or neuron == -1 disables ablation.
@@ -516,7 +514,7 @@ void veritate_get_ablation(int32_t* layer, int32_t* neuron);
 // per-layer reductions itself (ffn max-pool buckets, residual L2 norms, attention ->
 // info_flow, logit-lens top-k) instead of streaming full-resolution arrays, shrinking
 // the per-byte frame ~30x. Opt-in (see chat_traced_loop compact flag); the default
-// path still emits the raw 'TFRM' v8 frame. These counts are wire constants and MUST
+// path still emits the raw 'TFRM' frame (trace protocol version 8). These counts are wire constants and MUST
 // match c_engine.py (FFN_BUCKET_TARGET / FFN_TOPK / INFO_FLOW_TOPK / LENS_TOPK).
 #define VERITATE_TRACE_VERSION_COMPACT    9
 #define VERITATE_FFN_BUCKET_TARGET        256

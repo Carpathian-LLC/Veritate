@@ -9,7 +9,7 @@
 # - scale_q24 sentinel 0 lets the engine derive RMS-based requant at load time.
 # - PTQ on a non-QAT model trades off some accuracy. acceptable as a baseline.
 # - v13 hybrid export (trunk=hybrid): fp32/fp16/int8 tensors, PyTorch [out, in] layout,
-#   spec at developer_documentation/engine/engine_v13_hybrid.md.
+#   spec at developer_documentation/engine/hybrid_trunk.md.
 # veritate_mri/training/export.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -96,11 +96,11 @@ def quantize_activation(w):
 # gamma, q in {-1, 0, +1}. Output: 5-trits/byte packed bytes [n, ceil(k/5)] in
 # [in, out] = [k, n] layout (transposed from PyTorch's [out, in] like int8 path)
 # plus a single int32 gamma_q24 = round(gamma * ACT_INT8_SCALE * 2^24).
-# Engine load path: load_b_ternary in v2 reads packed bytes, decodes into a
+# Engine load path: load_b_ternary reads packed bytes, decodes into a
 # {-1,0,+1}-valued INT8 buffer, and runs the existing prep_b, so the engine's
 # INT8 hot path runs unchanged on ternary checkpoints. The trit-packed disk
 # format gives the 5x density that matters at 5B+; the standalone NEON ternary
-# kernel (compiled into v2 but unused at runtime today) is the future fast
+# kernel (compiled in but unused at runtime today) is the future fast
 # path that exploits that density.
 
 def recover_ternary(w):
@@ -529,7 +529,7 @@ def _write_big(f, arr, dtype, np_dtype, shape):
 def _export_checkpoint_hybrid(name, step, ckpt_path, state_rule, dtype):
     """v13 binary: hybrid trunk (local attn + recurrent global slots). fp32/fp16/int8
     tensors in PyTorch [out, in] row-major, tied lm_head, baked boundary table.
-    Layout spec: developer_documentation/engine/engine_v13_hybrid.md."""
+    Layout spec: developer_documentation/engine/hybrid_trunk.md."""
     from veritate_core.model_patched import PATCH_STRIDE, _boundary_table
 
     if state_rule != "gla":
@@ -661,7 +661,7 @@ def export_checkpoint_ternary(name, step, out_path=None):
         raise ValueError(f"n_out shape {n_out.shape} != ({shape['hidden']},)")
 
     if out_path is None:
-        out_path = paths.bin_v2_path(name)
+        out_path = paths.bin_ternary_path(name)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     with open(out_path, "wb") as f:

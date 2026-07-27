@@ -232,13 +232,19 @@ int32_t veritate_pool_size(void) {
 
 // ------------------------------------------------------------------------------------
 
+// The calling thread runs the last span itself instead of only spinning on the
+// completion count, so an n-way split occupies n cores rather than n workers
+// plus a spinning driver. Without this a split as wide as the core count
+// oversubscribes and collapses (measured 92 -> 7.5 tok/s at n = cores on an
+// 8-core i7-9700T), which forced callers to cap the split one below the pool.
 void veritate_pool_run(veritate_work_fn fn, void* const* args, int32_t n) {
     if (!pool_ready) pool_init_once();
     if (n < 1) return;
     if (n > pool_n) n = pool_n;
 
+    const int32_t nw = n - 1;
     atomic_store_explicit(&pool_done_count, 0, memory_order_seq_cst);
-    for (int32_t t = 0; t < n; t++) {
+    for (int32_t t = 0; t < nw; t++) {
         pool[t].fn  = fn;
         pool[t].arg = (void*)args[t];
         atomic_store_explicit(&pool[t].wake_flag, 1, memory_order_seq_cst);
@@ -249,15 +255,18 @@ void veritate_pool_run(veritate_work_fn fn, void* const* args, int32_t n) {
         }
     }
 
+    fn((void*)args[nw], nw);
+    if (nw == 0) return;
+
     int done = 0;
     for (long i = 0; i < pool_spin; i++) {
-        if (atomic_load_explicit(&pool_done_count, memory_order_acquire) >= n) { done = 1; break; }
+        if (atomic_load_explicit(&pool_done_count, memory_order_acquire) >= nw) { done = 1; break; }
         POOL_RELAX();
     }
     if (!done) {
         POOL_MU_LOCK(&pool_done_mu);
         atomic_store_explicit(&pool_main_waiting, 1, memory_order_seq_cst);
-        while (atomic_load_explicit(&pool_done_count, memory_order_seq_cst) < n)
+        while (atomic_load_explicit(&pool_done_count, memory_order_seq_cst) < nw)
             POOL_CV_WAIT(&pool_done_cv, &pool_done_mu);
         atomic_store_explicit(&pool_main_waiting, 0, memory_order_relaxed);
         POOL_MU_UNLOCK(&pool_done_mu);

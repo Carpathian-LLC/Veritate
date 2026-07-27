@@ -135,7 +135,7 @@ void dispatch_init(const cpu_features_t* feat, dispatch_info_t* out) {
         out->matmul_backend = "scalar_int8";
     }
 #elif defined(__aarch64__) || defined(_M_ARM64)
-    // arm64 v1 ships only the NEON SDOT path. the prep'd matmul, transformer
+    // arm64 ships only the NEON SDOT path. the prep'd matmul, transformer
     // hot-path, and inline attn helpers all use vdotq_s32 unconditionally; a
     // chip without FEAT_DotProd would SIGILL on the model hot path. fail loud
     // at startup rather than at the first instruction.

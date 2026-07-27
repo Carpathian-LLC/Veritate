@@ -4,9 +4,9 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - read the engine binary registry at veritate_engine/v1/engine_versions.json.
-# - the registry carries version metadata only. the binary path is resolved per
-#   host by paths.engine_binary_path(), so the registry stays arch-neutral.
+# - describe the C engine for the running host: version from the platform ledger
+#   versions.json, binary path from paths.engine_binary_path().
+# - the descriptor lists whether or not the binary is built; consumers filter.
 # veritate_mri/readers/engine.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -19,27 +19,28 @@ from . import paths
 # ------------------------------------------------------------------------------------
 # Constants
 
+VERSION_KEY = "engine"
+
 # ------------------------------------------------------------------------------------
 # Functions
 
-def manifest():
+def version():
     try:
-        with open(paths.ENGINE_VERSIONS_JSON, encoding="utf-8") as f:
-            return json.load(f)
+        with open(paths.VERSIONS_JSON_PATH, encoding="utf-8") as f:
+            return json.load(f).get(VERSION_KEY)
     except (OSError, ValueError):
-        return {"current": None, "engines": []}
+        return None
 
 
 def engines():
-    """Registry entries with `path` filled in for the running host. Consumers read
-    `path` and never build one; an entry whose binary is not built for this host
-    still lists, with `path` pointing at where the build would land."""
-    host_binary = paths.engine_binary_path()
-    return [{"path": host_binary, **e} for e in manifest().get("engines", [])]
+    """The one engine, with `path` resolved for the running host. Consumers read
+    `path` and never build one; the path is where the build lands whether or not
+    it has been built yet."""
+    return [{"version": version(), "path": paths.engine_binary_path()}]
 
 
 def by_path(abs_path):
     for e in engines():
-        if e.get("path") and os.path.abspath(e["path"]) == abs_path:
+        if os.path.abspath(e["path"]) == abs_path:
             return e
     return None

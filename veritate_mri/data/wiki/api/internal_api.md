@@ -225,7 +225,7 @@ The `extensions` flag controls the extension nav links and the marketplace entry
 |---|---|---|---|
 | `GET /engine/status` | engine_routes | none | `{status, error, c_subprocess_running, c_exe, ...}` |
 | `POST /engine/build` | engine_routes | `force` | build-state dict |
-| `GET /c-engines` | engine_routes | none | `{engines:[{version, label, perf_ms_per_byte, path, exists, is_current, mtime, size}]}` |
+| `GET /c-engines` | engine_routes | none | `{engines:[{version, path, is_current, mtime, size}]}` |
 | `GET /c-models` | engine_routes | none | `{models:[{name, bin_path, is_current, mtime, size, precision, bin_version, training, activation, act_boost, qat_enabled, description}]}` |
 | `POST /c-config` | engine_routes | `exe`, `model` | selected-configuration dict; `400` not found, `500` respawn failed |
 | `GET /pruning/report` | pruning_routes | `model` (required), `step`, `samples` | `{ok, model, step, corpus, samples, n_params, n_params_after, size_mb_before, size_mb_after, dead_pct, per_layer, plan}`; `400` bad model or corpus |

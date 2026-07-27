@@ -4,8 +4,8 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - regression for v13 batched prefill (VERITATE_PREFILL_BATCH). drives the built
-#   engine's chat_greedy A/B harness (same pattern as test_v13_compat): a batched
+# - regression for hybrid batched prefill (VERITATE_PREFILL_BATCH). drives the built
+#   engine's chat_greedy A/B harness (same pattern as test_decode_parity): a batched
 #   prefill must greedy-decode byte-identically to the sequential per-byte path,
 #   the scalar matmul fold must match on its own, and batching must compose with
 #   the persistent state cache. skips when the engine binary is absent.
@@ -24,7 +24,7 @@ from readers import paths
 # Constants
 
 FIXTURES    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
-V13_FIXTURE = os.path.join(FIXTURES, "hybrid_v13_fixture.bin")
+HYBRID_FIXTURE = os.path.join(FIXTURES, "hybrid_fixture.bin")
 # prompt >= the batch width so remaining positions clear the batch gate and the
 # chunk loop runs a full 32-wide chunk plus a partial tail.
 PROMPT      = b"The quick brown fox jumps over the lazy dog today"
@@ -51,7 +51,7 @@ def _engine():
 
 
 def _greedy(exe, prompt, batch=None, scalar=False, cache_dir=None,
-            model_path=V13_FIXTURE, threads=None):
+            model_path=HYBRID_FIXTURE, threads=None):
     env = dict(os.environ, VERITATE_MODEL_PATH=model_path)
     if batch is not None:
         env["VERITATE_PREFILL_BATCH"] = batch
@@ -95,7 +95,7 @@ def test_batched_composes_with_state_cache(tmp_path):
     assert warm == reference
 
 
-def _traced(exe, prompt, batch=None, model_path=V13_FIXTURE):
+def _traced(exe, prompt, batch=None, model_path=HYBRID_FIXTURE):
     env = dict(os.environ, VERITATE_MODEL_PATH=model_path)
     if batch is not None:
         env["VERITATE_PREFILL_BATCH"] = batch

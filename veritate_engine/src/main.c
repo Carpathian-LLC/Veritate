@@ -165,7 +165,7 @@ static float compute_lens_consistency(const veritate_shape_t* sh,
 }
 
 // residual stability: mean pearson r of (residual_post[L] * embed[byte]) across layer pairs.
-// v13 hybrid has no int8 embed table; the feature reports 0.
+// the hybrid trunk has no int8 embed table; the feature reports 0.
 static float compute_residual_stab(const trace_record_t* trace, const model_t* m,
                                    int32_t pos, uint8_t sampled) {
     if (!m->embed) return 0.0f;
@@ -389,11 +389,11 @@ static int chat_loop(void) {
 //   float lens_consistency        (L_t)
 //   float residual_stab           (S_t)
 //   float confidence              (calibrated probability)
-//   uint16 cand_count             (v8 — count of next-byte candidates with DLA, == VERITATE_CAND_TOPK)
-//   uint8  cand_bytes[cand_count] (v8 — byte values, ordered by logit descending)
-//   dla_entry_t dla_cand[cand_count][VERITATE_DLA_TOPK]   (v8 — per-candidate DLA, ordered to match cand_bytes)
-//   int16  ablation_layer         (v8 — -1 if no ablation active for this token)
-//   int16  ablation_neuron        (v8 — -1 if no ablation active for this token)
+//   uint16 cand_count             (count of next-byte candidates with DLA, == VERITATE_CAND_TOPK)
+//   uint8  cand_bytes[cand_count] (byte values, ordered by logit descending)
+//   dla_entry_t dla_cand[cand_count][VERITATE_DLA_TOPK]   (per-candidate DLA, ordered to match cand_bytes)
+//   int16  ablation_layer         (-1 if no ablation active for this token)
+//   int16  ablation_neuron        (-1 if no ablation active for this token)
 //   'TEND' u32_pos                (8 bytes — end of turn)
 //
 // fast serving: the header carries an optional trailing trace flag (default 1).
@@ -510,7 +510,7 @@ static int chat_traced_loop(void) {
         // empty token "-" explicitly clears any previously-installed chain. the
         // trailing rep fields default to 0 (repetition control off) when absent;
         // trace defaults to 1 (full frames) when absent; compact defaults to 0
-        // (raw TFRM v8 frames). compact=1 with trace=1 emits reduced TFRC v9 frames.
+        // (raw TFRM frames). compact=1 with trace=1 emits reduced TFRC frames.
         // stop_csv is optional and defaults to empty: a header without it leaves
         // generation byte-identical to the previous protocol, so an older caller
         // and an older binary both keep working.
@@ -599,7 +599,7 @@ static int chat_traced_loop(void) {
             }
 
             if (!compact) {
-                // ---- TFRM (v8): full-resolution per-layer arrays ----
+                // ---- TFRM (trace protocol version 8): full-resolution per-layer arrays ----
                 uint8_t hdr[16];
                 memcpy(hdr, "TFRM", 4);
                 uint32_t u_pos = (uint32_t)pos;
@@ -645,7 +645,7 @@ static int chat_traced_loop(void) {
                 // final_act (only the raw frame carries it; the dashboard ignores it)
                 fwrite(trace->final_act, sizeof(int8_t), (size_t)H, stdout);
             } else {
-                // ---- TFRC (v9): engine-side reductions of the four heavy arrays ----
+                // ---- TFRC (trace protocol version 9): engine-side reductions of the four heavy arrays ----
                 // Mirrors _build_c_mri_frame in backends_routes.py exactly so the
                 // dashboard renders identically off a ~30x smaller frame.
                 uint8_t hdr[16];
@@ -798,7 +798,7 @@ static int chat_traced_loop(void) {
             // full logits (shared by both frame formats)
             fwrite(logits, sizeof(int32_t), (size_t)V, stdout);
 
-            // decision-trace fields (v8): per-layer decisiveness + DLA top-K.
+            // decision-trace fields: per-layer decisiveness + DLA top-K.
             for (int32_t L = 0; L < Ln; L++) {
                 int32_t* src = trace->lens_logits + ((size_t)L * S + pos) * V;
                 memcpy(lens_pos_block + (size_t)L * V, src, (size_t)V * sizeof(int32_t));
@@ -837,7 +837,7 @@ static int chat_traced_loop(void) {
             float conf5[5] = { margin, entropy_score, lens_consistency, residual_stab, confidence };
             fwrite(conf5, sizeof(float), 5, stdout);
 
-            // v8 — per-candidate DLA + ablation echo.
+            // per-candidate DLA + ablation echo.
             uint16_t cand_count = (uint16_t)VERITATE_CAND_TOPK;
             uint8_t  cand_bytes[VERITATE_CAND_TOPK];
             top_k_bytes_by_logit(logits, V, VERITATE_CAND_TOPK, cand_bytes);
@@ -1389,7 +1389,7 @@ static int ppl_mode(int argc, char** argv) {
             : (1.0 / 1024.0);
         for (int i = 0; i < chunk_len - 1; i++) {
             if (model.hybrid) {
-                // v13: fp32 logits scaled by 1024 -> same 1/1024 inv_scale as
+                // hybrid trunk: fp32 logits scaled by 1024 -> same 1/1024 inv_scale as
                 // the tied int8 path.
                 hybrid_logits_i32((const hybrid_t*)model.hybrid, logits);
             } else {
@@ -1484,7 +1484,7 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    printf("veritate v%s\n", VERITATE_VERSION);
+    printf("veritate\n");
 
     cpu_features_t feat;
     cpu_detect(&feat);
@@ -1793,7 +1793,7 @@ int main(int argc, char** argv) {
 #endif  // __x86_64__ || _M_X64
 
     // ------------------------------------------------------------------------------
-    // hybrid fp32 matvec parity (v13). scalar 4-partial-sum reference vs NEON
+    // hybrid fp32 matvec parity. scalar 4-partial-sum reference vs NEON
     // lane-mapped port; bitwise contract (rule 24). arm64 only — scalar is the
     // sole x86 implementation today.
     // ------------------------------------------------------------------------------
@@ -1923,7 +1923,7 @@ int main(int argc, char** argv) {
     }
 #endif  // __aarch64__ || _M_ARM64
 
-    // v3 — single transformer block forward pass
+    // single transformer block forward pass
     static model_t model;
     const char* model_path = getenv("VERITATE_MODEL_PATH");
     double t_init0 = now_ms();

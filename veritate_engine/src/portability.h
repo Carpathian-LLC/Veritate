@@ -29,6 +29,13 @@
 // in matmul_vnni.c. raise only with a matched rebench.
 #define VERITATE_MAX_THREADS 32
 
+// huge-page backing for the weight stream. decode touches every weight of every
+// block it runs, so a model held in 4 KB pages walks tens of thousands of page
+// entries per byte and thrashes the TLB. Allocations at or above one huge page
+// are aligned to it and marked for huge-page backing where the OS offers it.
+#define VERITATE_HUGE_PAGE (2u << 20)
+#define VERITATE_HUGE_MIN  VERITATE_HUGE_PAGE
+
 // ------------------------------------------------------------------------------------
 // Functions
 

@@ -6,7 +6,7 @@ Server-side architecture: Flask app, training pipeline, runtime, readers, engine
 
 - [veritate_core_overview.md](veritate_core_overview.md): training-side model + QAT
 - [veritate_mri_overview.md](veritate_mri_overview.md): Flask app + runtime + readers + routes
-- [veritate_engine.md](veritate_engine.md): C inference engine (`veritate_engine/v1/`)
+- [veritate_engine.md](veritate_engine.md): C inference engine (`veritate_engine/`)
 - [trainer_plugins.md](trainer_plugins.md): `trainers/<id>/` plugin contract
 
 ## Flask app
