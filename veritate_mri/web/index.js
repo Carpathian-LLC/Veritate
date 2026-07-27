@@ -2857,22 +2857,52 @@ const _typingGaps = [];
 let _lastKeyAt = 0;
 let _lastDraftLen = 0;
 
+// Too few samples to know this typist: fall back to the floor, not the ceiling. The
+// ceiling would make the very first question of a session wait the longest, which is
+// exactly backwards.
 function _typingMedianMs() {
-  if (_typingGaps.length < 3) return PREFETCH_PAUSE_MAX_MS / PREFETCH_PAUSE_FACTOR;
+  if (_typingGaps.length < 3) return PREFETCH_PAUSE_MIN_MS / PREFETCH_PAUSE_FACTOR;
   const sorted = _typingGaps.slice().sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-// How long to wait before treating the current draft as a finished question.
-function _prefetchDelayMs(raw) {
+// One rolling sample of this typist's gaps, fed by the composer AND the calibrator,
+// so calibrating actually moves the auto threshold instead of measuring a copy of it.
+function _recordTypingGap(gap) {
+  if (gap >= TYPING_GAP_MAX_MS) return;
+  _typingGaps.push(gap);
+  if (_typingGaps.length > TYPING_SAMPLE_MAX) _typingGaps.shift();
+}
+
+// The pause that means "stopped typing". A calibrated value wins; at 0 the threshold
+// tracks the typist's live median gap.
+function _pauseBaseMs() {
+  const set = (settingsState.current || {}).speculative_pause_ms || 0;
+  if (set > 0) return set;
+  return Math.min(PREFETCH_PAUSE_MAX_MS,
+                  Math.max(PREFETCH_PAUSE_MIN_MS, _typingMedianMs() * PREFETCH_PAUSE_FACTOR));
+}
+
+// How long a draft sitting at `box` must be still before it counts as finished.
+// Pure, so the calibrator can replay a typing sample through the same rule the
+// composer runs and draw exactly what would have happened.
+function _draftDelayMs(box, prevLen, baseMs) {
+  const raw = box.trim();
   if (PREFETCH_SENTENCE_END.test(raw)) return PREFETCH_SENTENCE_MS;
-  let ms = Math.min(PREFETCH_PAUSE_MAX_MS,
-                    Math.max(PREFETCH_PAUSE_MIN_MS, _typingMedianMs() * PREFETCH_PAUSE_FACTOR));
+  let ms = baseMs;
   // Mid-word waits longer rather than never firing: plenty of people never punctuate,
   // and their finished question ends on a letter like any half-typed one.
-  if (!PREFETCH_WORD_END.test($("prompt").value)) ms *= PREFETCH_MIDWORD_FACTOR;
-  if (raw.length < _lastDraftLen) ms *= PREFETCH_EDIT_FACTOR;
+  if (!PREFETCH_WORD_END.test(box)) ms *= PREFETCH_MIDWORD_FACTOR;
+  if (raw.length < prevLen) ms *= PREFETCH_EDIT_FACTOR;
   return ms;
+}
+
+// Whether `box` is a question worth answering ahead at all, clock aside.
+function _draftEligible(box) {
+  const raw = box.trim();
+  if (PREFETCH_SENTENCE_END.test(raw)) return true;
+  if (raw.split(/\s+/).length < PREFETCH_MIN_WORDS) return false;
+  return !PREFETCH_OPEN_WORDS.has(_trailingWord(box));
 }
 
 // The last whole word, for the open-word test. A word still being typed does not
@@ -2897,13 +2927,8 @@ function _prefetchWirePrompt() {
   if ($("backend").value !== "c") return "";
   if ($("go").dataset.generating === "1") return "";
   const box = $("prompt").value;
+  if (!_draftEligible(box)) return "";
   const raw = box.trim();
-  // Terminal punctuation is a finished question outright. Otherwise the draft needs a
-  // couple of words and must not trail an open word, which no finished question does.
-  if (!PREFETCH_SENTENCE_END.test(raw)) {
-    if (raw.split(/\s+/).length < PREFETCH_MIN_WORDS) return "";
-    if (PREFETCH_OPEN_WORDS.has(_trailingWord(box))) return "";
-  }
   return (mode === "chat") ? wrapChat(raw) : raw;
 }
 
@@ -3062,18 +3087,13 @@ function _primeStale() {
 
 $("prompt").addEventListener("input", () => {
   const now = performance.now();
-  if (_lastKeyAt) {
-    const gap = now - _lastKeyAt;
-    if (gap < TYPING_GAP_MAX_MS) {
-      _typingGaps.push(gap);
-      if (_typingGaps.length > TYPING_SAMPLE_MAX) _typingGaps.shift();
-    }
-  }
+  if (_lastKeyAt) _recordTypingGap(now - _lastKeyAt);
   _lastKeyAt = now;
   const raw = $("prompt").value.trim();
   if (_prefetchDraft && _prefetchDraft.asked !== raw) _primeStale();
   clearTimeout(_prefetchTimer);
-  _prefetchTimer = setTimeout(_prefetchTick, _prefetchDelayMs(raw));
+  _prefetchTimer = setTimeout(_prefetchTick,
+                              _draftDelayMs($("prompt").value, _lastDraftLen, _pauseBaseMs()));
   _lastDraftLen = raw.length;
 });
 // Enter sends, shift+enter breaks the line: the composer hint promises it.
@@ -3083,9 +3103,189 @@ $("prompt").addEventListener("keydown", (e) => {
   if (!$("go").disabled) $("go").click();
 });
 $("backend").addEventListener("change", _primeSync);
-$("prefetchEnable").addEventListener("change", () => {
-  _saveSettings({ speculative_enabled: $("prefetchEnable").checked });
+
+// ---- typing recorder (Settings) ----
+// Records how a person actually types, per keystroke, and hands the session back raw.
+// Enter marks the keystroke you were finished on, which labels every other keystroke
+// as a known not-done. That label is what makes a candidate draft rule scorable
+// against real typing instead of against an invented "average typist".
+//
+// Typing speed is not one number: the gap varies with WHERE in the text the keystroke
+// falls, so each record carries its context (inside a word, at a word boundary, after
+// a clause mark, after terminal punctuation) and the trailing word. A summary computed
+// here would throw that structure away, so nothing here summarizes.
+const REC_GAP_MAX_MS  = 10000;   // longer than this is leaving the keyboard
+const REC_BAR_MIN_PCT = 4;
+const REC_CTX_WORD     = "word";
+const REC_CTX_BOUNDARY = "boundary";
+const REC_CTX_CLAUSE   = "clause";
+const REC_CTX_SENTENCE = "sentence";
+const REC_CLAUSE_END   = /[,;:]["'”’)\]]?$/;
+const _rec = { keys: [], last: 0, t0: 0, prevLen: 0, question: 1 };
+
+function _recContext(box) {
+  const raw = box.trim();
+  if (PREFETCH_SENTENCE_END.test(raw)) return REC_CTX_SENTENCE;
+  if (REC_CLAUSE_END.test(raw))        return REC_CTX_CLAUSE;
+  if (PREFETCH_WORD_END.test(box))     return REC_CTX_BOUNDARY;
+  return REC_CTX_WORD;
+}
+
+// Replay the session through the SAME two functions the composer runs, so the score
+// is the behaviour you would actually get, not a model of it. A keystroke fires when
+// the person stayed still past the delay it asked for; firing anywhere but the
+// keystroke they finished on is a draft generated for nothing.
+function _recScore() {
+  const base = _pauseBaseMs();
+  const out = [];
+  for (let i = 0; i < _rec.keys.length; i++) {
+    const k = _rec.keys[i];
+    const still = (i + 1 < _rec.keys.length) ? _rec.keys[i + 1].gap : k.stillAfter;
+    const want = _draftEligible(k.box) ? _draftDelayMs(k.box, k.prevLen, base) : Infinity;
+    out.push({ k, still, want, fires: (still != null && still >= want) });
+  }
+  return { base, rows: out };
+}
+
+function _recRender() {
+  const { base, rows } = _recScore();
+  const strip = $("calStrip");
+  const peak  = Math.max(base, ...rows.map(r => r.k.gap), 1);
+  strip.innerHTML = '<i id="calRule" class="gap-rule"></i>';
+  for (const r of rows) {
+    const bar = document.createElement("i");
+    bar.className = "gap-bar" + (r.k.done ? " done" : r.fires ? " fires" : "");
+    bar.style.height = `${Math.max(REC_BAR_MIN_PCT, (r.k.gap / peak) * 100)}%`;
+    bar.title = `${Math.round(r.k.gap)} ms before ${JSON.stringify(r.k.ch)} · ${r.k.ctx}`
+              + (r.k.word ? ` after "${r.k.word}"` : "")
+              + (r.k.done ? " · YOU FINISHED HERE" : "")
+              + (r.fires ? ` · would start a draft (needed ${Math.round(r.want)} ms still)` : "");
+    strip.appendChild(bar);
+  }
+  $("calRule").style.bottom = `${(base / peak) * 100}%`;
+  $("calAxisMax").textContent = `${Math.round(peak)} ms`;
+
+  const done = rows.filter(r => r.k.done);
+  const falseFires = rows.filter(r => r.fires && !r.k.done).length;
+  const caught = done.filter(r => r.fires).length;
+  const secs = _rec.keys.length ? (_rec.keys[_rec.keys.length - 1].t / 1000) : 0;
+  $("calAxisN").textContent = _rec.keys.length
+    ? `${_rec.keys.length} keystrokes · threshold ${Math.round(base)} ms`
+    : "no keystrokes yet";
+  $("calStats").innerHTML = [
+    ["keystrokes",     String(_rec.keys.length)],
+    ["questions",      String(done.length)],
+    ["session",        secs ? `${secs.toFixed(0)}s` : "-"],
+    ["drafts for nothing", String(falseFires)],
+  ].map(([k, v]) => `<div class="stat-card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+  $("calVerdict").textContent = !done.length
+    ? "press Enter when a question is finished: without that mark the session has nothing to score against"
+    : `Against the rule running right now: ${caught} of ${done.length} finished questions would have `
+      + `started a draft, and ${falseFires} draft${falseFires === 1 ? "" : "s"} would have been generated `
+      + `mid-question for nothing.`;
+  const has = _rec.keys.length > 0;
+  $("calSave").disabled = !has;
+  $("calCopy").disabled = !has;
+}
+
+// The whole session, raw. Shape is the tuning input: one record per keystroke.
+function _recSession() {
+  return {
+    name: `${_isoStamp()}`,
+    recorded_at: new Date().toISOString(),
+    threshold_ms_at_record: Math.round(_pauseBaseMs()),
+    model_seq: modelShape.seq,
+    keys: _rec.keys.map(k => ({
+      t: Math.round(k.t), gap: Math.round(k.gap), ch: k.ch, len: k.len,
+      ctx: k.ctx, word: k.word, done: !!k.done,
+      still_after: k.stillAfter == null ? null : Math.round(k.stillAfter),
+    })),
+  };
+}
+
+function _isoStamp() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function _recStatus(msg, warn) {
+  $("calStatus").textContent = msg || "";
+  $("calStatus").style.color = warn ? "var(--warm)" : "var(--dim)";
+}
+
+$("calBox").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey) return;
+  e.preventDefault();
+  // The finish mark. It labels the last keystroke and records how long you sat still
+  // before declaring the question done, which is the latency a draft has to beat.
+  const last = _rec.keys[_rec.keys.length - 1];
+  if (last) {
+    last.done = true;
+    last.stillAfter = performance.now() - _rec.last;
+  }
+  _rec.question += 1;
+  $("calBox").value = "";
+  _rec.prevLen = 0;
+  _rec.last = 0;
+  _recRender();
 });
+
+$("calBox").addEventListener("input", () => {
+  const now = performance.now();
+  if (!_rec.t0) _rec.t0 = now;
+  const box = $("calBox").value;
+  const gap = _rec.last ? now - _rec.last : 0;
+  if (_rec.last && gap < REC_GAP_MAX_MS) {
+    _rec.keys.push({
+      t: now - _rec.t0, gap, ch: box.slice(-1) || "⌫", len: box.length,
+      ctx: _recContext(box), word: _trailingWord(box), box, prevLen: _rec.prevLen,
+      question: _rec.question, done: false, stillAfter: null,
+    });
+    _recordTypingGap(gap);
+  }
+  _rec.last = now;
+  _rec.prevLen = box.trim().length;
+  _recRender();
+});
+
+$("calSave").addEventListener("click", () => {
+  const body = _recSession();
+  _recStatus("saving…");
+  fetch("/typing/samples", { method: "POST", headers: { "Content-Type": "application/json" },
+                             body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { _recStatus(d.error, true); return; }
+      _recStatus(`saved as ${d.name}`);
+      _recListSaved();
+    })
+    .catch(() => _recStatus("could not reach the server", true));
+});
+
+$("calCopy").addEventListener("click", () => {
+  const text = JSON.stringify(_recSession(), null, 1);
+  navigator.clipboard.writeText(text)
+    .then(() => _recStatus(`${_rec.keys.length} keystrokes copied`))
+    .catch(() => _recStatus("clipboard blocked: use save instead", true));
+});
+
+$("calReset").addEventListener("click", () => {
+  _rec.keys.length = 0; _rec.last = 0; _rec.t0 = 0; _rec.prevLen = 0; _rec.question = 1;
+  $("calBox").value = "";
+  _recStatus("");
+  _recRender();
+});
+
+function _recListSaved() {
+  fetch("/typing/samples").then(r => r.json()).then(d => {
+    const rows = (d && d.samples) || [];
+    $("calSaved").textContent = rows.length
+      ? `${rows.length} saved in ${d.dir} · latest: ${rows[0].name} `
+        + `(${rows[0].keystrokes} keystrokes, ${rows[0].questions} questions)`
+      : "";
+  }).catch(() => {});
+}
 
 // probe server for backend availability and prefill model meta
 function fmtMtime(t) {
@@ -11411,6 +11611,7 @@ function _applySettingsToUI(s) {
   $("speculativeBytes").value      = s.speculative_bytes;
   $("speculativeChunkBytes").value = s.speculative_chunk_bytes;
   _primeSync();
+  _recRender();
   $("idleTimeoutWrap").style.display = (s.pytorch_load_mode === "on_demand") ? "" : "none";
   $("hudEnable").checked = !!s.hud_enabled;
   $("hudDetailed").checked = !!s.hud_detailed;

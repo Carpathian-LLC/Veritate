@@ -17,6 +17,7 @@ from readers import checkpoints, models
 from runtime import ai_assist as ai_assist_mod
 from runtime import logs as logmod
 from runtime import settings as settings_mod
+from runtime import typing_samples
 
 from . import _brain
 from ._common import auto_thread_count, user_error
@@ -92,3 +93,27 @@ def register(app):
         kind = body.get("kind") or ""
         payload = body.get("payload") or {}
         return ai_assist_mod.ask(kind, payload)
+
+    @app.route("/typing/samples", methods=["GET", "POST"])
+    def typing_samples_route():
+        """POST stores one recorded typing session; GET lists what is stored. The
+        session is the raw per-keystroke evidence the draft trigger is tuned against,
+        so nothing here summarizes it."""
+        if request.method == "GET":
+            return {"samples": typing_samples.listing(), "dir": typing_samples.SAMPLES_DIR}
+        body = request.get_json(silent=True) or {}
+        try:
+            name = typing_samples.save(body)
+        except ValueError as ve:
+            return {"error": str(ve)}, 400
+        except OSError as e:
+            logmod.error("typing", f"sample save failed: {type(e).__name__}: {e}")
+            return {"error": user_error(e, "could not write the sample")}, 500
+        return {"name": name, "path": typing_samples.path(name)}
+
+    @app.route("/typing/samples/<name>", methods=["GET"])
+    def typing_sample_route(name):
+        try:
+            return typing_samples.load(name)
+        except (OSError, ValueError):
+            return {"error": "no such sample"}, 404

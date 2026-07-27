@@ -66,6 +66,10 @@ DEFAULTS = {
     "speculative_enabled": False,
     "speculative_bytes": 1024,
     "speculative_chunk_bytes": 32,
+    # How long the composer waits on a still prompt before treating it as a finished
+    # question, in ms. 0 tracks the typist's live median keystroke gap; a positive
+    # value is a threshold measured by the Settings typing calibrator.
+    "speculative_pause_ms": 0,
     "hud_enabled": False,
     "hud_position": "top",
     "hud_detailed": False,
@@ -130,6 +134,10 @@ VALID_TEMPERATURE_UNITS = ("C", "F", "K")
 # a draft can never be told to speculate more than a real request could generate.
 SPECULATIVE_BYTES_MAX      = 4096
 SPECULATIVE_CHUNK_BYTES_MAX = 256
+# Calibrated pause bounds. Below the floor a draft fires between words; above the
+# ceiling nothing is ever ready in time to be worth the compute.
+SPECULATIVE_PAUSE_MS_MIN   = 200
+SPECULATIVE_PAUSE_MS_MAX   = 5000
 
 # Optional API-key gate for the programmatic API surface (/v1/*, /generate,
 # /agent/stream). Off by default (empty api_key). Minted keys carry this prefix.
@@ -284,6 +292,13 @@ def _validate(patch):
         v = patch["speculative_chunk_bytes"]
         if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= SPECULATIVE_CHUNK_BYTES_MAX:
             raise ValueError(f"speculative_chunk_bytes must be an integer 1..{SPECULATIVE_CHUNK_BYTES_MAX}")
+    if "speculative_pause_ms" in patch:
+        v = patch["speculative_pause_ms"]
+        ok = (not isinstance(v, bool) and isinstance(v, int)
+              and (v == 0 or SPECULATIVE_PAUSE_MS_MIN <= v <= SPECULATIVE_PAUSE_MS_MAX))
+        if not ok:
+            raise ValueError(f"speculative_pause_ms must be 0 (auto) or an integer "
+                             f"{SPECULATIVE_PAUSE_MS_MIN}..{SPECULATIVE_PAUSE_MS_MAX}")
     if "warm_models" in patch:
         v = patch["warm_models"]
         if v is None:

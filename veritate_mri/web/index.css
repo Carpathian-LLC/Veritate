@@ -187,6 +187,27 @@
   /* the flushed bytes, marked in the live answer so an instant reply reads as one */
   .response .banked { color: var(--data-pos); }
 
+  /* Typing calibrator: keystroke gaps as a bar strip against the draft threshold.
+     Bars that cross the rule are the pauses that would start a draft, so state is
+     carried by height as well as color. Gray is deliberately recessive here; the
+     pair validates at CVD dE 24.1 / normal 25.8 on this surface. */
+  .gap-fig { margin: 2px 0 0; }
+  .gap-cap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin-bottom: 5px; }
+  .gap-legend { margin-left: auto; display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; }
+  .gap-key { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 3px; vertical-align: -1px; }
+  .gap-key-idle { background: var(--dim); }
+  .gap-key-fire { background: var(--cool); }
+  .gap-key-done { background: var(--highlight); }
+  .gap-key-rule { width: 12px; height: 0; border-top: 2px dashed var(--warm); border-radius: 0; }
+  .gap-strip { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 68px; padding: 0 1px; background: #06070a; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+  .gap-strip i.gap-bar { flex: 1 1 0; min-width: 2px; max-width: 14px; border-radius: 2px 2px 0 0; background: var(--dim); }
+  .gap-strip i.gap-bar.fires { background: var(--cool); }
+  /* the keystroke you pressed Enter on: the label the whole session is scored against */
+  .gap-strip i.gap-bar.done { background: var(--highlight); }
+  .gap-rule { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed var(--warm); pointer-events: none; }
+  .gap-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--dim); margin-top: 3px; }
+  #calBox { width: 100%; }
+
   /* advanced */
   #advancedWrap { margin-top: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; }
   #advancedWrap > summary { cursor: pointer; font-size: 12px; color: var(--text); font-weight: 600; }

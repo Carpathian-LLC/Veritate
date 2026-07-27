@@ -57,6 +57,19 @@ DOWNLOAD_CHUNK_BYTES  = 64 * 1024
 POLL_INTERVAL_SECS    = 30 * 60
 POLL_FIRST_DELAY      = 60
 
+TARBALL_TMP_PREFIX = "veritate-tarball-"
+TARBALL_TMP_SUFFIX = ".tar.gz"
+EXTRACT_TMP_PREFIX = "veritate-http-updater-"
+
+# Extensions reported as user-added files. Anything else (pyc, binaries, editor
+# droppings) would drown the list.
+TRACKED_SOURCE_EXTS = (".py", ".js", ".html", ".css", ".md", ".json", ".sh", ".toml", ".yaml", ".yml")
+
+# A baseline this far out of sync with the tree is drift (git pull, manual
+# unzip, moved layout), not user edits: discard it instead of gating on it.
+STALE_BASELINE_MIN_FILES = 20
+STALE_BASELINE_SHARE     = 0.5
+
 CHANNEL_STABLE       = "stable"
 CHANNEL_EXPERIMENTAL = "experimental"
 CHANNEL_DEVELOPMENT  = "development"
@@ -446,62 +459,74 @@ def _write_baseline(files, branch=""):
     os.replace(tmp, BASELINE_PATH)
 
 
-def _extract_and_copy(tarball_path, repo_root, skip_dirs=None):
-    """Extract the tarball, then copy every file into `repo_root` EXCEPT files
-    whose top-level path component is in `skip_dirs`. Also hashes each written
-    file so the caller can persist a baseline. Returns
-    {ok, copied, skipped, error, baseline}. Cleans up temp dir on every exit."""
+def _iter_tracked(root, skip):
+    """Yield (rel, abs_path) for every file under `root` whose top-level dir is
+    not skipped. rel is forward-slashed."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root)
+        if rel_dir == ".":
+            rel_dir = ""
+            dirnames[:] = [d for d in dirnames if d not in skip]
+        else:
+            top = rel_dir.split(os.sep, 1)[0]
+            if top in skip:
+                dirnames[:] = []
+                continue
+        for fname in filenames:
+            rel = os.path.join(rel_dir, fname) if rel_dir else fname
+            yield _normalize_rel(rel), os.path.join(dirpath, fname)
+
+
+def _scan_incoming(tarball_path, temp_dir, skip_dirs=None):
+    """Extract the tarball into `temp_dir` and hash every file it would write.
+    Returns (src_root, {rel: sha}, error)."""
     skip = set(skip_dirs if skip_dirs is not None else DEFAULT_SKIP_DIRS)
-    temp_dir = tempfile.mkdtemp(prefix="veritate-http-updater-")
-    copied = 0
-    skipped = 0
-    baseline = {}
     try:
-        try:
-            with tarfile.open(tarball_path, "r:*") as tar:
-                _safe_extract(tar, temp_dir)
-        except (tarfile.TarError, RuntimeError) as e:
-            return {"ok": False, "copied": 0, "skipped": 0, "error": f"extract failed: {e}",
-                    "baseline": {}}
+        with tarfile.open(tarball_path, "r:*") as tar:
+            _safe_extract(tar, temp_dir)
+    except (tarfile.TarError, RuntimeError) as e:
+        return None, {}, f"extract failed: {e}"
 
-        src_root = _find_extracted_root(temp_dir)
-
-        for dirpath, dirnames, filenames in os.walk(src_root):
-            rel_dir = os.path.relpath(dirpath, src_root)
-            if rel_dir == ".":
-                rel_dir = ""
-            if rel_dir == "":
-                dirnames[:] = [d for d in dirnames if d not in skip]
-            else:
-                top = rel_dir.split(os.sep, 1)[0]
-                if top in skip:
-                    skipped += len(filenames)
-                    dirnames[:] = []
-                    continue
-
-            for fname in filenames:
-                src_file = os.path.join(dirpath, fname)
-                rel_file = os.path.normpath(os.path.join(rel_dir, fname)) if rel_dir else fname
-                top = rel_file.split(os.sep, 1)[0]
-                if top in skip:
-                    skipped += 1
-                    continue
-                dst_file = os.path.join(repo_root, rel_file)
-                os.makedirs(os.path.dirname(dst_file) or repo_root, exist_ok=True)
-                shutil.copy2(src_file, dst_file)
-                copied += 1
-                sha = sc.sha256_file(dst_file)
-                if sha:
-                    baseline[_normalize_rel(rel_file)] = sha
-
-        return {"ok": True, "copied": copied, "skipped": skipped,
-                "error": None, "baseline": baseline}
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    src_root = _find_extracted_root(temp_dir)
+    incoming = {}
+    for rel, abs_path in _iter_tracked(src_root, skip):
+        sha = sc.sha256_file(abs_path)
+        if sha:
+            incoming[rel] = sha
+    return src_root, incoming, None
 
 
-def local_edits(skip_dirs=None):
-    """Return the set of repo files that differ from the last-pulled baseline.
+def _copy_incoming(src_root, incoming, repo_root):
+    """Write the scanned files into `repo_root`. Bytes match the scan, so
+    `incoming` doubles as the new baseline."""
+    for rel in incoming:
+        native = rel.replace("/", os.sep)
+        dst_file = os.path.join(repo_root, native)
+        os.makedirs(os.path.dirname(dst_file) or repo_root, exist_ok=True)
+        shutil.copy2(os.path.join(src_root, native), dst_file)
+
+
+def _no_baseline(stale=False):
+    return {
+        "ok":             True,
+        "has_baseline":   False,
+        "stale_baseline": stale,
+        "modified":       [],
+        "missing":        [],
+        "added":          [],
+        "counts":         {"modified": 0, "missing": 0, "added": 0},
+    }
+
+
+def local_edits(skip_dirs=None, incoming=None):
+    """Return the repo files a pull would overwrite against the user's wishes.
+
+    `incoming` is {rel: sha} for the files the pull is about to write. Given it,
+    a baseline entry only counts when the pull would actually touch that path
+    AND the local bytes differ from what lands there: a file already identical
+    to the incoming version is not a conflict, and a path upstream no longer
+    ships cannot be overwritten at all. Without it the comparison is advisory
+    (the /app/local_edits diagnostic) and reports every drift from the last pull.
 
     Three relations:
       - "modified": file exists locally with a different SHA than baseline
@@ -516,14 +541,7 @@ def local_edits(skip_dirs=None):
     skip = set(skip_dirs if skip_dirs is not None else DEFAULT_SKIP_DIRS)
     baseline = _read_baseline()
     if not baseline:
-        return {
-            "ok":           True,
-            "has_baseline": False,
-            "modified":     [],
-            "missing":      [],
-            "added":        [],
-            "counts":       {"modified": 0, "missing": 0, "added": 0},
-        }
+        return _no_baseline()
 
     modified = []
     missing  = []
@@ -532,56 +550,39 @@ def local_edits(skip_dirs=None):
     # Pass 1: walk the baseline. For each tracked file, compare local SHA.
     for rel, base_sha in baseline.items():
         seen.add(rel)
+        if incoming is not None and rel not in incoming:
+            continue
         local_path = os.path.join(REPO_DIR, rel)
         if not os.path.isfile(local_path):
             missing.append({"path": rel, "baseline_sha": base_sha})
             continue
         local_sha = sc.sha256_file(local_path)
-        if local_sha != base_sha:
-            modified.append({
-                "path":         rel,
-                "baseline_sha": base_sha,
-                "local_sha":    local_sha,
-            })
+        if local_sha == base_sha:
+            continue
+        if incoming is not None and local_sha == incoming[rel]:
+            continue
+        modified.append({
+            "path":         rel,
+            "baseline_sha": base_sha,
+            "local_sha":    local_sha,
+        })
 
     # Self-heal: if the baseline barely matches reality (mass rename, manual
     # restore, dev did `git pull`, user unzipped over the install), treat it
     # as obsolete and report no baseline. The next successful pull writes a
     # fresh baseline naturally; healthy installs never hit this branch.
-    if len(missing) >= max(20, len(baseline) // 2):
+    diverged = len(modified) + len(missing)
+    if diverged >= max(STALE_BASELINE_MIN_FILES, int(len(baseline) * STALE_BASELINE_SHARE)):
         logmod.warn("http-updater",
-                    f"baseline appears stale ({len(missing)}/{len(baseline)} files "
-                    f"missing); ignoring it: next pull will rebuild")
-        return {
-            "ok":             True,
-            "has_baseline":   False,
-            "stale_baseline": True,
-            "modified":       [],
-            "missing":        [],
-            "added":          [],
-            "counts":         {"modified": 0, "missing": 0, "added": 0},
-        }
+                    f"baseline appears stale ({diverged}/{len(baseline)} files "
+                    f"diverged); ignoring it: next pull will rebuild")
+        return _no_baseline(stale=True)
 
     # Pass 2: surface files the user added that aren't in baseline. Only check
     # source-y extensions so we don't flood the dashboard with pyc, generated
     # binaries, IDE droppings, etc.
-    added = []
-    SOURCE_EXTS = (".py", ".js", ".html", ".css", ".md", ".json", ".sh", ".toml", ".yaml", ".yml")
-    for dirpath, dirnames, filenames in os.walk(REPO_DIR):
-        rel_dir = os.path.relpath(dirpath, REPO_DIR)
-        if rel_dir == ".":
-            rel_dir = ""
-            dirnames[:] = [d for d in dirnames if d not in skip]
-        else:
-            top = rel_dir.split(os.sep, 1)[0]
-            if top in skip:
-                dirnames[:] = []
-                continue
-        for fname in filenames:
-            if not fname.endswith(SOURCE_EXTS): continue
-            rel_file = _normalize_rel(os.path.normpath(os.path.join(rel_dir, fname)) if rel_dir else fname)
-            if rel_file in seen: continue
-            added.append({"path": rel_file})
+    added = [{"path": rel} for rel, _ in _iter_tracked(REPO_DIR, skip)
+             if rel.endswith(TRACKED_SOURCE_EXTS) and rel not in seen]
 
     return {
         "ok":           True,
@@ -741,39 +742,22 @@ def pull_update(reload=False, force=False, ignore_training=False):
       - if a plugin/trainer is currently running, refuses unless `ignore_training`
         is True. Overwriting source files mid-run is the most common foot-gun
         (especially on Windows file locks).
-      - if local_edits() reports any modified/missing/added source files,
-        refuses unless `force` is True. The dashboard surfaces this as a
-        confirm() dialog with the file list."""
+      - once the tarball is on disk, if local_edits() reports any file whose
+        local bytes differ from the version about to be written, refuses unless
+        `force` is True. The dashboard surfaces this as a confirm() dialog with
+        the file list. The check runs post-download so it compares against the
+        incoming files, not against a snapshot of the last pull: a file already
+        matching upstream, or one upstream dropped, is never reported."""
     if not ignore_training and plugin_runner.is_running():
         msg = "a plugin/trainer is running. stop it first or pass ignore_training=true."
         logmod.warn("http-updater", msg)
         return {"ok": False, "error": msg, "training_active": True}
 
-    if not force:
-        edits = local_edits()
-        # Only gate on modified/missing: those are the cases where pull would
-        # overwrite or fail to restore user work. "added" files are user-created
-        # and never touched by the updater (it only writes files present in
-        # the tarball), so they don't need to block the pull.
-        if edits.get("has_baseline") and (
-            edits["counts"]["modified"] > 0
-            or edits["counts"]["missing"]  > 0
-        ):
-            c = edits["counts"]
-            msg = (f"local edits detected: {c['modified']} modified, "
-                   f"{c['missing']} missing. pass force=true to overwrite.")
-            logmod.warn("http-updater", msg)
-            return {
-                "ok":             False,
-                "error":          msg,
-                "requires_force": True,
-                "edits":          edits,
-            }
-
     branch = _active_branch()
     url = _tarball_url(branch)
-    tmp_fd, tmp_path = tempfile.mkstemp(prefix="veritate-tarball-", suffix=".tar.gz")
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix=TARBALL_TMP_PREFIX, suffix=TARBALL_TMP_SUFFIX)
     os.close(tmp_fd)
+    temp_dir = tempfile.mkdtemp(prefix=EXTRACT_TMP_PREFIX)
     try:
         logmod.info("http-updater", f"downloading {url}")
         ok, err = _download_tarball(url, tmp_path)

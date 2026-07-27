@@ -79,3 +79,27 @@ def test_unknown_key_is_not_persisted(env):
 def test_unknown_key_is_rejected(env):
     """An unknown key posted to /settings is rejected with 400 rather than accepted and dropped."""
     assert env.client.post("/settings", json={UNKNOWN_KEY: UNKNOWN_VALUE}).status_code == 400
+
+
+def test_speculative_pause_ms_accepts_zero_for_auto(env):
+    """0 is the auto threshold and is accepted, not treated as out of range."""
+    r = env.client.post("/settings", json={"speculative_pause_ms": 0})
+    assert r.get_json()["speculative_pause_ms"] == 0
+
+
+def test_speculative_pause_ms_accepts_a_calibrated_value(env):
+    """A threshold inside the calibrated bounds round-trips."""
+    r = env.client.post("/settings", json={"speculative_pause_ms": settings_mod.SPECULATIVE_PAUSE_MS_MIN})
+    assert r.get_json()["speculative_pause_ms"] == settings_mod.SPECULATIVE_PAUSE_MS_MIN
+
+
+def test_speculative_pause_ms_below_the_floor_returns_400(env):
+    """A sub-floor threshold would fire a draft between words, so it is rejected."""
+    r = env.client.post("/settings", json={"speculative_pause_ms": settings_mod.SPECULATIVE_PAUSE_MS_MIN - 1})
+    assert r.status_code == 400
+
+
+def test_speculative_pause_ms_above_the_ceiling_returns_400(env):
+    """A threshold past the ceiling never has a draft ready in time, so it is rejected."""
+    r = env.client.post("/settings", json={"speculative_pause_ms": settings_mod.SPECULATIVE_PAUSE_MS_MAX + 1})
+    assert r.status_code == 400

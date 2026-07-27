@@ -39,3 +39,38 @@ Settings store at [settings.py](../../../veritate_mri/runtime/settings.py); see 
 - Teacher provider configs are remembered per provider (`teacher_configs` in settings): every Save snapshots that provider's key/model/base-url, and switching providers restores the remembered values (key shown as a mask; raw keys never reach the frontend). Picking a never-saved provider starts blank; keys are not carried across providers.
 - The provider dropdown appends "(connected)" per `_teacherIsConnected()`: API providers with a stored key, and local providers (Ollama, LM Studio, llama.cpp) whose server answers `POST /teacher/models` with at least one model. Local providers are probed on form hydrate (`_teacherProbeLocalProviders()`) and labels update in place when a probe lands.
 - Teacher `max_concurrency` (advanced box) is the parallel-request count synth fires. For local providers the backend clamps it to `LOCAL_MAX_CONCURRENCY` in `_resolve_concurrency` (teacher_routes.py) so a high global value never floods a single local GPU into an out-of-memory crash, regardless of `OLLAMA_NUM_PARALLEL`; no server-side parallelism tuning is needed. Cloud APIs take the value as-is. The field hydrates to the effective (capped) value via `_teacherEffectiveConc` so it never shows a number the backend silently overrides.
+
+## Answer while typing (speculative prefetch)
+
+Two panels, both writing settings keys consumed by the Generation tab's prime rail
+([generation_tab.md](generation_tab.md)) and the `/prefetch` route
+([../backend/speculative_prefetch.md](../backend/speculative_prefetch.md)).
+
+**Controls.** `speculativeEnable` mirrors the composer's `prefetchEnable`: one
+`speculative_enabled` key, so either switch moves both. `speculative_bytes` caps a
+draft; `speculative_chunk_bytes` is the engine turn size, which bounds how long a
+real request can wait behind a draft already in flight. `speculativeStats` renders
+`served_bytes / spent_bytes` and warns under 50%, the point below which the feature
+is buying latency with a doubling of energy per served answer.
+
+**Typing calibrator.** `speculative_pause_ms` is how still the composer must be
+before it treats a prompt as a finished question; `0` tracks the typist's live
+median keystroke gap instead. The calibrator measures it: type into `calBox` and
+every keystroke gap is recorded, then replayed through `_draftDelayMs` and
+`_draftEligible` — the same two functions the composer runs, so the strip shows what
+would actually have happened rather than an illustration of it.
+
+- `#calStrip` draws one bar per gap, height proportional to the gap, against a dashed
+  rule at the current threshold. Bars crossing the rule are the pauses that would
+  start a draft, so state is carried by height as well as color (`--dim` ordinary,
+  `--cool` fires; validated CVD dE 24.1 / normal 25.8 against the panel surface).
+  Each bar's `title` gives its gap and, when it fires, the delay it had to beat.
+- `_calRecommendMs` returns `clamp(p90_gap * CAL_HEADROOM, PREFETCH_PAUSE_MIN_MS,
+  PREFETCH_PAUSE_MAX_MS)`: a threshold clearing this typist's ordinary between-word
+  gaps with headroom. "use this" writes it; "back to auto" writes 0.
+- The calibrator and the composer feed ONE rolling sample (`_recordTypingGap`).
+  Keeping separate lists made calibration measure a copy of the threshold it was
+  supposed to move.
+- With under three samples `_typingMedianMs` falls back to `PREFETCH_PAUSE_MIN_MS /
+  PREFETCH_PAUSE_FACTOR`, i.e. the floor. Falling back to the ceiling made the first
+  question of every session wait the longest, which is backwards.
