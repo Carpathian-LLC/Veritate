@@ -225,6 +225,92 @@ def test_simhash_is_stable_across_processes():
     assert one.stdout.strip() == two.stdout.strip() != ""
 
 
+def test_instruct_genre_accepts_a_two_turn_instruction():
+    """A bare instruction and its execution pass: the genre's turn floor is 2, not 4."""
+    spec = _spec()
+    gate = authoring.RecordGate(spec)
+    rec = {"genre": "instruct", "voice": "enumerate",
+           "turns": [{"role": "user", "text": "list three tools you would find in a kitchen drawer"},
+                     {"role": "assistant", "text": "a can opener, a vegetable peeler, and a wooden spoon"}]}
+    kept, why = gate({"id": "x", "genre": "instruct"}, _response(rec))
+    assert (len(kept), why) == (1, [])
+
+
+def test_a_record_with_a_raw_newline_in_a_string_still_parses():
+    """Asked for 'steps, one per line' a teacher writes the newline unescaped; a
+    line-split parser cuts that object in half and loses a good record."""
+    rec = {"genre": "instruct", "voice": "numbered-steps",
+           "turns": [{"role": "user", "text": "give three steps for changing a bike tube"},
+                     {"role": "assistant", "text": "1. lift the wheel off\n2. pry the tire\n3. swap the tube"}]}
+    raw = json.dumps(rec).replace("\\n", "\n")
+    got = list(authoring.iter_json_objects(raw))
+    assert got == [rec]
+
+
+def test_a_record_pretty_printed_across_lines_still_parses():
+    rec = {"genre": "instruct", "voice": "enumerate",
+           "turns": [{"role": "user", "text": "name two rivers in europe"},
+                     {"role": "assistant", "text": "the Rhine and the Danube"}]}
+    got = list(authoring.iter_json_objects(json.dumps(rec, indent=2)))
+    assert got == [rec]
+
+
+def test_undecodable_text_yields_none_so_it_is_counted_as_a_reject():
+    assert None in list(authoring.iter_json_objects("{not json at all"))
+
+
+def test_two_objects_on_one_line_both_parse():
+    a = {"x": 1}
+    b = {"y": 2}
+    assert list(authoring.iter_json_objects(json.dumps(a) + json.dumps(b))) == [a, b]
+
+
+def test_repeated_instruction_is_rejected_when_the_genre_dedups_user_turns():
+    """Two records posing the same ask cannot both land, even with different replies."""
+    spec = _spec()
+    gate = authoring.RecordGate(spec)
+    def rec(reply):
+        return {"genre": "instruct", "voice": "compose-on-demand",
+                "turns": [{"role": "user", "text": "name four things you would pack for a cold hike"},
+                          {"role": "assistant", "text": reply}]}
+    gate({"id": "a", "genre": "instruct"}, _response(rec("wool socks, a hat, gloves, and a thermos")))
+    kept, why = gate({"id": "b", "genre": "instruct"},
+                     _response(rec("a down jacket, boots, hand warmers, and a headlamp")))
+    assert (kept, why) == ([], [authoring.REJECT_REPEAT_INSTRUCTION])
+
+
+def test_conversation_genre_still_allows_a_repeated_user_turn():
+    """The dedup is per-genre opt-in: chat data legitimately revisits the same question."""
+    spec = _spec()
+    genre = authoring.genre_by_id(spec, GENRE)
+    assert not genre.get(authoring.DEDUP_USER_TURN_KEY)
+
+
+def test_instruct_genre_dedups_user_turns():
+    """The genre that collapses onto one ask must carry the flag that prevents it."""
+    assert authoring.genre_by_id(_spec(), "instruct")[authoring.DEDUP_USER_TURN_KEY] is True
+
+
+def test_instruct_genre_carries_no_structural_marker_requirement():
+    """Yield collapses on structural demands, so instruct must not gain a marker gate."""
+    genre = authoring.genre_by_id(_spec(), "instruct")
+    assert genre.get("require_in_first_user", "") == ""
+
+
+def test_instruct_genre_allows_a_follow_up_revision():
+    """The user revising the instruction mid-record stays inside the turn ceiling."""
+    spec = _spec()
+    gate = authoring.RecordGate(spec)
+    rec = {"genre": "instruct", "voice": "revise-under-new-constraint",
+           "turns": [{"role": "user", "text": "write one sentence about a rainstorm over the harbor"},
+                     {"role": "assistant",
+                      "text": "the rain came down so hard the harbor lights blurred into one smear"},
+                     {"role": "user", "text": "shorter, under ten words"},
+                     {"role": "assistant", "text": "rain blurred the harbor lights into one smear"}]}
+    kept, why = gate({"id": "x", "genre": "instruct"}, _response(rec))
+    assert (len(kept), why) == (1, [])
+
+
 def test_plan_calls_splits_a_byte_target_across_genres():
     """A megabyte target turns into a per-genre call count weighted by the spec."""
     spec = _spec()

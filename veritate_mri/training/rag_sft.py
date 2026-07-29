@@ -22,6 +22,7 @@ import json
 import os
 import sys
 
+import numpy as np
 import torch
 
 _HERE     = os.path.dirname(os.path.abspath(__file__))
@@ -34,7 +35,6 @@ for _p in (_REPO, _MRI_ROOT):
 from readers import checkpoints  # noqa: E402
 
 from training import save as save_mod  # noqa: E402
-from training.native_trainer import make_loader  # noqa: E402
 from veritate_core.load import load_from_state_dict  # noqa: E402
 from veritate_core.plugin import hardware  # noqa: E402
 
@@ -57,6 +57,28 @@ MAP_CPU        = "cpu"
 
 # ------------------------------------------------------------------------------------
 # Functions
+
+
+def make_loader(bin_path, seq_len, batch_size, seed):
+    """Random fixed-length windows out of a byte corpus. Inlined here when the
+    native trainer was removed: this was its only remaining consumer."""
+    arr = np.memmap(bin_path, dtype=np.uint8, mode="r")
+    n = len(arr)
+    if n < seq_len + 2:
+        raise ValueError(f"corpus too small: {n} bytes < {seq_len + 2}")
+    rng = np.random.RandomState(seed)
+
+    def draw():
+        starts = rng.randint(0, n - seq_len - 1, size=batch_size, dtype=np.int64)
+        toks = np.empty((batch_size, seq_len), dtype=np.int64)
+        tgts = np.empty((batch_size, seq_len), dtype=np.int64)
+        for b, st in enumerate(starts):
+            toks[b] = arr[st:st + seq_len]
+            tgts[b] = arr[st + 1:st + 1 + seq_len]
+        return torch.from_numpy(toks), torch.from_numpy(tgts)
+
+    return draw, n
+
 
 def load_source(name):
     step = checkpoints.latest_step(name)

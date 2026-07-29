@@ -83,6 +83,41 @@ Plus every key in the plugin's `manifest.json` `defaults` becomes a `--<key>` fl
 (`size`, `precision`, `seq`, `batch_size`, `total_steps`, `ckpt_every`, `eval_every`,
 `base_lr`, `lr_schedule`, ...).
 
+## loss_mask (gating on a chat corpus)
+
+`--loss_mask assistant` computes loss only over assistant turn CONTENT plus its closing
+`<|im_end|>`, never over the turn openings or the user's text. `off` trains every byte.
+
+The trainer REFUSES to start when a corpus in the mix is ChatML dense and `--loss_mask` was
+not passed explicitly (`require_loss_mask_decision`), because forgetting it fails silently:
+loss falls, the run looks healthy, and the model comes out fluent but unable to answer,
+having been trained to predict the user's turns too.
+
+A window containing no `<|im_start|>` is left fully unmasked and trains as plain LM. That is
+what makes pretrain replay work inside a masked SFT mix: the replay corpus carries no turn
+markers, so it trains normally alongside the masked chat data.
+
+## Capability SFT recipe
+
+To teach a base model a skill it lacks without losing what it already knows:
+
+- **Dose ~0.15.** The target corpus is a MINORITY of the mix.
+- **Replay ~0.75 of the base's own pretrain corpora** (`fineweb_edu`, `chat_500mb`,
+  `wikitext103`). This is what prevents catastrophic forgetting.
+- **Many steps at a low LR** (~2e-5 constant), sized so total tokens land near the reference
+  run rather than sized by step count alone.
+- Include identity data if the base has a persona; a mix without it erodes the persona.
+
+The inverse (high dose, few steps, light replay) moves the model off its base fast and trades
+the new skill for the old ones: two runs at dose 0.35-0.50 with 160-180 steps each regressed
+factual recall ("How many days are in a week?" 7 -> "1) 2) Pegged to base.") while form
+compliance rose, and neither beat the untouched base overall.
+
+`total_steps` is ABSOLUTE, not additional: a resume at step 58500 wanting 2625 more passes
+`61125`. And `apply_resume_overrides` inherits the resume target's config for every flag NOT
+present on argv, so an omitted `lr_schedule` silently inherits the base's decayed `wsd` and
+trains at min_lr while looking healthy. Pass every SFT flag explicitly.
+
 ## Gotchas
 
 - `use_8bit_adam` needs `bitsandbytes`. Not installed -> falls back to torch AdamW (fp32

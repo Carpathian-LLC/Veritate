@@ -44,11 +44,13 @@ RESERVED_DIRS = {"corpus", "common", "__pycache__", ".git", "node_modules"}
 # plugin folder. The dashboard form is schema-driven (TRAINER_SCHEMA in
 # static/index.js), so all knobs render and route through the same CLI surface.
 NATIVE_TRAINER_ID   = "native/trainer"
-NATIVE_TRAINER_PATH = os.path.normpath(os.path.join(paths.MRI_ROOT, "training", "native_trainer.py"))
+# The one trainer. Lives in the synced trainers checkout, not in veritate_mri:
+# it is owned by the canonical Veritate-Trainers repo and ships its own size table.
+NATIVE_TRAINER_PATH = os.path.normpath(os.path.join(paths.REPO_ROOT, "trainers", "common", "vanilla_trainer.py"))
 
 # Single owner of the size -> shape table (rule 20), and it is DATA, not code:
 # veritate_mri/data/trainer_sizes.json, or any path the user puts in the
-# trainer_sizes_path setting. native_trainer.py resolves --size against the same
+# trainer_sizes_path setting. vanilla_trainer.py resolves --size against the same
 # dict, so the offered set can never drift from the supported set.
 TRAINER_SIZES_FILE    = "trainer_sizes.json"
 SETTING_SIZES_PATH    = "trainer_sizes_path"
@@ -63,13 +65,50 @@ def native_sizes_path():
         override = ""
     if override:
         return override
-    return os.path.join(paths.MRI_ROOT, "data", TRAINER_SIZES_FILE)
+    return os.path.join(paths.REPO_ROOT, "trainers", "common", TRAINER_SIZES_FILE)
+
+
+SHARED_DEFAULTS_KEY = "shared_defaults"
+SHAPE_KEY           = "shape"
+DEFAULTS_KEY        = "defaults"
+
+
+def load_sizes_doc():
+    """The whole size document, read fresh so an edit lands without a restart."""
+    with open(native_sizes_path(), encoding="utf-8") as f:
+        return json.load(f)
 
 
 def load_native_sizes():
-    """Size -> shape table, read fresh so an edit lands without a restart."""
-    with open(native_sizes_path(), encoding="utf-8") as f:
-        return json.load(f)[SIZES_KEY]
+    """Size -> shape. The shape table every caller has always consumed."""
+    return {name: entry[SHAPE_KEY] for name, entry in load_sizes_doc()[SIZES_KEY].items()}
+
+
+def size_defaults(size=None):
+    """Tuned defaults for one size: shared defaults, then that size's overrides.
+    Returns the shared set alone when `size` is unknown, so a caller asking for a
+    size that was retuned away still gets something sane rather than nothing."""
+    doc = load_sizes_doc()
+    out = dict(doc.get(SHARED_DEFAULTS_KEY) or {})
+    entry = (doc[SIZES_KEY].get(size) or {}) if size else {}
+    out.update(entry.get(DEFAULTS_KEY) or {})
+    if size:
+        out["size"] = size
+    return out
+
+
+def all_size_defaults():
+    """size -> merged defaults, for the Training tab to switch on without a round
+    trip per size."""
+    doc = load_sizes_doc()
+    shared = dict(doc.get(SHARED_DEFAULTS_KEY) or {})
+    out = {}
+    for name, entry in doc[SIZES_KEY].items():
+        merged = dict(shared)
+        merged.update(entry.get(DEFAULTS_KEY) or {})
+        merged["size"] = name
+        out[name] = merged
+    return out
 
 
 NATIVE_SIZES = load_native_sizes()
@@ -87,34 +126,8 @@ NATIVE_TRAINER_MANIFEST = {
     "bench":       True,
     "flow":        ["scratch", "continue"],
     "sizes": NATIVE_SIZES,
-    "defaults": {
-        "size":         NATIVE_DEFAULT_SIZE,
-        "precision":    "bf16",
-        "vocab":        NATIVE_DEFAULT_VOCAB,
-        "seq":          NATIVE_DEFAULT_SEQ,
-        "total_steps":  20000,
-        "batch_size":   8,
-        "n_chunks":     1,
-        "base_lr":      3e-4,
-        "min_lr":       3e-6,
-        "warmup_steps": 200,
-        "lr_schedule":  "wsd",
-        "wsd_decay_frac": 0.1,
-        "wsd_decay_kind": "sqrt",
-        "weight_decay": 0.1,
-        "beta1":        0.9,
-        "beta2":        0.95,
-        "label_smoothing": 0.0,
-        "grad_clip":    1.0,
-        "ckpt_every":   500,
-        "log_every":    50,
-        "eval_every":   500,
-        "eval_iters":   16,
-        "seed":         0,
-        "use_act_ckpt": False,
-        "qat_enabled":  False,
-        "quant_mode":   "int8",
-    },
+    "defaults": size_defaults(NATIVE_DEFAULT_SIZE),
+    "size_defaults": all_size_defaults(),   # Training tab switches on this
 }
 
 # ------------------------------------------------------------------------------------
@@ -183,7 +196,7 @@ def _walk(rel_path, out):
 def _native_record():
     """Synthetic trainer entry: no manifest on disk, persisted defaults live
     in memory only (a future refinement could mirror them to a JSON next to
-    native_trainer.py). The runner builds argv off `path` like any plugin."""
+    vanilla_trainer.py). The runner builds argv off `path` like any plugin."""
     return {
         "id":                NATIVE_TRAINER_ID,
         "file":              os.path.basename(NATIVE_TRAINER_PATH),

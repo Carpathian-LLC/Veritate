@@ -56,6 +56,8 @@ REJECT_TURN_COUNT = "turn count out of range"
 REJECT_EXACT_DUP = "exact duplicate"
 REJECT_OPENING = "repeated opening"
 REJECT_NEAR_DUP = "near duplicate"
+REJECT_REPEAT_INSTRUCTION = "repeated instruction"
+DEDUP_USER_TURN_KEY = "dedup_user_turn"
 REJECT_UNKNOWN_GENRE = "unknown genre"
 
 _WORD_RE = re.compile(r"[^a-z0-9 ]+")
@@ -102,6 +104,46 @@ def assistant_text(record, schema):
         return "\n".join(t.get(TEXT_KEY, "") for t in record.get(TURNS_KEY, [])
                          if t.get(ROLE_KEY) == ROLE_ASSISTANT)
     return record.get(TEXT_KEY, "")
+
+
+_DECODER = json.JSONDecoder(strict=False)
+
+
+def iter_json_objects(text):
+    """Yield each top-level JSON value in a teacher batch reply, or None for a span
+    that will not decode (the caller counts that as a reject).
+
+    Splitting the reply on newlines loses every record the model pretty-printed
+    across lines, and every record carrying a literal newline inside a string value:
+    asked for "steps, one per line", a model writes the newline raw rather than
+    escaped, and a line split then cuts the object mid-string. Scanning with
+    raw_decode recovers both; strict=False permits the raw control character."""
+    i, n = 0, len(text)
+    while i < n:
+        while i < n and text[i] not in "{[":
+            i += 1
+        if i >= n:
+            return
+        try:
+            obj, end = _DECODER.raw_decode(text, i)
+        except ValueError:
+            yield None
+            nl = text.find("\n", i)
+            if nl == -1:
+                return
+            i = nl + 1
+            continue
+        yield obj
+        i = end
+
+
+def first_user_text(record, schema):
+    if schema != SCHEMA_TURNS:
+        return record.get(TEXT_KEY, "")
+    for t in record.get(TURNS_KEY, []):
+        if t.get(ROLE_KEY) == ROLE_USER:
+            return t.get(TEXT_KEY, "")
+    return ""
 
 
 def compile_ban_re(phrases):
@@ -189,6 +231,7 @@ class RecordGate:
         self.seen = set()
         self.openings = Counter()
         self.simhashes = set()
+        self.user_turns = set()
         self.rejects = Counter()
         self.per_genre = Counter()
         self.records = 0
@@ -235,13 +278,8 @@ class RecordGate:
         schema_name = g["schema"]
         schema = self.spec["schemas"][schema_name]
         kept, why = [], []
-        for line in strip_code_fence(response).splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
+        for rec in iter_json_objects(strip_code_fence(response)):
+            if rec is None:
                 why.append(REJECT_JSON)
                 self.rejects[REJECT_JSON] += 1
                 continue
@@ -293,6 +331,13 @@ class RecordGate:
         if is_near_dup(simhash64(txt), self.simhashes,
                        int(self.gates.get("near_dup_hamming", DEFAULT_HAMMING_THRESHOLD))):
             return REJECT_NEAR_DUP
+        # Instruction genres vary the ASK, not just the answer. Two records posing the
+        # same instruction with different replies clear every gate above (the opening
+        # cap keys on whole-record text, which the differing reply moves), so a teacher
+        # that latches onto one instruction floods the family with it.
+        if g.get(DEDUP_USER_TURN_KEY) and \
+                normalize(first_user_text(rec, schema_name)) in self.user_turns:
+            return REJECT_REPEAT_INSTRUCTION
         return None
 
     def _rewrite(self, rec, schema_name):
@@ -308,6 +353,7 @@ class RecordGate:
         self.seen.add(hashlib.sha1(norm.encode("utf-8")).hexdigest())
         self.openings[norm[:int(self.gates["opening_prefix_chars"])]] += 1
         self.simhashes.add(simhash64(txt))
+        self.user_turns.add(normalize(first_user_text(rec, schema_name)))
         self.window.append(norm.split())
         self.records += 1
         self.per_genre[genre_id] += 1

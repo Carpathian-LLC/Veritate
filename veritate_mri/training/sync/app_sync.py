@@ -302,6 +302,40 @@ def _repo_slug():
     return f"{parts[-2]}/{parts[-1]}" if len(parts) >= 2 else None
 
 
+def _remote_branch_sha(branch):
+    """Commit SHA at the tip of the remote `branch`, or None.
+
+    This is what a tarball actually contains. `pull_update` records it so a later
+    check has a real base to compare against: a tarball extract writes files but
+    creates no commit, so `.git/HEAD` never advances and comparing against it
+    reports the same `behind` count forever, however many times the user updates."""
+    slug = _repo_slug()
+    if not slug:
+        return None
+    req = urllib.request.Request(f"{GITHUB_API_BASE}/repos/{slug}/commits/{branch}",
+                                 method="GET")
+    req.add_header("User-Agent", "veritate-http-updater/1")
+    req.add_header("Accept", "application/vnd.github+json")
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECS,
+                                     context=net.ssl_context()) as resp:
+            return (json.loads(resp.read().decode("utf-8")) or {}).get("sha") or None
+    except Exception:
+        return None
+
+
+def _compare_base(git_checkout, branch):
+    """SHA to measure `behind` from: what this updater last pulled, falling back
+    to `.git/HEAD` only for a checkout this updater has never written. A commit
+    recorded on a different branch is discarded, matching how the ETag baseline
+    is dropped across a channel switch."""
+    st = _state() or {}
+    pulled = st.get("pulled_commit")
+    if pulled and (st.get("pulled_branch") or branch) == branch:
+        return pulled
+    return _local_head_sha() if git_checkout else None
+
+
 def _remote_ahead_behind(branch, local_sha):
     """Commits the remote `branch` tip has that the local HEAD lacks, via the
     GitHub compare API (base=local, head=remote). Returns (behind, error).
@@ -616,7 +650,9 @@ def status():
         "tracked_channel":  active_channel,
         "local_branch":     _local_git_branch(),
         "is_git_checkout":  _is_git_checkout(),
-        "head_short":       (last.get("etag") or "")[:7] or None,
+        # The commit this updater last pulled. Was built from the ETag, which is
+        # not a commit and rendered as a quote-prefixed string like `"613e9c`.
+        "head_short":       (last.get("pulled_commit") or _local_head_sha() or "")[:7] or None,
         "remote_url":       url_base,
         "behind":           last.get("behind", 1 if last.get("update_available") else 0),
         "ahead":            0,
@@ -679,9 +715,12 @@ def check_update():
     baseline_patch = {}
     behind = None
 
-    # Git checkout: local HEAD vs remote tip is authoritative.
-    if git_checkout:
-        behind, _cmp_err = _remote_ahead_behind(branch, _local_head_sha())
+    # Compare against what this updater last pulled, or `.git/HEAD` on a checkout
+    # it has never written. Comparing a tarball-updated checkout against HEAD is
+    # what made `behind` stick at the same number after every successful update.
+    base_sha = _compare_base(git_checkout, branch)
+    if base_sha:
+        behind, _cmp_err = _remote_ahead_behind(branch, base_sha)
 
     if behind is not None:
         update_available = behind > 0
@@ -822,6 +861,11 @@ def pull_update(reload=False, force=False, ignore_training=False):
             "pulled_etag":          post_etag,
             "pulled_last_modified": post_lm,
             "pulled_branch":        branch,
+            # The commit the tarball came from. Without it the next check_update
+            # recomputes `behind` against `.git/HEAD` -- which a tarball never
+            # advances -- and overwrites the 0 below with the same stale count,
+            # so the panel reads "N behind" again seconds after a good update.
+            "pulled_commit":        _remote_branch_sha(branch),
             "update_available":     False,
             "behind":               0,
             "etag":                 post_etag,
@@ -882,6 +926,8 @@ def switch_channel(channel):
         "pulled_etag":         None,
         "pulled_last_modified": None,
         "pulled_branch":       None,
+        # A commit on the old branch is not a valid base for the new one.
+        "pulled_commit":       None,
         "update_available":    True,
     })
     target_branch = CHANNEL_BRANCHES[channel]

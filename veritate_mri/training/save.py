@@ -320,6 +320,59 @@ def _sync_capabilities(name, step, args):
             logmod.warn("save", f"capability mark failed: {e}")
 
 
+# How the CURRENT run trained. A fork plus resume (every capability SFT) leaves the fork
+# source's config in place, because _ensure_config writes only when the file is absent, so
+# without this the model records the BASE run's corpus mix and schedule forever. model_type
+# is deliberately absent: it is owned by _sync_model_meta and by the documented workflow of
+# hand-editing a mislaunched run's config, which this must not overwrite.
+RUN_ARG_KEYS = ("resume", "corpus", "loss_mask", "base_lr", "min_lr", "lr_schedule",
+                "warmup_steps", "batch_size", "seq", "n_chunks", "bptt_window",
+                "total_steps", "precision", "optimizer",
+                # Optimization shape. Two runs differing only in weight_decay or
+                # label_smoothing are different experiments; a config that reports the
+                # fork source's values makes them look identical in the ledger.
+                "weight_decay", "beta1", "beta2", "grad_clip", "label_smoothing",
+                "wsd_decay_frac", "wsd_decay_kind",
+                # Reproducibility. A wrong seed makes a rerun silently non-comparable.
+                "seed",
+                # Cadence. Measured case: a resumed SFT checkpointed every 250 steps
+                # while its config still claimed 1500, so the recorded rollback
+                # granularity was 6x coarser than the run's.
+                "ckpt_every", "log_every", "eval_every", "eval_iters",
+                # Memory regime: changes throughput and peak footprint, so a bench or
+                # a repeat launched off this config needs the values the run used.
+                "use_act_ckpt", "use_8bit_adam")
+
+
+def _sync_run_args(name, args):
+    """Record the live run's own training args over the inherited ones, so a resumed
+    model describes how IT was trained rather than how its fork source was."""
+    if not isinstance(args, dict):
+        return
+    cfg_path = paths.config_path(name)
+    if not os.path.isfile(cfg_path):
+        return
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(data.get("training_args"), dict):
+        return
+    ta = data["training_args"]
+    changed = False
+    for k in RUN_ARG_KEYS:
+        if k in args and ta.get(k) != args[k]:
+            ta[k] = args[k]
+            changed = True
+    if not changed:
+        return
+    tmp = cfg_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, cfg_path)
+
+
 def _sync_model_meta(name):
     """Promote model_type (from the launch env) into config.json's training_args. The
     trainer drops --model_type (not a manifest key, so parse_known_args discards it),
@@ -510,6 +563,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         else:
             args.setdefault("model_type", _env_mt)
     _ensure_config(name, args)
+    _sync_run_args(name, args)
     _sync_model_meta(name)
     _validate_description(name, args)
     _sync_capabilities(name, step, args)

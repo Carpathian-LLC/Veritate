@@ -281,9 +281,15 @@ def _sanitize_text(answer):
 
 
 def _trim(answer):
+    """Cut the reply at the first stop marker. The byte-level stop in
+    backends_routes fires on a marker minus its last char, so a reply ends on a
+    PARTIAL marker that `str.split` cannot see: strip that prefix too."""
     answer = _sanitize_text(answer)
     for stop in STOP_MARKERS:
         answer = answer.split(stop)[0]
+    held = _dynamic_stop_hold(answer)
+    if held:
+        answer = answer[:-held]
     return answer.strip()
 
 

@@ -352,22 +352,6 @@
    "recommended_max_params": null
   },
   {
-   "stem": "stocks",
-   "label": "Stocks byte corpus (daily OHLCV, S&P 500)",
-   "family": "carpathian",
-   "topic": "market",
-   "description": "Daily adjusted OHLCV for ~503 S&P 500 tickers as a byte stream. For the Market LLM (numbers, not language).",
-   "format": "raw_bytes",
-   "train_url": "https://api.carpathian.ai/cos/6a75873f37fddebaed2caa5a8ed75c8b4b2cb2c45c376e18dfd9270283d06184/7fbed05ec821d36bb137eee735a2a977b93860a31d1015b1b7da4c2acc6ee28bd61e08c0df9f5b7adacb226af6ca3ee584f6a1e2a5cd10707a72419534a17aa6",
-   "val_url": "https://api.carpathian.ai/cos/6f9c07e6a5ec21409c14f143ddf1f2d898d65e780e107d3586e1a7ade3586913/138d9b457ef7267e1d4f19afde955ef6dbfd7de35e4e587676b6b0df05f1e52edfdd3b6249f70117944d09d0b401a74ce4b25f340f4b971ddd84d259b3644c05",
-   "size_train": 19408485,
-   "size_val": 2158130,
-   "sha256_train": "01ffad196e12c52bf76727f09b25ab05493e4f6abd1e6049c30545bd883c9bf8",
-   "sha256_val": "bbf493680c12b95600769346ea548cc35986a9acc3b09781ed3b7d763e07ea4d",
-   "recommended_min_params": null,
-   "recommended_max_params": null
-  },
-  {
    "stem": "py_code_100mb",
    "label": "Python code (ultra-clean, 100 MB)",
    "family": "carpathian",
@@ -671,6 +655,44 @@
    "size_val": 254830,
    "sha256_train": "5088d349372c4692064aa8d20eaed10ade2f17f7ea7f0d57d95936c6e962ca76",
    "sha256_val": "e8c9c47e1acd891e8c54e3371c722c7f835285a4450f7fe99e3ae9ced8b3c075",
+   "trained_modes": [
+    "chat"
+   ],
+   "recommended_min_params": 0,
+   "recommended_max_params": null,
+   "coming_soon": true
+  },
+  {
+   "stem": "cogito",
+   "label": "Identity and sense of self",
+   "family": "carpathian",
+   "topic": "chat",
+   "description": "Authored cogito records: fixed Veritate self-model, honest limits, epistemics.",
+   "format": "zip_bundle",
+   "train_url": "https://api.carpathian.ai/cos/PLACEHOLDER/cogito.zip",
+   "size_train": 755479,
+   "size_val": 13439,
+   "sha256_train": "91bb9994096096c2d5d14f8bf902257b4182805cf7e2418854989799ec02b6e5",
+   "sha256_val": "27a4e8352f57b77258d01d38344e55fcf518488430667b0cebc7e21be1e9321c",
+   "trained_modes": [
+    "chat"
+   ],
+   "recommended_min_params": 0,
+   "recommended_max_params": null,
+   "coming_soon": true
+  },
+  {
+   "stem": "instruct",
+   "label": "Instruction execution",
+   "family": "carpathian",
+   "topic": "chat",
+   "description": "Authored instruction-execution SFT corpus: exact counts, exact lengths, avoid-a-letter, JSON shape, transform, extract, compute, classify.",
+   "format": "zip_bundle",
+   "train_url": "https://api.carpathian.ai/cos/PLACEHOLDER/instruct.zip",
+   "size_train": 1943044,
+   "size_val": 38683,
+   "sha256_train": "a71d23ac57e0b1ced60d14ebb8435b85e04683ce518c3d9fe4988700a3ba4ea9",
+   "sha256_val": "f0b6abfc29e667d0b1c8796c789f6e16ca450b1af75622a77f64782494c81ee3",
    "trained_modes": [
     "chat"
    ],

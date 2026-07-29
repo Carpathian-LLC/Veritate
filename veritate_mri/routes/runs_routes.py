@@ -21,6 +21,7 @@ import re
 import threading
 import time
 
+from eval import ifeval as ifeval_mod
 from flask import Response, current_app, request, send_from_directory
 from readers import (
     capabilities as caps_reader,
@@ -476,6 +477,16 @@ def register(app):
         limit       = body.get("limit")
         mmlu_mode   = body.get("mmlu_mode") or "text"
         ifeval_maxn = int(body.get("ifeval_max_new") or IFEVAL_DEFAULT_MAXN)
+        # A chat-trained model needs its turn framing or IFEval scores the framing
+        # rather than the instruction following. Default off keeps base models raw.
+        ifeval_chat = body.get("ifeval_chat")
+        if ifeval_chat is None:
+            ifeval_chat = caps_reader.read(name).get("chat", {}).get("status") == "trained"
+        ifeval_chat = bool(ifeval_chat)
+        try:
+            ifeval_data = ifeval_mod.data_path_for(body.get("ifeval_set"))
+        except ValueError as e:
+            return ({"error": str(e)}, 400)
         threads     = int(body.get("threads") or cfg.get("DEFAULT_THREADS") or auto_thread_count())
 
         t_load0 = time.time()
@@ -515,6 +526,8 @@ def register(app):
                     limit=limit,
                     mmlu_mode=mmlu_mode,
                     ifeval_max_new=ifeval_maxn,
+                    ifeval_chat=ifeval_chat,
+                    ifeval_data=ifeval_data,
                     verbose=False,
                     progress_cb=_progress,
                 )

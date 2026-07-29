@@ -79,9 +79,9 @@ user turn is natural human speech.
 
 ## genres
 
-`conversation`, `carryover`, `grounded_read`, `format_constraint`, `cogito`, `jokes`, `writing`,
-`news`. Two schema kinds: `turns` (`{genre, voice, turns:[{role, text}]}`) and `text`
-(`{genre, voice, text}`). Three genres exist because nothing on the box covered them:
+`conversation`, `carryover`, `grounded_read`, `instruct`, `format_constraint`, `cogito`, `jokes`,
+`writing`, `news`. Two schema kinds: `turns` (`{genre, voice, turns:[{role, text}]}`) and `text`
+(`{genre, voice, text}`). Four genres exist because nothing on the box covered them:
 
 - `carryover` enforces `min_turns: 6` and briefs for later turns that depend on facts stated
   earlier, including a mid-conversation correction the assistant must honor. The turn floor is
@@ -89,7 +89,33 @@ user turn is natural human speech.
 - `grounded_read` enforces the literal `context:` marker in the first user turn, and briefs for
   roughly one honest-miss record in four ("the passage does not say"). The passage is authored
   prose, so reading data and style data are the same bytes.
+- `instruct` covers direct instruction execution: compose, enumerate, transform, summarize,
+  extract, translate, small arithmetic, compare, classify, define, numbered steps. The assistant
+  carries the instruction out with no preamble and no clarifying question. `min_turns: 2` keeps the
+  structural demand low, which is what keeps its yield high (see genre yield below).
 - `format_constraint` covers explicit output constraints ("one sentence", "exactly three items").
+
+### genre yield
+
+Planned calls are not produced records. A genre's yield is (kept records)/(records the teacher
+emitted), and it falls off a cliff with structural demand. Measured over two 22k-record jobs on
+`qwen2.5:14b-instruct`:
+
+| genre | structural demand | yield |
+| --- | --- | --- |
+| `jokes`, `writing` | none | 82-194% |
+| `conversation` | none | 39% |
+| `instruct` | 2-4 turns | 64% |
+| `cogito` | 4+ turns | 15% |
+| `format_constraint` | 2-4 turns, obey a stated format | 1.3% |
+| `carryover` | 6-10 turns, load-bearing memory | 1.4% |
+| `grounded_read` | `context:` marker, 120-400 word passage | 0.5% |
+
+A genre weighted at 0.10 that yields 1.3% lands at 0.4% of the corpus. Read `authoring.per_genre`
+and `authoring.rejects` in `state.json` (or the synth status route) against the planned call counts
+before trusting a mix: a starved genre looks identical to a genre that was never requested. Raising
+a starved genre's share means either a stronger teacher or a lower structural demand, not a higher
+weight.
 
 ## resume
 

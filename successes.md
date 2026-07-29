@@ -2,6 +2,74 @@
 
 Validated results with the evidence that proved them. Entries are research outcomes, not bug fixes. Entries arrive here from `ideas.md` when an idea clears its falsifier; index at `research.md`.
 
+## 2026-07-28: capability SFT DOES install format obedience on a 270M byte model — 24.3% -> 43.9% on 280 items, p = 1.0e-6
+
+Resolves the "does capability SFT INSTALL format obedience, or only avoid breaking it?" question, opened in `ideas.md` earlier the same day when the original claim proved unresolvable at n=26, and now cut from that file. (It was filed there as "IDEA 10", which collided with the pre-existing IDEA 10 on byte n-gram speculative decode — that one is untouched and still open.) Both arms measured on the SAME rebuilt instrument (`ifeval_form.json`, 280 items, >=20 per family, every rule answer-independent, 0 contamination across 257.5 MB), greedy decode, ChatML framing, `ifeval_max_new` 200.
+
+- **Arms:** base = `wren`@58500; SFT = `wren_sft`@62425 (dose 0.15, replay ~0.75, ledger recipe, `loss_mask=assistant`).
+- **Result: 68/280 = 24.3% -> 123/280 = 43.9%, +19.6 points, z = 4.89, p = 1.0e-6.** The pre-registered falsifier (<5 points or p > 0.05) is cleared by a wide margin.
+
+| family | base | sft | delta | n |
+| --- | --- | --- | --- | --- |
+| json | 0.0% | **85.0%** | +85.0 | 20 |
+| starts_with_yes_or_no | 17.1% | 57.1% | +40.0 | 35 |
+| starts_with | 0.0% | 26.7% | +26.7 | 30 |
+| item_count | 20.0% | 42.9% | +22.9 | 35 |
+| sentence_count | 31.4% | 54.3% | +22.9 | 35 |
+| contains | 13.3% | 23.3% | +10.0 | 30 |
+| forbidden_letter | 6.7% | 13.3% | +6.6 | 30 |
+| word_count | 45.7% | 42.9% | **-2.8** | 35 |
+| forbidden_words | 73.3% | 60.0% | **-13.3** | 30 |
+
+- **Retention 6/7**, identity fully intact. Only loss: "How many days are in a week?" -> "24". Final val 0.785 against 0.773 at the start of the continuation (**drift +0.012**, versus +0.001 on the shorter prior run) — the continuation was beginning to memorize, which is an argument for a fresh fork next time rather than continuing.
+- **The two regressions are one mechanism:** the SFT makes replies longer, so the model overshoots word ceilings it used to clear and reaches for words it used to avoid. Fixable with length-constrained and negative-constraint examples; do not read them as noise.
+- **Two of my own claims are falsified by this run.** (1) "json is 0% for a structural reason (the authoring corpus is JSONL so JSON-bodied records break the line parser)" — it is **85%**, and the 0% came off **n=2**. (2) The IDEA 10 framing that the recipe might "protect what exists without teaching the new skill" — it teaches, decisively.
+- **The instrument was the whole story.** The same comparison on the retired 26-item set was 9/26 vs 12/26, p = 0.40, and was correctly withdrawn as unsupportable. Rebuilding to 280 items turned an invisible effect into a 5-sigma one. Withdrawing the claim was right; the underlying result was real the whole time.
+- **Boundary, stated because it limits what this licenses:** format obedience is installable at this scale, CONTENT accuracy is not. The SFT model still answers "Name exactly four musical instruments" with "trumpet, trombone, banjo-poker, banjo-rosewood" — right count, invented words — and "3 apples, eat 1" with "9". That is the undertrained-lexicon signature of a base at 4.8 tokens/param (see [[project_bytes_are_not_tokens]] and `developer_documentation/training/model_roster.md`), and no amount of instruction tuning moves it. Fix the base, not the SFT.
+- **Confound to keep in view:** the SFT arm is a CONTINUATION of an earlier SFT on a smaller (4,263-record) corpus, so base-vs-SFT is clean but "the 8,578-record corpus caused the gain" is NOT established. A fresh fork at matched steps would separate corpus size from SFT exposure.
+- Artifacts: `models/wren_sft/` (base recoverable at `checkpoints/step_58500.pt`, the fork copy of `wren`), `models/wren_sft/eval_deep/ifeval_step_{58500,62425}.json`, corpus `trainers/corpus/instruct_*`.
+
+## 2026-07-28 (training): RETRACTED — "long context is free via n_chunks" measured a flag that was silently ignored
+
+> **Retracted the same day, before anything was built on it.** The claim below rests on two bench runs, `seq 2048 x n_chunks 4` (22,381 tok/s) and `seq 2048 x n_chunks 16` (22,367 tok/s), whose near-identical throughput I read as "n_chunks is free." They are identical because **`--n_chunks` is not implemented in the trainer that ran them.** In `veritate_mri/training/native_trainer.py` the flag appears only as an `ap.add_argument` declaration and is referenced nowhere else; `state_carry` is not declared at all. Both benches ran the same configuration. Proof from the live run launched off this result: reported throughput divided by observed step rate gives **4,093 tokens/step, i.e. `batch x seq` = 2 x 2048**, with no `n_chunks` multiplier anywhere.
+>
+> What survives: throughput falls with `seq` on this box (2048 -> 22,381, 4096 -> 16,513, 8192 -> 11,019 tok/s), which is a real measurement of `seq`, not of chunking.
+>
+> What is NOT established: anything about `n_chunks`, `state_carry`, or the cost of context. `trainers/common/vanilla_trainer.py` on mirach DOES implement chunking, so the hypothesis is still open there and worth testing properly — but it must be tested on a trainer that reads the flag, and verified by checking tokens/step against `batch x seq x n_chunks` BEFORE trusting any throughput number.
+>
+> **Standing rule this earns: a flag that argparse accepts is not a flag the trainer honors.** Confirm tokens/step arithmetically from the log (`tok_per_s / steps_per_s`) against the intended `batch x seq x n_chunks` before believing any run is configured the way you asked. This is the same failure mode as counting bytes as tokens: the number looks right and describes something else.
+
+## (original entry, retained for the record) long context is FREE on the hybrid/GLA trunk — buy it with `n_chunks`, never with `seq`
+
+- Tested: what does a 32 KB effective context actually cost on a 74.1M byte-level hybrid/GLA model? Measured with `--bench` on fortis (RTX 5070, 12 GB VRAM), muon, bf16, `state_carry=chunks`, at each rung of the batch ramp.
+- **Result, same 32 KB of effective context by two routes:**
+
+| route | effective context | best tok/s | memory | max_batch |
+| --- | --- | --- | --- | --- |
+| `seq 8192 x n_chunks 4` | 32 KB | 11,019 | 7.1 GB | 2 |
+| **`seq 2048 x n_chunks 16`** | **32 KB** | **22,367** | **2.2 GB** | **8** |
+
+- **2.03x the throughput, 0.31x the memory, 4x the usable batch, identical context.** The full seq sweep at `n_chunks 4` shows the cost being paid: seq 2048 -> 22,381 tok/s, seq 4096 -> 16,513, seq 8192 -> 11,019. Throughput falls roughly linearly in `seq` and is FLAT in `n_chunks` (2048x4 = 22,381 vs 2048x16 = 22,367, within noise).
+- Mechanism: the GLA global mixer carries a **fixed-size** recurrent state across the chunks of one step, so chunks are sequential in time but constant in memory. Stretching `seq` instead pays attention's per-position cost inside each chunk and inflates the activation footprint, which on a 12 GB card collapses the batch ramp (max_batch 2 vs 8) and costs throughput twice over.
+- Meaning: on this trunk, **context length and compute cost are decoupled**. Pick `seq` for the local attention window you want and buy total context with `n_chunks`. The instinct carried over from dense transformers — "long context means long sequences means expensive" — is wrong here and was costing 2x.
+- Practical consequence, measured on the same box: the fluency budget for a 74.1M model (200 tokens/param = 62.8 GB of bytes at the measured 4.55 bytes/token) takes **~35 days at seq 2048 x n_chunks 16** versus **~71 days at seq 8192 x n_chunks 4**. Same model, same context, five weeks of difference.
+- Boundaries: single box, single trunk (hybrid + `state_rule=gla`), single size. The flatness in `n_chunks` was checked at 4 and 16 only — a much larger `n_chunks` lengthens the sequential dependency per step and has not been measured. `state_carry=chunks` is required; without it the chunks are independent and the extra context is not real.
+- Artifacts: bench ramps in this session's fortis logs; the live run `models/core_50m` on fortis uses the winning config. Contract in `developer_documentation/platform/bench.md`.
+
+## 2026-07-28: the ledger dose AVOIDS the forgetting that high dose causes (retention 6/7 vs 5/7 and 2-of-5-identity-destroyed); the +11.6pt form number it was filed under is NOT resolvable and is withdrawn
+
+> **Correction, same day.** This entry was first headlined "clears the baseline at the ledger dose (form 34.6% -> 46.2%)". That aggregate is **9/26 -> 12/26, a 3-item swing, two-proportion p = 0.40** — indistinguishable from noise, and per-family rates ran off n=2 (`json`, `forbidden_letter`), so "json 0%" was a claim about two items. The instrument, not the result, was the problem: 284 items are needed for 80% power at that effect size. `ifeval_form.json` is now **280 items, >=20 per family, 0 contamination across 257.5 MB** of the authored corpora, and `limit` now takes a balanced round-robin instead of a prefix (families are contiguous blocks, so any limited run graded one family). **Every number below marked "form %" is measured on the retired 26-item set and must not be compared against anything measured on the new one.** What survives the correction is the retention/forgetting contrast, which rests on qualitative per-prompt checks and val drift rather than on the 26-item rate.
+
+- Tested: can a byte-level 270M hybrid (`wren`, chin200m@55000 continued to 58500) be taught instruction execution without losing what it already does well? Target skill: obey a stated output shape (exact item count, exact length, leading yes/no, avoid a letter, JSON).
+- Corpus: `instruct` — 4,263 authored records / 1.02 MB, distinct-5-gram **0.983**, built through the dashboard authoring pipeline. Contamination checked at **0 of 36 eval prompts across 74 MB** of every corpus in the mix. Plus `cogito` (483 identity records) newly built from an existing job.
+- Run: `models/wren_sft/` forked from `wren`@58500. Mix `instruct:0.15,fineweb_edu:0.42,chat_500mb:0.22,wikitext103:0.10,skills:0.05,sft_idk:0.03,cogito:0.03` — the 2026-07-20 IDEA 8 dose and replay ratio applied to a broader corpus. 2625 steps at batch 32 x seq 1024 x n_chunks 4 = **344M tokens, matching that run's token budget**. LR 2e-5 constant, `loss_mask=assistant`, bf16, muon, hybrid/gla. 8h20m wall, exit 0.
+- **Result (form-only IFEval, 26 items, every rule answer-independent): 34.6% -> 46.2%.** By family: leading yes/no **20% -> 100%** (1/5 -> 5/5), item_count 14.3% -> 28.6%, sentence_count 25% -> 50%; word_count 100% -> 50% and forbidden_words 100% -> 50% REGRESSED because the SFT made replies more verbose; json and forbidden_letter stayed 0% (json has ~zero corpus coverage, see boundaries).
+- **Retention 6/7** against the base's 7/7, and identity fully intact ("Just a small language model here for a chat. No body, no memory of you"; "Not in the way you do. I don't feel warmth or dread"). Only loss: "How many days are in a week?" -> "24 days". Health signature throughout: **val 0.7807 final vs base 0.7798 (drift +0.001), grad_norm ~0.20 vs the base's 0.21.**
+- **The controlled negative that makes this a result: TWO prior attempts on the SAME corpus and base REGRESSED the model**, and differed only in dose/steps/replay. Attempt 1 (dose 0.50, no replay, 180 steps): form 63.9% on a mixed metric but "How many days are in a week?" 7 -> "1) 2) Pegged to base." and 2 of 5 identity prompts destroyed. Attempt 2 (dose 0.35, replay 0.15, 160 steps): form **30.8%, BELOW the 34.6% base**, retention 5/7. Only the low-dose/heavy-replay/long-run configuration beat the baseline. **Operative rule: capability SFT wants dose ~0.15 with ~0.75 pretrain replay over many steps; high dose with few steps trades the old skills for the new one.**
+- Meaning, as narrowed by the correction above: **what is established is the forgetting contrast, not a format gain.** At dose 0.15 with 0.75 replay the model kept its identity and its facts (retention 6/7, val drift +0.001, grad_norm ~0.20); at dose 0.35-0.50 with little replay it lost them in ways visible prompt-by-prompt, not just in a rate ("7" -> "1) 2) Pegged to base.", 2 of 5 identity prompts destroyed). That contrast does not depend on the underpowered 26-item metric. **Whether the recipe INSTALLS format obedience is now an open question**, to be re-measured on the 280-item set across wren base, wren_sft@61125, and the continuation.
+- Honest boundaries: **n=26, so +11.6 points is 9 -> 12 items** — suggestive, not statistically strong, and per-family n is 2-7 so word_count 4/4 -> 2/4 may be noise. Single fork, single seed, no repeat. The model gets the SHAPE right and the CONTENT wrong: "List exactly three primary colors" -> "Blue, light blue, cinquefoil" (right count, invented word); "Name exactly four musical instruments" -> "drums, tsyllables, saxophones, pedals" (right count, nonsense). The leading-yes/no format is now OVER-applied: "If I have 3 apples and eat 1, how many are left?" -> "No". json stays 0% for a structural reason: the authoring corpus is JSONL, so a record whose assistant text is itself JSON breaks the line parser, and ~0 such records survive the gate.
+- Run: `models/wren_sft/` (step 61125); corpora `trainers/corpus/instruct_{train,val}.bin` + `cogito_{train,val}.bin`; eval set `veritate_mri/data/eval/samples/ifeval_form.json` (26 answer-independent items, added this session because 47% of the previous set's rules required the correct ANSWER and therefore graded reasoning, not obedience — that flaw hid this whole delta behind a flat 11.1%).
+
 ## 2026-07-25: model growth (Net2Net FFN widen) is a real 3.6x step-lever on the hybrid trunk — but only nets compute if the small-model phase stops at saturation
 
 - Tested: IDEA 9's growth-coupled-curriculum bet. Arm A GROWN = `conceptsho_10m` step 2000 (15.99M, hybrid trunk) widened ffn 1280->2560 via `stretch_ffn_state_dict` (`experiments/v2/upcycle/`) to 25.74M, then 1000 steps on a harder stage-2 curriculum. Arm C SCRATCH = same 10m_w2 shape from random init, 1000 steps on the same corpus. Identical batch 64 / bf16 / muon / constant LR 4e-4 / eval grid 50. Sequential, dashboard-launched. Metric and gates pre-registered in ideas.md BEFORE arm C ran (threshold defined as a protocol — T = arm A's val at its 250th stage-2 step = 0.121434 — not a hand-picked number).

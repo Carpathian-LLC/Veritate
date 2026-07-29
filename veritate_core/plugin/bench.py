@@ -33,6 +33,7 @@ PROBE_LR     = 1e-4
 PROBE_BETAS  = (0.9, 0.95)
 PROBE_EPS    = 1e-6
 PROBE_WD     = 0.0
+PROBE_MUON   = "muon"
 GB           = 1024 ** 3
 # On unified memory an over-budget allocation is SIGKILLed by the OS, not raised as a
 # catchable error, so the ramp must stop on a measured budget rather than wait for OOM.
@@ -99,6 +100,21 @@ def _free(device):
         torch.mps.empty_cache()
     elif device == "cuda":
         torch.cuda.empty_cache()
+
+
+class _ProbeArgs:
+    """Minimal stand-in for the trainer's argparse namespace, so the probe can build
+    the same optimizer the run will without importing trainer code."""
+
+    base_lr = PROBE_LR
+    weight_decay = PROBE_WD
+    beta1, beta2 = PROBE_BETAS
+    use_8bit_adam = False
+
+
+def _probe_muon(model):
+    from . import optim
+    return optim.build_muon(model, _ProbeArgs())
 
 
 def _step(model, opt, batch, seq, vocab, device, amp_dtype=None,
@@ -174,12 +190,17 @@ def plan_result(plan, device, seq):
 
 
 def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=None, plan=None,
-        amp_dtype=None, n_chunks=1, bptt_window=1):
+        amp_dtype=None, n_chunks=1, bptt_window=1, optimizer=None):
     """Ramp batch size on `model` until OOM; return the measured memory ceiling and
     throughput. When `plan` is an optimizer-offload tier the probe optimizer is the
     NVMe-paged AdamW, so the measured tok/s reflects the real paged regime, not a
     RAM-only fantasy. `on_progress(str)` receives human-readable lines as it runs.
-    Mutates throwaway weights + a throwaway optimizer-state dir only; saves nothing."""
+    Mutates throwaway weights + a throwaway optimizer-state dir only; saves nothing.
+
+    `optimizer` names the optimizer the RUN will use, so the probe steps with it.
+    Probing AdamW while the run trains on Muon over-reports throughput by ~1.5x on a
+    270M hybrid (measured 18,588 tok/s against a real 12,120), because Muon's
+    Newton-Schulz orthogonalization runs on every 2D weight every step."""
     import torch
     emit = on_progress or (lambda _line: None)
     model.train()
@@ -187,6 +208,9 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
         opt = mem_executor.make_optimizer(model.parameters(), plan, lr=PROBE_LR,
                                           betas=PROBE_BETAS, eps=PROBE_EPS, weight_decay=PROBE_WD)
         emit(f"optimizer paged to NVMe (tier {plan.tier}); step time is disk-bound")
+    elif str(optimizer or "").lower() == PROBE_MUON:
+        opt = _probe_muon(model)
+        emit(f"optimizer: {PROBE_MUON} (matches the run; Newton-Schulz is not free)")
     else:
         opt = torch.optim.AdamW(model.parameters(), lr=PROBE_LR)
 
@@ -260,6 +284,11 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
         opt.close()
 
     top = ramp[-1] if ramp else None
+    # The largest batch that FITS is not the batch to train at. Throughput is not
+    # monotonic in batch: under Muon this box peaks at batch 32 (13,207 tok/s), still
+    # fits batch 64, and collapses to 1,040 tok/s there once memory pressure bites.
+    # `max_batch` answers the memory question; `best_batch` is what a launch should use.
+    best = max(ramp, key=lambda r: r["tok_per_s"]) if ramp else None
     result = {
         "device": device,
         "seq": seq,
@@ -268,10 +297,16 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
         "max_batch": top["batch"] if top else 0,
         "mem_ceiling_gb": top["mem_gb"] if top else 0.0,
         "tok_per_s": top["tok_per_s"] if top else 0.0,
+        "best_batch": best["batch"] if best else 0,
+        "best_tok_per_s": best["tok_per_s"] if best else 0.0,
+        "best_mem_gb": best["mem_gb"] if best else 0.0,
         "ramp": ramp,
         **_bucket_gb(plan),
     }
     if top:
         emit(f"{ceiling_label}: batch {top['batch']} at {top['mem_gb']:.1f} GB {kind}, "
              f"{top['tok_per_s']:,.0f} tok/s ({device})")
+    if best and top and best["batch"] != top["batch"]:
+        emit(f"throughput peak: batch {best['batch']} at {best['mem_gb']:.1f} GB {kind}, "
+             f"{best['tok_per_s']:,.0f} tok/s -- launch at this batch, not the ceiling")
     return result

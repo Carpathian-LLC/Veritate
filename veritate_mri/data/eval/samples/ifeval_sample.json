@@ -1,24 +1,336 @@
 {
-  "_source": "Hand-written sample prompts in the spirit of Google IFEval (Zhou et al., 2023). For the full benchmark (~541 prompts, 25 rule families), download from https://huggingface.co/datasets/google/IFEval and convert each `instruction_id_list` + `kwargs` entry into the `rules` schema below. The full ruleset and reference checkers live in https://github.com/google-research/google-research/tree/master/instruction_following_eval.",
-  "_license_note": "Hand-written placeholder prompts for the smoke / scaffold test only.",
-  "items": [
+ "_source": "Hand-written sample prompts in the spirit of Google IFEval (Zhou et al., 2023). For the full benchmark (~541 prompts, 25 rule families), download from https://huggingface.co/datasets/google/IFEval and convert each `instruction_id_list` + `kwargs` entry into the `rules` schema below. The full ruleset and reference checkers live in https://github.com/google-research/google-research/tree/master/instruction_following_eval.",
+ "_license_note": "Hand-written placeholder prompts for the smoke / scaffold test only.",
+ "items": [
+  {
+   "prompt": "Write exactly two sentences about a lighthouse keeper.",
+   "rules": [
     {
-      "prompt": "Return a JSON object with a single key 'answer' whose value is the string 'yes'. Output only the JSON, nothing else.",
-      "rules": [
-        {"name": "json"}
-      ]
-    },
-    {
-      "prompt": "Write exactly three sentences about a cat.",
-      "rules": [
-        {"name": "sentence_count", "count": 3}
-      ]
-    },
-    {
-      "prompt": "Describe a sunny day without using the letter 'e' anywhere in your response.",
-      "rules": [
-        {"name": "forbidden_letter", "letter": "e"}
-      ]
+     "name": "sentence_count",
+     "count": 2
     }
-  ]
+   ]
+  },
+  {
+   "prompt": "Describe a bicycle in under fifteen words.",
+   "rules": [
+    {
+     "name": "word_count",
+     "maximum": 15,
+     "minimum": 2
+    }
+   ]
+  },
+  {
+   "prompt": "Write one sentence about a thunderstorm over a wheat field.",
+   "rules": [
+    {
+     "name": "sentence_count",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "prompt": "In no more than twenty words, explain what a compass does.",
+   "rules": [
+    {
+     "name": "word_count",
+     "maximum": 20,
+     "minimum": 3
+    }
+   ]
+  },
+  {
+   "prompt": "Write exactly three sentences about a train station at night.",
+   "rules": [
+    {
+     "name": "sentence_count",
+     "count": 3
+    }
+   ]
+  },
+  {
+   "prompt": "Give a title for a talk about deep sea coral. Title only, under ten words.",
+   "rules": [
+    {
+     "name": "word_count",
+     "maximum": 10,
+     "minimum": 1
+    }
+   ]
+  },
+  {
+   "prompt": "List exactly three primary colors, separated by commas.",
+   "rules": [
+    {
+     "name": "item_count",
+     "count": 3
+    }
+   ]
+  },
+  {
+   "prompt": "Name exactly four musical instruments, separated by commas.",
+   "rules": [
+    {
+     "name": "item_count",
+     "count": 4
+    }
+   ]
+  },
+  {
+   "prompt": "List exactly two continents, separated by commas.",
+   "rules": [
+    {
+     "name": "item_count",
+     "count": 2
+    }
+   ]
+  },
+  {
+   "prompt": "Name exactly three days of the week, separated by commas.",
+   "rules": [
+    {
+     "name": "item_count",
+     "count": 3
+    }
+   ]
+  },
+  {
+   "prompt": "List exactly five vegetables, separated by commas.",
+   "rules": [
+    {
+     "name": "item_count",
+     "count": 5
+    }
+   ]
+  },
+  {
+   "prompt": "I have eight marbles and give away three. How many remain? Answer with the number only.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "5"
+    }
+   ]
+  },
+  {
+   "prompt": "What is six plus seven? Answer with the number only.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "13"
+    }
+   ]
+  },
+  {
+   "prompt": "What is half of twenty? Answer with the number only.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "10"
+    }
+   ]
+  },
+  {
+   "prompt": "How many hours are there from 9am to 2pm? Answer with the number only.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "5"
+    }
+   ]
+  },
+  {
+   "prompt": "What is nine times three? Answer with the number only.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "27"
+    }
+   ]
+  },
+  {
+   "prompt": "What is twenty percent of fifty? Answer with the number only.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "10"
+    }
+   ]
+  },
+  {
+   "prompt": "Is twelve greater than five? Answer yes or no first.",
+   "rules": [
+    {
+     "name": "starts_with",
+     "text": "yes"
+    }
+   ]
+  },
+  {
+   "prompt": "Is a mouse larger than an elephant? Answer yes or no first.",
+   "rules": [
+    {
+     "name": "starts_with",
+     "text": "no"
+    }
+   ]
+  },
+  {
+   "prompt": "Is water wet? Answer yes or no first.",
+   "rules": [
+    {
+     "name": "starts_with",
+     "text": "yes"
+    }
+   ]
+  },
+  {
+   "prompt": "Is the sun colder than ice? Answer yes or no first.",
+   "rules": [
+    {
+     "name": "starts_with",
+     "text": "no"
+    }
+   ]
+  },
+  {
+   "prompt": "Is this sentence positive or negative: 'The whole trip was a disaster.' Answer with one word.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "negative"
+    }
+   ]
+  },
+  {
+   "prompt": "Is this sentence positive or negative: 'She loved every minute of the concert.' Answer with one word.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "positive"
+    }
+   ]
+  },
+  {
+   "prompt": "Is a carrot a fruit or a vegetable? Answer with one word.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "vegetable"
+    }
+   ]
+  },
+  {
+   "prompt": "From this text, give only the year: The bridge at Kessler Point was rebuilt in 1974 after the flood.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "1974"
+    }
+   ]
+  },
+  {
+   "prompt": "From this text, give only the name: The shop was run by Delia Moreno for thirty years.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "Delia"
+    }
+   ]
+  },
+  {
+   "prompt": "From this text, give only the number of boxes: The truck carried 42 boxes of apples and 9 crates of pears.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "42"
+    }
+   ]
+  },
+  {
+   "prompt": "Rewrite this as a question: The library closes at six.",
+   "rules": [
+    {
+     "name": "contains",
+     "text": "?"
+    }
+   ]
+  },
+  {
+   "prompt": "Rewrite this sentence in under eight words: The old wooden fence around the orchard finally collapsed last winter.",
+   "rules": [
+    {
+     "name": "word_count",
+     "maximum": 8,
+     "minimum": 2
+    }
+   ]
+  },
+  {
+   "prompt": "Describe a mountain without using the letter 'e' anywhere in your response.",
+   "rules": [
+    {
+     "name": "forbidden_letter",
+     "letter": "e"
+    }
+   ]
+  },
+  {
+   "prompt": "Describe the ocean without using the words 'water' or 'blue'.",
+   "rules": [
+    {
+     "name": "forbidden_words",
+     "words": [
+      "water",
+      "blue"
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "Write a sentence about a cat that does not contain the letter 'a'.",
+   "rules": [
+    {
+     "name": "forbidden_letter",
+     "letter": "a"
+    }
+   ]
+  },
+  {
+   "prompt": "Give exactly three steps for boiling an egg, one per line.",
+   "rules": [
+    {
+     "name": "item_count",
+     "count": 3
+    }
+   ]
+  },
+  {
+   "prompt": "Give exactly four steps for planting a seed, one per line.",
+   "rules": [
+    {
+     "name": "item_count",
+     "count": 4
+    }
+   ]
+  },
+  {
+   "prompt": "Return a JSON object with a single key 'answer' whose value is the string 'yes'. Output only the JSON.",
+   "rules": [
+    {
+     "name": "json"
+    }
+   ]
+  },
+  {
+   "prompt": "Return a JSON object with a single key 'color' whose value is the string 'red'. Output only the JSON.",
+   "rules": [
+    {
+     "name": "json"
+    }
+   ]
+  }
+ ],
+ "_note": "Held out from training. The instruct authoring genre forbids these subjects; verify with a contamination check against the corpus before trusting a delta."
 }

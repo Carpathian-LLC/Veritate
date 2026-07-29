@@ -1642,6 +1642,7 @@
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Corpus library <span id="corpusLibraryCountBadge" class="meta" style="font-size:10.5px;color:var(--dim);font-weight:400;letter-spacing:0"></span></div>
             <div class="meta" style="font-size:10.5px;color:var(--dim);line-height:1.45">Training data for your models. Files land at <code>trainers/corpus/&lt;name&gt;_train.bin</code>. Pick a size that fits your model.</div>
             <div id="corpusCatalogStatus" class="meta" style="font-size:10.5px"></div>
+            <div id="corpusActiveDownloads" style="display:none;flex-direction:column;gap:6px;margin-top:4px;border:1px solid var(--line);border-radius:3px;padding:6px 8px"></div>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
               <button id="corpusBrowseBtn"     class="action" type="button">browse</button>
               <button id="corpusRefreshBtn"    class="action" type="button">refresh</button>
@@ -2447,6 +2448,40 @@
         <button id="forkModelConfirm" class="action" type="button" style="border-color:var(--accent);color:var(--accent);font-weight:600">fork &amp; switch to new model</button>
         <button id="forkModelCancel"  class="action" type="button">cancel</button>
         <span id="forkModelStatus" class="meta" style="font-size:10.5px"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="ckptPruneModal" class="modal-backdrop hidden">
+  <div class="modal-box" style="max-width:620px">
+    <div class="modal-header">
+      <h3>Prune checkpoints</h3>
+      <button id="ckptPruneModalClose">×</button>
+    </div>
+    <div style="font-size:12px;line-height:1.55;color:var(--text);display:flex;flex-direction:column;gap:10px">
+      <div id="ckptPruneSummary" style="color:var(--text);font-size:12px"></div>
+      <div style="color:var(--dim);font-size:11px;line-height:1.5">
+        A long run writes one checkpoint every <code>ckpt_every</code> steps and never removes any. This keeps a milestone ladder plus the newest few and deletes the rest. <b>Hook captures are never touched</b> - the per-step probe, lens, classroom and eval dumps stay, so a pruned step is still analyzable. Deleting a checkpoint cannot be undone.
+      </div>
+      <div class="inline" style="gap:12px;flex-wrap:wrap">
+        <label style="display:flex;flex-direction:column;gap:3px">
+          <span style="font-size:11px;color:var(--dim)">keep every N steps</span>
+          <input type="number" id="ckptPruneKeepEvery" min="0" step="500" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:monospace;width:120px">
+          <span style="font-size:10.5px;color:var(--dim)">0 = no ladder</span>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:3px">
+          <span style="font-size:11px;color:var(--dim)">keep newest</span>
+          <input type="number" id="ckptPruneKeepLast" min="1" step="1" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:monospace;width:120px">
+          <span style="font-size:10.5px;color:var(--dim)">rollback margin</span>
+        </label>
+      </div>
+      <div id="ckptPrunePlan" style="font-size:11px;line-height:1.5;color:var(--dim);border:1px solid var(--line);border-radius:3px;padding:8px;max-height:180px;overflow:auto"></div>
+      <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+        <button id="ckptPrunePreview" class="action" type="button">preview plan</button>
+        <button id="ckptPruneConfirm" class="action" type="button" style="border-color:var(--hot);color:var(--hot);font-weight:600" disabled>delete the listed checkpoints</button>
+        <button id="ckptPruneCancel"  class="action" type="button">cancel</button>
+        <span id="ckptPruneStatus" class="meta" style="font-size:10.5px"></span>
       </div>
     </div>
   </div>

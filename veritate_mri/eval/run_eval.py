@@ -88,6 +88,7 @@ def run_suites_on_model(model,
                         hellaswag_data: str | None = None,
                         ifeval_data: str | None = None,
                         ifeval_max_new: int = 256,
+                        ifeval_chat: bool = False,
                         verbose: bool = False,
                         progress_cb=None) -> dict:
     """Run a subset of the eval suites on an already-loaded model.
@@ -133,6 +134,7 @@ def run_suites_on_model(model,
             model,
             data_path=ifeval_data or IF_DEFAULT,
             max_new=ifeval_max_new, limit=limit, verbose=verbose, progress_cb=_cb,
+            chat=ifeval_chat,
         )
     return out
 

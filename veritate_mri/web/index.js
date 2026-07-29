@@ -2769,6 +2769,7 @@ function activateTab(name) {
   } else {
     stopTrainPolling();
     trainStreamStop();
+    if (name === "settings") _corpusRefreshCatalog();
   }
 }
 
@@ -9297,9 +9298,13 @@ function _autoTunePersistDevice(pluginId, result) {
   const body = {
     id: pluginId,
     args: {},
+    // best_batch is the THROUGHPUT peak, not the memory ceiling: throughput is not
+    // monotonic in batch, so the largest batch that fits can be far slower.
     measured: { device: result.device, seq: result.seq, max_batch: result.max_batch,
-                mem_ceiling_gb: result.mem_ceiling_gb, best_batch: result.max_batch,
-                tok_per_s: result.tok_per_s, _shape_key: result._shape_key },
+                mem_ceiling_gb: result.mem_ceiling_gb,
+                best_batch: result.best_batch || result.max_batch,
+                tok_per_s: result.best_tok_per_s || result.tok_per_s,
+                _shape_key: result._shape_key },
   };
   if (_autoTuneState.sysprobe) body.sysprobe = _autoTuneState.sysprobe;
   fetch("/trainers/tune_defaults", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -9821,6 +9826,7 @@ function _trRenderForkButton() {
   wrap.style.cssText = "margin-top:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap";
   wrap.innerHTML = `
     <button type="button" class="action train-fork-btn" style="font-size:10.5px;padding:2px 8px" title="Copy the latest checkpoint into a new model dir so you can train it on a different corpus.">fork to new model</button>
+    <button type="button" class="action train-prune-btn" style="font-size:10.5px;padding:2px 8px" title="Delete old checkpoints, keeping a milestone ladder plus the newest few. Hook captures are never touched.">prune checkpoints</button>
   `;
   cell.appendChild(wrap);
   wrap.querySelector(".train-fork-btn").addEventListener("click", () => {
@@ -9831,6 +9837,95 @@ function _trRenderForkButton() {
     }
     _trOpenForkModal(src);
   });
+  wrap.querySelector(".train-prune-btn").addEventListener("click", () => {
+    const src = resumeEl.value;
+    if (!src) {
+      alert("Pick a model in 'model to continue' first.");
+      return;
+    }
+    _ckptOpenPruneModal(src);
+  });
+}
+
+// ---- checkpoint retention -----------------------------------------------------
+// Defaults mirror training/retention.py. The confirm button stays disabled until
+// a preview has run, so nothing is ever deleted without the plan on screen.
+const _CKPT_PRUNE_KEEP_EVERY = 5000;
+const _CKPT_PRUNE_KEEP_LAST  = 4;
+
+function _ckptGB(bytes) { return (Number(bytes || 0) / (1024 ** 3)).toFixed(1) + " GB"; }
+
+function _ckptOpenPruneModal(model) {
+  const modal = document.getElementById("ckptPruneModal");
+  if (!modal) return;
+  modal._pruneModel = model;
+  document.getElementById("ckptPruneSummary").innerHTML =
+    `Model: <code>${_trEsc(model)}</code>`;
+  document.getElementById("ckptPruneKeepEvery").value = _CKPT_PRUNE_KEEP_EVERY;
+  document.getElementById("ckptPruneKeepLast").value  = _CKPT_PRUNE_KEEP_LAST;
+  document.getElementById("ckptPrunePlan").innerHTML  = "Run a preview to see what would be deleted.";
+  document.getElementById("ckptPruneStatus").textContent = "";
+  document.getElementById("ckptPruneConfirm").disabled = true;
+  modal.classList.remove("hidden");
+}
+
+function _ckptClosePruneModal() {
+  const modal = document.getElementById("ckptPruneModal");
+  if (modal) {
+    modal.classList.add("hidden");
+    modal._pruneModel = null;
+  }
+}
+
+function _ckptPruneBody(modal) {
+  return {
+    name:       modal._pruneModel,
+    keep_every: parseInt(document.getElementById("ckptPruneKeepEvery").value, 10),
+    keep_last:  parseInt(document.getElementById("ckptPruneKeepLast").value, 10),
+  };
+}
+
+function _ckptPruneRequest(dryRun) {
+  const modal = document.getElementById("ckptPruneModal");
+  if (!modal || !modal._pruneModel) return;
+  const plan    = document.getElementById("ckptPrunePlan");
+  const status  = document.getElementById("ckptPruneStatus");
+  const confirm = document.getElementById("ckptPruneConfirm");
+  status.style.color = "var(--dim)";
+  status.textContent = dryRun ? "planning…" : "deleting…";
+  confirm.disabled = true;
+  fetch("/models/checkpoints/prune", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(Object.assign(_ckptPruneBody(modal), { dry_run: dryRun })),
+  }).then(r => r.json().then(out => ({ code: r.status, out })))
+    .then(({ code, out }) => {
+      if (!out.ok) {
+        status.style.color = "var(--hot)";
+        status.textContent = out.error || ("prune failed (" + code + ")");
+        return;
+      }
+      const steps = (dryRun ? out.delete.map(r => r.step) : out.deleted);
+      plan.innerHTML =
+        `<div><b>${out.total}</b> checkpoints on disk · keeping <b>${out.keep.length}</b> (${_ckptGB(out.keep_bytes)}) · ` +
+        `${dryRun ? "would delete" : "deleted"} <b>${steps.length}</b> (${_ckptGB(dryRun ? out.delete_bytes : out.freed_bytes)})</div>` +
+        `<div style="margin-top:6px">keeping: <code>${out.keep.map(r => r.step).join(", ") || "(none)"}</code></div>` +
+        `<div style="margin-top:6px">${dryRun ? "to delete" : "removed"}: <code>${steps.join(", ") || "(none)"}</code></div>` +
+        `<div style="margin-top:6px;color:var(--data-pos)">${out.hooks_kept} hook captures kept - never pruned</div>`;
+      if (dryRun) {
+        status.style.color = steps.length ? "var(--hot)" : "var(--dim)";
+        status.textContent = steps.length ? "review, then confirm" : "nothing to prune";
+        confirm.disabled = !steps.length;
+      } else {
+        status.style.color = "var(--data-pos)";
+        status.textContent = `freed ${_ckptGB(out.freed_bytes)}, ${out.remaining} checkpoints left`;
+        confirm.disabled = true;
+      }
+    })
+    .catch(e => {
+      status.style.color = "var(--hot)";
+      status.textContent = String(e);
+    });
 }
 
 function _trOpenForkModal(source) {
@@ -13515,6 +13610,11 @@ const corpusLibState = {
   installing: new Set(), // stems currently being installed (UI lock)
 };
 
+// Catalog poll cadence on the settings tab: fast while a download is running,
+// slow otherwise.
+const CORPUS_POLL_ACTIVE_MS = 2000;
+const CORPUS_POLL_IDLE_MS   = 15000;
+
 // Unpublished Veritate-native corpora carry coming_soon=true in the catalog
 // entry (corpus_catalog.json) with train_url = "PLACEHOLDER_URL" and render as
 // a disabled "coming soon" button; corpus_sync.install() also refuses them
@@ -13544,7 +13644,7 @@ const CORPUS_MODE_TOPIC = { chat: "chat", agent: "agent", autocomplete: "code" }
 // past the mix checkbox + status dot.
 const CORPUS_ROW_INDENT = "45px";
 
-// Market LLM corpora (crypto, stocks) are now published as real raw_bytes catalog
+// Market LLM corpora (crypto) are now published as real raw_bytes catalog
 // entries hosted on COS, so no coming-soon placeholders are needed.
 const CORPUS_MARKET_PLACEHOLDERS = [];
 
@@ -13582,8 +13682,55 @@ function _corpusEsc(s) {
   }[c]));
 }
 
+// Bar + byte counts for one in-flight install. Determinate when the server
+// knows the total, striped otherwise.
+function _corpusProgressBarHtml(p) {
+  const wrote = p ? p.bytes : 0;
+  const total = p ? p.total : null;
+  const kind  = p && p.kind ? p.kind : "starting";
+  const pct   = (total && total > 0) ? Math.floor((wrote / total) * 100) : null;
+  const bar = (pct != null)
+    ? `<div style="flex:1;height:3px;background:#0a0c12;border-radius:2px;overflow:hidden;min-width:80px"><div style="width:${pct}%;height:100%;background:var(--warm);transition:width .3s"></div></div>`
+    : `<div style="flex:1;height:3px;background:repeating-linear-gradient(90deg,var(--warm) 0 8px,#0a0c12 8px 16px);background-size:32px 100%;animation:cprogslide 1s linear infinite;border-radius:2px;min-width:80px"></div>`;
+  return bar +
+    `<span style="white-space:nowrap;color:var(--warm)">${kind} ${_corpusFmtBytes(wrote)}` +
+    `${total ? ` / ${_corpusFmtBytes(total)} (${pct}%)` : ""}</span>`;
+}
+
+function _corpusActiveDownloads(data) {
+  return ((data && data.corpora) || []).filter(c => c.progress);
+}
+
+// Settings-card mirror of in-flight installs. Progress lives on the server, so
+// a download started from another tab or before a reload still shows here even
+// with the library modal closed.
+function _corpusRenderActiveDownloads(data) {
+  const box = $("corpusActiveDownloads");
+  if (!box) return;
+  const active = _corpusActiveDownloads(data);
+  if (!active.length) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  box.style.display = "flex";
+  box.innerHTML = active.map(c => `
+    <div style="display:flex;flex-direction:column;gap:3px">
+      <div style="display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--text)">
+        <span class="spinner" style="flex-shrink:0"></span>
+        <span style="font-weight:500">${_corpusEsc(c.label || c.stem)}</span>
+        <span style="color:var(--dim)">(${_corpusEsc(c.stem)})</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:10px;color:var(--dim)">
+        ${_corpusProgressBarHtml(c.progress)}
+      </div>
+    </div>`).join("") +
+    `<div class="meta" style="font-size:10px;color:var(--dim)">The download runs on the server. Leaving this tab or closing the page does not stop it.</div>`;
+}
+
 function _corpusRenderCatalog(data) {
   corpusLibState.catalog = data;
+  _corpusRenderActiveDownloads(data);
   const list = $("corpusList");
   const urlInput = $("corpusCatalogUrl");
   const statusEl = $("corpusCatalogStatus");
@@ -13811,17 +13958,9 @@ function _corpusRowHtml(c) {
 
     let progressLine = "";
     if (downloading) {
-      const wrote = progress ? progress.bytes : 0;
-      const total = progress ? progress.total : null;
-      const kind  = progress && progress.kind ? progress.kind : "starting";
-      const pct   = (total && total > 0) ? Math.floor((wrote / total) * 100) : null;
-      const bar = (pct != null)
-        ? `<div style="flex:1;height:3px;background:#0a0c12;border-radius:2px;overflow:hidden;min-width:80px"><div style="width:${pct}%;height:100%;background:var(--warm);transition:width .3s"></div></div>`
-        : `<div style="flex:1;height:3px;background:repeating-linear-gradient(90deg,var(--warm) 0 8px,#0a0c12 8px 16px);background-size:32px 100%;animation:cprogslide 1s linear infinite;border-radius:2px;min-width:80px"></div>`;
       progressLine = `
         <div style="display:flex;align-items:center;gap:8px;padding:3px 8px 0 ${CORPUS_ROW_INDENT};font-size:10px;color:var(--dim)">
-          ${bar}
-          <span style="white-space:nowrap;color:var(--warm)">${kind} ${_corpusFmtBytes(wrote)}${total ? ` / ${_corpusFmtBytes(total)} (${pct}%)` : ""}</span>
+          ${_corpusProgressBarHtml(progress)}
         </div>`;
     }
 
@@ -13848,6 +13987,14 @@ function _corpusRowHtml(c) {
         ${descLine}
         ${progressLine}
       </div>`;
+}
+
+function _corpusPollLoop() {
+  const fast = _corpusActiveDownloads(corpusLibState.catalog).length > 0;
+  setTimeout(() => {
+    if (_isTabActive("settings")) _corpusRefreshCatalog();
+    _corpusPollLoop();
+  }, fast ? CORPUS_POLL_ACTIVE_MS : CORPUS_POLL_IDLE_MS);
 }
 
 function _corpusRefreshCatalog() {
@@ -15682,6 +15829,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const fmconf = document.getElementById("forkModelConfirm");
   if (fmconf) fmconf.addEventListener("click", _trDoFork);
 
+  const cpc = document.getElementById("ckptPruneModalClose");
+  if (cpc) cpc.addEventListener("click", _ckptClosePruneModal);
+  const cpcancel = document.getElementById("ckptPruneCancel");
+  if (cpcancel) cpcancel.addEventListener("click", _ckptClosePruneModal);
+  const cpprev = document.getElementById("ckptPrunePreview");
+  if (cpprev) cpprev.addEventListener("click", () => _ckptPruneRequest(true));
+  const cpconf = document.getElementById("ckptPruneConfirm");
+  if (cpconf) cpconf.addEventListener("click", () => _ckptPruneRequest(false));
+  // Changing a knob invalidates the plan on screen: re-preview before deleting.
+  ["ckptPruneKeepEvery", "ckptPruneKeepLast"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", () => {
+      const c = document.getElementById("ckptPruneConfirm");
+      if (c) c.disabled = true;
+    });
+  });
+
   const casc = $("corpusAddSourceModalClose");
   if (casc) casc.addEventListener("click", _corpusCloseAddSourceModal);
   const cass = $("corpusAddSourceSave");
@@ -15689,7 +15853,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const casm = $("corpusAddSourceModal");
   if (casm) casm.addEventListener("click", (e) => { if (e.target === casm) _corpusCloseAddSourceModal(); });
   _corpusRefreshCatalog();
-  setInterval(() => { if (_isTabActive("settings")) _corpusRefreshCatalog(); }, 15000);
+  _corpusPollLoop();
 
   // ---- Extension library wiring ----
   const mkc = $("mktModalClose"); if (mkc) mkc.addEventListener("click", _mktCloseMarketplace);

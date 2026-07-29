@@ -24,6 +24,7 @@ from readers import (
     config as cfg_reader,
 )
 from training import fork as fork_mod
+from training import retention
 from training.sync import models_sync
 
 from ._common import open_folder
@@ -105,6 +106,23 @@ def register(app):
         try:
             return fork_mod.fork_model(body.get("source"), body.get("new_name"))
         except fork_mod.ForkError as e:
+            return ({"ok": False, "error": str(e)}, 400)
+
+    @app.route("/models/checkpoints/prune", methods=["POST"])
+    def models_checkpoints_prune():
+        """Plan or apply checkpoint retention. `dry_run` (default true) reads only,
+        so the dashboard always shows the plan before anything is deleted."""
+        body = request.get_json(silent=True) or {}
+        try:
+            kw = {
+                "name":       body.get("name"),
+                "keep_every": body.get("keep_every", retention.DEFAULT_KEEP_EVERY),
+                "keep_last":  body.get("keep_last",  retention.DEFAULT_KEEP_LAST),
+            }
+            if body.get("dry_run", True):
+                return retention.plan(**kw)
+            return retention.prune(**kw)
+        except retention.RetentionError as e:
             return ({"ok": False, "error": str(e)}, 400)
 
     @app.route("/models/open_folder", methods=["POST"])

@@ -50,9 +50,15 @@ Size-adaptive training-memory planner. Decides whether a run fits in unified mem
 
 Measured memory/throughput benchmark powering the dashboard's Auto tune. Full reference: [developer_documentation/platform/bench.md](../platform/bench.md).
 
-### `bench.run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=None) -> dict`
+### `bench.run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=None, plan=None, amp_dtype=None, n_chunks=1, bptt_window=1, optimizer=None) -> dict`
 
 Ramps batch size on the already-built model with throwaway synthetic batches until OOM; returns `{device, seq, max_batch, mem_ceiling_gb, tok_per_s, ramp}`. Saves nothing. A trainer exposes it as a `--bench` flag and prints `BENCH_RESULT <json>`; the manifest declares `"bench": true` so the dashboard knows the flag exists.
+
+**Pass the run's own `optimizer`, `amp_dtype`, `n_chunks`, and `bptt_window`, or the numbers describe a run nobody is going to launch.** Each one changes the step the probe measures:
+
+- `optimizer="muon"` builds the real Muon+AdamW pair. Probing the default AdamW while the run trains on Muon over-reported a 270M hybrid by 53% (18,588 tok/s predicted against 12,120 measured) because Newton-Schulz orthogonalization runs on every 2D weight every step. It also changes the RECOMMENDED batch, not just the number: under AdamW the ramp climbs to batch 64, while under Muon batch 48 is SLOWER than batch 32 (12,121 against 13,207) once memory pressure bites at ~132 GB.
+- `n_chunks` scales per-step compute and `bptt_window` scales peak activation memory, since the trainer walks `seq * n_chunks` bytes per step and holds `bptt_window` chunk losses before each backward.
+- `amp_dtype` must match the run's precision; probing fp32 against a bf16 run mis-sizes both memory and throughput.
 
 ## mem_executor
 
