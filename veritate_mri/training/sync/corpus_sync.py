@@ -131,11 +131,15 @@ def _record(action, ok, message, stem=None):
 
 
 def _train_path(stem):
-    return os.path.join(CORPUS_DIR, f"{stem}{paths.CORPUS_TRAIN_SUFFIX}")
+    """Read-aware: an already-installed bin resolves wherever it lives (so a
+    legacy trainers/corpus/ install still reports as installed and uninstalls
+    correctly), while a new stem resolves to CORPUS_DIR, which is where
+    downloads land."""
+    return paths.corpus_train_path(stem)
 
 
 def _val_path(stem):
-    return os.path.join(CORPUS_DIR, f"{stem}{paths.CORPUS_VAL_SUFFIX}")
+    return paths.corpus_val_path(stem)
 
 
 def _native_train_path(stem):
@@ -552,10 +556,18 @@ def _extract_zip_bundle(zip_path, train_dest, val_dest):
 
 
 def _free_disk_bytes(path):
-    try:
-        return shutil.disk_usage(os.path.dirname(path) or ".").free
-    except OSError:
-        return None
+    """Walk up to the nearest existing ancestor: the corpus dir may not exist
+    yet on a fresh install, and disk_usage on a missing path raises, which
+    would silently disable the precheck."""
+    probe = os.path.dirname(os.path.abspath(path))
+    while True:
+        try:
+            return shutil.disk_usage(probe).free
+        except OSError:
+            parent = os.path.dirname(probe)
+            if parent == probe:
+                return None
+            probe = parent
 
 
 def _disk_precheck(stem, expected_bytes):

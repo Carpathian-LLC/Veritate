@@ -83,7 +83,7 @@ Isolation is by convention. There is no iframe, no content-security policy, and 
 
 - **API only from the browser.** The page reaches the platform through the documented HTTP API and the extension's own routes, nothing else.
 - **No platform-internal imports in server code.** Read disk through the model readers, load checkpoints through `veritate_core.load`, never import `veritate_mri` internals and never open platform files directly.
-- **Read-only on canonical state.** Do not mutate training, chat, or retrieval state. Never write into `models/<name>/` or `trainers/corpus/`.
+- **Read-only on canonical state.** Do not mutate training, chat, or retrieval state. Never write into `models/<name>/` or `data/corpus/`.
 - **Namespace everything.** Page route, `api_prefix`, server routes, CSS classes, and DOM ids all carry the extension prefix.
 - **Fail soft.** Lazy-import optional packages inside the route that needs them. One extension failing during registration is logged and skipped and never aborts another extension or server startup.
 

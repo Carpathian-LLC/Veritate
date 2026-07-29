@@ -13,7 +13,7 @@ The bottom of the learning-rate curve. The schedule decays from `base_lr` toward
 
 A run that decays all the way to zero stops learning before it stops running. A floor keeps small, useful updates flowing through the final steps while still letting the model settle.
 
-Consumed by `lr_at()` in `trainers/common/vanilla_trainer.py` for the `cosine`, `linear`, and `wsd` schedules. Under `constant` it is unused, and the form hides the field when `constant` is selected.
+Consumed by `lr_at()` in `veritate_mri/training/veritate_trainer.py` for the `cosine`, `linear`, and `wsd` schedules. Under `constant` it is unused, and the form hides the field when `constant` is selected.
 
 ## range and default
 

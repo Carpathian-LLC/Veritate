@@ -14,7 +14,7 @@ Rules of engagement for writing code in Veritate. Read after `claude_preflight.m
 104. **Functions do one thing.** If you can't name a function without "and" / "or", it's two functions. Cap soft length at ~30 lines; if you exceed that, ask whether it should split.
 105. **No layered abstractions for one caller.** A class with one method called from one place is a function. A function called from one place can be inlined. Build abstractions on the second use, not the first.
 106. **Delete code aggressively.** Dead code, commented-out code, "we might need this later," unreachable branches, unused params, defensive checks for impossible states — all go. The git history is the museum; the working tree is the office.
-107. **Reuse before you re-write.** Before writing a helper, grep for an equivalent that already exists in `veritate_core/`, `veritate_mri/training/`, `veritate_mri/readers/`, or `trainers/common/`. Two callers of the same helper beats two implementations.
+107. **Reuse before you re-write.** Before writing a helper, grep for an equivalent that already exists in `veritate_core/`, `veritate_mri/training/`, or `veritate_mri/readers/`. Two callers of the same helper beats two implementations.
 
 ## naming + style
 

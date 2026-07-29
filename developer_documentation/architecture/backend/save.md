@@ -16,7 +16,7 @@ The per-step `train.csv` row is the separate `append_train_row()` call.
 
 Callers that go through this single path:
 
-- The shared plugin loop [trainers/common/vanilla_trainer.py:536](../../../trainers/common/vanilla_trainer.py#L536): `save.save(veritate_model, name, step, optimizer=opt, args=ckpt_args)`.
+- The shared plugin loop [veritate_mri/training/veritate_trainer.py:536](../../../veritate_mri/training/veritate_trainer.py#L536): `save.save(veritate_model, name, step, optimizer=opt, args=ckpt_args)`.
 - The per-trainer loops `trainers/<id>/trainer.py` (e.g. [veritate_200m/trainer.py:497](../../../trainers/veritate_200m/trainer.py#L497)). Trainers reach `save` only through `veritate_core.plugin.save`, which re-exports this module ([veritate_core/plugin/__init__.py:24](../../../veritate_core/plugin/__init__.py#L24)).
 - The grounded SFT [experiments/v2/rag/sft_grounded.py:66](../../../experiments/v2/rag/sft_grounded.py#L66): `vsave.save(model, name, step, optimizer=opt, args=ckpt_args)`.
 
@@ -70,7 +70,7 @@ The `generation` and `writing_health` dumps need a prepped corpus bin. `save()` 
 - Multicorpus mix `"stem1:w1,stem2:w2,..."`: the highest-weight stem wins (first on ties).
 - Single `"prefix:stem"` (no numeric tail): the part after the last `:`.
 
-The stem resolves to `trainers/corpus/<stem>_train.bin`; if that file is missing, `generation` is skipped with a logged error.
+The stem resolves to `data/corpus/<stem>_train.bin`; if that file is missing, `generation` is skipped with a logged error.
 
 ### Model-type gate
 

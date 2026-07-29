@@ -4,7 +4,7 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - trainer catalog, start/stop, repo sync, core-trainers index, open-folder.
+# - trainer catalog, start/stop, core-trainers index, open-folder.
 #   Enforces fresh-run name collisions on /trainers/run. Every endpoint runs
 #   through _safe so any exception lands in the dashboard log ring with a
 #   parseable JSON error body (avoids the WebKit "string did not match the
@@ -17,7 +17,6 @@ from flask import request
 from readers import models
 from readers import trainers as trainers_reader
 from training import trainer_runner
-from training.sync import trainers_sync
 
 from ._common import open_folder
 from ._common import safe_route as _safe
@@ -65,8 +64,7 @@ def register(app):
         specs, without launching a run. Body: {id, args:{...}, measured:{...},
         sysprobe:{...}}. When sysprobe is present it's uploaded to the
         Carpathian heartbeat endpoint (bench_report kind) if the user has
-        opted into advanced analytics. The upstream-synced manifest is never
-        touched."""
+        opted into advanced analytics. trainer_sizes.json is never touched."""
         def _do():
             from runtime import heartbeat, sys_metrics
             body = request.get_json(silent=True) or {}
@@ -139,28 +137,6 @@ def register(app):
             flow = (request.args.get("flow") or "").strip() or None
             return {"trainers": _cp.all_plugins(flow=flow)}
         return _safe("trainers", _do)
-
-    @app.route("/trainers/git/status")
-    def trainers_git_status():
-        return _safe("trainers-sync", trainers_sync.status)
-
-    @app.route("/trainers/git/sync", methods=["POST"])
-    def trainers_git_sync():
-        def _do():
-            body = request.get_json(silent=True) or {}
-            actions = body.get("actions") if isinstance(body.get("actions"), dict) else None
-            branch  = body.get("branch") if isinstance(body.get("branch"), str) else None
-            return trainers_sync.sync(actions=actions, branch=branch)
-        return _safe("trainers-sync", _do)
-
-    @app.route("/trainers/git/check", methods=["POST"])
-    def trainers_git_check():
-        return _safe("trainers-sync", trainers_sync.check)
-
-    @app.route("/trainers/git/files")
-    def trainers_git_files():
-        """Per-file table with three-state classification."""
-        return _safe("trainers-sync", trainers_sync.files)
 
     @app.route("/trainers/open_folder", methods=["POST"])
     def trainers_open_folder():

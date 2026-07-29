@@ -9,7 +9,7 @@ This is a versioned contract. Adding, removing, or changing the signature of any
 
 Total parameters scale linearly with `n_experts` while active parameters per byte stay near a single expert's footprint. Combined with ternary weights ([developer_documentation/kernels/ternary.md](ternary.md)), an 8-expert 1B-class model has a per-byte active footprint that fits the 96 MB L3 of the 9800X3D. Without MoE, the same accuracy band requires a dense 1B model that misses cache catastrophically.
 
-MoE checkpoints come from any trainer launched with the `trunk=hybrid_moe` reserved flag (`trainers/common/vanilla_trainer.py`), which builds `VeritatePatched` with `global_ffn="moe"` (`veritate_core/model_moe.py::MoEFFN`). The engine reads the exported v11 binary.
+MoE checkpoints come from any trainer launched with the `trunk=hybrid_moe` reserved flag (`veritate_mri/training/veritate_trainer.py`), which builds `VeritatePatched` with `global_ffn="moe"` (`veritate_core/model_moe.py::MoEFFN`). The engine reads the exported v11 binary.
 
 # ------------------------------------------------------------------------------------
 # block layout

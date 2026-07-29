@@ -47,7 +47,7 @@ def main():
             save.save(model, name, step, optimizer=opt, args=ckpt_args)
 ```
 
-`save.save(model, name, step, *, optimizer, args, ...)` is the only checkpoint path (see [save.md](save.md)). It writes the checkpoint, `config.json`, and the full hooks dump suite on every call; per-step rows go through `append_train_row`. Most trainers share the loop in [trainers/common/vanilla_trainer.py](../../../trainers/common/vanilla_trainer.py); the per-trainer `trainer.py` sets the shape and recipe and calls in.
+`save.save(model, name, step, *, optimizer, args, ...)` is the only checkpoint path (see [save.md](save.md)). It writes the checkpoint, `config.json`, and the full hooks dump suite on every call; per-step rows go through `append_train_row`. Most trainers share the loop in [veritate_mri/training/veritate_trainer.py](../../../veritate_mri/training/veritate_trainer.py); the per-trainer `trainer.py` sets the shape and recipe and calls in.
 
 ## Current plugins
 
@@ -76,7 +76,7 @@ One trainer per size, named for its size. Nineteen trainers plus two shared dire
 | `veritate_500b` | Base trainer at 500B                                             |
 | `veritate_700b` | Base trainer at 700B                                             |
 | `veritate_1t`   | Largest base trainer, 1T                                         |
-| `common/`       | Shared trainer code (`vanilla_trainer.py`) and corpus builders   |
+| `common/`       | Shared trainer code (`veritate_trainer.py`) and corpus builders   |
 | `corpus/`       | Built corpus `.bin` files                                        |
 
 ## Launching
@@ -89,7 +89,7 @@ Three paths:
 
 ## Sync
 
-Per-file three-state sync against the upstream repo, implemented in [training/sync/](../../../veritate_mri/training/sync/) (`sync_common.py` engine, `trainers_sync.py` for trainers). `.sync_state.json` records the SHA written at the last sync. `GET /trainers/git/files` classifies every file as `current`, `missing`, `update_available`, `modified`, `conflict`, or `orphan` (tracked locally but dropped upstream). `POST /trainers/git/sync` applies per-file actions: `install`, `update`, `force`, `adopt`, `delete`, `skip`. The dashboard's per-file details panel exposes the action buttons; `force` and `delete` route through a confirm dialog. `delete` is valid only for orphans: it removes the local file and drops the tracking entry so it stops resurfacing.
+Removed 2026-07-29. The trainer ships with the platform, so it arrives by app update like every other file and needs no sync channel of its own. `trainers_sync.py`, `.sync_state.json`, the `/trainers/git/*` routes and the Settings "Trainers" panel are all gone. `sync_common.py` remains as the shared engine for corpus downloads.
 
 ## Machine-local tuning
 
@@ -105,6 +105,6 @@ Per-file three-state sync against the upstream repo, implemented in [training/sy
 ## Pitfalls
 
 - A trainer's `manifest.json` is the schema. The dashboard generates form fields from `defaults`; missing keys mean missing fields.
-- `trainers/` is a synced checkout. Local-only edits get overwritten on the next `/trainers/git/sync`; mirror changes upstream (preflight rule 34a).
+- `veritate_mri/training/veritate_trainer.py` is tracked platform code: edit it in place. `trainers/` now holds only `corpus/` (`.bin` data, skipped by the updater).
 - Plugins are subprocesses, so their stdout is the only feedback channel. Use `print(..., flush=True)` for log visibility.
 - Single-instance training enforced by `trainer_runner`. Direct CLI launches bypass that lock.

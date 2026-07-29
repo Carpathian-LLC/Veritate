@@ -13,7 +13,7 @@ The learning rate is how big a step the weights take each update. `base_lr` is t
 
 Too high and the loss spikes or diverges. Too low and the run crawls and may settle in a worse place. Larger models tolerate smaller peak rates, which is why the manifest defaults fall as size rises.
 
-`lr_at()` in `trainers/common/vanilla_trainer.py` computes the rate for the current step from `base_lr`, `min_lr`, `warmup_steps`, and the schedule, and the result is written into every optimizer parameter group before the step.
+`lr_at()` in `veritate_mri/training/veritate_trainer.py` computes the rate for the current step from `base_lr`, `min_lr`, `warmup_steps`, and the schedule, and the result is written into every optimizer parameter group before the step.
 
 ## range and default
 

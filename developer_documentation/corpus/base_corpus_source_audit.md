@@ -1,7 +1,7 @@
 # Base pretraining corpus source audit (200M byte-level model)
 
 Read-only measurement pass over the five open-source `.bin` corpora at
-`trainers/corpus/` that are candidates for the ~4.0–5.4 GB (20–27 bytes/param,
+`data/corpus/` that are candidates for the ~4.0–5.4 GB (20–27 bytes/param,
 Chinchilla-optimal for 200M params) base pretraining byte budget. No files
 were edited, no training was run. This report is reproducible by re-running
 the sampling method below with the same seed.

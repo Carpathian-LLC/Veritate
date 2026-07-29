@@ -5,7 +5,8 @@
 # ------------------------------------------------------------------------------------
 # Notes:
 # - tool configuration only. veritate is not a distributed package; there is no build backend.
-# - ruff is the single linter for platform code. trainers/ is an upstream checkout and is excluded.
+# - ruff is the single linter for platform code. trainers/ holds only corpus .bin data (no code)
+#   since the trainer moved into veritate_mri/training/ on 2026-07-29.
 # - target-version tracks the oldest supported tier (intel mac, torch 2.2), not the dev box.
 # pyproject.toml
 # ------------------------------------------------------------------------------------
@@ -70,7 +71,9 @@ ignore = [
 "**/__init__.py"             = ["F401"] # re-exports are the point of a package init
 
 # stdout is the persisted run log for these entry points; logmod's ring buffer dies with the process.
-"veritate_mri/training/native_trainer.py"   = ["T20"]  # trainer subprocess; stdout is .plugin_run.log
+# The trainer sets sys.path before importing veritate_core (it is a standalone entry point), and
+# its stdout IS the persisted run log the dashboard tails.
+"veritate_mri/training/veritate_trainer.py" = ["E402", "T20"]
 "veritate_mri/training/rag_sft.py"          = ["T20"]  # rag sft subprocess; stdout is .rag_run.log
 "veritate_mri/training/builders/**"         = ["T20"]  # standalone eval-set builders; stdout is the build report
 "veritate_mri/training/checkpoint_probe.py" = ["T20"]  # CLI probe entry; main() lists written artifacts on stdout

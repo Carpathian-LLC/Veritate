@@ -37,4 +37,4 @@ Activation checkpointing is numerically transparent: it recomputes the forward d
 
 ## adoption
 
-A trainer: build a plan from the size preset (params + shape) BEFORE constructing the model, refuse if `not plan.fits`, then `apply_plan(model, plan)` and `make_optimizer(model.parameters(), plan, ..., state_dir=<model_dir>/optim_state)`. See [trainers/contract.md](../trainers/contract.md) and the bench/real paths in `vanilla_trainer.py` / `native_trainer.py`.
+A trainer: build a plan from the size preset (params + shape) BEFORE constructing the model, refuse if `not plan.fits`, then `apply_plan(model, plan)` and `make_optimizer(model.parameters(), plan, ..., state_dir=<model_dir>/optim_state)`. See [trainers/contract.md](../trainers/contract.md) and the bench/real paths in `veritate_trainer.py`.

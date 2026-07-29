@@ -12,7 +12,7 @@ trainers/<plugin_id>/
 └── trainer.py
 ```
 
-Optional per-trainer files (corpus builders, helpers used by only this trainer) live in the same directory. Shared helpers live in `trainers/common/` (preflight rule 36).
+Shared helpers live in `veritate_core/plugin/` (preflight rule 36). There is one trainer, `veritate_mri/training/veritate_trainer.py`, shipped with the platform.
 
 ## manifest.json schema
 
@@ -72,7 +72,7 @@ The trainer is a standalone Python script. It must:
 | Module                                                                                | Provides                                                       |
 | ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | [save](../../veritate_mri/training/save.py)                                           | `save()`, `append_train_row()`, `compose_name()`, `hash_corpus()`, `resolve_corpus()`, `truncate_train_csv_at()` |
-| [paths](../../veritate_mri/readers/paths.py)                                          | read-only path composition over `models/<name>/` and `trainers/corpus/` |
+| [paths](../../veritate_mri/readers/paths.py)                                          | read-only path composition over `models/<name>/` and `data/corpus/` |
 | [model](../../veritate_core/model.py)                                                 | `Veritate(...)` canonical byte-level decoder, `VOCAB_BYTE_LEVEL` |
 | [qat](../../veritate_core/qat.py)                                                     | fake-quant helpers, `set_qat`, `set_quant_mode`, quant constants |
 | [hardware](../../veritate_core/plugin/hardware.py)                                    | `pick_device()`, `bf16_supported(device)`, `resolve_precision(requested, device)`, `physical_cores()`, device detection |

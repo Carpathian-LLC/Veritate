@@ -9,7 +9,7 @@
 - `build_muon(model, args)` splits `model.named_parameters()`: `p.ndim == 2` and no `"emb"` in the name goes to Muon, everything else to AdamW (`optim.py:57`).
 - Muon runs `adjust_lr_fn="match_rms_adamw"` (update RMS matched to AdamW, the Moonlight rule), so one AdamW-scale lr schedule drives both groups. The trainer writes `g["lr"]` into `opt.param_groups` exactly as with plain AdamW.
 - `MuonAdamW` wrapper exposes one optimizer surface: `step`, `zero_grad`, `param_groups` (live concatenation), `state_dict`/`load_state_dict` (`{"muon": ..., "adamw": ...}`), so trainers and `save()` never branch on optimizer kind.
-- Selected per run via the `optimizer` reserved flag (`trainers/common/vanilla_trainer.py::RESERVED_STR_FLAGS`), values `adamw` (default) | `muon`. Falls back to AdamW loudly when the platform module is missing.
+- Selected per run via the `optimizer` reserved flag (`veritate_mri/training/veritate_trainer.py::RESERVED_STR_FLAGS`), values `adamw` (default) | `muon`. Falls back to AdamW loudly when the platform module is missing.
 
 ## dependencies
 

@@ -68,15 +68,9 @@
     },
     {
       tab: "settings",
-      target: ['#trainersSyncRow'],
-      title: "Download trainers",
-      body: "Trainers are the model recipes. This panel pulls them from the public trainers repo: click 'check', then 'update' to install or refresh them. They then appear in the Training tab's trainer picker.",
-    },
-    {
-      tab: "settings",
       target: ['#corpusLibraryRow'],
       title: "Download corpuses",
-      body: "A corpus is the training data a model reads. Click 'browse' to open the library and install one. It downloads into trainers/corpus/ and shows up in the Training tab's data picker.",
+      body: "A corpus is the training data a model reads. Click 'browse' to open the library and install one. It downloads into data/corpus/ and shows up in the Training tab's data picker.",
     },
     {
       tab: "settings",

@@ -166,7 +166,7 @@ Returns the trimmed description, or raises `ValueError` if it's empty or non-str
 
 ### `save.resolve_corpus(stem) -> (train_path, val_path)`
 
-Returns `(train_path, val_path)` for a corpus stem. Searches the shared corpus folder (`trainers/corpus/`) first, then the calling trainer's bundled corpus folder (`trainers/<id>/corpus/`). Raises `FileNotFoundError` if no train file exists. `val_path` is `None` when no val file exists.
+Returns `(train_path, val_path)` for a corpus stem. Searches the shared corpus folder (`data/corpus/`) first, then the calling trainer's bundled corpus folder (`trainers/<id>/corpus/`). Raises `FileNotFoundError` if no train file exists. `val_path` is `None` when no val file exists.
 
 ## model
 
@@ -283,9 +283,9 @@ Recursively set `.engine_faithful` on every submodule that has the attribute. Wh
 | `paths.hooks_dir(name)` | `models/<name>/hooks/` |
 | `paths.hook_step_dir(name, step)` | `models/<name>/hooks/step_<N>/` |
 | `paths.hook_artifact_path(name, step, artifact)` | path to one of the dump files. `artifact` is one of the names in the dump-artifacts table. |
-| `paths.corpus_dir()` | `trainers/corpus/` |
-| `paths.corpus_train_path(stem)` | `trainers/corpus/<stem>_train.bin` |
-| `paths.corpus_val_path(stem)` | `trainers/corpus/<stem>_val.bin` |
+| `paths.corpus_dir()` | `data/corpus/` |
+| `paths.corpus_train_path(stem)` | `data/corpus/<stem>_train.bin` |
+| `paths.corpus_val_path(stem)` | `data/corpus/<stem>_val.bin` |
 
 ## manifest format
 

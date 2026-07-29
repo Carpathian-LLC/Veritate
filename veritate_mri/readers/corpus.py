@@ -53,8 +53,13 @@ def _split_namespace(stem):
 
 def list_stems():
     out = []
-    for s in _stems_in(paths.corpus_dir()):
-        out.append({"stem": s, "source": "shared", "plugin_id": None, "label": s})
+    seen = set()
+    for root in paths.corpus_search_dirs():
+        for s in _stems_in(root):
+            if s in seen:
+                continue
+            seen.add(s)
+            out.append({"stem": s, "source": "shared", "plugin_id": None, "label": s})
     for p in plugins_reader.scan():
         bdir = p.get("bundle_corpus_dir")
         if not bdir:

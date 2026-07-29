@@ -2,7 +2,7 @@
 
 ## What it is
 
-Machine-local per-trainer setting overrides at [veritate_mri/readers/trainer_tuning.py](../../../veritate_mri/readers/trainer_tuning.py). Auto-optimize results and last-used launch args land here instead of the upstream-synced trainer manifest, so a machine's benchmarked settings survive `/trainers/git/sync` and never leak to other machines. The store is keyed by `plugin_id`, each entry holding `{args, measured}`.
+Machine-local per-trainer setting overrides at [veritate_mri/readers/trainer_tuning.py](../../../veritate_mri/readers/trainer_tuning.py). Auto-optimize results and last-used launch args land here instead of `trainer_sizes.json`, so a machine's benchmarked settings survive an app update and never leak to other machines. The store is keyed by `plugin_id`, each entry holding `{args, measured}`.
 
 ## How it works
 

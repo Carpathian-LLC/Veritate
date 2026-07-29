@@ -1,7 +1,7 @@
 # Launching a training run (contract)
 
 How a training run is started, which fields are required, and the gotchas. Applies to
-every `trainers/<plugin>/trainer.py` (each calls `trainers/common/vanilla_trainer.py::run`).
+every `trainers/<plugin>/trainer.py` (each calls `veritate_mri/training/veritate_trainer.py::run`).
 
 ## Canonical launcher
 
@@ -21,7 +21,7 @@ synced trainer `manifest.json` (undesirable: `trainers/` is an upstream-synced c
 ## Required args (run crashes without them)
 
 - `name` : model slug (final dir is `<slug>_<size>`).
-- `corpus` : corpus stem, resolved to `trainers/corpus/<stem>_{train,val}.bin`. Mixes:
+- `corpus` : corpus stem, resolved to `data/corpus/<stem>_{train,val}.bin`. Mixes:
   `a+b` (size-weighted) or `a:0.5,b:0.5` (explicit).
 - `description` : non-empty. `save.require_description` raises `ValueError` otherwise.
 

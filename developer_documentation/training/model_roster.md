@@ -24,7 +24,7 @@ It surfaced only when a user asked why a chat-format-trained model still could n
 
 ## Corpus ceiling
 
-Measured 2026-07-28 on `trainers/corpus/`:
+Measured 2026-07-28 on `data/corpus/`:
 
 | | |
 | --- | --- |

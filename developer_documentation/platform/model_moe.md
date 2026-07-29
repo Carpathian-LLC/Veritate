@@ -16,7 +16,7 @@
 ## wiring
 
 - `VeritatePatched.__init__(..., global_ffn="dense")` (`model_patched.py`): default `"dense"` keeps existing checkpoints loading `strict=True`; `"moe"` swaps each global block's `.ff` for a `MoEFFN` before parameter init.
-- Trainer: `trunk=hybrid_moe` in `trainers/common/vanilla_trainer.py` builds `VeritatePatched(global_mixer="recurrent", global_ffn="moe")` (single delta on top of `trunk=hybrid`). `chunked_step` adds `model.moe_aux_sum()` to the loss when present (training only).
+- Trainer: `trunk=hybrid_moe` in `veritate_mri/training/veritate_trainer.py` builds `VeritatePatched(global_mixer="recurrent", global_ffn="moe")` (single delta on top of `trunk=hybrid`). `chunked_step` adds `model.moe_aux_sum()` to the loss when present (training only).
 
 ## dependencies
 

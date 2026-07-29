@@ -21,7 +21,18 @@ import sys
 REPO_ROOT       = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 MODELS_ROOT     = os.path.join(REPO_ROOT, "models")
 PLUGINS_ROOT    = os.path.join(REPO_ROOT, "trainers")
-CORPUS_ROOT     = os.path.join(PLUGINS_ROOT, "corpus")
+# Machine-local, not-code, survives app updates: repo-root data/ is in the
+# updater's DEFAULT_SKIP_DIRS (veritate_mri/data/ is NOT, since only top-level
+# names are matched, which is exactly why platform data belongs there and bulk
+# local data belongs here).
+LOCAL_DATA_ROOT = os.path.join(REPO_ROOT, "data")
+# Corpus .bin home. Moved out of trainers/corpus/ on 2026-07-29 when the trainer
+# became platform code and `trainers/` stopped holding any: a directory named
+# "trainers" containing only training data was misleading. LEGACY_CORPUS_ROOT is
+# still READ so existing installs keep working; downloads and builders write to
+# CORPUS_ROOT. Resolution order is CORPUS_ROOT first (see corpus_search_dirs).
+CORPUS_ROOT        = os.path.join(LOCAL_DATA_ROOT, "corpus")
+LEGACY_CORPUS_ROOT = os.path.join(PLUGINS_ROOT, "corpus")
 # Raw Project Gutenberg text cache the chat / agent corpus builders read from.
 PG_CACHE_ROOT   = os.path.join(CORPUS_ROOT, "_pg_cache")
 MRI_ROOT        = os.path.join(REPO_ROOT, "veritate_mri")
@@ -133,15 +144,36 @@ def model_dir(name):
 
 
 def corpus_dir():
+    """Where NEW corpus bins are written. Reads may resolve elsewhere; see
+    corpus_search_dirs()."""
     return CORPUS_ROOT
 
 
+def corpus_search_dirs():
+    """Every directory a corpus bin may live in, canonical first. Callers that
+    list or glob corpora must walk all of them, or a legacy install goes blind
+    to its own data."""
+    return (CORPUS_ROOT, LEGACY_CORPUS_ROOT)
+
+
+def _corpus_file_path(filename):
+    """An existing file wins wherever it lives, so a legacy install keeps
+    resolving and an in-place rebuild overwrites the copy actually in use.
+    Falls back to the canonical root, which is the correct target for a stem
+    that does not exist yet."""
+    for root in corpus_search_dirs():
+        candidate = os.path.join(root, filename)
+        if os.path.isfile(candidate):
+            return candidate
+    return os.path.join(CORPUS_ROOT, filename)
+
+
 def corpus_train_path(stem):
-    return os.path.join(CORPUS_ROOT, f"{stem}{CORPUS_TRAIN_SUFFIX}")
+    return _corpus_file_path(f"{stem}{CORPUS_TRAIN_SUFFIX}")
 
 
 def corpus_val_path(stem):
-    return os.path.join(CORPUS_ROOT, f"{stem}{CORPUS_VAL_SUFFIX}")
+    return _corpus_file_path(f"{stem}{CORPUS_VAL_SUFFIX}")
 
 
 def native_corpus_train_path(stem):

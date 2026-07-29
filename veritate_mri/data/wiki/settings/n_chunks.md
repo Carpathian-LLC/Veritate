@@ -21,7 +21,7 @@ bytes per step = batch_size * seq * n_chunks
 
 This is the knob that raises bytes per step without raising peak memory. Memory is governed by `bptt_window`, which controls how many chunks are held live at once. Raising `n_chunks` costs time per step, not memory.
 
-The width is computed in `trainers/common/vanilla_trainer.py::run` as `total_chunk_len = seq * n_chunks`, and the walk happens in `chunked_step` in the same module.
+The width is computed in `veritate_mri/training/veritate_trainer.py::run` as `total_chunk_len = seq * n_chunks`, and the walk happens in `chunked_step` in the same module.
 
 ## range and default
 

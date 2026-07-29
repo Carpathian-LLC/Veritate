@@ -11,7 +11,7 @@ Label smoothing is the technique of training a model toward slightly-less-than-c
 
 ## what it does in this platform
 
-Nothing to the loss. The value is parsed, recorded into the run's `config.json`, and stored with the checkpoint arguments, and no loss site reads it. Every cross-entropy call in `veritate_core/model.py`, `model_patched.py`, `model_recurrent.py`, `model_memory.py`, `model_rope.py`, and `chunked_step` in `trainers/common/vanilla_trainer.py` omits the smoothing argument.
+Nothing to the loss. The value is parsed, recorded into the run's `config.json`, and stored with the checkpoint arguments, and no loss site reads it. Every cross-entropy call in `veritate_core/model.py`, `model_patched.py`, `model_recurrent.py`, `model_memory.py`, `model_rope.py`, and `chunked_step` in `veritate_mri/training/veritate_trainer.py` omits the smoothing argument.
 
 Two runs that differ only in this value produce the same loss curve.
 

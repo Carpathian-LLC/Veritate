@@ -19,12 +19,12 @@ import sys
 
 import pytest
 
-TRAINER_COMMON = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "trainers", "common")
-if TRAINER_COMMON not in sys.path:
-    sys.path.insert(0, TRAINER_COMMON)
+TRAINER_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "veritate_mri", "training")
+if TRAINER_DIR not in sys.path:
+    sys.path.insert(0, TRAINER_DIR)
 
-import vanilla_trainer as vt
+import veritate_trainer as vt
 
 # ------------------------------------------------------------------------------------
 # Constants

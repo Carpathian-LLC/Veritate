@@ -451,7 +451,7 @@ A project by **[Carpathian, LLC](https://carpathian.ai/veritate)**. **Distributi
 | [`veritate_core/`](veritate_core/) | Python package. `veritate_core.plugin` is the only surface trainers may import. |
 | [`veritate_mesh/`](veritate_mesh/) | Hub and node roles for running across more than one box. |
 | [`extensions/`](extensions/) | Extension framework: registry, install/uninstall, and the bundled canonical sources. |
-| [`trainers/`](trainers/) | Trainer implementations. [`common/`](trainers/common/) for shared helpers, [`corpus/`](trainers/corpus/) for `.bin` training data. See [`trainers/readme.md`](trainers/readme.md). |
+| [`trainers/`](trainers/) | [`corpus/`](data/corpus/) only: `.bin` training data, skipped by the app updater. The trainer itself is [`veritate_mri/training/veritate_trainer.py`](veritate_mri/training/veritate_trainer.py). |
 | `models/` | One self-contained subdir per model (gitignored). |
 | [`developer_documentation/`](developer_documentation/) | Internal platform and per-component contracts (committed). One file per component. |
 | [`tests/`](tests/) | Regression suite, mirroring the platform area under test. |

@@ -11,7 +11,7 @@ The body of the model: the stack of layers between the byte inputs and the byte 
 
 ## what it does
 
-Each choice builds a different class from `veritate_core/`. The selection happens once, in `trainers/common/vanilla_trainer.py::run`, and is baked into the checkpoint. A continue run keeps the trunk of the model it continues.
+Each choice builds a different class from `veritate_core/`. The selection happens once, in `veritate_mri/training/veritate_trainer.py::run`, and is baked into the checkpoint. A continue run keeps the trunk of the model it continues.
 
 | value | class | how it mixes information |
 |---|---|---|
@@ -24,7 +24,7 @@ Each choice builds a different class from `veritate_core/`. The selection happen
 
 ## default
 
-No trainer manifest sets `trunk`, so the field renders empty and the trainer falls back to `dense` from `RESERVED_STR_FLAGS` in `vanilla_trainer.py`. A run with the field left alone is a dense transformer.
+No trainer manifest sets `trunk`, so the field renders empty and the trainer falls back to `dense` from `RESERVED_STR_FLAGS` in `veritate_trainer.py`. A run with the field left alone is a dense transformer.
 
 ## when to change it
 

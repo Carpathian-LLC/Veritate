@@ -47,7 +47,6 @@ WORD_RE = re.compile(rb"[a-z][a-z']*")
 DEFAULT_TOP_UNI     = 150_000
 DEFAULT_TOP_BIGRAMS = 500_000
 CHUNK_BYTES         = 64 * 1024 * 1024   # 64 MB chunks; PG19 (10 GB) needs streaming
-CORPUS_ROOT         = Path(paths.CORPUS_ROOT)
 TRAIN_GLOB          = f"*{paths.CORPUS_TRAIN_SUFFIX}"
 PG19_STEM           = "pg19"             # ~10 GB; opt-in only
 BIN_SUFFIX          = ".bin"
@@ -212,7 +211,11 @@ def main() -> int:
             return 1
         targets.append(str(p))
     elif args.all:
-        for p in sorted(CORPUS_ROOT.glob(TRAIN_GLOB)):
+        found = {}
+        for root in paths.corpus_search_dirs():
+            for cand in sorted(Path(root).glob(TRAIN_GLOB)):
+                found.setdefault(cand.name, cand)
+        for p in sorted(found.values(), key=lambda x: x.name):
             stem = p.stem.replace("_train", "")
             if stem == PG19_STEM and not args.include_pg19:
                 print(f"  skipping {p.name} (pg19; pass --include-pg19 to index)", file=sys.stderr)

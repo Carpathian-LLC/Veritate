@@ -7,7 +7,7 @@
 # - Machine-local per-trainer tuning overrides, keyed by plugin_id. Auto-optimize
 #   results and last-used launch args land here instead of the upstream-synced
 #   trainer manifest, so a machine's benchmarked settings survive
-#   /trainers/git/sync and never leak to other machines. trainers.scan() overlays
+#   an app update and never leak to other machines. trainers.scan() overlays
 #   these onto each trainer's manifest defaults at read time.
 # - Lives under REPO_ROOT/data (gitignored) alongside the other machine-local
 #   stores (mri_settings.json, system_specs.json).

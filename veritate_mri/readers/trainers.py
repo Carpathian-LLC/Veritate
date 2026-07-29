@@ -44,14 +44,17 @@ RESERVED_DIRS = {"corpus", "common", "__pycache__", ".git", "node_modules"}
 # plugin folder. The dashboard form is schema-driven (TRAINER_SCHEMA in
 # static/index.js), so all knobs render and route through the same CLI surface.
 NATIVE_TRAINER_ID   = "native/trainer"
-# The one trainer. Lives in the synced trainers checkout, not in veritate_mri:
-# it is owned by the canonical Veritate-Trainers repo and ships its own size table.
-NATIVE_TRAINER_PATH = os.path.normpath(os.path.join(paths.REPO_ROOT, "trainers", "common", "vanilla_trainer.py"))
+# The one trainer, shipped WITH the platform. The separate Veritate-Trainers repo
+# was retired 2026-07-29: a single file needs no distribution channel of its own,
+# and living outside veritate_mri meant trainer fixes could not ride an app update
+# (the updater skips trainers/) and were invisible to git status in this repo.
+NATIVE_TRAINER_PATH = os.path.normpath(
+    os.path.join(paths.REPO_ROOT, "veritate_mri", "training", "veritate_trainer.py"))
 
 # Single owner of the size -> shape table (rule 20), and it is DATA, not code:
 # veritate_mri/data/trainer_sizes.json, or any path the user puts in the
-# trainer_sizes_path setting. vanilla_trainer.py resolves --size against the same
-# dict, so the offered set can never drift from the supported set.
+# trainer_sizes_path setting. veritate_trainer.py resolves --size against the same
+# file, so the offered set can never drift from the supported set.
 TRAINER_SIZES_FILE    = "trainer_sizes.json"
 SETTING_SIZES_PATH    = "trainer_sizes_path"
 SIZES_KEY             = "sizes"
@@ -65,7 +68,7 @@ def native_sizes_path():
         override = ""
     if override:
         return override
-    return os.path.join(paths.REPO_ROOT, "trainers", "common", TRAINER_SIZES_FILE)
+    return os.path.join(paths.REPO_ROOT, "veritate_mri", "data", TRAINER_SIZES_FILE)
 
 
 SHARED_DEFAULTS_KEY = "shared_defaults"
@@ -196,7 +199,7 @@ def _walk(rel_path, out):
 def _native_record():
     """Synthetic trainer entry: no manifest on disk, persisted defaults live
     in memory only (a future refinement could mirror them to a JSON next to
-    vanilla_trainer.py). The runner builds argv off `path` like any plugin."""
+    veritate_trainer.py). The runner builds argv off `path` like any plugin."""
     return {
         "id":                NATIVE_TRAINER_ID,
         "file":              os.path.basename(NATIVE_TRAINER_PATH),
@@ -302,7 +305,7 @@ def update_defaults(plugin_id, args):
     fields like corpus/model/description/step are dropped) and each is coerced
     to the manifest default's type. Written to the local tuning store, never the
     upstream-synced manifest, so a machine's benchmarked settings survive
-    /trainers/git/sync and don't leak to other machines. scan() overlays them
+    an app update and don't leak to other machines. scan() overlays them
     onto the manifest defaults at read time."""
     plugin = by_id(plugin_id)
     if plugin is None or not isinstance(args, dict):

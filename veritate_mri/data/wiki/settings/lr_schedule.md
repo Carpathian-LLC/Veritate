@@ -22,11 +22,11 @@ Warmup applies to every schedule. For the first `warmup_steps` steps the rate cl
 
 `wsd` is warmup-stable-decay: the rate holds at `base_lr` for most of the run and only decays over the final fraction. Two extra fields control that tail. `wsd_decay_frac` is the fraction of total steps spent decaying, typically 0.1. `wsd_decay_kind` is the tail shape: `sqrt`, `linear`, or `cosine`.
 
-All four are computed by `lr_at()` in `trainers/common/vanilla_trainer.py`.
+All four are computed by `lr_at()` in `veritate_mri/training/veritate_trainer.py`.
 
 ## options and default
 
-Valid values are fixed in `LR_SCHEDULES` in `trainers/common/vanilla_trainer.py`; anything else stops the run with a clear error.
+Valid values are fixed in `LR_SCHEDULES` in `veritate_mri/training/veritate_trainer.py`; anything else stops the run with a clear error.
 
 Most trainer manifests default to `cosine`. `veritate_80m`, `veritate_200m`, and `veritate_3b` default to `wsd`.
 

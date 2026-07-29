@@ -89,10 +89,6 @@ Read-only routes are safe to poll. Mutating routes change server or disk state. 
 | `POST /trainers/tune_defaults` | trainers_routes | `id`, `args`, `measured`, `sysprobe` | `{ok, saved, upload}`; `400` missing id. Writes machine-local tuning, never the upstream manifest |
 | `POST /trainers/sysprobe` | trainers_routes | `disk_dir` | `{ok, sysprobe}`. Runs the hardware benchmark suite: disk write, CPU throughput and bandwidth, GPU throughput on every accelerator, memory headroom |
 | `GET /core_trainers` | trainers_routes | `flow` | `{trainers:[...]}` |
-| `GET /trainers/git/status` | trainers_routes | none | git-status dict for the trainers checkout |
-| `POST /trainers/git/sync` | trainers_routes | `actions`, `branch` | sync-result dict |
-| `POST /trainers/git/check` | trainers_routes | none | check-result dict |
-| `GET /trainers/git/files` | trainers_routes | none | per-file table with three-state classification |
 | `POST /trainers/open_folder` | trainers_routes | none | `{ok, path}` |
 
 `args` on `POST /trainers/run` carries the training settings: `name`, `size`, `corpus`, `total_steps`, `batch_size`, `seq`, and the rest. Each setting has its own wiki entry under `settings/`.

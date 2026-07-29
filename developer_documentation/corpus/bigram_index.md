@@ -10,7 +10,7 @@ A unigram plus bigram count index over a corpus `.bin`, stored as a `<stem>_bigr
 - `iter_words` streams the corpus in `CHUNK_BYTES` chunks with a carry window, so a multi-GB corpus never loads whole. `build_index` counts unigrams and adjacent pairs, trims the bigram counter periodically to bound memory, keeps the top `top_uni` tokens as the vocab, and keeps the top `top_bigrams` pairs whose both tokens are in that vocab.
 - `write_index(corpus_path, top_uni, top_bigrams, max_bytes)` writes the sidecar: `vocab`, `uni_c`, `bi_keys` (packed `(i<<32)|j`), `bi_c`, `n_tokens`, `n_bigrams`, `config`. `max_bytes` caps the scan.
 - Built on demand: `checkpoint_probe._wh_load_pmi_index` calls `write_index` the first time a corpus needs an index it does not have, capped at `WH_PMI_MAX_SCAN_BYTES`, then caches the loaded index in process memory. There is no manual step in the PMI path.
-- `--all` pre-builds uncapped indexes for every `trainers/corpus/*_train.bin` (pg19 is opt-in via `--include-pg19`).
+- `--all` pre-builds uncapped indexes for every `data/corpus/*_train.bin` (pg19 is opt-in via `--include-pg19`).
 
 ## Dependencies
 

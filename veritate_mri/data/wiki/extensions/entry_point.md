@@ -50,7 +50,7 @@ The contract:
 - The return value is ignored.
 - The module is loaded by file path, not imported as a package, so relative imports fail. Sibling modules import by bare name, which works because `<extension>/server` was prepended to `sys.path` immediately before the load.
 - Every route it adds should live under the manifest's `api_prefix`. The registry does not enforce this; a route outside the prefix risks colliding with a platform route or another extension.
-- Server code may read disk through the model readers and load checkpoints through `veritate_core.load`. It must not write into `models/<name>/` or `trainers/corpus/`, and must not import `veritate_mri` internals.
+- Server code may read disk through the model readers and load checkpoints through `veritate_core.load`. It must not write into `models/<name>/` or `data/corpus/`, and must not import `veritate_mri` internals.
 - Routes return plain JSON. Flask serializes a returned dict, and the platform's global error handler also returns JSON, so a caller can always read the body.
 
 A page-only extension omits `register`. A server-only extension omits `page`.

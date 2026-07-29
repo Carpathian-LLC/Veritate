@@ -26,9 +26,9 @@ Byte-level, energy-efficient LLM on consumer hardware ($300-1000 box; Apple Sili
 | Veritate repo (M3 Ultra) | `/Users/mirach-00-usc1/Development/Veritate` |
 | 85M base ckpt | `experiments/overnight/ckpt_final.pt` (val 0.46) |
 | 800M ckpt-in-progress | `experiments/v2/run_800m/ckpts/` (do not perturb) |
-| FineWeb val | `trainers/corpus/fineweb_edu_val.bin` |
-| Base pretrain val | `trainers/corpus/base_v1_val.bin` |
-| Tool-SFT bins | `trainers/corpus/tool_sft_{train,val}.bin` |
+| FineWeb val | `data/corpus/fineweb_edu_val.bin` |
+| Base pretrain val | `data/corpus/base_v1_val.bin` |
+| Tool-SFT bins | `data/corpus/tool_sft_{train,val}.bin` |
 | Canonical model class | `veritate_core.model.Veritate` (h=768 L=12 GELU absolute-pos) |
 | 800M model class | `trainers/veritate_800m/trainer.py::Veritate800M` (RoPE + MTP) |
 | Brain (inference) | `veritate_mri/inference/backends/pytorch.py::Brain` |

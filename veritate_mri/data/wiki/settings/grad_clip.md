@@ -13,7 +13,7 @@ A cap on the total size of the gradient for a step. When the gradient is larger 
 
 Most steps produce ordinary gradients. Occasionally a batch contains something unusual and produces one enormous gradient that would move the weights far out of a good region in a single update. Clipping keeps that step in proportion instead of letting it dominate.
 
-Applied unconditionally in `trainers/common/vanilla_trainer.py::run` through `torch.nn.utils.clip_grad_norm_`. The measured gradient norm, before clipping, is written to `train.csv` every logged step, so the training charts show how often the cap is actually reached.
+Applied unconditionally in `veritate_mri/training/veritate_trainer.py::run` through `torch.nn.utils.clip_grad_norm_`. The measured gradient norm, before clipping, is written to `train.csv` every logged step, so the training charts show how often the cap is actually reached.
 
 ## range and default
 

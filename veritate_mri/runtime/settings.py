@@ -68,7 +68,7 @@ DEFAULTS = {
     "speculative_chunk_bytes": 32,
     # How long the composer waits on a still prompt before treating it as a finished
     # question, in ms. 0 tracks the typist's live median keystroke gap; a positive
-    # value is a threshold measured by the Settings typing calibrator.
+    # value is an explicit pause threshold in ms; 0 tracks the typist's live median.
     "speculative_pause_ms": 0,
     # Read-ahead: read the prompt being typed into the engine so the request that
     # carries it skips the prefill. On by default: it predicts nothing, and the work is

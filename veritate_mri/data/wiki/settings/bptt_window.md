@@ -20,7 +20,7 @@ peak activation memory   scales with bptt_window
 
 `bptt_window = 1` frees each chunk immediately: cheapest memory, no gradient signal crossing chunk boundaries. `bptt_window = n_chunks` holds the whole step live: full BPTT, highest memory. Setting it above `n_chunks` behaves the same as setting it equal.
 
-Implemented in `chunked_step` in `trainers/common/vanilla_trainer.py`, which clamps the value with `K = max(1, bptt_window)`.
+Implemented in `chunked_step` in `veritate_mri/training/veritate_trainer.py`, which clamps the value with `K = max(1, bptt_window)`.
 
 This is the setting the dashboard memory estimator multiplies activation memory by. `n_chunks` does not appear in that estimate at all.
 

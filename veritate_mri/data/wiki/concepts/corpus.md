@@ -14,8 +14,8 @@ A corpus is the text a model learns from. On this platform it is not a folder of
 Every corpus is two files sharing a name, called the stem:
 
 ```
-trainers/corpus/<stem>_train.bin
-trainers/corpus/<stem>_val.bin
+data/corpus/<stem>_train.bin
+data/corpus/<stem>_val.bin
 ```
 
 The `_train` file is what the model learns from. The `_val` file is held back and never trained on, so measuring loss against it says whether the model learned the language or memorized the training file. A rising validation loss while training loss falls is the classic signal of memorization.

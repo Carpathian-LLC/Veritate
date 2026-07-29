@@ -24,7 +24,7 @@ Gradients and the optimizer state stay in fp32 in both modes. Only the forward a
 | `bf16` | 16-bit forward and backward, fp32 master weights |
 | `fp32` | full 32-bit throughout |
 
-Valid values are fixed in `PRECISIONS` in `trainers/common/vanilla_trainer.py`. Anything else stops the run with a clear error.
+Valid values are fixed in `PRECISIONS` in `veritate_mri/training/veritate_trainer.py`. Anything else stops the run with a clear error.
 
 Every trainer manifest defaults to `bf16` except `veritate_10m`, which defaults to `fp32`. Auto tune sets `fp32` when the box has neither CUDA nor Apple silicon.
 

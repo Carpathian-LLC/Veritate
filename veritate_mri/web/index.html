@@ -1297,7 +1297,7 @@
       </div>
 
     </div>
-    <p class="desc" title="Trainers live in trainers/ as <name>.py or a bundle (<name>/trainer.py + optional corpus/). They read a corpus from trainers/corpus/ and write to models/<name>/."><code>trainers/</code> &rarr; <code>trainers/corpus/</code> &rarr; <code>models/&lt;name&gt;/</code> (hover for full layout)</p>
+    <p class="desc" title="The trainer is veritate_mri/training/veritate_trainer.py. It reads a corpus from data/corpus/ and writes to models/<name>/."><code>veritate_trainer.py</code> &rarr; <code>data/corpus/</code> &rarr; <code>models/&lt;name&gt;/</code> (hover for full layout)</p>
   </div>
 
   <div class="panel" id="trainFilesPanel" style="margin-bottom:16px;display:none">
@@ -1623,24 +1623,9 @@
             </label>
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="trainersSyncRow">
-            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Trainers</div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">remote: <span id="trainersRemote">.</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">local: <span id="trainersLocal">.</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">status: <span id="trainersBehind">unknown</span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Per-file three-state sync from the public Veritate-Trainers repo. Files you've edited locally are flagged and never auto-overwritten. The "update" button installs missing files and updates clean-but-outdated ones; locally-modified files require an explicit "force" from the details panel below. Refuses to sync while a trainer is running.</div>
-            <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
-              <button id="trainersCheckBtn"   class="action" type="button">check</button>
-              <button id="trainersUpdateBtn"  class="action" type="button">update</button>
-              <button id="trainersDetailsBtn" class="action" type="button">details</button>
-            </div>
-            <span id="trainersSyncStatus" class="meta" style="font-size:10.5px"></span>
-            <div id="trainersFilesPanel" style="display:none;margin-top:6px;padding-top:6px;border-top:1px solid var(--line)"></div>
-          </div>
-
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px" id="corpusLibraryRow">
             <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Corpus library <span id="corpusLibraryCountBadge" class="meta" style="font-size:10.5px;color:var(--dim);font-weight:400;letter-spacing:0"></span></div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim);line-height:1.45">Training data for your models. Files land at <code>trainers/corpus/&lt;name&gt;_train.bin</code>. Pick a size that fits your model.</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim);line-height:1.45">Training data for your models. Files land at <code>data/corpus/&lt;name&gt;_train.bin</code>. Pick a size that fits your model.</div>
             <div id="corpusCatalogStatus" class="meta" style="font-size:10.5px"></div>
             <div id="corpusActiveDownloads" style="display:none;flex-direction:column;gap:6px;margin-top:4px;border:1px solid var(--line);border-radius:3px;padding:6px 8px"></div>
             <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
@@ -1719,36 +1704,6 @@
             <div id="warmModelsSummary" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
-            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Typing recorder</div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Type questions here the way you normally would, pauses and typos included. <b>Press Enter when a question is finished</b> and it starts the next one. That keypress is the only label the data needs: it marks which keystroke you were actually done on, so every other keystroke is a known not-done. Every keystroke is recorded with its gap, its character, and where in the text it fell, and the whole session is handed back raw.</div>
-            <textarea id="calBox" rows="2" placeholder="type a question, press Enter, type another" style="font-size:13px;line-height:1.5;min-height:52px"></textarea>
-
-            <figure class="gap-fig">
-              <figcaption class="gap-cap">
-                <span>gap between keystrokes</span>
-                <span class="gap-legend">
-                  <i class="gap-key gap-key-idle"></i>ordinary gap
-                  <i class="gap-key gap-key-fire"></i>would start a draft
-                  <i class="gap-key gap-key-done"></i>you pressed Enter
-                  <i class="gap-key gap-key-rule"></i>current threshold
-                </span>
-              </figcaption>
-              <div id="calStrip" class="gap-strip"><div id="calTrack" class="gap-track"><i id="calRule" class="gap-rule"></i></div></div>
-              <div class="gap-axis"><span id="calAxisMax">0 ms</span><span id="calAxisN">no keystrokes yet</span></div>
-            </figure>
-
-            <div id="calStats" class="stat-cards" style="grid-template-columns:repeat(4,1fr);gap:6px"></div>
-            <div id="calVerdict" class="meta" style="font-size:10.5px;color:var(--dim)"></div>
-            <div class="inline" style="gap:8px;flex-wrap:wrap">
-              <button id="calSave" disabled>save session</button>
-              <button id="calCopy" disabled>copy raw json</button>
-              <button id="calUndo" disabled title="Un-mark the last Enter if you pressed it by accident">undo last finish</button>
-              <button id="calReset">reset</button>
-              <span id="calStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
-            </div>
-            <div id="calSaved" class="meta" style="font-size:10.5px;color:var(--dim)"></div>
-          </div>
           </div>
         </div>
       </div>
@@ -2302,7 +2257,7 @@
       <button id="corpusLibraryModalClose">×</button>
     </div>
     <div style="display:flex;flex-direction:column;gap:8px;overflow:hidden;flex:1;min-height:0">
-      <div class="meta" style="font-size:11px;color:var(--dim);line-height:1.5">A corpus is the training data a model reads. Files land at <code>trainers/corpus/&lt;name&gt;_train.bin</code> and stay there until you remove them. Click <b>install</b> to download one; the Training tab's data picker then lists it. <b>chat</b> entries teach a model to chat. <b>agent</b> entries teach it to use tools (train these after a chat corpus). The rest are raw text for base autocomplete training. Pick a size that fits your model: a 10M model overfits a 5 GB corpus; a 1B model wastes time on 1 MB.</div>
+      <div class="meta" style="font-size:11px;color:var(--dim);line-height:1.5">A corpus is the training data a model reads. Files land at <code>data/corpus/&lt;name&gt;_train.bin</code> and stay there until you remove them. Click <b>install</b> to download one; the Training tab's data picker then lists it. <b>chat</b> entries teach a model to chat. <b>agent</b> entries teach it to use tools (train these after a chat corpus). The rest are raw text for base autocomplete training. Pick a size that fits your model: a 10M model overfits a 5 GB corpus; a 1B model wastes time on 1 MB.</div>
       <div class="inline" style="gap:6px;flex-wrap:wrap">
         <button id="corpusAddSourceBtn"    class="action" type="button">+ custom</button>
         <button id="corpusToggleConfigBtn" class="action" type="button" title="catalog URL settings">URL</button>

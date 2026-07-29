@@ -16,7 +16,7 @@ A deterministic generator of simple, child-like concept data for tiny models (10
 
 `build_stream` loops (seed=0) emitting a mix weighted toward action blocks (role binding is the hard target), shuffles blocks (local coherence kept inside a block, global order randomized), and fills to `--target-mb`. `write_split` holds out the trailing `VAL_FRACTION` (3%) as val. Output is raw UTF-8 bytes (vocab=256); no meta sidecar (rule 37).
 
-Build: `python veritate_mri/tools/build_curriculum_corpus.py --out-train trainers/corpus/concepts_v1_train.bin --out-val trainers/corpus/concepts_v1_val.bin --target-mb 30`
+Build: `python veritate_mri/tools/build_curriculum_corpus.py --out-train data/corpus/concepts_v1_train.bin --out-val data/corpus/concepts_v1_val.bin --target-mb 30`
 
 ### Stage 2 (`--stage 2`)
 
@@ -28,7 +28,7 @@ Harder material for the IDEA 9 growth experiment, added because a 16M model satu
 
 `build_stream_s2` (seed=SEED+2) emits one object block + one free block + one action block + one ditransitive block per loop. Held-out pairs come from `s2_holdout_verb_map` (Random(SEED+199)) over the 18 animates -> 306 pairs, so `--holdout-frac 0.3` yields **91** held-out role tests (vs 12 at stage 1).
 
-Build: `python veritate_mri/tools/build_curriculum_corpus.py --out-train trainers/corpus/concepts2_ho_train.bin --out-val trainers/corpus/concepts2_ho_val.bin --target-mb 34 --stage 2 --holdout-frac 0.3 --test-out <jsonl>`
+Build: `python veritate_mri/tools/build_curriculum_corpus.py --out-train data/corpus/concepts2_ho_train.bin --out-val data/corpus/concepts2_ho_val.bin --target-mb 34 --stage 2 --holdout-frac 0.3 --test-out <jsonl>`
 
 `_pp(verb)` supplies the past PARTICIPLE for passives via the `PARTICIPLES` irregular table, falling back to the simple past. Both stages use it.
 

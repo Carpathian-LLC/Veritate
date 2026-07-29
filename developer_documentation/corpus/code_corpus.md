@@ -19,7 +19,7 @@ files joined by `<|endoftext|>`); `code_qa` emits ChatML chat mode. See
 | py, js | `HuggingFaceTB/stack-edu` metadata (education-classifier scored Stack v2), content fetched anonymously from the public Software Heritage S3 bucket | `STACK_EDU_REVISION`, build_code_corpus.py:52 |
 | html, css | curated permissive-license GitHub repos (MDN learning-area, web-platform-tests, bootstrap, template sets), tarballs by tag or commit | `REPOS`, build_code_corpus.py:69 |
 | qa | `donfu/oa-stackexchange`, stackoverflow rows only, coding tags, vote thresholds | `QA_*`, build_code_corpus.py:58 |
-| textbook | Claude-authored teaching documents (concept + runnable example + worked exercises, buggy-vs-fixed pairs), jsonl shards in `trainers/corpus/_code_textbook_cache/`, every document syntax-gated and (py/js) executed with passing asserts at authoring time | `TEXTBOOK_CACHE`, `_load_textbook_docs` |
+| textbook | Claude-authored teaching documents (concept + runnable example + worked exercises, buggy-vs-fixed pairs), jsonl shards in `data/corpus/_code_textbook_cache/`, every document syntax-gated and (py/js) executed with passing asserts at authoring time | `TEXTBOOK_CACHE`, `_load_textbook_docs` |
 
 Every stage run records revisions and tarball sha256s to `sources.json` in the
 staging dir (default `~/.cache/veritate/code_corpus_staging`).
