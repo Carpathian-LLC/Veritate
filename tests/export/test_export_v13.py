@@ -6,7 +6,7 @@
 # Notes:
 # - v13 hybrid exporter round-trip: header, extension fields, boundary table,
 #   tensor payload sizes, and refusal paths. spec at
-#   developer_documentation/engine/hybrid_trunk.md.
+#   documentation.md (engine).
 # tests/export/test_export_v13.py
 # ------------------------------------------------------------------------------------
 # Imports:

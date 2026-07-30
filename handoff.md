@@ -2,6 +2,14 @@
 
 Rolling state summary. Newest facts win. Keep it short.
 
+## 2026-07-29: documentation + standards rebuild
+
+- Documentation is now exactly five root files: `claude_preflight.md` (rules, rewritten, 38 rules absorbing coding_roe/agent_roe/claude_merge), `documentation.md` (single platform reference, served by the dashboard wiki tab), `successes.md`/`failures.md`/`ideas.md` (condensed; `research.md` retired). `developer_documentation/` and `veritate_mri/data/wiki/` are deleted; stale in-code doc pointers repointed.
+- Wiki tab reworked to serve `documentation.md` (readers/wiki.py single-file loader, `/wiki` + `/wiki/doc` + `/wiki/<slug>/page` routes; training-form learn-more links unchanged). Dashboard needs a reload to pick up index.js; the mirach run is a detached process and survives it.
+- New tests: wiki single-file (5), readers/trainers direct (8), trainer_sizes.json schema (4), apply_resume_overrides (4). Suite 1036 passed, ruff clean.
+- `veritate_mri/eval/_smoke.py` + sample-data dependency rescued from `experiments/v2/eval_harness/` before the pending experiments purge; `python -m veritate_mri.eval._smoke` passes.
+- Awaiting user approval: delete `experiments/` (manifest extracted to ledgers), retire-or-keep `models_sync` + `/models/git/*`, atlas-vs-`/neuron` duplication, vestigial `trainers` key in `versions.json`, and (after the live run ends) `LEGACY_CORPUS_ROOT` + `trainers/corpus/`.
+
 ## boxes
 
 | box | hardware | repo | dashboard |
@@ -13,6 +21,7 @@ fortis is reached with `ssh fortis`; it is a Windows box, so use `powershell -No
 
 ## live as of 2026-07-29
 
+- **fortis: `core_50m` — STOPPED 2026-07-29 21:09 at step 1,875,000 of 11,250,585** (16.7% of budget, **33.3 tok/param**), on the user's instruction, at a checkpoint boundary and deliberately NOT restarted. `checkpoints/step_1875000.pt`, 607,762,263 bytes. Stopped with `POST /trainers/stop`; verified by process list (only the two dashboard pythons left) and a frozen `train.csv`. Validation across the restarted stretch, at 25k intervals: `1.048, 1.074, 1.006, 1.037, 0.982, 1.002, 1.036` — noisy, hovering just above 1.0, no clear descent in the last 100k steps. Resume needs `--size 50m` passed explicitly (see the shape trap below).
 - **fortis: `core_50m`** — the one model. **50.64M params**, `trunk=dense`, seq 2048, batch 2, **AdamW** (NOT muon — `native_trainer.py` only ever had `torch.optim.AdamW`; an earlier version of this file said muon and was wrong), bf16, wsd, base_lr 6e-4. `total_steps 11,250,585 = 46.08 GB of bytes = 200 tokens/param`. Context is 2 KB.
   - **RESTARTED 2026-07-29 at step 1,650,000 (29.3 tok/param) onto a prose mix.** The first 1.65M steps ran on 100% `the_pile`, whose own catalog entry sets `recommended_min_params: 500000000` — a 50.6M model was spending its budget on ArXiv LaTeX, patents, and Latin-1 mojibake. Remaining 39.33 GB now draws 95% prose/chat:
     `fineweb_edu:0.30,slimpajama627b:0.20,openwebtext10g:0.20,chat_5gb:0.15,veritate_v1:0.05,wikitext103:0.05,the_pile:0.05`
@@ -50,7 +59,9 @@ Component doc: `developer_documentation/architecture/backend/veritate_trainer.md
 - `corpus_sync._train_path` / `_val_path` delegate to those, so install-state detection sees legacy corpora instead of reporting them missing.
 - `_free_disk_bytes` now walks up to the nearest existing ancestor: `data/corpus/` may not exist on a fresh install, and `disk_usage` on a missing path raises, which would have silently disabled the pre-download disk check.
 - `veritate_mri/data/corpus/` is unrelated and unchanged — it is the staging area for Veritate-native corpora the Settings library copies into the working corpus dir.
-- Bins were **copied, not moved**: 67 bins / 71 GB now in both places, file lists identical. `trainers/corpus/` stays until no run holds the bins open (fortis ~6.5 d, mirach ~14 d), then delete it. Windows refuses to rename a file the trainer has mapped, which is the only reason this is two steps.
+- Bins were **copied, not moved**: 67 bins / 71 GB now in both places, file lists identical. Windows refuses to rename a file the trainer has mapped, which is the only reason this is two steps.
+- **mirach `trainers/corpus/` is still held open** — verified 2026-07-29 with `lsof` on the live trainer (pid 80102): 7 handles into `trainers/corpus/`, not `data/corpus/`. A running trainer resolves its bins once at launch, so it keeps the root it started with. Delete that copy when `wren_sft` ends (~14 d), not before.
+- **fortis needs no corpus action at all, and this is why `LEGACY_CORPUS_ROOT` exists.** It holds 75 bins / **101 GB** under `trainers/corpus/` and has no `data/corpus/` at all. Whenever it pulls the consolidation, `corpus_search_dirs()` finds every bin where it already lies. Nothing to move, nothing to re-download.
 - 9 tests in `tests/mri/test_corpus_roots.py` pin the two-root behaviour.
 
 ## typing recorder REMOVED 2026-07-29
@@ -81,17 +92,56 @@ Chinchilla is 20. Nothing reached 7. The symptom is **correct output shape with 
 
 ## open, needs the user
 
-- **`trainer_sizes.json` is UNTRACKED IN BOTH REPOS and has no fallback.** It is the single owner of all 34 sizes and every tuned default. `native_sizes_path()` resolves it to `trainers/common/trainer_sizes.json`; the location claimed by `readers/trainers.py:52` AND by CLAUDE.md — `veritate_mri/data/trainer_sizes.json` — **does not exist**. `load_sizes_doc()` has no try/except and `load_native_sizes()` runs at import time, so if that one untracked file goes missing the Training tab stops importing. It survives today only as a local file on mirach plus a hand-copy on fortis. Commit it.
-- **Deprecate the upstream trainers repo** (user's proposal 2026-07-29, agreed). Its reason for existing — distributing 19 per-size trainers — died 2026-07-27; it now ships one file. Costs of keeping it, all hit this session: trainer edits are invisible to `git status` in Veritate; the updater SKIPS `trainers/` so a platform update cannot deliver a trainer fix (fortis's copy was 83 lines stale and missing the `sys.path` bootstrap it needs as a standalone entry point); and `trainer_sizes.json` is untracked. Blocker: `trainers/` is skipped precisely because `trainers/corpus/` holds ~100 GB of bins, so either narrow the skip to `trainers/corpus` or move bins to `data/corpus/`. Then `trainer_sizes.json` becomes tracked platform data and `/trainers/git/sync` retires.
-- 19 stale `veritate_*` per-size trainer dirs were deleted from fortis; `trainers/` there is now `common/` + `corpus/` only, matching canonical.
+Both items that stood here on 2026-07-29 are closed. `trainer_sizes.json` is tracked at `veritate_mri/data/trainer_sizes.json`, the upstream trainers repo is retired, and the whole consolidation is committed as `b2a678e`.
+
+- **fortis is on `80501e4`, NOT the consolidation `b2a678e`.** Its `/trainers` still reports `C:\GitHub\Veritate\trainers\common\vanilla_trainer.py`, and `trainers/` there still holds `common/`, `.sync_state.json` and `readme.md` — all three deleted upstream, all three lingering because **the updater never deletes**. Deliberately left alone: mirach is where working code lives, and fortis is downstream. Pulling the update is safe whenever the user wants it (no run is active, the corpus resolves from the legacy root, and `veritate_mri/data/trainer_sizes.json` rides the update by design).
+
+## repo cleanup 2026-07-29 (after the consolidation landed)
+
+- **`veritate_mri/training/sync/git_runner.py` DELETED** — 55 lines, zero references anywhere in the tree. Its own header claimed it was "shared by app_sync, plugins_sync, models_sync": `plugins_sync` is `trainers_sync`, deleted with the repo retirement, and `app_sync` parses the `.git` layout directly with **no git binary at all**. Dead since the tarball updater landed.
+- **`NATIVE_DEFAULT_SIZE = "85m"` removed from `readers/trainers.py`.** It was a hardcoded tunable (preflight rule 11) that silently overrode the data: `trainer_sizes.json` states the intended prefill *twice* (`default_size: 200m` and `shared_defaults.size: 200m`) and nothing read either key. The manifest now resolves `size_defaults(load_sizes_doc().get(DEFAULT_SIZE_KEY))`. **Behaviour change: a fresh Training form prefills 200m, not 85m.** `NATIVE_DEFAULT_SEQ` and `NATIVE_DEFAULT_VOCAB` went too — both unreferenced duplicates of `shared_defaults`.
+- **`developer_documentation/architecture/backend/trainer_plugins.md` rewritten.** Only its bottom sections had been patched, so the doc still opened by describing `trainers/` as a synced upstream checkout and still listed a table of nineteen per-size plugins as current. The plugin *mechanism* is real and kept (`_walk` discovers `trainers/<id>/trainer.py` + `manifest.json`, or a bare `<name>.py`/`<name>.json` pair); what is gone is the claim that any exist.
+- 4 genuinely broken doc links fixed: `backend/README.md` -> deleted `native_trainer.md`; `training/settings_index.md` -> deleted `trainers/veritate_80m/manifest.json`; `backend/save.md` -> deleted `trainers/veritate_200m/trainer.py`; `backend/trainer_plugins.md` -> deleted `trainers/.sync_state.json`. A link sweep over `developer_documentation/` + the wiki now reports only 3 hits, all regex false positives on code fragments.
+- Stale comment in `index.js` fixed: the form->config direction is `veritate_trainer.write_config`, not `native_trainer._save_args_for_config` (a function that no longer exists under any name).
+- **6 new tests, `tests/mri/test_updater_skip_depth.py`.** `DEFAULT_SKIP_DIRS` is matched against the FIRST path segment only, and the whole consolidation rests on that asymmetry: repo-root `data/corpus/` must survive an update untouched while `veritate_mri/data/trainer_sizes.json` must ride it. Same directory name, opposite outcomes, decided purely by depth — and it was pinned by nothing.
+
+Checked and deliberately left alone: `temp/` (19 tracked files that look like scratch but are cited as provenance by `successes.md`, `failures.md` and `ideas.md`, and `build_sft_idk_corpus.py` documents `--in-dir temp/sft_gen`); `build_curriculum_corpus.py` (flagged as unimported only because it is a CLI entry point, and it is a documented builder with 10 siblings); `RESERVED_DIRS` still listing `common` (harmless, still guards a plugin dir of that name). No merge-conflict markers anywhere — the `worklog.md` note claiming unresolved markers at lines 18-31 is stale.
+
+Ruff clean, **1002 tests pass**, 6 skipped, 8 xfailed. `veritate_mri.app` imports, `index.js` passes `node --check`, and a DOM/CSS orphan sweep found nothing left behind by either panel removal (the 18 ids JS reaches that HTML lacks are all dynamically built modals; the 2 "dead CSS ids" are hex colours).
+
+## full suite on fortis (Windows) 2026-07-29 — 985 passed, 1 real bug, 4 phantom
+
+First time the suite has been run on Windows in a while. `venv\Scripts\python.exe -m pytest -q` from the repo root on `b2a678e`: **5 failed, 985 passed, 28 skipped, 8 xfailed** (mac skips 6, Windows 28 — the extra skips are the torch/MPS-gated ones).
+
+**The one real bug, a Windows-only test defect (fixed on mirach):** `tests/mri/test_app_sync_edits.py::test_local_file_matching_incoming_is_not_a_conflict`. Its `_write()` helper opened files in text mode, so on Windows every `\n` became `\r\n` and the bytes on disk stopped matching `_sha(text)` — the file always read as locally modified, so the "already identical to incoming is not a conflict" assertion could never hold. Fixed with `newline=""`, which suppresses translation on every platform (Python writes `\n` literally when `newline` is `""` or `"\n"`). **The updater itself was correct** — worth stating plainly, because the failure looks like a conflict-gate bug and is not one. The file's other tests pass on Windows for the wrong reason: they *want* a SHA mismatch, and newline translation hands them one.
+
+A sweep found 12 more text-mode writes in byte-sensitive test files (`tests/corpus/`, `tests/export/`, `tests/engine/`). All pass today — they write JSON/JSONL that is read back through text mode, which normalizes the translation away. Left alone deliberately rather than churned.
+
+**The 4 phantom failures are the finding that matters: the updater never deletes.** `tests/mri/test_typing_samples.py` survived on fortis while the routes it tests were removed in `b2a678e`, so it fails 4 ways against a 404. A full tree diff (fortis vs `git ls-files`) shows fortis is otherwise a faithful copy — 250 files vs 245 tracked, and the 5 extras are exactly the files upstream deleted:
+
+| stale on fortis | deleted upstream in |
+| --- | --- |
+| `veritate_mri/training/native_trainer.py` | `80501e4` |
+| `veritate_mri/runtime/typing_samples.py` | `b2a678e` |
+| `veritate_mri/training/sync/trainers_sync.py` | `b2a678e` |
+| `tests/mri/test_typing_samples.py` | `b2a678e` |
+| `tests/engine/test_v13_compat.py` | earlier |
+
+Consequences already observed: a stale test file makes a clean tree report 4 failures, and two dead modules sit importable where nothing should be able to reach them. **This is the top platform-arch item.** The fix belongs in `_copy_incoming`: a path in the baseline, absent from `incoming`, inside a non-skipped top-level dir, is a file upstream deleted and should be removed locally — with the same conflict gate applied, so a user-modified file is never silently destroyed. Until that lands, every downstream box drifts further from the commit it claims to be on.
+
+## the update that "kept failing" was never applied 2026-07-29
+
+fortis reported `head_short: 80501e4, behind: 1, update_available: true` with `last_check_ok: true` and a recorded etag from a check at **21:18:08**, while `pulled_commit` still read `80501e4`. A **check** had run; a **pull** had not. `POST /app/update_pull` then applied it in one shot: `head_short: b2a678e, behind: 0, update_available: false`, `veritate_trainer.py` present at 42,590 bytes, and fortis's stale 4,700-byte `veritate_mri/data/trainer_sizes.json` (an older copy from `3259282`) correctly overwritten with the real 13,223-byte table.
+
+Nothing was broken and the hash was never missing. But a UI that leaves `update_available: true` after the user believes they updated is the same class of problem as the counter that never cleared: **the dashboard must make "checked" versus "applied" impossible to confuse.** Worth fixing alongside the delete gap.
 
 ## updater — FIXED and verified in production 2026-07-29
 
 The "behind" counter that never cleared is fixed and confirmed on fortis. `pull_update` applies a TARBALL, so `.git/HEAD` never advances and comparing against it left `behind` permanently stuck. `app_sync.py` now records `pulled_commit` (the real remote branch sha) on pull and `_compare_base()` prefers it, with `head_short` built from that sha instead of the ETag. Verified live: fortis went `behind: 7, head_short e68f62a` -> pull 596 files -> `behind: 0, head_short 80501e4, update_available: false`, cleared on the FIRST pull.
 
 Two facts about the updater worth keeping:
-- **`DEFAULT_SKIP_DIRS` resolves to `('.git', '.venv', '__pycache__', 'data', 'experiments', 'models', 'trainers', 'venv')`** — `PLUGINS_ROOT` basename is `trainers`. So models, checkpoints, corpus bins and the sizes table all survive an update. Updating a box mid-training does NOT endanger a checkpoint.
-- **The updater never DELETES.** It only copies incoming files, so files removed upstream linger. `veritate_mri/training/native_trainer.py` is still on fortis after 80501e4 deleted it. Harmless here (nothing references it — `NATIVE_TRAINER_PATH` was repointed at `vanilla_trainer.py` in the same commit) but it means stale modules accumulate.
+- **`DEFAULT_SKIP_DIRS` resolves to `('.git', '.venv', '__pycache__', 'data', 'experiments', 'models', 'trainers', 'venv')`** — `PLUGINS_ROOT` basename is `trainers`. Matched against the FIRST path segment only, so models, checkpoints and corpus bins survive an update while `veritate_mri/data/trainer_sizes.json` correctly arrives WITH one. Updating a box mid-training does NOT endanger a checkpoint. Pinned by `tests/mri/test_updater_skip_depth.py`.
+- **The updater never DELETES.** It only copies incoming files, so files removed upstream linger. `veritate_mri/training/native_trainer.py` is still on fortis after 80501e4 deleted it. Harmless here (nothing references it — `NATIVE_TRAINER_PATH` was repointed at `veritate_trainer.py` in the same commit) but it means stale modules accumulate.
 
 ## corpus
 

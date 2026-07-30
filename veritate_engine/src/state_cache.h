@@ -8,7 +8,7 @@
 //   post-prefill hybrid_t state to disk and restores it on a longest-prefix hit,
 //   so a repeated (or extended) prompt skips the per-byte prefill loop.
 // - fully env-gated by VERITATE_STATE_CACHE; unset means no lookup, no store.
-//   spec: developer_documentation/engine/state_cache.md.
+//   spec: documentation.md (engine, state cache).
 // veritate_engine/src/state_cache.h
 // ------------------------------------------------------------------------------------
 

@@ -1,7 +1,6 @@
 # veritate_mri/eval
 
 Byte-level deep-eval harness. Runtime path the MRI "deep eval" panel calls.
-Development sandbox lives at `experiments/v2/eval_harness/`.
 
 ## scoring
 

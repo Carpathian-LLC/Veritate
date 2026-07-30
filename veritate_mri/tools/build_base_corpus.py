@@ -18,7 +18,7 @@
 # - Every document goes through corpus_filters (clean -> quality -> pii -> dedup).
 #   Chat sources are already ChatML-framed and pass through unchanged; nothing is
 #   re-framed. Records are joined by the literal <|endoftext|> separator per
-#   developer_documentation/corpus/framing.md.
+#   documentation.md (corpus framing).
 # - Streaming end to end: sources are read in chunks, documents are emitted as they
 #   are produced, output bytes are written incrementally. Nothing is held in RAM.
 # - Sources are interleaved document by document (seeded weighted choice), so no long

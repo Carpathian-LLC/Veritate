@@ -3801,7 +3801,7 @@ async function ensureLearningLoaded() {
     // not "hookless": those panels will still render.
     const noHooksWarn = (tlEntry.has_hooks === false)
       ? `<div class="meta" style="margin-top:8px;padding:8px 10px;border:1px solid var(--warm);border-radius:3px;color:var(--warm);font-size:11.5px;line-height:1.45">
-          <b>No hook artifacts for this model yet.</b> Checkpoints (.pt) are present but the per-step probe / lens / classroom / generation dumps were not written. Either training has not reached its first save_checkpoint yet, or this trainer has not been ported to the <code>hook_spec()</code> contract (see developer_documentation/hooks/contract.md). Outputs / quant-KL / classroom panels will stay empty until hooks land.
+          <b>No hook artifacts for this model yet.</b> Checkpoints (.pt) are present but the per-step probe / lens / classroom / generation dumps were not written. Either training has not reached its first save_checkpoint yet, or this trainer has not been ported to the <code>hook_spec()</code> contract (see documentation.md, hooks and dumps). Outputs / quant-KL / classroom panels will stay empty until hooks land.
         </div>`
       : "";
     $("learningStatus").innerHTML = `
@@ -8332,7 +8332,7 @@ const TRAINER_SCHEMA = {
   ],
 };
 
-// Settings with a "learn more" wiki page (data/wiki/settings/<slug>.md). Field
+// Settings with a "learn more" page (documentation.md settings reference). Field
 // name -> page slug; the form renders a link next to the label for each.
 const WIKI_SETTING_PAGES = {
   recipe: "recipe", optimizer: "optimizer", trunk: "trunk", precision: "precision",
@@ -9185,8 +9185,8 @@ function _trClearHintPop(hint) {
 // Two-way sync: model's config.json -> form. When the resume model selector
 // changes (or is set on first render), pull that model's training_args from
 // /run/<name>/config and apply each schema-known field. The reverse direction
-// (form -> config.json) already happens: native_trainer._save_args_for_config
-// rewrites the model's config.json on every checkpoint.
+// (form -> config.json) already happens: veritate_trainer.write_config rewrites
+// the model's config.json on every checkpoint.
 function _trApplyResumeConfig(modelName) {
   if (!modelName) { trainState._resumeSize = null; _trCheckSizeMismatch(); return; }
   fetch(`/run/${encodeURIComponent(modelName)}/config?` + Date.now(), { cache: "no-store" })
@@ -9303,7 +9303,7 @@ function _trApplyPendingMix() {
 }
 
 // Named knob combinations validated by measured A/B runs on this platform.
-// Sources: developer_documentation/training/research_successes.md (per-entry
+// Sources: successes.md (per-entry
 // run dirs + numbers). "custom" applies nothing.
 const TRAIN_RECIPES = {
   "balanced":              { optimizer: "muon", trunk: "dense",     lr_schedule: "wsd" },
@@ -15090,129 +15090,45 @@ function trainStreamStop() {
 const wikiState = {
   loaded:   false,
   loading:  false,
-  cats:     [],
-  current:  null,
-  entries:  {},
-  selected: {},
+  sections: [],
 };
 
 async function ensureWikiLoaded() {
-  if (wikiState.loaded || wikiState.loading) {
-    if (wikiState.loaded) renderWikiSubtabs();
-    return;
-  }
+  if (wikiState.loaded || wikiState.loading) return;
   wikiState.loading = true;
   showSkeleton("wikiSubtabs", "lines", 3);
-  showSkeleton("wikiList",    "rows",  4);
+  showSkeleton("wikiEntry",   "blocks", 3);
   try {
-    const r = await fetch("/wiki");
-    const d = await r.json();
-    wikiState.cats = d.categories || [];
-    if (wikiState.cats.length && !wikiState.current) {
-      wikiState.current = wikiState.cats[0].name;
-    }
+    const [tocRes, docRes] = await Promise.all([fetch("/wiki"), fetch("/wiki/doc")]);
+    const toc = await tocRes.json();
+    const doc = await docRes.json();
+    wikiState.sections = toc.sections || [];
+    renderWikiToc();
+    $("wikiEntry").innerHTML = doc.body_html || "";
     wikiState.loaded = true;
-    renderWikiSubtabs();
-    if (wikiState.current) await loadWikiCategory(wikiState.current);
   } catch (e) {
-    $("wikiList").innerHTML = `<div class="wiki-empty">failed to load wiki: ${escapeHtml(String(e))}</div>`;
+    $("wikiEntry").innerHTML = `<div class="wiki-empty">failed to load wiki: ${escapeHtml(String(e))}</div>`;
   } finally {
     wikiState.loading = false;
   }
 }
 
-function renderWikiSubtabs() {
+function renderWikiToc() {
   const wrap = $("wikiSubtabs");
   if (!wrap) return;
-  if (!wikiState.cats.length) {
-    wrap.innerHTML = `<div class="wiki-empty">No categories yet. Add a folder under <code>veritate_mri/data/wiki/</code>.</div>`;
+  if (!wikiState.sections.length) {
+    wrap.innerHTML = `<div class="wiki-empty">documentation.md has no sections.</div>`;
     return;
   }
-  wrap.innerHTML = wikiState.cats.map(c => {
-    const active = c.name === wikiState.current ? " active" : "";
-    return `<div class="wiki-subtab${active}" data-cat="${escapeHtml(c.name)}">${escapeHtml(prettifyCat(c.name))}<span class="count">${c.n_entries}</span></div>`;
-  }).join("");
+  wrap.innerHTML = wikiState.sections.map(s =>
+    `<div class="wiki-subtab wiki-toc-level${s.level}" data-slug="${escapeHtml(s.slug)}">${escapeHtml(s.title)}</div>`
+  ).join("");
   wrap.querySelectorAll(".wiki-subtab").forEach(el => {
     el.addEventListener("click", () => {
-      const cat = el.dataset.cat;
-      if (cat === wikiState.current) return;
-      wikiState.current = cat;
-      renderWikiSubtabs();
-      loadWikiCategory(cat);
+      const target = document.getElementById(el.dataset.slug);
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
-}
-
-function prettifyCat(s) {
-  return s.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-}
-
-async function loadWikiCategory(category) {
-  const list = $("wikiList");
-  showSkeleton(list, "rows", 5);
-  $("wikiEntry").innerHTML = `<div class="wiki-empty">Pick an entry on the left.</div>`;
-  try {
-    let entries = wikiState.entries[category];
-    if (!entries) {
-      const r = await fetch(`/wiki/${encodeURIComponent(category)}`);
-      const d = await r.json();
-      entries = d.entries || [];
-      wikiState.entries[category] = entries;
-    }
-    if (!entries.length) {
-      list.innerHTML = `<div class="wiki-empty">No entries yet in <code>${escapeHtml(category)}</code>.</div>`;
-      return;
-    }
-    list.innerHTML = entries.map(e => {
-      const tags = (e.tags || []).map(t =>
-        `<span class="wiki-tag">${escapeHtml(t)}</span>`).join("");
-      const summary = e.summary ? `<div class="s">${escapeHtml(e.summary)}</div>` : "";
-      const date = e.date ? `<div class="d">${escapeHtml(e.date)}</div>` : "";
-      return `<div class="wiki-list-item" data-slug="${escapeHtml(e.slug)}">
-        <div class="t">${escapeHtml(e.title || e.slug)}</div>
-        ${date}
-        ${summary}
-        ${tags ? `<div class="tags">${tags}</div>` : ""}
-      </div>`;
-    }).join("");
-    list.querySelectorAll(".wiki-list-item").forEach(el => {
-      el.addEventListener("click", () => loadWikiEntry(category, el.dataset.slug));
-    });
-    const selected = wikiState.selected[category];
-    const target = selected || entries[0].slug;
-    loadWikiEntry(category, target);
-  } catch (e) {
-    list.innerHTML = `<div class="wiki-empty">failed: ${escapeHtml(String(e))}</div>`;
-  }
-}
-
-async function loadWikiEntry(category, slug) {
-  wikiState.selected[category] = slug;
-  $("wikiList").querySelectorAll(".wiki-list-item").forEach(el => {
-    el.classList.toggle("active", el.dataset.slug === slug);
-  });
-  const view = $("wikiEntry");
-  showSkeleton(view, "blocks", 3);
-  try {
-    const r = await fetch(`/wiki/${encodeURIComponent(category)}/${encodeURIComponent(slug)}`);
-    if (!r.ok) {
-      view.innerHTML = `<div class="wiki-empty">not found.</div>`;
-      return;
-    }
-    const d = await r.json();
-    const meta = [];
-    if (d.date) meta.push(escapeHtml(d.date));
-    if (d.tags && d.tags.length) meta.push(d.tags.map(t => escapeHtml(t)).join(", "));
-    view.innerHTML = `
-      <div class="wiki-entry-meta">
-        <span class="title">${escapeHtml(d.title || slug)}</span>
-        ${meta.join(" · ")}
-      </div>
-      <div class="wiki-body">${d.body_html || ""}</div>`;
-    view.scrollTop = 0;
-  } catch (e) {
-    view.innerHTML = `<div class="wiki-empty">failed: ${escapeHtml(String(e))}</div>`;
-  }
 }
 
 async function loadVersions() {

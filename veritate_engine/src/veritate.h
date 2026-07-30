@@ -363,7 +363,7 @@ typedef struct {
 // v12: v11 body + MTP byte-0 head (mtp.transforms[0], mtp.norms[0]) + untied lm_head.
 #define VERITATE_MODEL_VERSION_MTP 12
 // v13: hybrid trunk (local attn + gla recurrent global slots), fp32/fp16 tensors,
-// separate fp32 forward path. spec: developer_documentation/engine/hybrid_trunk.md.
+// separate fp32 forward path. spec: documentation.md (engine).
 #define VERITATE_MODEL_VERSION_HYBRID 13
 
 // quant_mode values stored in the v11 header.

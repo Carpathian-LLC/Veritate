@@ -5,7 +5,7 @@
 # ------------------------------------------------------------------------------------
 # Notes:
 # - The platform-side entry point that plugins call into. The full surface is
-#   specified in developer_documentation/trainers/contract.md.
+#   specified in documentation.md (training, plugin surface).
 # - This module is the only thing plugins are allowed to import from outside
 #   their own bundle. Internals of veritate_mri/ are not part of the contract
 #   and must not be reached into directly.

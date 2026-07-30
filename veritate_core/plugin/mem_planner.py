@@ -38,8 +38,8 @@ MASTER_COPY_BYTES  = BYTES_FP32
 # Coarse activation model: each block retains, per token, tensors on the order of
 # (hidden + ffn) elements for the backward pass. ACT_OVERHEAD folds in attention
 # scratch, norm buffers, and autograd's retained intermediates. Both constants are
-# calibrated against measured MPS forward retention (see developer_documentation/platform/
-# mem_planner.md) and biased to slightly over-predict: under-prediction OOMs.
+# calibrated against measured MPS forward retention (documentation.md,
+# memory planning) and biased to slightly over-predict: under-prediction OOMs.
 # Checkpointing trades the per-block store for recompute, retaining only inputs.
 ACT_OVERHEAD          = 13.5
 CHECKPOINT_ACT_RETAIN = 0.06

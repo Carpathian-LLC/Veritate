@@ -17,8 +17,7 @@
 #   decay-exempt memory slots). Default path is untouched so baselines are unaffected.
 # - WY inverse is block-recursive (8x8 nilpotent base, halving combine): same exact
 #   inverse, no large intermediates. Whole-chunk nilpotent squaring overflows fp32
-#   when beta saturates and keys align (see developer_documentation/training/
-#   m1delta_divergence_analysis.md).
+#   when beta saturates and keys align (failures.md, delta-rule entry).
 # - Mixer module is named attn with a combined qkv QuantLinear + proj so the
 #   dump/hook suite and QAT walk the same names as the canonical Block.
 # - State carry: forward(x, state=None, return_state=False) seeds the

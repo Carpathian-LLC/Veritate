@@ -8,7 +8,7 @@
 //   n_enc local attn blocks, boundary-gated recurrent slot stack, n_dec local
 //   attn blocks, tied lm_head. matches veritate_core/model_patched.py +
 //   model_recurrent.py decode-form math. spec:
-//   developer_documentation/engine/hybrid_trunk.md.
+//   documentation.md (engine).
 // - scalar matvec accumulates in 4 interleaved partial sums; SIMD ports must be
 //   bitwise-identical (rule 24).
 // ------------------------------------------------------------------------------------
@@ -933,7 +933,7 @@ void hybrid_reset(hybrid_t* h) {
 // sweep) via hybrid_mm, which j-splits each across the pool; the recurrent
 // stack, conv ring, and slot scan stay sequential per position so their float
 // reductions match hybrid_step exactly. spec:
-// developer_documentation/engine/hybrid_trunk.md.
+// documentation.md (engine).
 // ------------------------------------------------------------------------------------
 
 int32_t hybrid_prefill_batch(void) {

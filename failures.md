@@ -1,181 +1,113 @@
-# research failures (kill list)
+# failures (kill list)
 
-Falsified approaches. Each entry: what was tested, the measured result that killed it, and the retry condition. An approach on this list is dead until its retry condition is met. Entries are research outcomes, not bug fixes. Entries arrive here from `ideas.md` when an idea hits its kill line; index at `research.md`.
+Falsified approaches. Each entry: the measured result that killed it and the retry condition. An approach here is dead until its retry condition is met. Short entries only.
 
-## 2026-07-25: relational role binding CANNOT be fixed with better data or more capacity at small scale — dead across 4 sizes and 2 data regimes (F6)
+## relational role binding
 
-- Tested: F4 found the model has zero relational role binding at 200M/800M (and 122M). Two rescues remained: (a) DATA — the training text never disambiguates roles, so build a corpus that does; (b) CAPACITY — grow the model. Both were run. (a) `veritate_mri/tools/build_curriculum_corpus.py`: a child-concept curriculum whose action stage states every event FOUR ways — active, passive, subject-question, object-question — so roles cannot be read off word position; stage 2 adds three-role ditransitives ("X gives the Y to Z" + who/what/whom), pronoun coreference, negation, comparatives, counting, subordinate clauses. (b) `conceptsho_10m` (15.99M) widened to 25.74M via Net2Net and trained further. Generalization measured on HELD-OUT (subject, object) pairs shown declarative-only, so their who/what answers must generalize from other pairs; leakage audited to 0/91.
-- Result, stage 1 (10M, n=12): CONTROL (pairs seen WITH questions) who 50% / what 25%; HELD-OUT who 17% / what 0%. **Training LONGER made the seen set WORSE** (who 100% at step 500 -> 50% at step 2000). Result, stage 2 (26M, n=91, chance 6%): subject-role **11% (A GROWN) and 29% (C SCRATCH)**.
-- Cause — the decomposition is the evidence, and aggregate accuracy hides it. Each arm ran a FIXED policy, not a relation: **A GROWN answers with the OBJECT regardless of question** (names the object on 78% of "who" questions; its headline "what 81% / held-out 60%" is exactly what a constant emit-the-object policy scores, not binding). **C SCRATCH echoes the noun out of the QUESTION** ("Who sees the boy?" -> "The boy does."; "What does the baker see?" -> "The baker.", 6/8 sampled). Gradient descent on next-byte loss reaches these shortcuts faster than a role rule and then HARDENS into them — which is why more training hurt. Role-diverse data does not remove the shortcut; it just changes which shortcut wins.
-- Retry condition: DEAD for the data lever and the small-scale capacity lever — do not build another role-diverse corpus or add parameters at this scale expecting binding. Retry only with an ARCHITECTURAL change that provides variable/register semantics (e.g. the "bind-then-read" discrete slot layer in ideas.md IDEA 8, supervised on `grounded_v3` where the gold chunk is known), and validate on held-out combinations with the per-entity decomposition above, never on aggregate accuracy.
-- Meaning: this closes the last non-architectural escape route for F4. Role binding now fails at **10M, 26M, 122M, 200M, 800M** (a 80x range) and under **both** data regimes (incidental web text AND a corpus purpose-built to teach roles). The production consequence is already banked and unchanged: put relations in the INDEX as (subject, relation, object) triples so a hop is a DB join outside the model and the LM only verbalizes one fact — F5 measured 36% -> 100% doing exactly that. Also generalizes beyond this task: **when a small model scores well on a relational probe, decompose WHICH entity it names before believing it** — both arms here looked partly competent on aggregate and were running degenerate policies.
-- Run: `models/conceptsho_10m/` (stage 1), `models/conceptsho_grown/` + `models/conceptscratch_10m_w2/` (stage 2); corpora `trainers/corpus/concepts_ho_*` and `concepts2_ho_*`; harnesses `role_eval.py` / `role_eval_s2.py` + `role_test_s2.jsonl` (session scratchpad). Full evidence in ideas.md IDEA 9.
+**Zero relational role binding at any scale — architectural wall, not data or capacity**
+OBJECT-role accuracy 4%/0%/0% at 122M/200M/800M. Confirmed at 10M/26M on purpose-built role data: held-out who 17%/what 0%; more training made controls worse (100%→50%). Fails at 5 sizes × 2 data regimes.
+Retry: explicit binding primitive (slot/register layer), or route around it via relations in the index (validated 36%→100%, successes.md). Do not chase data or capacity fixes.
 
-## 2026-07-18: sft_identity_v1 with 20% refusal family teaches the REFUSAL FRAME, not positive identity
+## rag / retrieval
 
-- Tested: chin200m fork 1 (`chin200m_ident`), 1500 SFT steps at base_lr 2e-5 WSD sqrt (warmup absolute step 55100), corpus mix sft_identity_v1 12% + pretrain anchor 88%. Corpus was 500 pairs / 5 families x 100: name, maker, purpose, capabilities, refusal ("Aren't you GPT-4?" -> "No, I'm Veritate."). Fork chained on IDEA 6's chin200m Chinchilla-optimal base (step 55000, val 0.776).
-- Result: probe battery of 12 axes = 2/12 pass, identical to base = **NO net improvement**. Identity name and maker BOTH failed. Post-SFT replies read as refusal-shaped: "There's no fixed name for me. Small chat model is the honest label." (name) and "Only a small language model. Naming a company would be a guess, so I won't." (maker). Val loss 0.776 -> 0.779 (slight regression from mix drift). Grounded probes timed out under GPU-share (unrelated).
-- Cause: the refusal family (20% of the corpus) frames identity questions as "graceful decline" rather than "affirm THEN decline". Because refusal pairs also contain "I'm Veritate", they conflict with a generation-time policy of "when asked identity, refuse". A 20% dose of refusal at 12% SFT weight = 2.4% effective refusal signal, which was enough to dominate the pattern the model actually generalizes to identity prompts. The affirmation families (name/maker/purpose/caps, 80% of the corpus) got out-competed by a narrower, more consistent frame.
-- Retry condition: rebalance sft_identity_v2 to name 40% / maker 40% / purpose+caps 15% / refusal 5%, AND rewrite refusal to LEAD with the affirmation ("I'm Veritate. I won't roleplay as a different AI."). Increase SFT dose to 18% or double the total_steps. Re-fork from chin200m base (not chin200m_ident which is corrupted for this axis).
-- Meaning: family-count balance in narrow SFT corpora is a first-order lever, not a formatting detail. A minority frame that CONTAINS the target vocabulary but negates the target policy will dominate a majority frame that PRESENTS the target policy directly. Learned once at 500 pairs; applies to every layered corpus in the IDEA 6 chain (grounded_read, multiturn, empathy, engaged, instruct, prose): each family within a corpus must AGREE on the target frame, not just the target vocabulary. This is the atomic version of the failures.md 2026-07-06/08 lesson (narrow-template SFT interferes with the base): here, narrow-template SFT interferes with ITSELF.
-- Run: `models/chin200m_ident/` (step 56500); corpus `trainers/corpus/sft_identity_v1_{train,val}.bin`; probes `temp/probe_chin200m_{base,ident_fork1}.json`; builder `veritate_mri/tools/build_sft_corpus.py`.
+**Model is a good reader but a poor relevance judge**
+36% of irrelevant chunks get a confident fabrication. One-chunk-at-a-time + confidence-picking scored worse than stuffing (35% vs 50%); confidence does not track correctness. Relevance lives outside the LM.
 
-## 2026-07-13: hard-negative mining for the key head does NOT lift top-1 retrieval precision (the ceiling is feature quality, not the negative recipe)
+**Hard-negative mining does not lift key-head retrieval**
+Hard-store recall@1 0.351→0.327 (noise). Ceiling is frozen-trunk feature quality. Retry only on richer trunk features (800M).
 
-- Tested: the natural-query bottleneck is top-1 precision on the HARD store (fineweb + competing real facts), where stock InfoNCE with 512 random store-distractor negatives lands recall@1 ~0.32-0.37 on held-out topics. Standard fix for exactly this: mine HARD negatives — each step draw a random 4096-distractor window, score against the batch queries, use the top-512 hardest (with gradient) as negatives instead of uniform random. Compared baseline vs hard-neg heads on the same held-out natural-query split, retrieval-only. Code `experiments/v2/memory/eval_teacher_hardneg.py`.
-- Result: no lift, target metric slightly DOWN. hard-store recall@1 baseline 0.351 -> hardneg 0.327 (delta -0.024, within run-to-run noise); hard-store recall@5 0.620 -> 0.637; fineweb (easy) @1 0.444 -> 0.450, @5 0.713 -> 0.737. Mining the hardest competitors did not improve top-1 precision on the semantically-competitive store it was designed for.
-- Cause: the limit is not the negative-sampling strategy, it is the FROZEN trunk feature quality. chat200m's pooled residual does not resolve semantically-competitive real facts finely enough, and no negative recipe recovers resolution the features never had — over-focusing on a few confusable pairs can even trade away general separation (the small hard@1 regression). This CONFIRMS BY ELIMINATION that retrieval precision is feature-bound: the lever is a richer trunk (the 800M), not a smarter head recipe.
-- Retry condition: re-run on the 800M's features (richer residual may make hard-neg mining pay off, or may lift recall@1 enough that mining is moot) — `eval_teacher_hardneg.py` is model-agnostic. Do NOT re-chase head-training recipes on chat200m features; the ceiling is the features.
-- Run: `experiments/v2/memory/eval_teacher_hardneg.py`.
+**Multi-leaf (top-k) context injection makes grounding worse**
+grounded_acc top-1 0.130, top-3 0.120, top-5 0.080. A 200M copy-limited generator cannot disambiguate candidates. Retry with a stronger generator or a re-ranker collapsing k→1.
 
-## 2026-07-13: multi-leaf (top-k) context injection to convert recall@5 into grounding FAILS on the small generator
+**Key head overfits toy schemas — resolved as a diversity artifact**
+3 schemas: unseen-schema recall@1 0.540→0.176 (below baseline). 11 schemas: 0.332 (1.5x baseline). Real data transfers (successes.md).
 
-- Tested: the obvious productionization lever off the natural-query eval. Retrieval recall@5 (~0.63) is ~2x recall@1 (~0.37), and serving already injects up to CTX_LEAVES=3 leaves, so the hypothesis was: inject the top-k retrieved leaves (not just top-1) into context and the extra recall converts to more grounded answers. Measured end-to-end grounded_acc on chat200m over held-out natural-query topics, hard store, n=100, at k=1/3/5. Code `experiments/v2/memory/eval_teacher_topk.py`.
-- Result: grounding gets WORSE with more leaves. top-1 grounded_acc 0.130, top-3 0.120, top-5 0.080 (retrieval recall@1 0.350, bare 0.010). The recall@5 gain does NOT transfer to end-to-end; adding candidate leaves monotonically hurts.
-- Cause: chat200m cannot disambiguate among candidates. One clean leaf -> it copies the answer; five leaves -> the gold fact is present more often (higher recall@5) but the k-1 distractor leaves actively mislead a 200M copy-limited generator, and it cannot select which leaf to copy. Multi-candidate context is a burden, not a help, for a weak generator. This localizes the end-to-end bottleneck precisely: it is top-1 retrieval PRECISION plus generator disambiguation, NOT recall@k coverage.
-- Retry condition: a generator strong enough to select among candidates (the 800M when trained, or a platform-served larger model) — re-run eval_teacher_topk.py and look for top-k >= top-1; OR a re-ranker that collapses k candidates to the single best leaf before injection. Do NOT raise serving TOP_K for the small local model on the assumption more context helps — for chat200m, top-1 injection is best (this test prevented a net-negative serving change). k remains a per-model tuning knob.
-- Run: `experiments/v2/memory/eval_teacher_topk.py`.
+**RARS (retrieval folded into O(1) recurrent state) fails exact recall**
+K=8 overflow: prefix 0.000 / RARS 0.025; K=64 both 0.000. The state is a gist mechanism, not an exact-recall buffer. Ship top-1 prefix injection. Retry only with an explicitly addressable state.
 
-## 2026-06-27: from-scratch dense byte-level 2.5B coder
+**Corpus-echo suffix sidecar degrades quality monotonically with echo strength**
+alpha 0.0→0.3: nll/byte 0.3797→0.3902 on a real 85M checkpoint; sc6 variant ppl 1.9037→2.3941 on held-out val. Source checkpoint gone; numbers not re-derivable. (experiments/rag + sidecars, 2026-05)
 
-- Tested: `veritate_3b` (2.52B dense, vocab=256) pretrained from scratch on distilled Python chat corpus, dashboard run.
-- Result: val loss plateaued near 1.0 by 205M tokens, zero code ability, looping English. Model deleted.
-- Cause: compute wall. Competitive coding needs tens of billions of tokens; box delivers ~550 tok/s at 2.5B.
-- Retry condition: a training-efficiency lever of 10x or more at equal quality, measured on this box.
+## architecture trainability
 
-## 2026-07-01: cheap byteification of a subword coder
+**Delta-rule state update (Gated DeltaNet) not trainable on this stack**
+Two divergences under two numeric regimes at 10M (fp32 cancellation ~2e17 fixed by block-recursive inverse; second run still NaN'd at step 2094). Retry: capped beta, much lower delta-projection LR, or a fused kernel off MPS.
 
-- Tested: Qwen2.5-Coder-0.5B converted to vocab=256 (embed/head swap, exact 256/256 warm-init), continue-trained on 10 MB distilled Python, 2000 steps.
-- Result: HumanEval pass@1 = 0/30 = 0.0 percent on held-out problems. In-distribution samples looked correct (memorized surface patterns); held-out eval exposed them.
-- Cause: 1-byte-per-step granularity is an unseen input distribution for the pretrained body; recovery needs billions of adaptation bytes (Bolmo needed ~49B tokens with patching). Tiny corpus cannot buy it.
-- Retry condition: patching front-end (body sees ~4 bytes per step) plus GB-scale diverse corpus, or frozen-body codec route. Full writeup removed; see git history for `bigmodel_byteification_handoff.md`.
-- Standing rule from this failure: never believe in-distribution samples; only held-out executed benchmarks count.
+**Pinned memory register (decay-exempt slots): no recall benefit, real quality tax**
+Pure chat: +0.073 val (~7σ), recall 0.00=0.00. Recall mix: quality-neutral but recall 0.338 vs 0.423 baseline. Killed on pre-registered line. Retry: much larger scale or pins trained with an explicit recall loss.
 
-## 2026-07-03: backprop-free learning rules for language modeling
+**Selective language modeling (RHO-1) at byte level**
+Tail-10 val 1.0638 vs 0.9763 baseline (~8σ worse). Byte-level "easy" tokens carry structure. Retry at patch/subword granularity or anneal-phase only.
 
-- Tested: literature verdict (Forward-Forward arXiv 2301.01452, predictive coding 2212.00720 / 2308.07870, Mono-Forward 2501.09238, surveys through 2026).
-- Result: no backprop-free rule has reached backprop parity on real language modeling at any scale. Demonstrations stop at MNIST/CIFAR/toy translation, with worse perplexity and higher convergence cost.
-- Retry condition: a peer-reviewed result showing LM parity at 100M params or above.
+**Test-time depth scaling via weight-tied loops does not emerge**
+CE by loop count R=1..8: peaks at R=3 (the training-time mean), degrades past it.
 
-## 2026-07-03: ternary (BitNet) as a training-cost lever below 3B
+**Fast-weight memory does not store retrievable facts**
+Recall lift 0.0 at every distance (both reset and carried regimes); carried variant actively hurts at 4096B+ (win rate 0.167). Kept only as a free context extender (val 0.9867 beats dense). Retry: carry horizons at recall distance, ≥170M scale, or retrieval memory.
 
-- Tested: literature verdict (BitNet b1.58 2402.17764, BitNet Reloaded 2407.09527, 2B4T 2504.12285).
-- Result: below ~3B params ternary needs roughly 2x hidden width to match fp16 quality, and QAT adds training cost. It is a decode/energy lever, not a training lever.
-- Standing use: keep ternary at EXPORT time (engine ternary path exists). Retry condition for training: parity evidence at or below 1B without the width penalty.
+**Unnormalized fast-weight inner loop breaks at real width**
+Stable at hidden=64; NaN in first forward at hidden=320. Fix: unit-normalize k/q, divide inner grads by chunk size, 0.02-std init. Rule: stability-smoke test-time-learning modules at real width.
 
-## 2026-07-06: pinned memory register (decay-exempt state slots) on the hybrid trunk (M2)
+**TRM/HRM puzzle recursion does not transfer to language modeling**
+Literature + ~1M-param port on TinyStories lost to a plain transformer in every configuration.
 
-- Tested twice at 10M (matched arms, muon, 12k steps). Pure chat: trained stably (77k tok/s = 97% of gla) but a real LM tax — tail-10 val 0.7637 vs gla 0.6907 (+0.073, ~7 sigma) — with needle recall 0.00 = 0.00 (floor, no discriminating power). Recall mix (fair test vs m0recall, single delta = mechanism): quality-neutral (tail-10 0.7010 vs 0.6990) but in-distribution recall 0.338 vs 0.423 at n=130 (z=1.4 worse; 0.28 vs 0.47 at n=40) — consistently below baseline, never above.
-- KILLED per the pre-registered condition "pinned recall no better than M0": no measured benefit in any sample, one measured cost (the pure-chat val tax). The hand-designed salience writer + decay-exempt pins subtract learnable state capacity without buying retention at this scale.
-- Retry conditions: (a) much larger scale where raw state capacity stops being the binding constraint, (b) pins trained with an explicit auxiliary recall loss (the writer currently gets only the LM gradient), (c) pins in a streaming-trained regime where cross-window retention is actually trainable (see campaign route 4).
-- Runs: `models/m2pinned_10m_qat/`, `models/m2pinned2_10m_qat/`.
+**Backprop-free learning rules have no LM parity at any scale** (literature verdict)
 
-## 2026-07-06: late-phase recall-SFT at 25% — degrades out-of-distribution recall at 121M
+**Student self-improvement (STaR/BoN) collapses below 1B** (literature: marginal-to-negative at 0.5B). Retry once the student clears nonzero executed-benchmark pass rate.
 
-- Tested: chat80m phase 4 (resume from the 48k SFT checkpoint, 4k steps, 1e-5 WSD, 25% `chat_recall_v1` synthetic recall-pressure conversations in the chat mix). Falsifier scoreboard: needle curve step_52000 vs the step_48000 baseline (0.92 / 0.25 / 0.00 at ~190 B / ~480 B / past-window).
-- KILLED the phase: recall at ~190 B collapsed 0.92 -> 0.08; ~480 B 0.25 -> 0.17; past-window unchanged at 0.00. Coherence contradiction 0.25 -> 0.0 — the model no longer echoes even the WRONG planted fact; it answers from the trained template distribution. Mechanism: the pre-recall model had an emergent copy behavior ("echo the salient unusual token from context") which the narrow, highly-templated recall corpus REPLACED with fact-type-bound template recall that does not transfer to alien surface forms (the benchmark's hyphenated codes / 5-digit amounts). Interference, not augmentation.
-- Standing result that survives alongside this kill: the same corpus at 10M (10% in-pretrain-style mix) taught genuine in-distribution retrieval (0.47 vs baseline 0.05 on held-out recall-val). The lever is real; late-phase concentrated dosing is what failed.
-- Action: flagship chat model = step_48000 (rolled back). step_52000 was later pruned in the model cleanup; its needle curve JSON remains the evidence.
-- Retry conditions: (a) small fraction (~5%) mixed into PRETRAIN, not a late phase — the copy behavior then never faces a concentrated narrow distribution late; (b) surface-form-diverse recall needles (codes, amounts, names, dates) which requires re-balancing the contamination guard toward held-out template splits rather than wholly disjoint fact types; (c) score any retry on BOTH in-distribution recall-val AND the needle benchmark before adoption.
-- Runs: `models/chat80m_80m/` steps 48000 (keep) vs 52000 (research); curves: `experiments/v2/longctx/chat80m_needle_curve.json` vs `chat80m_recallsft_needle_curve.json`.
+**Ternary (BitNet) is not a training-cost lever below 3B**
+Literature: needs ~2x hidden width below ~3B, QAT adds cost. Measured in-repo on 85M: ternary QAT ppl 1.753 (+13.66% vs fp32 1.542) at 0.1975 bytes/weight. A decode/energy lever, not a training lever. (experiments/v2/ternary_qat)
 
-## 2026-07-08: identity SFT (round 1b) silently destroys conversation-copy at 121M — the needle gate was skipped
+**INT4 per-tensor PTQ is catastrophic**
++193.5% ppl on a trained 85M. Per-row and QuaRot variants are near-free (successes.md). (experiments/v2/int4_quarot)
 
-- Tested: post-hoc needle A/B on the identity round the tuning journal recorded as a clean PASS (chat80m resume 48000 -> 51000, ~3k steps, 1e-5 WSD, 10-15% `chat_identity_v1` in a chat mix; gates run at the time: identity battery, general-chat battery, val). The "needle ~unchanged" gate was in the plan and did NOT run. This entry is the makeup measurement.
-- KILLED the clean-PASS verdict: needle recall at ~190 B collapsed **0.917 -> 0.167**; ~480 B 0.250 -> 0.000; contradiction rate 0.25 -> 0.00 (12 trials/row, 4 seeds, same protocol as the recall-SFT kill). Identical interference signature to the 25% recall-SFT kill above, from a much smaller dose: the model stops echoing planted context and answers from the trained template distribution. Val is blind to it — val IMPROVED (0.647 -> 0.644) while the skill collapsed. A skipped falsifier is a false pass.
-- What the SFT actually bought (measured, live C engine, temp 0.5, n=6-8 per cell): persona-context application. 51000 with the persona line "You are Veritate..." in the context block answers its name 6/8 and maker 7-8/8; 48000 with the SAME persona line scores 0/6 across the board ("Your name is Jack Thompson", "Yes, I am human"). Bare (no persona), both checkpoints fail the name at sampling temps (0/8). Identity is not "in" 51000 as a fact; the SFT taught it to APPLY persona-shaped context, and the serving layer now supplies that context (persona line shipped in /hybrid/chat, name 0/8 -> 4-6/8 deployed).
-- Control that separates the failures: alien-fact extraction from a `context:` block (invented entities, the RAG surface) scores 1/4 greedy at BOTH 48000 and 51000 (48000 sampled: 4/12). That skill never existed at either checkpoint — a training-dose gap (chat_v1/v2 grounded examples are common-surface facts at trace dose), NOT damage from this round. The 121M transfer gap mirrors the 10M one (in-distribution 0.47 vs alien 0.00).
-- Action: serving flagship stays 51000 (identity via persona + all decode guards; RAG is equally broken at both checkpoints so the rollback buys nothing deployed). 48000 retains the conversation-copy skill and is the designated BASE for the repair round.
-- Retry conditions: (a) one combined SFT from 48000 — grounded_v3 (~25%, alien-entity extractive QA, 4 families incl. honest-miss) + chat_identity_v1 (~15%) + chat mix, ~2-3k steps at 1e-5, gated on ALL of: needle@190B >= 0.8, identity >= 5/8 sampled temp 0.5, alien-fact context battery >= 3/4 greedy, chat battery no-regress, tail val. Queued behind the 200m pretrain (GPU). (b) in-pretrain dosing from step 0 — LIVE: chat200m launched 2026-07-08 with grounded_v3 2.5% + identity 2% + recall 4% in the mix.
-- Runs: `models/chat80m_80m/` steps 48000 vs 51000; needle JSONs in the session scratchpad (protocol identical to `chat80m_needle_curve.json`); persona/alien-fact batteries logged in `worklog.md` 2026-07-08 section.
+**Naive sparse kernels lose to dense by 800-1700x at 87.5% activation sparsity**
+dense 1.256 ms/iter vs CSR 1002.7 vs gather 2170.6 on this hardware, despite 8x fewer multiplies in theory. ReLU-sparsity FLOP savings are not realizable here. (experiments/v2/neuron)
 
-## 2026-07-06: delta-rule state update (Gated DeltaNet) on the hybrid trunk — not trainable on this stack (M1)
+**Sparsity regularizers buy little prunable capacity at quality parity — and forced pruning without them is ruinous**
+group-lasso 7.6% reduction at ~same val; l1strong 3.7%; baseline forced-50% prune costs val 0.9888→1.3637. The Muon+group-lasso stack (successes.md) prunes 61.2% but its raw pre-prune quality trails plain baseline (1.3023 vs 1.2638). (experiments/v2/neuron + stack)
 
-- Tested twice at 10M (hybrid trunk global mixer, muon, fp32, bs32/seq512, 12k steps, cosine base 6e-4). Run 1 (m1delta, pure chat): crept to divergence at step ~4420 — root-caused to fp32 catastrophic cancellation in the whole-chunk WY nilpotent inverse under beta-gate saturation (intermediates ~2e17; the long-memory head was numerically broken from ~step 800; full chain in `developer_documentation/platform/model_recurrent.md`). Fix shipped: block-recursive triangular inverse, same exact math, bounded intermediates (~20), triple-verified incl. a saturation stress test (old code 2.4e31, new 5.4e-7) and a 50-step exact-resume repro (finite, flat grad norms).
-- Run 2 (m1delta2, recall mix, fixed inverse): diverged AGAIN at step 2094 — different signature: sudden single-step NaN with no precursor (grad norms flat 0.37-0.44, loss descending 0.77). The stabilizer survived the replay of run 1's divergence but from-scratch training found a second path. Throughput was fine both times (85% / 77% of gla, above the 70% line). Baseline gla and pinned arms trained clean on the same configs, so both failures are delta-specific.
-- Verdict: KILLED on trainability — two divergences under two different numeric regimes, one retry per line spent. The oracle-exact chunkwise math and the published DeltaNet results are not in question; the failure is this formulation's stability under muon/fp32/MPS at byte level without the specialized fused kernels the literature trains with.
-- Retry conditions: (a) beta parameterization capped away from saturation (e.g. beta_max ~0.95, changes the math where it currently saturates — needs its own A/B), (b) markedly lower LR for the delta projections (breaks matched-arm simplicity), (c) a proper fused/chunked kernel path (CUDA fla-style) if the platform ever leaves MPS, (d) autopsy of the m1delta2 sudden-NaN checkpoint if the mechanism is revisited.
-- Runs: `models/m1delta_10m_qat/` (creeping), `models/m1delta2_10m_qat/` (sudden, stopped at ~2600 to free the GPU).
+**Aux-expert sidecar is a wash in-domain and hurts ASCII-art OOD**
+base vs +aux val nll Δ+0.0004; ascii OOD nll 5.912→6.040. Small n, low confidence, but no signal to chase. PG19 OOD win is real (successes.md).
 
-## 2026-07-05: selective language modeling (RHO-1 top-k excess-loss tokens) at byte level (E6)
+**Streaming attention sinks: real 2.7x throughput, degenerate output**
+209.6 vs 77.2 B/s, zero extra MPS memory — but output degenerates to a repetition loop at 4096-byte prompts. Both halves count. (experiments/streaming, checkpoint gone)
 
-- Tested: `slm_ref=e1muon_10m_qat, slm_keep=0.6` (frozen dense-muon 10M reference scores tokens, train loss on top-60% by excess loss), single delta vs `e2patched` (identical trunk=patched, muon, corpus sha, seed, 12000 steps).
-- KILLED on the pre-registered condition "quality regression at equal steps": tail-10 val 1.0638 vs e2patched 0.9763 (+0.0875, ~8 sigma beyond tail-mean noise). It never reaches e2patched-final val at all, so byte-savings-to-target is zero.
-- What the curve shows: SLM is fast to a mediocre plateau — it reaches the 1.064 level 1.24x sooner in steps than the baseline passes it, then flatlines. At byte granularity the "easy" 40% of tokens is not skippable filler; it carries the structure (whitespace, morphology, tag syntax) the hard tokens sit in.
-- Second observation: per-eval val variance is large on this arm (stdev ~0.035 over 6000-8000); single milestone evals lied in both directions. Verdicts on any arm now use tail-averaged val (same lesson class as E7's random-R noise).
-- Retry conditions: (a) subword/patch-level selection where a "token" is a semantic unit, not a byte; (b) a reference model much stronger than the student scoring at patch granularity; (c) SLM restricted to a mid-train anneal phase instead of the full run (the early-speed effect is real).
-- Runs: `models/e6slm_10m_qat/` vs `models/e2patched_10m_qat/`.
+**Dynamic-shape batching on MPS is a 23x slowdown**
+~200 tok/s vs ~4,858 at fixed shapes. All MPS training uses fixed or bucketed shapes.
 
-## 2026-07-05: test-time depth scaling via weight-tied loops at byte level (E7)
+**torch.compile crashes the hybrid trunk on MPS**
+Inductor `aten.convolution_backward` stride assertion (2026-07-13). ~33% win on dense only. Re-benchmark only after a torch/MPS upgrade.
 
-- Tested: `trunk=looped` (patched local blocks + half the unique global blocks, weight-tied and iterated R times, R sampled uniform 1-4 per training step Huginn-style, per-loop input injection), muon, params-matched to dense (10.12M vs 10.08M), fineweb_edu, 12000 steps.
-- The "think longer" claim is DEAD at this scale: R sweep on the trained checkpoint (paired, 64 identical val batches) gives CE 1.0103 / 0.9975 / 0.9965 / 0.9983 / 1.0050 / 1.0142 at R=1/2/3/4/6/8. Quality peaks at R=3, the training-time mean depth (2.5), and degrades monotonically past it. No test-time compute scaling emerges; the model interpolates within its trained depth distribution.
-- Second cost, measured: random-R training makes validation noisy (tail-20 stdev 0.0087, ~9x the other arms), so any single eval of a looped run is untrustworthy without averaging.
-- What survives (recorded here, not scaled): at matched params it beats dense-muon (final val 0.9920 vs 0.9990, ahead 111/120 matched evals, 1.63x wall-clock to dense-final). Attribution is unproven: no loop-free control with the same halved unique blocks was trained, so the win may belong to the patched front-end, not the loop. It loses to full patched (0.9776, 1.82x) and hybrid (0.9707, 1.70x) on quality AND wall-clock, so it is not the trunk to scale.
-- Retry conditions: (a) params-bound deployment where 10M-class weights must act deeper than they are (then train the loop-free halved-blocks control first for attribution), (b) reasoning-style executed benchmarks where test-time compute is the claim, with loop counts trained beyond 4.
-- Run: `models/e7looped_10m_qat/`; sweep: `SMOKE_RESULTS/e7_loop_sweep_smoke.py` + `_stats.json`.
+## training recipe kills
 
-## 2026-07-05: fast-weight memory for explicit fact recall at 10M (E4b, closes the E4 line)
+**Late-phase recall-SFT at 25% dose collapses out-of-distribution recall (121M)**
+Needle recall ~190B: 0.92→0.08. Narrow templated recall data replaces emergent copy-from-context. Same recipe at 10% in-pretrain dose taught genuine retrieval (0.47 vs 0.05). Retry: ~5% in pretrain or surface-diverse needles.
 
-- Tested: `trunk=memory` retrained with memory CARRIED across the 4 contiguous chunks per step (the E4 retry condition). Language quality: val 0.9867, BEATS dense-muon 0.9990: the carried memory works as cheap context extension (attention sees 512 bytes, memory spans 2048). One benign non-finite skip in 12000 steps.
-- Knowledge-injection quiz on the trained checkpoint: exact-match recall lift 0.0 at every distractor length. Distance profile: within the trained horizon (1024 bytes) a soft trace exists (fact-span bpb win rate 0.667, on 5.42 vs off 5.52); at 4096+ the stale memory actively hurts (win rate 0.167, on worse than off).
-- Verdict per the pre-registered condition: the fast-weight route to explicit knowledge recall at 10M is DEAD. It stores soft traces within its training horizon, not retrievable facts.
-- Kept: the context-extension effect is real and free (E4b val beats dense); the memory trunk stays available as a long-context device, not a knowledge store.
-- Retry conditions: (a) training carry horizons at or beyond the recall distance (seq x chunks of 8k+), (b) larger scale (Titans floor was 170M), or (c) pivot to retrieval-based memory (rank 3 of the memory shortlist), which needs no gradient at all.
-- Runs: `models/e4memory_10m_qat/` (v1), `models/e4bmem_10m_qat/` (carry); quiz: `SMOKE_RESULTS/e4_knowledge_injection_smoke.py`.
+**Identity SFT silently destroyed conversation-copy — a skipped needle gate hid it**
+Recall 0.917→0.167 while val IMPROVED (0.647→0.644). Standing rule: never skip a pre-registered falsifier.
 
-## 2026-07-04: surprise-gated memory with per-window reset training (E4)
+**sft_identity_v1 (20% refusal family) teaches the refusal frame, not identity**
+2/12 probes, val regression. The refusal family contained the target vocabulary and dominated. Retry: name40/maker40/purpose15/refusal5, dose 18%+.
 
-- Tested: `trunk=memory` (Titans MAG class, stabilized inner loop) trained 12000 steps on fineweb_edu with fast weights RESET every 512-byte forward. Plain-text quality preserved (val 1.0026 vs dense 0.9990, regression +0.004, under the 0.05 limit). Knowledge-injection eval on the trained checkpoint: exact-match recall lift 0.0 points (0/12 both arms; falsifier kill line +10), fact-span bpb win rate 0.583 (barely above coin flip).
-- Diagnosis: with per-window reset, the training loss never rewards reading memory across windows: attention already covers the whole window, so the write rule gets no retrieval pressure. Persistence was exercised only at eval time.
-- Retry condition (E4b, concrete): train with memory CARRIED across the 4 contiguous 512-byte chunks the loader already feeds per step (reset between steps). Memory then serves bytes 513-2048 beyond the attention window, giving the loss a reason to store and read. If E4b also fails recall at +10 points, the fast-weight route at 10M is dead and consolidation moves to retrieval-based memory (rank 3 in the memory shortlist).
-- Run: `models/e4memory_10m_qat/`; eval: `SMOKE_RESULTS/e4_knowledge_injection_stats.json`.
+**High-dose capability SFT destroys retention (two failed attempts before the working recipe)**
+dose 0.50 no-replay: facts destroyed, template intrusion. dose 0.35 replay 0.15: form below base. Working recipe: dose 0.15, replay 0.75, many steps (successes.md).
 
-## 2026-07-04: TRM/HRM puzzle-recursion ported to language modeling
+**Narrow-template prose SFT fails the gate and leaks its shape**
+6/12 (+33pt, gate ≥40pt) at ~10 templates/family; verbatim echo, shape leakage. 18-22 templates/family cleared it (successes.md).
 
-- Tested: literature verdict. TRM (7M) / HRM (27M) ARC-AGI results are per-task grid transduction with heavy augmentation; ARC Prize ablations attribute the gains to outer-loop refinement + per-task memorization, not the architecture. A direct ~1M-param TRM-on-TinyStories port lost to a plain transformer in every configuration.
-- Retry condition: a peer-reviewed TRM-style result beating a params-matched transformer on held-out language perplexity or executed benchmarks.
-- The transferable ingredient survives separately: weight-tied looped depth (Ouro 1.4B, RRT 1B, MoR 135M+), queued as the looped-trunk experiment.
+## compute-wall / from-scratch attempts
 
-## 2026-07-04: student self-improvement (STaR/BoN on own outputs) below 1B
+**From-scratch 2.5B dense byte coder hits the compute wall**
+Val plateau ~1.0 by 205M tokens, zero code ability at ~550 tok/s. Retry: a 10x+ training-efficiency lever at equal quality.
 
-- Tested: literature verdict. Label-free self-bootstrapping collapses on sub-1B students (marginal-to-negative on Qwen2.5-0.5B, 2511.04902): rollouts contain no correct answers to amplify. A 10-200M byte model has ~zero base success rate.
-- Retry condition: the student clears a nonzero executed-benchmark pass rate after SFT; until then teacher-side judge-filtered distillation (72B judges, 14B generates) is the working form of the idea.
+**Cheap byteification of a subword coder does not recover code ability**
+Qwen-0.5B → vocab 256, 2000 steps on 10MB distilled Python: HumanEval 0/30 held-out; in-distribution samples looked correct (memorized surface). Rule: only held-out executed benchmarks count.
 
-## 2026-07-04: unnormalized fast-weight inner loop at real width
+## process / measurement kills
 
-- Tested: Titans-style memory branch (E4) with raw q/k projections and sum-scale inner gradients. Stable at hidden=64 (all smokes passed); at hidden=320 the fast weights hit NaN inside the FIRST forward (inner grads scale ~3600, momentum compounds across chunks).
-- Fix that works (relaunched, finite): unit-normalize keys and queries, divide inner grads by chunk size, init memory projections at 0.02 std like the trunk. Persistence signal also improved 200x with normalized keys.
-- Standing rule: any test-time-learning module must be stability-smoked at the REAL width, not a toy width (same lesson class as preflight 24d for dumps).
-- Infrastructure lesson (fixed in trainer): a run whose every loss is non-finite used to complete silently with exit 0 and zero output; `vanilla_trainer` now prints a loud WARNING per skipped non-finite step batch.
+**"Long context is free via n_chunks" — the flag was never wired; the test measured nothing**
+Both bench runs were the same config (22,381 vs 22,367 tok/s). What survives: seq alone costs throughput (2048→22,381, 8192→11,019 tok/s on fortis). Rule: confirm tokens/step arithmetically before trusting any throughput number.
 
-## 2026-07-03: dynamic-shape batching on MPS
-
-- Tested: SFT loop with per-batch max-length padding (every batch a new shape) on PyTorch MPS.
-- Result: ~200 tok/s versus ~4,858 tok/s benchmarked at fixed shapes on the same model and box, a 23x slowdown. MPS recompiles kernels per new shape.
-- Rule: all MPS training uses fixed or bucketed shapes (small fixed set of padded lengths).
-
-## 2026-07-11: zero-training mean-pool byte-native keys + prefix-inject on chat200m (IDEA 2 milestone-1)
-
-- Tested: the IDEA 2 addressable-memory milestone with NO trained head. Byte-native key = mean-pooled chat200m trunk residual (new `hidden_states()` contract method on the hybrid trunk, `veritate_core/model_patched.py`), L2-normalized; flat cosine retrieval over a 1e5-leaf on-disk store (512-byte fineweb leaves) built on MPS at ~26 leaf/s (CPU was 0.5/s = a 17h dead-end; the gla recurrence scan is the CPU cost). 180 invented-entity (passage, q, a) triples planted as leaves; grounded = retrieve -> "context:" prompt -> greedy decode vs bare. Eval `experiments/v2/memory/`, store `models/memory_milestone/d1e5`.
-- Result: GATE FAIL. grounded 0.167 vs required floor 0.60; margin over bare (0.033) = 0.134 vs required 0.20. Robust to prompt assembly: fixing the gold-truncation bug (top-5 480-cap -> top-3 per-leaf-cap) and max_new 24->48 left grounded at 0.167, so the answer-copy gap is real, not an eval artifact.
-- What IS validated (why this is a rung, not a dead end): retrieval is SCALE-STABLE. recall@1 0.62 / recall@5 0.82, FLAT across D=1e3->1e4->1e5 (0.822/0.822/0.817); monotonicity (the external-memory signature) HOLDS, added memory never hurt. Anisotropy is severe (gold-vs-best-distractor cosine margin 0.0006) but uniform, so ranking survives scale. The mechanism (jointly-learned byte-native addressable memory) works.
-- Two separable bottlenecks: (1) thin key margin, recall@1 capped at 0.62 by same-schema fact competition (the 180 planted facts, NOT the distractors); (2) answer-copy: even with the gold leaf cleanly in context, chat200m copies the answer ~22-27% of the time (its known multi-fact-selection + novel-string-copy weakness, successes.md 2026-07-10).
-- Retry condition: a trained contrastive key head (hard-negative InfoNCE on the pooled residual) to widen the margin and lift recall@1; for copy, the 800M core (`chat800m`, pretraining) and single-leaf RARS folding (gold leaf into the O(1) recurrent state) instead of multi-leaf prefix-inject. Re-run the gate when either lands.
-- UPDATE 2026-07-13: the trained head cleared the gate IN-DISTRIBUTION (successes.md 2026-07-11: recall@1 0.40->0.97, grounded 0.75) but OVERFITS its schemas (failures.md 2026-07-13 below). The retrieval win is real only for fact types the head trained on.
-
-## 2026-07-13: the trained key head OVERFITS its training schemas, does not generalize to unseen fact structure
-
-- Tested: does the contrastive key head (successes.md 2026-07-11) learn a GENERAL query->fact metric or just the training templates? Trained the head on invented-fact schemas {0,1,2} only, measured retrieval recall on SEEN schemas (held-out entities) vs UNSEEN schemas {3,4} (structure never trained on), over the 1e5 store. Code `experiments/v2/memory/eval_generalize.py`.
-- Result: SEEN schemas (new entities) baseline recall@1 0.236 -> trained 0.956 (huge lift, expected). UNSEEN schemas (new structure) baseline recall@1 0.540 -> trained 0.176. The head made unseen structure WORSE than the raw mean-pool baseline: it distorts the metric space to fit the training templates and breaks fact types it never saw.
-- Meaning: the head as trained is schema-specific, not a general retrieval metric. The 2026-07-11 end-to-end success (recall@1 0.97, grounded 0.75) is IN-DISTRIBUTION (held-out entities, SAME schemas as training); it does NOT imply the system works on arbitrary real content. Raw mean-pool generalizes across structures better (0.54 unseen) than the overfit head (0.176).
-- Retry condition: train the head on a MUCH broader distribution of fact structures (many schemas, ideally real corpus (query, passage) pairs via an offline teacher, per the IDEA 2 teacher-distilled retrieval-target plan). Re-run this held-out-schema test; the head must lift unseen-structure recall ABOVE the raw baseline, not below it.
-- FIX (2026-07-13, rigorous): the overfit is a LOW-DIVERSITY artifact and transfer scales with training diversity. Held-out schemas FIXED at {11,12,13} (baseline recall@1 0.216), a 14-schema generator (`make_facts_diverse.py`), training-schema count swept: train on 3 -> unseen recall@1 0.020 (catastrophic overfit); 6 -> 0.212 (parity); 11 -> 0.332 (positive transfer, 1.5x baseline). recall@5 unseen 0.072 -> 0.428 -> 0.596. In-distribution stays 0.90-0.97 throughout. Transfer to unseen structure climbs MONOTONICALLY with training diversity: the head learns a more general query->fact metric as the structure distribution widens. Toy-schema diversity caps transfer at ~0.33 recall@1 (vs 0.97 in-dist); the extrapolation is that real-scale diverse (query, passage) data yields strong generalization. Code `experiments/v2/memory/{make_facts_diverse,eval_generalize_diverse,eval_generalize_sweep}.py`. Sharpened retry: train on real corpus pairs at scale, confirm unseen-topic recall approaches in-distribution.
-- RESOLVED (2026-07-13, successes.md): trained on 33 REAL topics, transfers to 5 held-out real topics at recall@1 0.70 / recall@5 0.92 (unseen ~= seen). Real diversity generalizes; the overfit was a toy-diversity artifact.
-
-## 2026-07-13: RARS (fold retrieved bytes into the O(1) recurrent state) FAILS for exact recall
-
-- Tested: the IDEA 1 RARS thesis, that folding retrieved bytes into the hybrid trunk's O(1) recurrent state (forward_streaming) makes the exact-read context bounded by STATE size, not the 1024-byte attention window, so k can be large. Gold fact placed FIRST in a context of K leaves (K=1..64, 128 B..32 KB) then the question; prefix-injection (windowed, last 1024 B) vs RARS (stream all K leaves through forward_streaming into state, then decode). 40 invented facts, chat200m. Code `experiments/v2/memory/eval_rars.py` (reuses needle_bench.generate_answer streaming=True/False).
-- Result: K=1 (128 B, fits window) prefix 0.725 = RARS 0.725 (sanity, matches eval_head_e2e). K=8 (3.7 KB, overflows) prefix 0.000 / RARS 0.025; K=32 (16 KB) prefix 0.000 / RARS 0.025; K=64 (32 KB) both 0.000. RARS does NOT recover the gold from state: folding it among 3-32 KB of distractor bytes washes it out (gla decay + fixed state capacity), the design's noted state-saturation risk.
-- Meaning: the O(1) recurrent state is a GIST/coverage mechanism, not an exact-recall buffer. The RARS claim ("k large via state folding") is dead for exact recall at this scale. The WORKING exact-recall recipe is simpler: retrieve top-1 (near-perfect, successes.md 2026-07-11/13) and prefix-inject that single leaf, which fits the window (grounded 0.75). No RARS needed; the recurrent state keeps its proven session-working-memory role (E4b), not fact recall. This simplifies IDEA 1: Tier B (retrieval) and Tier C (recurrent state) stay SEPARATE; retrieval does exact recall, the state does gist.
-- Retry condition: an explicitly-addressable / larger-capacity state (not a decaying O(1) scalar-per-head recurrence), or accept top-1 prefix-inject (which works). Re-test RARS only with a state designed to hold exact spans.
+**MoE on MPS: 0.715 of hybrid throughput (kill line 0.70) — sequencing, not kill**
+Attributed to missing sparse-routing kernels on MPS, not the idea. Deferred to an 80M A/B with a pre-committed symmetric rule.

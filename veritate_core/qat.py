@@ -17,7 +17,7 @@
 #   continues to operate as if the rounding were absent.
 # - Ternary and INT4 are L3-fit accelerators. Ternary at 1.58 bits/param means
 #   a 200M dense model fits 40 MB; a 1B 4-way MoE has 50 MB active. Engine
-#   kernels for these live under developer_documentation/kernels/.
+#   kernel contracts: documentation.md (engine).
 # - INT8_MAX, ACT_INT8_SCALE, LN_FIXED_SCALE and EPS_SCALE are owned by
 #   qat_triton and re-exported here; this module imports that one, so the
 #   dependency runs one way only.
@@ -145,18 +145,13 @@ def set_engine_faithful(module, value):
 
 
 # ----------------------------------------------------------------------------
-# Split-precision split-device training (invention #1, falsifier passed)
+# Split-precision split-device training
 # ----------------------------------------------------------------------------
-# The master weight is a bf16 nn.Parameter on CPU. Per forward, an INT8
-# fake-quanted copy is shipped to the GPU. Backward returns the GPU grad to
-# the CPU master via straight-through estimator. Optimizer state lives on
-# CPU. Falsifier (experiments/inventions/split_precision.py) showed:
-#   - converges within noise of standard QAT
-#   - peak GPU VRAM drops 58% on a 25M model
-#   - 1B-class training on 12 GB VRAM becomes feasible with this + grad-ckpt
-# Tradeoff: wall time is slower in the unoptimized form (per-forward H2D
-# weight ship). Not a problem for VRAM-bound training; address with CUDA
-# streams + 8-bit Adam on CPU when wall starts dominating.
+# Master weight: bf16 nn.Parameter on CPU. Per forward, an INT8 fake-quanted
+# copy ships to the GPU; backward returns the GPU grad to the CPU master via
+# straight-through estimator. Optimizer state lives on CPU. Converges within
+# noise of standard QAT; trades per-forward H2D weight traffic for VRAM
+# (measured results in successes.md).
 # ----------------------------------------------------------------------------
 
 

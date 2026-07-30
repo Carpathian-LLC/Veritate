@@ -299,7 +299,7 @@ class CTracedSubprocess:
         # enable engine-side addons. per-request addon selection from the
         # dashboard is python-only today; the C subprocess holds whatever
         # chain it had at spawn time. Restart the C backend in the dashboard
-        # to pick up an env-var change. spec: developer_documentation/addons/c_engine_port.md.
+        # to pick up an env-var change. spec: documentation.md (addons).
         self.proc = subprocess.Popen(
             [self.exe, "chat_traced"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

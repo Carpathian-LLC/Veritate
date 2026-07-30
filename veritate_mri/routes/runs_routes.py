@@ -6,8 +6,7 @@
 # Notes:
 # - run / timeline artifact endpoints. csv, probes index, classroom suite,
 #   config, coactivation, learning rate, surprise atlas, full timeline,
-#   eval_deep GET / POST / status, plus the legacy /timelines and
-#   /timeline/<>/<> compat paths.
+#   eval_deep GET / POST / status, /timelines index, /timeline/<>/<> files.
 # - also owns /eval_sets: the smartness-meter eval sets every probe here is
 #   graded against are regenerated from this module, on a job thread with the
 #   same claim + status-poll shape as eval_deep.
@@ -579,7 +578,7 @@ def register(app):
         return {"ok": True, "running": True, "known_builders": list(eval_builders.BUILDERS)}
 
     @app.route("/timelines")
-    def timelines_compat():
+    def timelines_index():
         out = []
         for name in models.list_models():
             hook_steps = hooks.list_steps(name)
@@ -604,7 +603,7 @@ def register(app):
         return {"timelines": out}
 
     @app.route("/timeline/<path:name>/<path:fname>")
-    def timeline_file_compat(name, fname):
+    def timeline_file(name, fname):
         if not safe_name(name) or not safe_name(fname): return ("bad name", 400)
         if not models.exists(name): return ("not found", 404)
         if fname == "timeline.json":

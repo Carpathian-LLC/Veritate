@@ -14,7 +14,7 @@
 # - Deduper stores 64-bit band signatures only, never document text, and stops growing
 #   at DEDUP_MAX_SIGNATURES. Pure stdlib, deterministic, no seeded randomness.
 # - Records in an assembled corpus are separated by the literal bytes <|endoftext|>
-#   (developer_documentation/corpus/framing.md); separators are not passed through here.
+#   (documentation.md (corpus framing)); separators are not passed through here.
 # veritate_mri/tools/corpus_filters.py
 # ------------------------------------------------------------------------------------
 # Imports

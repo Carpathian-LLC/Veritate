@@ -13,7 +13,7 @@
 #        passage records lifted from the bundled mcp_docs native corpus.
 #     3. agent: Hermes function-calling conversations where the system turn
 #        lists tools discovered from a fictional MCP server and payloads follow
-#        developer_documentation/corpus/framing.md.
+#        documentation.md (corpus framing).
 # - Tool results are generated alongside the arguments so call, response, and
 #   final answer always agree.
 # - Deterministic: a fixed PRNG seed means every run produces the same bytes.

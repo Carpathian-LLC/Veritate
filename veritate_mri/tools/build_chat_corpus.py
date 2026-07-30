@@ -10,7 +10,7 @@
 # - Source 1: public-domain Project Gutenberg text already cached at
 #     trainers/corpus/_pg_cache/*.txt
 # - Source 2: hand-written templates (facts, definitions, simple math).
-# - Output: framed U/A turns per developer_documentation/corpus/framing.md.
+# - Output: framed U/A turns per documentation.md (corpus framing).
 # - Deterministic: a fixed PRNG seed means every run produces the same bytes.
 #   This matters because corpus content is shipped as a binary asset on GitHub
 #   and we want the sha256 stable across rebuilds.

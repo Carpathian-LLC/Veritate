@@ -6,7 +6,7 @@
 # Notes:
 # - Builds the agent byte-level corpus tiers (agent_150mb, agent_1500mb) shipped
 #   on Carpathian COS. Hermes function-calling frames per
-#   developer_documentation/corpus/framing.md: system turn lists tools, assistant
+#   documentation.md (corpus framing): system turn lists tools, assistant
 #   emits <tool_call>, host answers with a tool turn carrying <tool_response>.
 # - Tools mirror the runtime toolbox (veritate_mri/inference/agent/tools):
 #   calculator, fs_read, fetch, retrieve. Both system-turn styles are emitted:

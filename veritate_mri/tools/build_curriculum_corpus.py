@@ -11,7 +11,7 @@
 #   instead of emitting the salient noun (the F4 role-binding seed).
 # - Deterministic: fixed seed, combinatorial expansion. Output is raw bytes
 #   (vocab=256). No meta sidecar (preflight rule 37); provenance lives in
-#   developer_documentation/corpus/curriculum_corpus.md.
+#   documentation.md (corpus builders).
 # veritate_mri/tools/build_curriculum_corpus.py
 # ------------------------------------------------------------------------------------
 # Imports

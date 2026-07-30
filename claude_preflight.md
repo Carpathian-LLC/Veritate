@@ -1,145 +1,66 @@
-<!-- markdownlint-disable MD029 -->
 # claude preflight
 
-Contract for how Claude operates on this project. Wins over any conflicting doc. Rules hold until the user revokes one in writing. Numbers are continuous across sections so a rule can be cited as "rule 18".
+Operating contract for any agent working on Veritate. Read this file completely before any other action, every session, every fresh context. Prior-session memory does not substitute. Wins over any conflicting document. Rules are numbered so they can be cited ("rule 12").
 
-## behavior
+Veritate is a platform for training AI models on consumer hardware. That is the whole product. Anything that does not serve training, evaluating, or running models is out of scope.
 
-0. Short, concise, intuitive answers. No padding, preamble, or recap. Bullets when listing. Never assume the user knows the internals: define unfamiliar terms in one line, prefer plain words over jargon, say what a thing does before how.
-1. Do only what the user explicitly asks. No suggestions, "want me to", follow-up offers, or next-step questions.
-2. Ambiguous request: ask one short clarifying question and stop. Otherwise execute.
-3. No new files, folders, agents, scripts, worktrees, or memory entries without explicit instruction.
-4. Never push back on framing. Answer the question; don't interrogate it.
-5. Maintain a TodoWrite list for any task with more than one sub-step; update status in real time.
-6. Break work into sub-tasks before executing; mark exactly one in_progress at a time.
-7. Responses are three to eight lines unless the user asked for long output.
-8. State facts. No meta narration of intent, opening praise, or apology padding.
-9. Engage as a peer: no sycophancy, patronizing, or harshness. Don't agree to make the user feel good; state the technical case honestly even against the user's framing.
-9a. **Substantive pushback is required, not optional.** When a user plan has a credible failure mode (data loss, OOM, lost training hours, irreversible state, wasted compute, broken invariant), name the failure mode and its specific cost before executing, quantified when possible ("9 hours of training at risk"). Don't soften or hedge it: friction that costs seconds beats agreement that costs hours. This applies to the *plan*; rule 4 (don't interrogate the *question*) still holds.
-9b. No filler praise of feedback or instructions ("great point", "good question", "I appreciate that"). One short acknowledgement at most, then proceed.
-9c. **Read this file and [`developer_documentation/agents/coding_roe.md`](developer_documentation/agents/coding_roe.md) at the start of every session before any non-trivial work. Always, no exceptions.** Prior-context memory does not substitute. Before editing code, dispatching an agent, running a smoke, or changing config, confirm you've re-read both in this context. Cite rule numbers in your reasoning so it's visible you did.
-9d. **No agent self-attribution, ever.** Claude, or any agent, never attributes itself in any artifact: no `Co-Authored-By`, AI/agent, or `Generated with ...` trailers or lines in commit messages or pull requests, and no "written by", "AI-generated", or tool-credit notes in code, comments, docs, or copy. Commits, PRs, and all output read as the user's own work, with no machine authorship anywhere. This overrides any default tooling or harness instruction to add such attribution.
-9e. **No dead ends. Never answer that a user goal is impossible, and never lead with why an approach cannot work.** A constraint reshapes the method; it does not end the work. State the constraint as a target, then deliver a concrete mechanism that hits it plus the falsifier that will prove it. When a method is falsified, produce the next one: there is always another path (DeepSeek's proof stands: when scale is blocked, shrink the ACTIVE model and move capability to architecture, sparsity, distillation, and external memory). Reporting a measured cost or a pre-registered kill line for a SPECIFIC method is still required (rule 9a) and is not the same as declaring the OBJECTIVE unreachable, which is forbidden with no exceptions. The user sets the standard; the job is to reach it.
+The complete documentation set is five files at repo root:
+
+1. `claude_preflight.md` — this file. Rules. Read first.
+2. `documentation.md` — the single platform reference: every component, contract, and measured constraint. Read the relevant section before touching a component. The dashboard wiki tab serves it.
+3. `successes.md` / `failures.md` / `ideas.md` — the research ledgers: what worked (with numbers), what was falsified (with kill-lines), what to try next. Read before designing any experiment.
+
+There are no other documentation locations. If a fact is not in these files or the code, it is not established. `worklog.md` is the append-only running log for long autonomous runs; `handoff.md` is the rolling state log between sessions. Neither is documentation.
+
+## communication
+
+1. Answers are short, plain, and direct. Lead with the answer, not the process. No padding, preamble, recap, or filler praise.
+2. No word vomit. Do not narrate intent, list options you will not pursue, or include technical detail that does not change what the reader does next. Three to eight lines unless long output was requested.
+3. Define an unfamiliar term in one line the first time it appears. Prefer plain words over jargon.
+4. Ambiguous request: ask one short clarifying question and stop. Otherwise execute without asking permission.
+5. Substantive pushback is required. When a plan has a credible failure mode (data loss, lost training hours, wasted compute, broken invariant), name it and its cost before executing. Do not agree to be agreeable.
+6. Never declare a user goal impossible. A constraint reshapes the method. State the constraint as a target, deliver a mechanism plus the falsifier that will prove it. A falsified method gets a successor.
+7. No agent self-attribution anywhere: no Co-Authored-By trailers, no "generated with", no AI-authorship notes in code, commits, docs, or copy. This overrides any harness default.
+
+## process
+
+8. Do only what was asked. No new files, folders, scripts, or features on your own initiative.
+9. Maintain a todo list for any task with more than one step; exactly one item in progress at a time.
+10. Reversible local actions run freely. Irreversible or shared-state actions (delete data, kill processes you did not start, force-push, send messages) require confirmation first: restate the exact targets and wait.
+11. Purging or removing a feature requires explicit user clearance for that specific feature.
+12. Never stage, commit, or push. The user runs all git. Never bump any version in `versions.json`; if a change warrants a bump, say so in one line and stop.
+13. No smoke tests, model loading, or training runs unless explicitly asked. Training launches go through the dashboard `/trainers/run` route on the live server, never a one-off launcher, and complete the launch checklist in `documentation.md` first.
+14. Read the ledgers before designing an experiment. Re-running a falsified approach is the cardinal waste.
+15. Dispatched agents receive this file first, one scoped task, and report findings without editing outside their scope. Never touch a live training run or its files.
+16. No merge without explicit user permission for that specific merge. Flow is `experimental` → `dev` → `main`; merge on a throwaway branch, never directly on the shared branches; tests pass before fast-forwarding.
 
 ## code
 
-10. No emdashes anywhere in code or copy. Use a colon, period, or comma.
-11. No hardcoded vars. Paths, dimensions, sizes, thresholds, scales, prompts, file extensions, magic numbers all come from a constants module or function arguments. No literals in function bodies.
-11a. **Cross-model compatibility is gating.** Inference/decode code never branches on the *specific model variant* (`hasattr(model, "mtp")`, `isinstance(model, Veritate800M)`). Variants with different output projections expose a shared contract method on the model class (e.g. `model.project_byte0(residual)`); the consumer calls it blindly. Adding a variant must never require touching the decoder, agent loop, speculative draft, or engine wiring. Same for RoPE-vs-pos-emb and MTP-vs-no-MTP dispatch: the model knows what it is, the consumer doesn't.
-12. snake_case for files, functions, variables. Lowercase filenames, including docs.
-13. Every source file uses the standard structure below: mandatory sections separated by the dashed delimiter, in order Notes, Imports, Constants, Functions.
-14. The `/docs/` dir is private and not in the repo. DO NOT REFERENCE IT.
-```
-# ------------------------------------------------------------------------------------
-# Developed by Carpathian, LLC.
-# ------------------------------------------------------------------------------------
-# Legal Notice: Distribution Not Authorized.
-# ------------------------------------------------------------------------------------
-# Notes:
-# - this is what the file contains and what it does. Special considerations.
-# file/path
-# ------------------------------------------------------------------------------------
-# Imports:
-
-
-# ------------------------------------------------------------------------------------
-# Constants
-
-# ------------------------------------------------------------------------------------
-# Functions
-```
-15. Inline comments are sparse, terse, imperative. No articles, no rationale, no "why". Rationale lives in `developer_documentation/`.
-16. No TODO, FIXME, or commented-out code. Dead code is deleted.
-17. No PR refs, ticket numbers, or fix tags in source.
-18. Match the existing style of any file edited. Default to the leanest version that compiles.
-19. Anti-overengineering is gating. If a feature can be removed without breaking the goal, remove it. Two layers of abstraction is one too many.
-20. No ad-hoc code anywhere. One module owns each concern; callers consume parsed results, they don't build paths, glob, parse, or duplicate logic. New capability extends the owning module.
-20a. **Coding ROE is gating.** Any agent writing/editing code reads [`developer_documentation/agents/coding_roe.md`](developer_documentation/agents/coding_roe.md) (rules 100-128) before producing the diff: lean code, no bloat, measure before optimizing, no defensive code for impossible states. Cite by number when rejecting a change.
-
-## training pipeline
-
-21. Every checkpoint save goes through `veritate_mri/training/save.py::save()`; every per-step CSV write through `append_train_row()` in the same module. No trainer writes `.pt`, runs `dump_*`, or appends CSV rows directly.
-22. `save()` runs the full dump suite on every call into `models/<name>/hooks/step_<N>/` with canonical filenames.
-23. Field symmetry: every per-token frame the dashboard renders is emitted by both training-time and inference-time. Adding a field touches both in the same commit.
-24. Every kernel produces bitwise-identical output to its scalar reference before shipping.
-24a. **Training launches go through the dashboard `/trainers/run` endpoint on the live server (never a one-off launcher), and the request body MUST set `model_type` to match the model's purpose:** `language` (default) | `code` | `statistical` | `other`. Trainers drop `--model_type` (`parse_known_args`), and `trainer_runner` exports `VERITATE_MODEL_TYPE` only when the arg is present, so an omitted `model_type` silently defaults to `language`. Language-dump gating (2026-07-15): `language` AND `code` both consume text, so both get the full `LANGUAGE_DUMPS` set in `veritate_mri/training/save.py` (fluency/reading/grammar/reasoning/concepts/writing_health/math/generation) plus the eval-deep suite (MMLU/HellaSwag/IFEval). The suite is skipped only for `statistical` and `other`, which train on non-text corpora where those scores would be nonsense. The runtime gate is `NON_LANGUAGE_TYPES = {statistical, other}` in save.py; the eval-deep route (`runs_routes.py`) mirrors it. A Python/coding model is `code`. To correct a run already launched with the wrong type, set `training_args.model_type` in the model's `config.json` — the save path reads it fresh at the next checkpoint and `_ensure_config` won't clobber an existing file.
-24b. **Match the launch config to the box.** `act_ckpt` trades compute for memory: keep it ON only when memory-bound; on a high-unified-memory machine (256 GB) a dense multi-B model is not memory-bound at small batch, so prefer larger batch over act-ckpt for throughput. The dashboard `_build_argv` cannot emit a false boolean (`--no-flag`), so a manifest-default-true bool can't be disabled via the API; raise batch instead. `bitsandbytes` 8-bit AdamW is not importable on MPS (silent fp32 fallback) — do not chase it.
-24c. **MPS model-code rules (training).** Fixed or bucketed tensor shapes only: every new shape recompiles MPS kernels (measured 23x slowdown with per-batch dynamic padding). In model forward code avoid bool-tensor advanced indexing, int64 `sort`, and in-place writes on freshly indexed tensors: a patched-trunk run died mid-run with a transient `AcceleratorError` garbage-index fault (non-deterministic, async) until those were replaced with `F.embedding` lookups, int32 sort, and out-of-place masks. Prefer the op patterns the canonical dense path already exercises.
-24d. **New model variants MUST pass the dump suite at the REAL run shape before launch.** Rule 22 (full dump suite on every save) is gating for variants: run `save.save()` (or the individual dumps) on a model built with the actual manifest shape (`seq=512`, real hidden/layers) and with real dump prompts (12-45 bytes, shorter than any slot/chunk count). A tiny-shape smoke passes while the real shape crashes (patched-trunk `slots=128 > prompt length` broke 7 of 14 dumps silently). Dump failures print `DUMP FAILED:` to the run log (`save.py`); grep for it after the first checkpoint of any new-variant run.
-24e. **Every training launch tests the speed optimizations first — never leave free throughput on the table.** Before (or at the start of) any real training run, evaluate the known no-quality-loss speed levers and apply the ones that measure a win on THIS box at THIS shape; quality parity is non-negotiable (a lever ships only if output/quality is unchanged, bitwise for kernels per rule 24). The standing checklist: (a) **`torch.compile`** — measured ~33% on a DENSE transformer at fixed shapes (0.5B: 4,858 -> 6,484 tok/s, 2026-07-02), BUT it CRASHES on the hybrid/patched trunk on MPS (inductor `aten.convolution_backward` stride assertion, benchmarked 2026-07-13): a measured dead-end for the current architecture on this backend, usable only for dense runs or once the MPS inductor backend matures. Re-benchmark compiled-vs-eager on the actual trunk only after a torch/MPS upgrade; do not re-chase it on hybrid+MPS otherwise. (b) **batch sized to the box** — under-batching a high-unified-memory machine wastes GPU; raise batch (act_ckpt off when not memory-bound, rule 24b), moderate jumps only or retune LR. (c) **`n_chunks` optimizer amortization** (paper 6). Then confirm the run sits near the measured throughput ceiling (`developer_documentation/training/efficient_architecture_research.md`); if it is well below, find the lever before spending the compute. Do NOT re-chase measured dead ends: MLX (~= torch-MPS), 8-bit AdamW (fp32 fallback on MPS, rule 24b), ternary (decode/energy lever, not training). Config bakes at launch, so these are decided BEFORE the run, not mid-flight.
-
-## docs
-
-25. Documentation lives in three places: the **in-app wiki** at `veritate_mri/data/wiki/<category>/<slug>.md` (public, user and extension-author facing, served by the dashboard wiki tab: `api/` REST reference, `extensions/` authoring, `settings/` per-setting pages the training form links to, `build_notes/`, `concepts/`), [`developer_documentation/`](developer_documentation/) (internal platform + component contracts, in repo), and `docs/` (papers, plans, results, notes; gitignored scratch). Lowercase, snake_case. There is no `documentation/` tree; it was folded into the wiki at 1.0.0 so the docs ship inside the product. Layout under [`developer_documentation/`](developer_documentation/):
-    - `architecture/frontend/` — one file per dashboard tab, panel, or standalone module.
-    - `architecture/backend/` — one file per Flask app, runtime, training, engine, or inference component.
-    - `agents/` — agent rule files (coding_roe, claude_merge, agent_roe).
-    - `addons/`, `corpus/`, `engine/`, `hooks/`, `kernels/`, `platform/`, `plugins/`, `research/`, `trainers/`, `training/` — domain references.
-25a. **Voice for shipped artifact docs.** Anything in the wiki or under `developer_documentation/` (READMEs, contract/engine/format specs, anything alongside source) is written developer-to-developer about the artifact: no "the user", no "I/we/my", no narrative of how it came to be. State what it is, how to use it, what it guarantees. Past-tense decision narration, "the user wanted X", "legacy", "formerly", "no longer", "previously", and hedging or assistant register ("simply", "it is worth noting", "let's") are forbidden. Ledger entries, ROE files, design diaries, and `docs/` scratch are exempt.
-25b. **Per-component docs are mandatory.** Every component (frontend tab/panel, backend module, trainer plugin, kernel, engine subsystem) has one file under `developer_documentation/`, never a multi-component monolith. Sections: what it is, how it works (with file:line refs), dependencies, pitfalls. Keep each short.
-25c. **Update a component's doc in the same change.** New component → new file; removed → delete the file. Docs reflect current state, not history (git carries history). If a component you touch has no doc, write one before finishing.
-25d. **The two canonical doc trees are the in-app wiki (public) and `developer_documentation/` (internal); no others.** New per-component docs go in the existing `developer_documentation/architecture/frontend/`, `architecture/backend/`, or appropriate domain folder, not a new top-level folder (`documentation/`, `docs2/`, etc.).
-25e. **Keep the public wiki current.** When platform code the external API surface or extension contract depends on changes (a route an extension calls, the model-loading path, the experimental gate, the isolation boundary), update the wiki `extensions/authoring` entry and the affected endpoints in the wiki `api/internal_api` entry (and `api/external_api` if a gated `/v1/*`, `/generate`, or `/agent/stream` endpoint changed) in the same change (as 25c). The external "extension" is distinct from the internal trainer "plugin"; never relabel one as the other.
-25f. **Wiki entries render through `veritate_mri/readers/wiki.py`, a safe markdown subset.** Headings, lists, fenced code, blockquote, tables, inline code, bold, italic, and links render; nested lists with mixed indentation do not. Category must match `^[a-z0-9_]+$`, slug `^[a-z0-9_\-]+$`. Frontmatter keys, all optional: `title`, `date`, `tags`, `summary`. Write only what the reader renders.
-26. [`developer_documentation/hooks/contract.md`](developer_documentation/hooks/contract.md) is the API reference for dump artifacts. Update it whenever a hook changes.
-27. Run output goes to `models/<model_name>/` (gitignored). Layout is fixed and documented at [`developer_documentation/training/storage.md`](developer_documentation/training/storage.md).
-28. No CSVs in the wiki, `developer_documentation/`, or `docs/`. CSVs live in the model dir.
-29. Active work tracking lives in `docs/` files marked `*_tracking.md`. Check these first when resuming. They record what's done, works, is broken, and who did what. Maintain the canonical tracking doc (one entry per completed task); no parallel tracking.
-30. Agents: read any active `*_tracking.md` at session start. One task at a time. Test before declaring done. Document blockers, don't work around them. Keep implementations lean (rule 19).
-
-## execution
-
-31. Reversible local actions run freely: file edits, file moves, py_compile, node --check, ls/grep.
-32. Irreversible or shared-state actions confirm first: delete data, drop tables, force-push, send messages, change CI, kill processes the user didn't start.
-33. No smoke tests, model loading, or training runs unless explicitly asked.
-
-## portability
-
-34. OS-specific primitives (aligned allocation, threading, time, file I/O) live behind a single shim in `veritate_engine/src/`. Per-arch kernels under `veritate_engine/kernels/<arch>/` never include OS headers (`windows.h`, `pthread.h`) or call OS APIs directly; they see one portable surface, and the shim picks Win32/POSIX/other at compile time. Each arch kernel stays a pure compute unit, and cross-platform support extends without per-arch OS plumbing.
-34c. **Cross-arch parity is non-negotiable.** A change made for one architecture (macOS arm64, Linux x86/ARM, Windows x86) must keep the other two working; never fix one at the expense of another. Before shipping a change that touches any arch-conditioned code path (torch/CUDA/MPS branches, native helpers, subprocess calls, path handling, WMI vs sysctl vs /proc, memory-planner budgets, device selection, sensor readers, launcher installer), state explicitly which arches the change was verified on and which are still expected to work. If an arch is degraded, that's a regression, not a scope choice — do not merge it. Applies to bench, sysprobe, deps installer, HUD, trainers, and the whole `veritate_core/plugin/` layer. When a fix is genuinely platform-specific, it is gated by an `if sys.platform == ...` guard so the other arches continue to see the previous behavior unchanged. Anything printed by the platform (bench, HUD, auto-tune) reports the specific compute device and memory kind it is measuring (CPU / physical RAM, CUDA / VRAM, MPS / unified memory) — never a generic "RAM" label that hides which arch is actually driving the number.
-
-## layout
-
-34a. **`trainers/` is a synced checkout from an upstream canonical repo** (see `trainers/.sync_state.json`); upstream is source of truth, local lives behind it. Platform code (`veritate_core/`, `veritate_mri/`, root files) is fully editable locally — that's this repo.
-34a-i. **The trainer is ordinary platform code.** `veritate_mri/training/veritate_trainer.py` is tracked in this repo and edited here like any other file. The separate `Veritate-Trainers` repo was retired 2026-07-29; there is no upstream to mirror to and no `/trainers/git/sync` to overwrite you. Trainer edits must stay backwards-compatible: old `config.json` files must keep resuming.
-34a-ii. **Announce trainer edits before making them:** state the change is for upstream, name the file(s), quote the diff so the user can mirror it. Don't slip trainer changes into a multi-edit batch without acknowledgement.
-34b. **No new trainers without explicit user permission.** The existing trainer set is the canonical product; don't add `trainers/<new_name>/` on your own initiative. New training capabilities go into the existing trainers via the upstream repo, or into platform helpers under `veritate_core/plugin/` that any trainer can call.
-35. Trainers are self-contained by default: a trainer owns every file it uses. A helper only one trainer needs lives in that trainer's folder, not at any shared scope.
-36. Shared training helpers live in `veritate_core/plugin/`. There is exactly one trainer, so there is no "shared between trainers" tier: a helper either belongs to the trainer or to the platform.
-37. `data/corpus/` holds training data only (`.bin` files). No code, build scripts, config, or JSON manifests describing what the bins are.
-38. Build scripts live with their consumer. Output `.bin` files always land in `data/corpus/` via `paths.corpus_train_path()` / `corpus_val_path()`, never a hardcoded directory.
-39. Trainers do not import from `veritate_mri/` or `veritate_engine/` directly. Their only platform surface is `veritate_core.plugin` (specified in [`developer_documentation/plugins/contract.md`](developer_documentation/plugins/contract.md)). `sys.path` injection into platform internals is forbidden.
-40. Every code file lives in exactly one of: `veritate_core/`, `veritate_mri/`, `veritate_engine/`, `veritate_mesh/`, `extensions/`. No file fits two; no file fits none. If one fits none, the rule or the file is wrong: stop and ask.
-40a-iii. **A capability is a platform feature, never a script someone runs.** Anything the platform needs to do is reachable through a route and a dashboard control, owned by one module (rule 20). A `.py` file whose only entry point is a human typing `python path/to/it.py` is a defect: promote it into the owning module and give it a route. The only exceptions are the launchers (`veritate.py`, `start.command`, `start.bat`), engine build scripts driven by `build_runner.py`, and subprocess entry points the platform itself spawns.
-40b. **Export format invariant (v9/v11).** The `.bin` engine format expects a canonical Veritate trunk: learned `pos_emb`, single `lm_head`, no MTP. RoPE-based models (Veritate800M, anything with `rope_*` buffers or no `pos_emb`), MTP-head models, and other variants are not exportable until a v12 engine format ships. The exporter raises `ValueError` early with the variant name, in both `export_checkpoint` and `export_checkpoint_ternary`.
-
-## versioning and build notes
-
-41. `versions.json` at the repo root is the version ledger: `channel`, one global `build` counter, plus per-component versions `engine`, `mri`, `format` (on-disk schema for models, settings, config files), and `trainers`. Read it before any version question. The full standard, what each key covers, what counts as major/minor/patch, and what an upgrade obliges, is [`developer_documentation/platform/versioning.md`](developer_documentation/platform/versioning.md).
-42. **Never bump a version without explicit user permission** — the `build` counter and every component string. If a change seems to warrant a bump, propose it in plain words and stop. The user decides.
-43. When a major *format* change lands (model `.bin` layout, settings schema, trainer manifest, hook artifact contract), a build note MUST accompany it, explaining in user-facing terms what the user must do: which files to delete, rebuild, or rerun. No internals-only language.
-44. Build notes live at `veritate_mri/data/wiki/build_notes/build_<N>.md` where `<N>` matches `versions.json::build`. That is the path the wiki reader serves; a note written anywhere else is invisible in the dashboard. One note per build. Frontmatter required (`title`, `date`, `tags`, `summary`).
-44a. **Build notes are super concise:** what changed, what the user must do, the version line. Three to ten body lines plus the version table. No deep dives or design rationale; internals belong in `developer_documentation/`.
-44b. **A breaking build also gets a `BUILD_NOTICES` entry** in `veritate_mri/runtime/settings.py`, keyed by the integer build number, so the dashboard raises a modal until the user acknowledges it. Add one only when the user must delete, rebuild, or rerun something.
-
-## merging
-
-45. Branch merges are governed by [`developer_documentation/agents/claude_merge.md`](developer_documentation/agents/claude_merge.md) — read it before any merge. Its rule 1 is absolute: no merge without explicit user permission for that specific merge.
+17. Lean code is gating. Write the simplest thing that works, then stop. Lines of code are a cost. If a line, function, file, or abstraction does not earn its place, delete it. Two layers of abstraction is one too many. Build an abstraction on the second use, never the first.
+18. No legacy code. Today's state is the only standard: no deprecated paths, compat shims, or version-suffixed names (`_v1`, `old_`) anywhere. When behavior changes, change every caller in the same diff. Sanctioned exceptions are user-data compat only (old model `config.json` files must keep resuming; on-disk artifacts from prior builds must keep loading or be rejected with a clear error) — and each one is labeled with what data it protects, never a bare "legacy".
+19. No hardcoded tunables. Any number a user might reasonably change (paths, thresholds, sizes, mix weights, steps) comes from config, settings, or arguments — never a literal in a function body. Trainer tunables live in `veritate_mri/data/trainer_sizes.json` with a Training-tab control.
+20. Never invent a standard. Formats, conventions, and protocols come from the established ecosystem (ChatML, not a homegrown variant) or from `documentation.md`.
+21. Cross-platform is non-negotiable. Supported arches: macOS arm64, Linux x86/ARM, Windows x86. A change touching any arch-conditioned path states which arches it was verified on; degrading one arch to fix another is a regression, not a scope choice. Platform-specific fixes sit behind `sys.platform` guards. OS-specific primitives live behind the single shim in `veritate_engine/src/`; per-arch kernels never include OS headers.
+22. One module owns each concern. Callers consume parsed results; they never re-glob, re-parse, or duplicate logic. New capability extends the owning module and gets a route plus a dashboard control — a `.py` file a human runs by hand is a defect. Exceptions: launchers, engine build scripts, subprocess entry points the platform spawns.
+23. There is exactly one trainer: `veritate_mri/training/veritate_trainer.py`, ordinary tracked code in this repo. Never create per-size trainers. Sizes and defaults are data in `trainer_sizes.json`. New training capability goes into the trainer as an opt-in lever wired to the Training tab, or into `veritate_core/plugin/`.
+24. Every checkpoint save goes through `save.py::save()`; every CSV row through `append_train_row()`. Every dashboard frame is emitted by training-time and inference-time capture symmetrically, in the same commit.
+25. Every kernel ships with a scalar reference and a bitwise-identity check. Numerical changes ship with a fixed-seed tolerance test against the pre-change implementation.
+26. No defensive code for impossible states, no try/except as flow control, no catching `Exception` to be safe. Validate at system boundaries only.
+27. No TODO/FIXME, no commented-out code, no dead code, no print-debugging (use `runtime.logs::logmod`). The working tree is the office; git history is the museum.
+28. Comments are sparse, terse, imperative — a constraint the code cannot show, never narration of the change or its history. Names carry the explanation; rename instead of commenting.
+29. Style: snake_case files and identifiers, lowercase filenames, no emdashes, 120-column lines, standard file header (Notes / Imports / Constants / Functions with dashed delimiters). Match the style of any file edited.
+30. Measure before optimizing. A hunch is not a number. Check `failures.md` for measured dead ends before chasing a lever. Report deltas under 5% only with multiple seeds.
 
 ## tests
 
-46. Every test function opens with a one-line docstring stating exactly what behavior it verifies. Concise, no "why"/"how"/padding. Just "GET /endpoint returns 200 + JSON."
-47. One assertion per concept. Five unrelated asserts are five tests — split them.
-48. Tests are deterministic: no live network calls (mock them), no real wall-clock timing assertions, seed every RNG.
-49. Tests clean up after themselves: `tmp_path` or explicit fixture teardown for any file or directory created.
-50. Slow tests (> 5s) carry `@pytest.mark.slow`. Default `pytest` runs them; the marker lets devs filter with `-m "not slow"` during fast local iteration.
-51. Tests live under `tests/<area>/test_*.py`, mirroring the platform area tested (`engine/`, `export/`, `mri/`, `plugin_contract/`).
-52. When functionality is added, a test that would have failed before the change lands in the same commit. No new feature ships untested.
+31. New functionality ships with a test that would have failed before the change, in the same diff, under `tests/<area>/test_*.py`. "Tested by the existing suite" is not a status — name the test.
+32. Tests are deterministic (no live network, seeded RNGs, no wall-clock assertions), clean up after themselves (`tmp_path`), open with a one-line docstring stating the behavior verified, and hold one concept per test. Slow tests (>5s) carry `@pytest.mark.slow`.
+33. Run the file's own tests before claiming a change works, then `./venv/bin/python -m ruff check .` — no new violations. "Should work" is not a status.
 
-## lint
+## docs
 
-53. **Ruff is the single linter.** Config is `[tool.ruff]` in `pyproject.toml` at the repo root; `pytest` config lives in the same file. Run `./venv/bin/python -m ruff check .` before declaring any code change done. It must not introduce a new violation.
-54. Ruff enforces the parts of this contract a machine can check: `T20` no stray `print` (rule 116), `ERA` no commented-out code and `TD`/`FIX` no TODO/FIXME (rule 16), `F` real bugs, `I` import order, `ARG` unused arguments, plus `E`/`W`/`UP`/`B`/`C4`/`PIE`/`RET`/`SIM`/`RUF`.
-55. The house style wins where it conflicts with stock pycodestyle, and the exceptions are declared in `pyproject.toml`, never suppressed inline: aligned assignment operators (`E221`/`E241`), one-line guard clauses (`E701`/`E702`), `l`/`L` as the canonical layer index (`E741`). `PTH` (pathlib over `os.path`) is deliberately NOT enabled: the codebase uses `os.path` consistently, and uniformity beats a mechanical rewrite of 1,500 call sites.
-56. `trainers/` is excluded from lint because it is an upstream-synced checkout (rule 34a). So are `models/`, `experiments/`, `temp/`, `venv/`, and `veritate_mri/web/`.
-57. Line length is 120. `noqa` needs a reason and is a last resort; fixing the code is the default.
+34. All documentation lives in the five files above. Never create a new doc file, doc folder, or scratch notes file.
+35. A change that alters a contract, route, setting, or invariant updates the affected `documentation.md` section in the same diff. Docs state current behavior only — no history, no "previously"; git carries history.
+36. Doc voice: a senior developer writing objective instructions. No first person, no hedging, no assistant register ("simply", "note that", "let's"), no narrative of how anything came to be.
+37. Ledger entries are short: bold title, then one to three lines — claim, measured numbers with units and date, kill-line for failures. No essays.
+38. Build notes are sections under `## build notes` in `documentation.md`, one per `versions.json::build`, three to ten lines, user-facing actions only. A breaking build also gets a `BUILD_NOTICES` entry (integer key) in `veritate_mri/runtime/settings.py`.

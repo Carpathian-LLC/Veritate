@@ -13,7 +13,7 @@
 #            content fetched anonymously from the public Software Heritage S3.
 #     html/css: curated permissive-license GitHub repos, tarballs by pinned ref.
 #     qa: donfu/oa-stackexchange, stackoverflow rows filtered to coding tags and
-#         vote thresholds, framed as ChatML per developer_documentation/corpus/framing.md.
+#         vote thresholds, framed as ChatML per documentation.md (corpus framing).
 # - Code families emit autocomplete mode: raw files joined by <|endoftext|>.
 #   qa emits chat mode (ChatML). Val split is a stable 2% hash bucket per doc.
 # - mixed_* build variants for the corpus-style ablation:

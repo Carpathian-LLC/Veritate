@@ -4,9 +4,9 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - reader for the wiki content tree under veritate_mri/data/wiki/<category>/<slug>.md.
-# - parses yaml-ish frontmatter and renders a safe markdown subset to html.
-# - frontmatter keys: title, date, tags, summary. all optional.
+# - reader for the single-file platform doc at repo-root documentation.md.
+# - splits the file into ## / ### sections by heading, caches by (path, mtime).
+# - renders a safe markdown subset to html; headings get id=<slug> for anchor jumps.
 # veritate_mri/readers/wiki.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -20,14 +20,9 @@ from . import paths as paths_mod
 # ------------------------------------------------------------------------------------
 # Constants
 
-FRONTMATTER_DELIM     = "---"
-FRONTMATTER_LIST_OPEN = "["
-FRONTMATTER_LIST_CLOSE = "]"
-KV_SEP                = ":"
-LIST_SEP              = ","
+SECTION_HEADING_LEVELS = (2, 3)
 
-CATEGORY_RE = re.compile(r"^[a-z0-9_]+$")
-SLUG_RE     = re.compile(r"^[a-z0-9_\-]+$")
+SLUG_KEEP_RE = re.compile(r"[^a-z0-9_]")
 
 HEADING_RE  = re.compile(r"^(#{1,6})\s+(.*)$")
 HRULE_RE    = re.compile(r"^-{3,}\s*$")
@@ -45,134 +40,73 @@ AUTOLINK_RE    = re.compile(r"(?<![\"'>=])\b(https?://[^\s<]+)")
 
 INLINE_PLACEHOLDER = "\x00CODE\x00"
 
-DEFAULT_TITLE = "(untitled)"
+_doc_cache = {"key": None, "text": "", "sections": []}
 
 # ------------------------------------------------------------------------------------
 # Functions
 
-def _safe_category(c):
-    return bool(c) and bool(CATEGORY_RE.match(c))
+def slugify(text):
+    s = text.strip().lower().replace(" ", "_")
+    return SLUG_KEEP_RE.sub("", s)
 
 
-def _safe_slug(s):
-    return bool(s) and bool(SLUG_RE.match(s))
-
-
-def list_categories():
-    root = paths_mod.wiki_root()
-    if not os.path.isdir(root):
-        return []
-    out = []
-    for name in sorted(os.listdir(root)):
-        p = os.path.join(root, name)
-        if not os.path.isdir(p): continue
-        if not _safe_category(name): continue
-        out.append({"name": name, "n_entries": _count_entries(p)})
-    return out
-
-
-def _count_entries(category_dir):
-    n = 0
-    for fn in os.listdir(category_dir):
-        if fn.endswith(paths_mod.WIKI_ENTRY_SUFFIX):
-            n += 1
-    return n
-
-
-def list_entries(category):
-    if not _safe_category(category):
-        return None
-    cdir = paths_mod.wiki_category_dir(category)
-    if not os.path.isdir(cdir):
-        return None
-    out = []
-    for fn in os.listdir(cdir):
-        if not fn.endswith(paths_mod.WIKI_ENTRY_SUFFIX): continue
-        slug = fn[: -len(paths_mod.WIKI_ENTRY_SUFFIX)]
-        if not _safe_slug(slug): continue
-        path = os.path.join(cdir, fn)
-        meta = _read_meta(path)
-        meta["slug"]   = slug
-        meta["_mtime"] = os.path.getmtime(path)
-        out.append(meta)
-    out.sort(key=lambda r: (r.get("date") or "", r["_mtime"], r["slug"]), reverse=True)
-    for r in out:
-        r.pop("_mtime", None)
-    return out
-
-
-def load_entry(category, slug):
-    if not _safe_category(category) or not _safe_slug(slug):
-        return None
-    p = paths_mod.wiki_entry_path(category, slug)
-    if not os.path.isfile(p):
-        return None
-    with open(p, encoding="utf-8") as f:
-        text = f.read()
-    fm, body = _split_frontmatter(text)
-    meta = _parse_frontmatter(fm)
-    meta["slug"]      = slug
-    meta["category"]  = category
-    meta["body_md"]   = body
-    meta["body_html"] = render_markdown(body)
-    return meta
-
-
-def _read_meta(path):
+def load_doc():
+    path = paths_mod.documentation_path()
+    mtime = os.path.getmtime(path)
+    key = (path, mtime)
+    if _doc_cache["key"] == key:
+        return _doc_cache["sections"]
     with open(path, encoding="utf-8") as f:
         text = f.read()
-    fm, _ = _split_frontmatter(text)
-    return _parse_frontmatter(fm)
+    sections = _parse_sections(text)
+    _doc_cache["key"] = key
+    _doc_cache["text"] = text
+    _doc_cache["sections"] = sections
+    return sections
 
 
-def _split_frontmatter(text):
+def _parse_sections(text):
     lines = text.split("\n")
-    if not lines or lines[0].strip() != FRONTMATTER_DELIM:
-        return ({}, text)
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == FRONTMATTER_DELIM:
-            end = i
-            break
-    if end is None:
-        return ({}, text)
-    fm = "\n".join(lines[1:end])
-    body = "\n".join(lines[end + 1:])
-    return (fm, body.lstrip("\n"))
+    headings = []
+    for i, line in enumerate(lines):
+        m = HEADING_RE.match(line.strip())
+        if m:
+            headings.append((i, len(m.group(1)), m.group(2).strip()))
+    seen = set()
+    sections = []
+    for idx, (line_no, level, title) in enumerate(headings):
+        if level not in SECTION_HEADING_LEVELS:
+            continue
+        slug = slugify(title)
+        if slug in seen:
+            continue
+        seen.add(slug)
+        end = len(lines)
+        for later_no, later_level, _ in headings[idx + 1:]:
+            if later_level <= level:
+                end = later_no
+                break
+        sections.append({
+            "slug": slug, "title": title, "level": level,
+            "body": "\n".join(lines[line_no:end]),
+        })
+    return sections
 
 
-def _parse_frontmatter(fm):
-    if isinstance(fm, dict):
-        return dict(fm)
-    out = {"title": None, "date": None, "tags": [], "summary": None}
-    if not fm:
-        return out
-    for raw in fm.split("\n"):
-        line = raw.rstrip()
-        if not line.strip(): continue
-        if KV_SEP not in line: continue
-        k, v = line.split(KV_SEP, 1)
-        k = k.strip().lower()
-        v = v.strip()
-        if k == "tags":
-            out["tags"] = _parse_list(v)
-        elif k in ("title", "date", "summary"):
-            out[k] = _strip_quotes(v)
-    if out["title"] is None:
-        out["title"] = DEFAULT_TITLE
-    return out
+def toc():
+    return [{"slug": s["slug"], "title": s["title"], "level": s["level"]} for s in load_doc()]
 
 
-def _strip_quotes(v):
-    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
-        return v[1:-1]
-    return v
+def section_html(slug):
+    for s in load_doc():
+        if s["slug"] == slug:
+            return render_markdown(s["body"])
+    return None
 
 
-def _parse_list(v):
-    if v.startswith(FRONTMATTER_LIST_OPEN) and v.endswith(FRONTMATTER_LIST_CLOSE):
-        v = v[1:-1]
-    return [_strip_quotes(p.strip()) for p in v.split(LIST_SEP) if p.strip()]
+def doc_html():
+    load_doc()
+    return render_markdown(_doc_cache["text"])
 
 
 def render_markdown(text):
@@ -241,7 +175,8 @@ def render_markdown(text):
         if m:
             flush_para(); close_lists()
             level = len(m.group(1))
-            out.append(f"<h{level}>{_inline(m.group(2).strip())}</h{level}>")
+            heading_text = m.group(2).strip()
+            out.append(f'<h{level} id="{slugify(heading_text)}">{_inline(heading_text)}</h{level}>')
             i += 1
             continue
         if HRULE_RE.match(stripped):

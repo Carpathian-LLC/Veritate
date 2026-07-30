@@ -9,7 +9,7 @@
 # - scale_q24 sentinel 0 lets the engine derive RMS-based requant at load time.
 # - PTQ on a non-QAT model trades off some accuracy. acceptable as a baseline.
 # - v13 hybrid export (trunk=hybrid): fp32/fp16/int8 tensors, PyTorch [out, in] layout,
-#   spec at developer_documentation/engine/hybrid_trunk.md.
+#   spec at documentation.md (engine).
 # veritate_mri/training/export.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -197,12 +197,16 @@ def shape_from_config(name):
     with open(cfg_path, encoding="utf-8") as f:
         cfg = json.load(f)
     shape = cfg.get("shape") or {}
+    ta    = cfg.get("training_args") or {}
     out = {}
     for key in SHAPE_KEYS:
+        # Older runs wrote a FLAT config: no "shape", no "training_args", every
+        # field at top level. Those checkpoints stay exportable.
         v = shape.get(key)
         if v is None:
-            ta = cfg.get("training_args") or {}
             v = ta.get(key)
+        if v is None:
+            v = cfg.get(key)
         if v is None:
             raise ValueError(f"config.json for {name} missing shape field: {key}")
         out[key] = int(v)
@@ -316,11 +320,13 @@ def export_checkpoint(name, step, dtype=None):
         raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
 
     with open(paths.config_path(name), encoding="utf-8") as f:
-        cfg_ta = (json.load(f).get("training_args")) or {}
-    trunk = str(cfg_ta.get("trunk") or "dense")
+        cfg = json.load(f)
+    cfg_ta = cfg.get("training_args") or {}
+    trunk = str(cfg_ta.get("trunk") or cfg.get("trunk") or "dense")
     if trunk == "hybrid":
         return _export_checkpoint_hybrid(name, step, ckpt_path,
-                                         str(cfg_ta.get("state_rule") or "gla"),
+                                         str(cfg_ta.get("state_rule")
+                                             or cfg.get("state_rule") or "gla"),
                                          dtype or HYBRID_DTYPE_DEFAULT)
     if trunk != "dense":
         raise ValueError(
@@ -529,7 +535,7 @@ def _write_big(f, arr, dtype, np_dtype, shape):
 def _export_checkpoint_hybrid(name, step, ckpt_path, state_rule, dtype):
     """v13 binary: hybrid trunk (local attn + recurrent global slots). fp32/fp16/int8
     tensors in PyTorch [out, in] row-major, tied lm_head, baked boundary table.
-    Layout spec: developer_documentation/engine/hybrid_trunk.md."""
+    Layout spec: documentation.md (engine)."""
     from veritate_core.model_patched import PATCH_STRIDE, _boundary_table
 
     if state_rule != "gla":

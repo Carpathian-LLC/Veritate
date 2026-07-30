@@ -189,7 +189,7 @@ From the [**Training**](#tabs) tab you can:
 - Pick a trainer, configure the run, and click **Start**.
 - Training writes checkpoints + a per-step CSV to [`models/<name>/`](./).
 
-See [`trainers/readme.md`](trainers/readme.md) for the trainer contract and how to author your own.
+See [`documentation.md`](documentation.md) (training section) for the trainer contract.
 
 <br/>
 
@@ -318,7 +318,7 @@ Three independent pieces.
 
 | Piece | What it is | Language | Runs on | Output |
 |---|---|---|---|---|
-| **[Trainers](trainers/readme.md)** | Training scripts + manifests. Each trainer trains, fine-tunes, or distills a model. | PyTorch | GPU | `models/<name>/checkpoints/` |
+| **[Trainer](veritate_mri/training/veritate_trainer.py)** | One trainer, every size; sizes are data in `trainer_sizes.json`. Trains, fine-tunes, or distills a model. | PyTorch | GPU | `models/<name>/checkpoints/` |
 | **[Inference engine](veritate_engine/)** | Loads converted INT8 or ternary weights, generates text. Hand-written C + architecture-specific assembly. | C + asm | CPU | tokens via stdin/stdout, sub-ms |
 | **[Project MRI](veritate_mri/)** | Web app to watch the model think while it generates. Visualization + debugging tool. | Flask + JS | CPU | live UI on [http://localhost:8001](http://localhost:8001) |
 
@@ -403,7 +403,7 @@ The launcher detects the host (OS + arch + CPU features) and dispatches per-tier
 | **GPU (NVIDIA)** | CUDA on any tier above | — | `torch.cuda` | bfloat16 AMP | N/A (CPU engine) |
 | **GPU (AMD on macOS)** | Discrete AMD on Intel Mac | — | not supported by torch on macOS | CPU only | planned Metal compute path |
 
-Capability flags (`has_avx2`, `has_avx512vnni`, `can_use_mps`, `can_use_cuda`, etc.) are exposed in the hardware dump for any code that needs to gate features at runtime. See [`developer_documentation/platform/tiers.md`](developer_documentation/platform/tiers.md) for how the tier dispatch works.
+Capability flags (`has_avx2`, `has_avx512vnni`, `can_use_mps`, `can_use_cuda`, etc.) are exposed in the hardware dump for any code that needs to gate features at runtime. See [`documentation.md`](documentation.md) (hardware tiers) for how the tier dispatch works.
 
 <br/>
 
@@ -453,5 +453,5 @@ A project by **[Carpathian, LLC](https://carpathian.ai/veritate)**. **Distributi
 | [`extensions/`](extensions/) | Extension framework: registry, install/uninstall, and the bundled canonical sources. |
 | [`trainers/`](trainers/) | [`corpus/`](data/corpus/) only: `.bin` training data, skipped by the app updater. The trainer itself is [`veritate_mri/training/veritate_trainer.py`](veritate_mri/training/veritate_trainer.py). |
 | `models/` | One self-contained subdir per model (gitignored). |
-| [`developer_documentation/`](developer_documentation/) | Internal platform and per-component contracts (committed). One file per component. |
+| [`documentation.md`](documentation.md) | The single platform reference (committed). Served in-app by the wiki tab. |
 | [`tests/`](tests/) | Regression suite, mirroring the platform area under test. |

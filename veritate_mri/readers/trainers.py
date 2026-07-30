@@ -74,6 +74,7 @@ def native_sizes_path():
 SHARED_DEFAULTS_KEY = "shared_defaults"
 SHAPE_KEY           = "shape"
 DEFAULTS_KEY        = "defaults"
+DEFAULT_SIZE_KEY    = "default_size"
 
 
 def load_sizes_doc():
@@ -116,10 +117,6 @@ def all_size_defaults():
 
 NATIVE_SIZES = load_native_sizes()
 
-NATIVE_DEFAULT_SIZE  = "85m"
-NATIVE_DEFAULT_SEQ   = 1024
-NATIVE_DEFAULT_VOCAB = 256   # byte-level; mirrors veritate_core.model.VOCAB_BYTE_LEVEL
-
 NATIVE_TRAINER_MANIFEST = {
     "name":        "Native trainer (no plugin)",
     "description": "Train, continue, or refine any size from the dashboard. Canonical Veritate (GELU FFN + "
@@ -129,7 +126,8 @@ NATIVE_TRAINER_MANIFEST = {
     "bench":       True,
     "flow":        ["scratch", "continue"],
     "sizes": NATIVE_SIZES,
-    "defaults": size_defaults(NATIVE_DEFAULT_SIZE),
+    # Which size a fresh form prefills is DATA (`default_size`), not a literal here.
+    "defaults": size_defaults(load_sizes_doc().get(DEFAULT_SIZE_KEY)),
     "size_defaults": all_size_defaults(),   # Training tab switches on this
 }
 

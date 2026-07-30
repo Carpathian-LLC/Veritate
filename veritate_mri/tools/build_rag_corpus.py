@@ -46,7 +46,7 @@ QA_TEMP         = 0.5
 MIN_FACT_CHARS  = 10
 PROGRESS_EVERY  = 20
 
-# ChatML, per developer_documentation/corpus/framing.md. Retrieved text rides a
+# ChatML, per documentation.md (corpus framing). Retrieved text rides a
 # system turn; the "context: " lead-in is kept because inference stops on it.
 # EVAL_PREFIX ends after the user turn so the model emits the assistant turn itself.
 IM_START    = "<|im_start|>"

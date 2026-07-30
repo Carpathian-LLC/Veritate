@@ -7,7 +7,7 @@
 // - v13 hybrid trunk: fp32 decode path. local attention blocks on every byte,
 //   gla recurrent global blocks on boundary-anchored slots. O(1) state per byte:
 //   bounded KV over seq for local blocks, [heads x d x d] state + conv ring per
-//   global block. spec: developer_documentation/engine/hybrid_trunk.md.
+//   global block. spec: documentation.md (engine).
 // ------------------------------------------------------------------------------------
 
 #ifndef VERITATE_HYBRID_H

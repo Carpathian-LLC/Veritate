@@ -15,7 +15,7 @@
 #   answer strings come from the REAL source corpus, never a closed hand-written
 #   vocabulary. Only QUESTION phrasing is templated. A purely combinatorial
 #   generator measured val 0.092 while teaching nothing (held-out role binding
-#   17%/0%, developer_documentation/corpus/curriculum_corpus.md 2026-07-25): the
+#   17%/0%, failures.md, role-binding entry, 2026-07-25): the
 #   model learns surface statistics when the answer set is closed. Answers here
 #   are open-ended because they are literal spans of real text.
 # - Frame: serving prompt template, veritate_mri/routes/hybrid_routes.py:60, so

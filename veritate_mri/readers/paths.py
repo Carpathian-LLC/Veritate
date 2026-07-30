@@ -41,13 +41,14 @@ TEMP_ROOT       = os.path.join(REPO_ROOT, "temp")
 REQUIREMENTS_PATH = os.path.join(REPO_ROOT, "requirements.txt")
 # Platform-level data lives under veritate_mri/data/. eval/grade/ holds the
 # committed grade-level eval corpora; eval/samples/ holds the small smoke
-# subsets of MMLU / HellaSwag / IFEval; wiki/ holds dashboard wiki markdown;
-# corpus/ holds the Veritate-native corpora the Settings library installs by
-# copying into trainers/corpus/; synth_jobs/ holds raw teacher synth output
-# per job (samples, cache, state) until a corpus .bin is built from it;
-# corpus_mix_profiles.json holds the mix planner's intent profiles;
-# authoring/corpus_spec.json holds the editable genre, prompt, and quality-gate
-# data the corpus authoring pipeline runs on.
+# subsets of MMLU / HellaSwag / IFEval; corpus/ holds the Veritate-native
+# corpora the Settings library installs by copying into trainers/corpus/;
+# synth_jobs/ holds raw teacher synth output per job (samples, cache, state)
+# until a corpus .bin is built from it; corpus_mix_profiles.json holds the
+# mix planner's intent profiles; authoring/corpus_spec.json holds the
+# editable genre, prompt, and quality-gate data the corpus authoring
+# pipeline runs on. The dashboard wiki tab serves repo-root documentation.md
+# (see documentation_path()), not a file under this tree.
 DATA_ROOT          = os.path.join(MRI_ROOT, "data")
 EVAL_ROOT          = os.path.join(DATA_ROOT, "eval")
 GRADE_EVAL_ROOT    = os.path.join(EVAL_ROOT, "grade")
@@ -60,7 +61,6 @@ GRADE_EVAL_GRAMMAR_ROOT   = os.path.join(GRADE_EVAL_ROOT, "grammar")
 EVAL_SAMPLES_ROOT  = os.path.join(EVAL_ROOT, "samples")
 # Held-out question/answer sets the RAG corpus builder writes beside its bins.
 RAG_EVAL_ROOT      = os.path.join(EVAL_ROOT, "rag")
-WIKI_ROOT          = os.path.join(DATA_ROOT, "wiki")
 NATIVE_CORPUS_ROOT = os.path.join(DATA_ROOT, "corpus")
 SYNTH_JOBS_ROOT    = os.path.join(DATA_ROOT, "synth_jobs")
 AUTHORING_ROOT     = os.path.join(DATA_ROOT, "authoring")
@@ -72,6 +72,8 @@ ENGINE_KERNELS  = os.path.join(ENGINE_ROOT, "kernels")
 ENGINE_SOURCE_SUFFIXES = (".c", ".h", ".S")
 # Component version ledger for the whole platform.
 VERSIONS_JSON_PATH = os.path.join(REPO_ROOT, "versions.json")
+# Single-file platform documentation the dashboard wiki tab serves.
+DOCUMENTATION_PATH = os.path.join(REPO_ROOT, "documentation.md")
 
 OS_WINDOWS = "windows"
 OS_LINUX   = "linux"
@@ -106,8 +108,6 @@ COMPREHENSION_HARD_PREFIX = "comprehension_hard_"
 COMPREHENSION_SUFFIX      = ".json"
 JSONL_SUFFIX              = ".jsonl"
 RAG_EVAL_SUFFIX           = "_test.json"
-
-WIKI_ENTRY_SUFFIX = ".md"
 
 MIX_PROFILES_NAME = "corpus_mix_profiles.json"
 AUTHORING_SPEC_NAME = "corpus_spec.json"
@@ -266,16 +266,8 @@ def hook_artifact_path(name, step, artifact):
     return os.path.join(hook_step_dir(name, step), fname)
 
 
-def wiki_root():
-    return WIKI_ROOT
-
-
-def wiki_category_dir(category):
-    return os.path.join(WIKI_ROOT, category)
-
-
-def wiki_entry_path(category, slug):
-    return os.path.join(WIKI_ROOT, category, f"{slug}{WIKI_ENTRY_SUFFIX}")
+def documentation_path():
+    return DOCUMENTATION_PATH
 
 
 def current_os():

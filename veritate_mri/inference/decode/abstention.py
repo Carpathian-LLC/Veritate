@@ -5,8 +5,8 @@
 # ------------------------------------------------------------------------------------
 # Notes:
 # - Inference-side abstention backstop. The primary IDK signal comes from
-#   in-pretrain dosing of `idk_abstention` pairs (developer_documentation/training/
-#   settings_index.md perfect-chat recipe). This gate is the safety net: when the
+#   in-pretrain dosing of `idk_abstention` pairs (documentation.md settings
+#   reference; recipe in successes.md). This gate is the safety net: when the
 #   model tries to answer confidently but its own top-1 probability across the
 #   first N decoded bytes is low, the response is replaced with a fixed template.
 # - Two paths:

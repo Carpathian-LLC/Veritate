@@ -4,7 +4,8 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - in-app wiki: categories, per-category entry lists, single entries.
+# - in-app wiki: serves repo-root documentation.md as a table of contents, the
+#   whole rendered doc, and standalone per-section pages for "learn more" links.
 # veritate_mri/routes/wiki_routes.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -37,43 +38,42 @@ _WIKI_PAGE_CSS = (
 # ------------------------------------------------------------------------------------
 # Functions
 
-def _wiki_page_html(entry):
-    title = _html.escape(str(entry.get("title") or entry.get("slug") or "wiki"))
-    cat   = _html.escape(str(entry.get("category") or ""))
-    slug  = _html.escape(str(entry.get("slug") or ""))
+def _wiki_page_html(slug, title, body_html):
+    title_esc = _html.escape(title)
+    slug_esc  = _html.escape(slug)
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        f"<title>{title} · Veritate wiki</title><style>{_WIKI_PAGE_CSS}</style></head>"
-        "<body><div class=\"wrap\">" + (entry.get("body_html") or "") +
-        f"<div class=\"src\">Veritate wiki · {cat}/{slug}</div></div></body></html>"
+        f"<title>{title_esc} · Veritate wiki</title><style>{_WIKI_PAGE_CSS}</style></head>"
+        "<body><div class=\"wrap\">" + (body_html or "") +
+        f"<div class=\"src\">Veritate wiki · {slug_esc}</div></div></body></html>"
     )
+
+
+def _section_title(slug):
+    for s in wiki_reader.toc():
+        if s["slug"] == slug:
+            return s["title"]
+    return slug
 
 
 def register(app):
     @app.route("/wiki")
     def wiki_index():
-        return {"categories": wiki_reader.list_categories()}
+        return {"sections": wiki_reader.toc()}
 
-    @app.route("/wiki/<category>")
-    def wiki_category(category):
-        entries = wiki_reader.list_entries(category)
-        if entries is None:
-            return ({"error": f"category not found: {category}"}, 404)
-        return {"category": category, "entries": entries}
+    @app.route("/wiki/doc")
+    def wiki_doc():
+        return {"body_html": wiki_reader.doc_html()}
 
-    @app.route("/wiki/<category>/<slug>")
-    def wiki_entry(category, slug):
-        entry = wiki_reader.load_entry(category, slug)
-        if entry is None:
-            return ({"error": f"entry not found: {category}/{slug}"}, 404)
-        return entry
-
+    @app.route("/wiki/<slug>/page")
     @app.route("/wiki/<category>/<slug>/page")
-    def wiki_entry_page(category, slug):
-        """Standalone HTML render of a wiki entry, for opening in a new tab from
-        a setting's `learn more` link."""
-        entry = wiki_reader.load_entry(category, slug)
-        if entry is None:
-            return (f"entry not found: {category}/{slug}", 404)
-        return Response(_wiki_page_html(entry), mimetype="text/html")
+    def wiki_section_page(slug, category=None):
+        """Standalone HTML render of one documentation.md section, for opening in
+        a new tab from a setting's `learn more` link. `category` is accepted for
+        URL compatibility with existing links and otherwise ignored."""
+        del category
+        body_html = wiki_reader.section_html(slug)
+        if body_html is None:
+            return (f"section not found: {slug}", 404)
+        return Response(_wiki_page_html(slug, _section_title(slug), body_html), mimetype="text/html")

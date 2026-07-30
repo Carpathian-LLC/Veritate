@@ -93,20 +93,18 @@ def _validate_name(name):
     if not models.is_valid_name(name):
         raise ValueError(
             f"invalid model name: {name!r}. expected <name>_<param>_<precision>_<version> "
-            "per developer_documentation/training/model_naming.md"
+            "per documentation.md (repo layout)"
         )
 
 
 def compose_name(*args, **kwargs):
-    """Compose the canonical model dir name.
+    """Compose the canonical model dir name. Two live forms:
 
-    Preferred form:    compose_name(user_name, size)
-                       -> "<slug>_<size>"           (e.g. "chatty_otter_85m")
-    Legacy form:       compose_name(corpus, size, precision, version)
-                       -> "<corpus>_<size>_<precision>_<version>"
+    compose_name(user_name, size)                    -> "<slug>_<size>"
+    compose_name(corpus, size, precision, version)   -> "<corpus>_<size>_<precision>_<version>"
 
-    The user_name is slugified (lowercased, non-alnum -> '_'). The legacy form
-    is kept so older plugins / pruning.py keep working unchanged.
+    The 2-arg form slugifies the user name (lowercased, non-alnum -> '_'); the
+    4-arg form is the version-tagged path used by the trainer and pruning.py.
     """
     from readers import models as _models  # local import: avoid circular at module load
     if "name" in kwargs or len(args) == 2:
@@ -123,7 +121,7 @@ def compose_name(*args, **kwargs):
         if slug == size or slug.endswith((NAME_SEP + size, size)):
             return slug
         return NAME_SEP.join([slug, size])
-    # Legacy 4-arg form.
+    # Version-tagged 4-arg form.
     corpus, size, precision, version = args
     leaf = corpus.rsplit(":", 1)[-1] if ":" in corpus else corpus
     return NAME_SEP.join([leaf, size, precision, version])

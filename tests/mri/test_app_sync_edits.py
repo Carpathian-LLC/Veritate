@@ -33,9 +33,11 @@ def _sha(text):
 
 
 def _write(root, rel, text):
+    # newline="" or Windows text mode turns every \n into \r\n, so the bytes on
+    # disk stop matching _sha(text) and every file reads as locally modified.
     path = os.path.join(root, rel.replace("/", os.sep))
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     return path
 

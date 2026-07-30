@@ -552,6 +552,28 @@ def _no_baseline(stale=False):
     }
 
 
+def _local_noise_dirs():
+    """Top-level dirs that exist only on this machine: virtualenvs (any name, so
+    `pyvenv.cfg` is the test rather than a name list) and tooling caches. They are
+    never in the baseline, so without this every file inside one is reported as a
+    file the user added — a single venv turns a clean tree into thousands of
+    'changes'. Applies to the local walk only; the incoming tarball has none of
+    these, and dot-dirs that DO ship (.github) are in the baseline and filtered
+    out by the `seen` check anyway."""
+    noise = set()
+    try:
+        entries = os.listdir(REPO_DIR)
+    except OSError:
+        return noise
+    for entry in entries:
+        abs_entry = os.path.join(REPO_DIR, entry)
+        if not os.path.isdir(abs_entry):
+            continue
+        if entry.startswith(".") or os.path.isfile(os.path.join(abs_entry, "pyvenv.cfg")):
+            noise.add(entry)
+    return noise
+
+
 def local_edits(skip_dirs=None, incoming=None):
     """Return the repo files a pull would overwrite against the user's wishes.
 
@@ -615,7 +637,7 @@ def local_edits(skip_dirs=None, incoming=None):
     # Pass 2: surface files the user added that aren't in baseline. Only check
     # source-y extensions so we don't flood the dashboard with pyc, generated
     # binaries, IDE droppings, etc.
-    added = [{"path": rel} for rel, _ in _iter_tracked(REPO_DIR, skip)
+    added = [{"path": rel} for rel, _ in _iter_tracked(REPO_DIR, skip | _local_noise_dirs())
              if rel.endswith(TRACKED_SOURCE_EXTS) and rel not in seen]
 
     return {

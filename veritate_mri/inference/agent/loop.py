@@ -7,7 +7,7 @@
 # - AgentLoop: ReAct-style multi-turn loop driving any backend exposing
 #   `stream(prompt, ..., constraint=...)` (matches Brain.stream).
 # - Wire format: ChatML + Hermes function-calling, per
-#   developer_documentation/corpus/framing.md. Each model turn is an assistant block
+#   documentation.md (corpus framing). Each model turn is an assistant block
 #   bounded by <|im_start|>assistant\n...<|im_end|>. Tool calls are emitted
 #   as <tool_call>{"name": str, "arguments": object}</tool_call> blocks
 #   inside the assistant turn. Tool replies are injected as a tool-role
@@ -43,8 +43,8 @@ _RAW_HEAD_CAP        = 120
 
 # ------------------------------------------------------------------------------------
 # Model contract. Every string below is what the model actually sees or is
-# expected to emit (ChatML + Hermes function calling, developer_documentation/corpus/
-# framing.md). Editing one edits the prompt the model was framed against, so
+# expected to emit (ChatML + Hermes function calling, documentation.md
+# corpus framing). Editing one edits the prompt the model was framed against, so
 # they live here rather than inline in the builders.
 
 IM_START = "<|im_start|>"
