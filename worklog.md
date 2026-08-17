@@ -14,6 +14,8 @@ papers (`research/`), and the per-component docs (`developer_documentation/`).
 
 ## timeline (headlines)
 
+- **2026-08-03 (product-key memory built, trained and kernelled on cardinal: 102x capacity at 3.90x faster decode with quality parity — and the measurement instrument was the real find):** Built `veritate_core/model_pkm.py`, a memory-layer FFN that replaces the dense up/down pair with a weighted top-k read over `sub_keys^2` learned value slots, wired as `global_ffn=pkm` / `trunk=hybrid_pkm` on the patched trunk. **The headline is a methodology finding, not the layer.** In eager PyTorch the layer measured **4.9x SLOWER** than dense at batch=1 (1387 vs 281 us/token); rewritten in C it is **3.90x FASTER**. Root cause measured directly on cardinal: `x*2` on a 320-vector costs **20.3 us** and a 320x320 matmul doing **102,400 MACs** costs **38.0 us**, i.e. PyTorch charges ~20 us per OPERATION and 102k multiply-adds cost only 17.7 us more than doing nothing. Dense FFN wins in eager for a reason unrelated to being good (3 fat ops); anything sparse, gated or conditional needs more ops and loses automatically. **Every batch-1 architecture comparison run in eager PyTorch has been measuring the dispatcher, so prior batch-1 architecture conclusions are re-openable.** Two-stage speed work in C, both arms held at identical optimization throughout (the fair-comparison discipline mattered — an earlier 4.70x shrank to 3.90x once dense also got AVX2): profiling showed the **top-k sorts were 52% of cost and the scattered gather only 8%**, and forcing the gather fully contiguous gained just 7%, killing my own prediction that random access would dominate. Replacing the ranking with a **firing threshold** (AVX2 compare + movemask, 0.586 us vs topk 8.778 us = **15x** on that stage) took PKM int8 139.3 -> 69.6 us/token; adding a 4-row-blocked int8 integer-dot matvec to BOTH arms landed the final **dense 199.6 vs PKM 51.2 us/token, 102x capacity, 6.49x fewer bytes read**. Quality settled by a matched A/B trained end to end **on the clamped 800 MHz i7** (5m shape, enwik8, 10,000 steps each): dense val **1.299641**, top-k PKM **1.294813** — PKM ahead at every step from 7500 on, but 0.37% on a single seed so the reportable claim is PARITY (agent_roe seed rule). Capacity is unexploited: 12.7x the params only matches, because enwik8 at 95 MB cannot fill it. Threshold gating ported back into the PyTorch layer (hard gate forward so it matches the kernel exactly, straight-through backward so `theta` learns — verified real gradient and genuinely variable firing at ~12.8 of 32 candidates), new trunk `hybrid_pkm_fire`, third arm training. **Four negatives banked, each killing a plan I had already written down:** PKM is NOT a training-speed lever (dense 592M 2542 tok/s vs PKM 2309M-capacity 983 tok/s on MPS — capacity costs training time, it does not save it, so my "500M in 4 days via PKM" estimate was wrong and is retracted); sparse gradients on the value table LOSE on unified memory (0.209 vs 0.188 s/step at 537M capacity despite only 4.8% of slots touched); `n_chunks` does not generalize across shapes (+68% at chat200m, but 0.86x/0.70x at 593M b24 — splitting an already-large batch starves the GPU); and Muon is an **11x tax** on the clamped CPU (9.5 vs 0.81 s/step) though it remains the GPU default. Honest 500M budget now measured rather than extrapolated: **593M on M3 Ultra at b24 bf16 = 5541 tok/s = 24.8 days Chinchilla**, so the sub-week target needs `torch.compile` plus Muon convergence plus distillation, and n_chunks/PKM are NOT part of that path. Two of my own bugs were caught only by parity checks and are worth remembering: an AVX2 kernel with broken maddubs sign handling (relative error 1001) and a threshold calibration that silently measured an EMPTY gather and reported a beautiful fake 6.3x. Platform work alongside: rule-11a `probe_module()`/`probe_weights()` contract added to FFN/MoEFFN/ProductKeyMemory so the dump suite, `diff`, `pruning` and `export` stop reaching into `ff.up`/`ff.down` (dump failures 66 -> 0 in a live run; pruning now refuses non-prunable trunks with a clear message, export joins the rule-40b variant refusal), and a missing `os.makedirs` in `corpus_sync.py` that made every HF-stream and zip corpus install fail on a fresh box with no `data/corpus/`. Artifacts: `veritate_core/model_pkm.py`, `models/{pkmctl_5m,pkmmem_5m,pkmfire_5m}/`, C harnesses in cardinal `/tmp/pkm_{bench,bench_i8,bench_thresh,profile,mv,fair}.c`. Nothing staged or committed.
+
 - **2026-07-27 evening (wren instruction-following: cause found and measured; SFT v1 a net NEGATIVE, v2 tests the fix; 5 platform defects fixed incl. IFEval scoring framing not obedience):** `wren` (270M hybrid, 5.4B tokens, forked from chin200m@55000, trained to 58500 on fortis) is not broken: identity, factual recall and IDK calibration all work, and it is coherent in ChatML. It fails ONE thing, instruction execution. Measured: **IFEval 11.1% (4/36) with `item_count`, `word_count`, `starts_with` and `json` all at exactly 0%.** Cause is arithmetic, not mystery: its chat data was **0.4% instruction-following** (160 of ~44,500 authored records), because authoring genres with STRUCTURAL requirements yield far less than free-form ones on `qwen2.5:14b-instruct` — measured over two 22k-record jobs: jokes/writing 82-194%, conversation 39%, `instruct` 64%, cogito 15%, **`format_constraint` 1.3%, `carryover` 1.4%, `grounded_read` 0.5%**. A genre weighted 0.10 that yields 1.3% lands at 0.4% of the corpus and NOTHING surfaced it: per-genre yield is in `state.json` but was never read against planned calls. **Standing rule banked: planned calls are not produced records; read `authoring.per_genre` + `authoring.rejects` before trusting any mix.** Built the missing capability as data: new `instruct` genre (compose/enumerate/transform/summarize/extract/translate/compute/compare/classify/define/steps), `min_turns: 2` to keep structural demand low. Three self-inflicted errors caught mid-run: (1) the teacher **regurgitated my brief's examples verbatim** — one prompt 24x, and one of them ("write one sentence about rain") was also an EVAL prompt, which would have shown a fake improvement; fixed by stripping quotable examples and adding a `dedup_user_turn` gate flag (the existing opening cap keys on whole-record text, so the same instruction with a different answer passed freely); (2) I chased VOLUME while **diversity** was the binding constraint — distinct-5-gram decayed to the 0.90 floor at ~2,200 records; the fix was replacing 15 abstract `situations` with **40 concrete subject domains** (14 voices x 40 domains = 560 combinations) plus temperature 0.7->0.95, which took variety 0.9046 -> **0.9827**; (3) I was generating families the eval does not test (389 `define-in-one-line`) while `json` and `avoid-a-letter` had **zero** coverage — rebalanced the voice pool toward verifiable families. Result: `instruct` = **4,263 records / 1.02 MB / variety 0.983 / 0-of-36 eval contamination across 74 MB** of all four mix corpora. **the first SFT attempt (`wren_sft`, instruct 0.50 + veritate_sft/sft_idk/skills, LR 3e-5, 180 steps, batch 16, loss_mask=assistant) was a NET NEGATIVE and is not shippable.** Form compliance rose 55.6% -> 63.9% (yes/no-first **0/4 -> 4/4**, "List three colors" gibberish -> "Yellow, green, blue", "3 apples eat 1" -> "2") but strict IFEval stayed **flat at 11.1%** and it REGRESSED what wren was good at: "How many days are in a week?" **"7" -> "1) 2) Pegged to base."**, and 2 of 5 identity prompts degraded (temperature 0, so not sampling noise). Two causes, both mine: **no replay data and no cogito in the retention mix** (I named catastrophic forgetting as the top risk then protected the wrong things — wren's facts come from its pretraining `fineweb_edu`/`wikitext103`, none of which was in the SFT mix), and **template intrusion** from 344 `numbered-steps` records (8%) teaching it to answer any uncertain question with a numbered list. **Third finding, about the instrument: 47% of my eval rules required the correct ANSWER (`contains`, `starts_with` pinned to the true value), so they grade reasoning, not obedience** — which is why a real form gain scored flat. Split out `ifeval_form.json` (26 items, every rule answer-independent, `starts_with_yes_or_no` passes on either answer) selectable via `ifeval_set`. Platform defects fixed with tests: `_trim` cut only COMPLETE stop markers so every buffered reply leaked `<|im_end|`; **IFEval fed raw prompts with no chat template and no decode stop, so it scored the framing rather than the instruction following and was unusable on any chat model**; the authoring gate split teacher replies on newlines and lost every record carrying a raw newline in a string (+7.1% records via `iter_json_objects` with `raw_decode`/`strict=False`); 5 new checkers (`word_count`, `item_count`, `contains`, `starts_with`, `forbidden_words`). 912+ tests pass, ruff clean. **BOTH of my recipes FAILED, and the answer was already in this repo.** Retry (fineweb replay 0.15 + cogito 0.08, instruct 0.35, LR 2e-5, 160 steps) scored **form 30.8% against wren's 34.6%** on the answer-independent set: `starts_with_yes_or_no` 20% -> **100%** and `sentence_count` 25% -> 50%, but `word_count` **100% -> 0%** and `forbidden_words` 100% -> 0% because the SFT made the model MORE VERBOSE, so it now overshoots word ceilings it previously passed. Retention recovered only to 5/7 (still lost 'days in a week' -> '14 days'). **Then I read `successes.md` and found 2026-07-20 IDEA 8 already solved this on wren's own parent lineage: `sft_instruct_v1` on a chin200m@55000 fork, +50-58pt format lift, ZERO bleed, val drift +0.002.** Its recipe is the INVERSE of mine: **dose 0.15 (not 0.35-0.50), replay 74% (fineweb 0.42 + chat_500mb 0.22 + wikitext103 0.10), 3500 steps (not 160), 4 focused families (not 14).** Low dose + heavy replay + long training; I ran high dose + light replay + short training and got forgetting both times. **Process failure worth banking: read `successes.md` / `failures.md` / `ideas.md` at session start before designing an experiment — CLAUDE.md points at them and a week-old entry documented the working recipe for exactly this task.** Relaunched `wren_sft` in place (failed attempts deleted, no version suffixes) with the ledger recipe applied to the broader authored `instruct` corpus: `instruct:0.15,fineweb_edu:0.42,chat_500mb:0.22,wikitext103:0.10,skills:0.05,sft_idk:0.03,cogito:0.03`, 3500 steps, LR 2e-5 constant, ckpt_every 500. Measured baselines to beat: **wren form 34.6%, mixed-set IFEval 11.1%, retention 7/7.** `wren` itself is untouched at `models/wren`. Artifacts: `trainers/corpus/instruct_*`, `trainers/corpus/cogito_*`, `veritate_mri/data/eval/samples/ifeval_form.json`, `models/wren_sft/`, `models/wren_sft/`, `developer_documentation/training/deep_eval_suites.md`, genre-yield table in `developer_documentation/corpus/authoring.md`.
 - **2026-07-25 evening (IDEA 9 growth experiment COMPLETE: Net2Net widen = real 3.6x step-lever, but 1.66x compute LOSS as run; role binding dead across 4 sizes -> failures.md):** Ran the pre-registered grown-vs-scratch experiment. A GROWN = `conceptsho_10m`@2000 (15.99M) ffn-widened 1280->2560 to 25.74M then 1000 stage-2 steps; C SCRATCH = same shape random init, 1000 steps; identical corpus/batch/LR, eval grid 50, gates fixed in ideas.md BEFORE C ran (threshold as a PROTOCOL — T = A's val at its 250th stage-2 step = 0.121434 — not a hand-picked number). **Function-preserving growth verified on the hybrid trunk for the first time** (the upcycle kit targets the deleted veritate_800m dense plugin; its smoke + model-level wrappers are dead, state_dict fns are fine): new ff.down cols exactly 0.0, old cols bit-exact, and resume loss 0.0917 vs parent 0.0923 — no spike. **Steps-to-target PASS as a whole-curve shift:** 0.30 -> 50/450 (9.0x), 0.20 -> 100/500 (5.0x), 0.15 -> 100/550 (5.5x), T -> 250/900 (**3.6x**); C never catches A in 1000 steps. **But the falsifier registered beside the gate FIRED: total compute A 38.42 G vs C 23.17 G = A cost 1.66x MORE** (params x steps) — the 3.6x is in LARGE-model steps only and stage-1 is not free. Break-even stage-1 budget = 1046 small steps; stage 1 saturated ~1250 and I ran 2000, overspending ~950 and flipping a likely win into a loss. **Operative rule for the flagship: stop every curriculum stage the moment its val curve flattens, then widen.** Role binding (n=91, chance 6%): subject-role 11% (A) / 29% (C) — and the decomposition is the real finding: **A answers with the OBJECT regardless of question (78% of "who" items), so its headline "what 81% / held-out 60%" is a constant emit-the-object policy, NOT binding; C echoes the noun out of the question** ("Who sees the boy?" -> "The boy does."). Two shortcuts, no relation. F4 now fails at 10M/26M/122M/200M/800M and under BOTH data regimes -> data lever and small-scale capacity lever both killed in failures.md; only relations-in-the-index (F5, 36->100%) or an explicit binding primitive remain. Three self-inflicted errors caught and fixed mid-run, each recorded: (1) the first design continued the grown model on the SATURATED stage-1 corpus (killed at ~12 min — a saturated benchmark cannot measure capacity); (2) stage 2 ALSO floored at 0.121 despite 3x block diversity, because **a procedurally-generated corpus floors at its GENERATOR's complexity, not its byte count** — unique strings are not information, so capacity work must use real text; (3) the held-out set had **7/91 answers leaking into train** (one block type drew objects from a list containing the animate entities) plus a "They pulls" agreement bug — both fixed, corpus rebuilt, arm A restarted. Standing method rule banked: **score WHICH entity a wrong answer names, never just accuracy.** Artifacts: `models/conceptsho_grown/`, `models/conceptscratch_10m_w2/`, `trainers/corpus/concepts2_ho_*`, `--stage 2` in `build_curriculum_corpus.py`, `10m_w2` size added to `trainers/veritate_10m/manifest.json` (pure addition, upstream mirror pending).
 
@@ -135,6 +137,107 @@ occasionally return blank answers; all three are fixed.
 **The bigger sibling (chat200m).** Training now, with every lesson above baked in from the first
 step. Tuning made it about twice as fast to train as planned (~2 days, not 4-5), and at matched
 amounts of reading it is already ahead of the smaller model in quality.
+
+---
+
+## 2026-08-03 — product-key memory: the layer, the kernel, and what the instrument was hiding
+
+Context: the standing question is local AI on OLD hardware, without buying specs. Cardinal
+(OptiPlex 7070, i7-9700T, BIOS-clamped to 800 MHz) is the target, and its decode is
+RAM-bandwidth-bound, so the only currency is bytes read per token. A memory layer trades
+streamed weights for addressed lookups, which is the one mechanism that decouples capacity
+from bytes read.
+
+**The layer.** `veritate_core/model_pkm.py`: `ProductKeyMemory` replaces the dense FFN
+up/down pair with two sqrt-sized sub-key searches locating the top-k of `sub_keys^2` value
+slots, so read cost is `O(sub_keys*key_dim + top_k*hidden)` while capacity is
+`O(sub_keys^2 * hidden)`. Wired as `global_ffn=pkm` on the patched trunk mirroring the MoE
+slot, reachable as `trunk=hybrid_pkm`. Slot spread verified healthy at init: 32,768 reads
+hit 31,278 DISTINCT slots (95.5%), so the classic collapse-onto-hot-slots failure is absent.
+
+**The instrument was the finding.** In eager PyTorch the layer measured 4.9x SLOWER than
+dense at batch=1 (1387 vs 281 us/token) despite doing 5.5x FEWER multiply-adds and reading
+8.7x fewer bytes. A batch sweep did not close the gap (7x at batch 1024), which ruled out
+dispatch amortization as the explanation and forced a direct measurement of the floor:
+
+| op (cardinal, 7 threads, batch=1) | work | cost |
+|---|---|---|
+| `x*2` on a 320-vector | ~none | 20.3 us |
+| `a@b` 320x320 | 102,400 MACs | 38.0 us |
+
+PyTorch charges ~20 us per OPERATION. 102k multiply-adds cost 17.7 us more than doing
+nothing. Dense FFN wins in eager because it is 3 fat ops; PKM is ~40 skinny ones. **Any
+sparse, gated or conditional design loses in eager regardless of merit, so batch-1
+architecture comparisons in PyTorch measure the dispatcher.** Prior batch-1 architecture
+conclusions in this repo are re-openable on that basis.
+
+**The kernel, in two stages, both arms held at equal optimization.** Component profile of
+the int8 forward killed my own prediction: the top-k sorts were 52% of cost and the
+scattered gather only 8%; forcing the gather fully contiguous gained 7%, so access pattern
+was never the bottleneck. Replacing ranking with a firing threshold (AVX2 compare +
+movemask, **0.586 us vs topk 8.778 us = 15x** on that stage) took PKM 139.3 -> 69.6
+us/token. Adding a 4-row-blocked int8 integer-dot matvec to BOTH arms gave dense its own
+speedup (327 -> 199.6) and settled the ratio:
+
+| int8, batch=1, core-pinned, both arms AVX2 | us/token | capacity |
+|---|---|---|
+| dense FFN | 199.6 | 819,200 |
+| PKM + firing threshold | **51.2** | **83,886,080** |
+
+**3.90x faster, 102x capacity, 6.49x fewer bytes.** The fair-comparison discipline mattered:
+an earlier 4.70x shrank to 3.90x once dense also got AVX2, and reporting the smaller number
+is the correct call.
+
+**Quality, trained end to end on the clamped i7.** Matched A/B, 5m shape (8L h256 ffn1024),
+enwik8, AdamW, fp32, qat off, seq 256, b8, 10,000 steps per arm: dense val **1.299641**,
+top-k PKM **1.294813**. PKM led at every matched step from 7500 on. Margin is 0.37% on a
+single seed, so per the agent_roe seed rule the reportable claim is **parity**, not a win —
+which is all the thesis needs, since parity plus 3.90x is the win. Capacity is unexploited:
+12.7x the params only matches, because enwik8 at 95 MB cannot fill 102x the slots.
+
+**Threshold gating ported back into the trained model.** Until this, the quality number
+described a top-k model and the speed number described a threshold model. `_fire()` uses a
+hard gate in forward (exactly matching the kernel) with a straight-through sigmoid backward
+so `theta` still learns, thresholding the STANDARDIZED candidate score so it stays scale
+free as score magnitudes drift. Verified: real `theta` gradient on CPU and MPS, and genuinely
+variable firing (~12.8 of 32 candidates, not a fixed count). New trunk `hybrid_pkm_fire`;
+default stays top-k so nothing existing changes. Third arm `pkmfire_5m` training.
+
+**Four negatives, each killing a plan already written down.**
+- **PKM is not a training-speed lever.** MPS, seq 512 b4: dense 592M **2542 tok/s** vs PKM
+  2309M-capacity **983 tok/s**. Capacity costs training time. My "500M in ~4 days via PKM"
+  estimate was wrong and is retracted.
+- **Sparse gradients lose on unified memory.** 537M-param value table, only 4.8% of slots
+  touched per step, yet dense grad **0.188 s/step** beats `sparse=True` + SparseAdam
+  **0.209 s/step**. Bandwidth makes the dense update cheaper than building the sparse tensor.
+- **`n_chunks` does not generalize.** +68% at chat200m's shape; at 593M b24 bf16 it is a
+  loss (1 -> 5722 tok/s, 2 -> 4924 = 0.86x, 4 -> 3993 = 0.70x).
+- **Muon is an 11x tax on the clamped CPU** (9.5 vs 0.81 s/step), while remaining the GPU
+  default. Optimizer choice is per box, not per project.
+
+**500M budget, measured not extrapolated.** 593M on M3 Ultra: b4 fp32 3313 tok/s (41.4 d),
+b12 bf16 4058 (33.8 d), b24 bf16 **5541 (24.8 d)** at Chinchilla 20 tok/param. The sub-week
+target therefore needs `torch.compile` + Muon convergence + distillation; n_chunks and PKM
+are explicitly NOT on that path.
+
+**Two of my own bugs, caught only by parity checks.** An AVX2 matvec with broken `maddubs`
+sign handling (relative error 1001 vs scalar), and a threshold calibration that computed
+thresholds on the raw query while the forward used the RMS-normalized one — nothing ever
+fired, the gather was empty, and it reported a clean, plausible, entirely fake 6.3x. Both
+would have shipped as wins. Rule 24's scalar-parity gate earned its keep twice in one day.
+
+**Platform work alongside.** Rule-11a contract `probe_module()` / `probe_weights()` added to
+FFN / MoEFFN / ProductKeyMemory so consumers stop reaching into `ff.up` / `ff.down`:
+checkpoint_probe (hook site + narrow-variant width padding + byte-direction stack), diff,
+pruning (skips non-prunable layers, refuses with a clear message when nothing is prunable),
+export (joins the rule-40b variant refusal instead of KeyError). Dump failures 66 -> 0 in a
+live run. Separately, `corpus_sync.py` never created `data/corpus/` on the HF-stream or zip
+paths, so every corpus install failed on a fresh box; the generic downloader did it and
+those two did not.
+
+Artifacts: `veritate_core/model_pkm.py`, `models/{pkmctl_5m,pkmmem_5m,pkmfire_5m}/`, C
+harnesses at cardinal `/tmp/pkm_{bench,bench_i8,bench_thresh,profile,mv,fair}.c`. Nothing
+staged or committed.
 
 ---
 
@@ -523,3 +626,52 @@ failures (reproduce on stashed tree).
 **Docs:** `developer_documentation/corpus/library_ladder.md` (ladder + cap
 rationale), `architecture/backend/corpus_library.md` (5 formats + release
 flow), `architecture/frontend/settings_tab.md` (catalog-driven gate).
+
+---
+
+## 2026-08-12 — wren1_0 chat SFT launch
+
+**Run:** `wren1_0`, resumed from `wren_base` step 146,014 (270,510,336 params,
+hybrid trunk, layers=16 -> 20 blocks). 8,000 steps, `loss_mask=assistant`,
+base_lr 5e-5 -> 5e-6, wsd decay_frac 0.25, warmup 200, batch 48 x seq 1024 x
+n_chunks 4. Mix: mixed_chat 0.300, chrg 0.200, wren_identity 0.180,
+hansard 0.120, scotus 0.080, ukinquiry 0.070, veritate_chat 0.050
+(1,895,835,636 train bytes, val = mixed_chat_val). Launched via
+`POST /trainers/run`. Steady 12,880-12,904 tok/s vs the base run's 12,857
+ceiling; 15.2 s/step, ~33.8 h projected.
+
+**Two bugs caught at launch, both would have been silent.**
+
+1. `shape_from_checkpoint` counted `blocks.N.*` entries as the layer count.
+   VeritatePatched builds `N_LOCAL_ENC(2) + layers + N_LOCAL_DEC(2)`, so
+   wren_base's `layers=16` writes 20 entries. The first launch built a 24-block
+   model, `load_resume_state(strict=False)` loaded the 20 real blocks, and
+   54,649,152 params stayed at random init with nothing in the log. Caught by
+   diffing the printed param count (325,159,488) against the checkpoint
+   (270,510,336). Fix: `trunk_block_overhead()` + `PATCHED_TRUNKS`, and
+   `load_resume_state(require_complete=True)` now reports every stranded tensor
+   and refuses a plain resume that leaves any. wren_base's `shape.layers: 16`
+   was correct all along; the earlier todo calling it a bug was wrong, reverted.
+2. The unknown-flag fatality shipped earlier rejected 9 live dashboard schema
+   fields (`model_type`, `layers`, `hidden`, `ffn`, `heads`, `rope_base`,
+   `alpha`, `variant`, `init_from`) — every UI launch would have died. Shape
+   fields are now parsed and ASSERTED against the resolved shape rather than
+   ignored; the rest joined SCHEMA_IGNORED_FLAGS. A test scrapes TRAINER_SCHEMA
+   out of `web/index.js` and fails on any unhandled field.
+
+**Hook cost control.** Measured the full dump suite at ~137s/checkpoint across
+three wren_base checkpoints, of which generation 33s, reading_comprehension 31s,
+writing_health 24s, reasoning 20s, math 20s (= `save.HEAVY_DUMPS`); everything
+else totals ~9s. New `--hooks full|light|off` + `--hooks_full_every N`. This run
+uses `light` + every 4th, which bought ckpt_every 250 / eval_every 200 for ~1%
+overhead instead of ~4% at ckpt_every 500.
+
+`use_act_ckpt` left ON. mem_planner reports `tier=none fits=True need=206.5GB
+budget=217.6GB`, but the budget assumes the whole 256 GB machine (~170 GB was
+actually free) and the planner does not model n_chunks. Not worth an OOM on a
+34 h run; queued as a measured experiment for the next pretrain (~30% on offer).
+
+**Naming:** `wren1.0` is rejected by `NAME_RE` (`[a-z0-9_]` only). On disk as
+`wren1_0`.
+
+**Tests:** 1,115 passed, 6 skipped, 8 xfailed.

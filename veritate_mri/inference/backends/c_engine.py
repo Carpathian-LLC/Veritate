@@ -20,6 +20,7 @@
 # Imports:
 
 import os
+import platform
 import struct
 import subprocess
 import sys
@@ -71,10 +72,24 @@ STOP_SEQ_MAX_LEN     = 31    # VERITATE_MAX_STOP_LEN - 1 in main.c
 PROMPT_ANCHOR_DIVISOR = 8
 # Hybrid-trunk batched prefill width (VERITATE_PREFILL_BATCH). Amortizes the local-block
 # weight streaming across the chunk; bitwise-identical to sequential prefill
-# (tests/engine/test_prefill_batch.py). Off: on the 200m hybrid trunk a cold 734-byte
-# prompt costs 14.4s batched against 1.15s sequential (M3 Ultra, 2026-07-27). Raise it
-# only per-arch behind a measurement.
-PREFILL_BATCH        = 1
+# (tests/engine/test_prefill_batch.py). Per-arch because the two measured tiers disagree
+# by more than an order of magnitude, and each entry states the box it was measured on:
+#   apple silicon: 1. Batching is a catastrophic regression there - on the 200m hybrid
+#     trunk a cold 734-byte prompt costs 14.4s batched against 1.15s sequential
+#     (M3 Ultra, 2026-07-27).
+#   linux x86_64: 32. Cold 320-byte TTFB on the 200m hybrid trunk, i7-9700T @800MHz:
+#     batch 1 3.46s, 8 2.38s, 32 2.11s, 64 2.12s. Plateaus at 32 (2026-08-08).
+# Any tier without its own measurement stays sequential. Add an entry only with numbers
+# from that arch; never extrapolate one tier's win onto another.
+PREFILL_BATCH_DEFAULT = 1
+PREFILL_BATCH_BY_ARCH = {("linux", "x86_64"): 32}
+
+
+def prefill_batch():
+    """Batched-prefill width for this box, or the sequential default when this
+    arch has no measurement of its own."""
+    return PREFILL_BATCH_BY_ARCH.get(
+        (sys.platform, (platform.machine() or "").lower()), PREFILL_BATCH_DEFAULT)
 
 DLA_TOPK            = 12
 DLA_ENTRY_BYTES     = 16   # u8 layer, u8 pad, u16 neuron, i32 act, i32 w, i32 contrib
@@ -293,7 +308,7 @@ class CTracedSubprocess:
             env.setdefault("VERITATE_STATE_CACHE",
                            os.path.join(os.path.dirname(self.model_path), STATE_CACHE_DIRNAME))
         # Batched prefill off the TTFB path; setdefault so a parent env value wins.
-        env.setdefault("VERITATE_PREFILL_BATCH", str(PREFILL_BATCH))
+        env.setdefault("VERITATE_PREFILL_BATCH", str(prefill_batch()))
         # VERITATE_ADDONS=<csv> is inherited from the parent env automatically
         # via os.environ.copy(). set it before starting the MRI server to
         # enable engine-side addons. per-request addon selection from the

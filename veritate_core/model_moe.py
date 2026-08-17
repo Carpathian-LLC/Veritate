@@ -126,3 +126,9 @@ class MoEFFN(nn.Module):
         if self.capture_l1:
             self._last_l1 = out.abs().mean()
         return out
+
+    def probe_module(self):
+        return self.up
+
+    def probe_weights(self):
+        return self.up.weight, self.down.weight

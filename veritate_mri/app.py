@@ -27,8 +27,8 @@ sys.path.insert(0, REPO_ROOT)
 
 from readers import checkpoints, models, paths
 from readers import config as cfg_reader
+from runtime import compression, lifecycle, sys_metrics
 from runtime import heartbeat as heartbeat_mod
-from runtime import lifecycle, sys_metrics
 from runtime import logs as logmod
 from runtime import settings as settings_mod
 from training import build_runner
@@ -168,6 +168,7 @@ from routes import (
     wiki_routes,
 )
 
+compression.register(app)
 auth_routes.register(app)
 api_auth_routes.register(app)
 atlas_routes.register(app)

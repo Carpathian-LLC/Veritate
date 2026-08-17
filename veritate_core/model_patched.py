@@ -31,6 +31,8 @@ import torch.nn.functional as F
 from . import qat as _qat
 from .model import ACT_DEFAULT, REG_DEFAULT, VOCAB_BYTE_LEVEL, Block, QuantLinear, RMSNorm
 from .model_moe import MoEFFN
+from .model_monarch import MonarchFFN
+from .model_pkm import PKM_GATE_THRESHOLD, PKM_GATE_TOPK, ProductKeyMemory
 from .model_recurrent import STATE_RULE_DEFAULT, RecurrentBlock
 
 # ------------------------------------------------------------------------------------
@@ -43,6 +45,9 @@ GLOBAL_MIXER_ATTN      = "attn"
 GLOBAL_MIXER_RECURRENT = "recurrent"
 GLOBAL_FFN_DENSE       = "dense"
 GLOBAL_FFN_MOE         = "moe"
+GLOBAL_FFN_PKM         = "pkm"
+GLOBAL_FFN_PKM_FIRE    = "pkm_fire"
+GLOBAL_FFN_MONARCH     = "monarch"
 UTF8_CONT_LO  = 0x80
 UTF8_CONT_HI  = 0xBF
 LOOP_MAX      = 4
@@ -113,10 +118,19 @@ class VeritatePatched(nn.Module):
         # (bool advanced indexing showed transient index corruption there).
         self.register_buffer("boundary", _boundary_table().float().unsqueeze(-1), persistent=False)
 
-        if global_ffn == GLOBAL_FFN_MOE:
+        if global_ffn in (GLOBAL_FFN_MOE, GLOBAL_FFN_PKM, GLOBAL_FFN_PKM_FIRE,
+                          GLOBAL_FFN_MONARCH):
+            kw = {"activation": activation, "capture_l1": capture_l1, "reg_mode": reg_mode}
+            if global_ffn == GLOBAL_FFN_MOE:
+                cls = MoEFFN
+            elif global_ffn == GLOBAL_FFN_MONARCH:
+                cls = MonarchFFN
+            else:
+                cls = ProductKeyMemory
+                kw["gate"] = (PKM_GATE_THRESHOLD if global_ffn == GLOBAL_FFN_PKM_FIRE
+                              else PKM_GATE_TOPK)
             for blk in self.blocks[N_LOCAL_ENC:N_LOCAL_ENC + self.glob_layers]:
-                blk.ff = MoEFFN(hidden, ffn, activation=activation,
-                                capture_l1=capture_l1, reg_mode=reg_mode)
+                blk.ff = cls(hidden, ffn, **kw)
 
         for p in self.parameters():
             if p.dim() >= 2:

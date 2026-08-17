@@ -2,6 +2,24 @@
 
 Falsified approaches. Each entry: the measured result that killed it and the retry condition. An approach here is dead until its retry condition is met. Short entries only.
 
+## training throughput levers
+
+**Net2Net growth-at-flatten has no trigger on real text: the 3.6x was a saturating-corpus artifact**
+Growth only nets compute if the cheap stage stops when its val curve flattens (successes.md 2026-07-25 rule). Built the detector and the widen (`veritate_mri/training/grow.py`, `grow_to_ffn` flag, function-preservation verified) and measured the premise directly: on enwik8 at the 5m shape, **all three completed 10,000-step runs still show 9.2-9.8% relative val gain in their final window**, and none ever flattens. A 1500-step smoke never fires either (10.6% gain). The original 3.6x was measured on a procedurally-generated curriculum corpus that its own entry flags as SATURATING; real-text pretraining at these scales does not stop paying, so there is no moment at which widening is free.
+Retry: only where a stage genuinely saturates (a narrow curriculum stage, a drill corpus, or a heavily-repeated small corpus). Do NOT apply to real-text pretraining. The widen and detector are built and tested if a saturating stage ever appears. (2026-08-05)
+
+**Product-key memory is not a training-speed lever**
+It is an inference and capacity lever only. Training still reads every addressed slot and the optimizer still updates the table, so capacity costs training time rather than saving it. Measured on M3 Ultra (seq 512, b4, MPS): dense 592M **2542 tok/s** vs PKM 2309M-capacity **983 tok/s**. Any plan that budgets training time from ACTIVE params is wrong for PKM. (2026-08-03)
+Retry: only if a sparse-update path lands that makes optimizer cost scale with touched slots rather than table size, and it beats dense at matched capacity.
+
+**Sparse gradients on the PKM value table: no win on high-bandwidth hardware**
+At 500M-class capacity (sub_keys 1448 = 2,096,704 slots, 537M value params, b8 seq256) M3 Ultra: dense grad **0.188 s/step**, `F.embedding(sparse=True)` + SparseAdam **0.209 s/step**. Only 4.8% of slots are touched per step, so the sparsity is real; unified memory bandwidth just makes the dense optimizer update cheap enough that sparse tensor construction costs more than it saves. (2026-08-03)
+Retry: on a bandwidth-poor box (CPU-only edge training), or once table size exceeds memory and the dense grad allocation itself becomes the constraint.
+
+**`n_chunks` optimizer amortization does not generalize across shapes**
+Measured +68% at chat200m's shape. At 593M (24L h1280 ffn5120, seq 1024, b24, bf16, MPS) it is a LOSS: n_chunks 1 **5722 tok/s**, 2 **4924** (0.86x), 4 **3993** (0.70x). Splitting an already-large batch starves the GPU; the win only exists where the per-step batch is below the hardware knee. (2026-08-03)
+Retry: re-benchmark per shape before enabling. Never carry the setting across model sizes.
+
 ## relational role binding
 
 **Zero relational role binding at any scale — architectural wall, not data or capacity**
@@ -61,6 +79,13 @@ Literature: needs ~2x hidden width below ~3B, QAT adds cost. Measured in-repo on
 **INT4 per-tensor PTQ is catastrophic**
 +193.5% ppl on a trained 85M. Per-row and QuaRot variants are near-free (successes.md). (experiments/v2/int4_quarot)
 
+**Matching structured layers to dense on PARAMETERS is the wrong control and inverts the result**
+Holding parameters equal forces a structured layer to a 5-6x wider hidden dimension, and activation bytes scale with hidden, not with params. Under that control Monarch measured 0.13-0.18x on cardinal and read as dead. The correct control is matched HIDDEN dimension, where activations are identical and the structure shows as a parameter/FLOP cut: the same benchmark then reads 1.35x at H=1024 and 3.15x at H=2304 (ideas.md IDEA 14). Rule: for any layer that changes the params-to-hidden relationship, hold the activation shape fixed and let params vary, never the reverse. (2026-08-05)
+
+**int8 training math does not raise cardinal's compute roofline: no VNNI means the win is bandwidth, not arithmetic**
+The `_mm256_cvtepi8_epi16` + `_mm256_madd_epi16` path is not arithmetically faster than `_mm256_fmadd_ps` on AVX2 without VNNI; it moves 4x fewer bytes. Measured on cardinal, single core, fp32 and int8 kernels structurally identical (same transposed-B dot product, scalar parity checked), sweeping matrix size to separate the two effects: cache-resident **N=64 1.175x, N=80 1.305x, N=96 1.528x**; bandwidth-bound **N=256 3.415x, N=1024 2.770x**. Arithmetic-only the format is worth ~1.2-1.5x, and training on cardinal is compute-bound (4.81x thread scaling, successes.md), so it cashes at the low end. Also: comparing a transposed int8 kernel against a row-major fp32 one reports 4.31x, of which **1.93x is memory layout alone** — a fair int8 claim requires identical structure in both arms.
+Retry: only on a chip with VNNI (`vpdpbusd`), where the arithmetic ratio is real, or for bandwidth-bound decode where the 4x traffic cut already pays (successes.md PKM kernel). (2026-08-05)
+
 **Naive sparse kernels lose to dense by 800-1700x at 87.5% activation sparsity**
 dense 1.256 ms/iter vs CSR 1002.7 vs gather 2170.6 on this hardware, despite 8x fewer multiplies in theory. ReLU-sparsity FLOP savings are not realizable here. (experiments/v2/neuron)
 
@@ -77,7 +102,8 @@ base vs +aux val nll Δ+0.0004; ascii OOD nll 5.912→6.040. Small n, low confid
 ~200 tok/s vs ~4,858 at fixed shapes. All MPS training uses fixed or bucketed shapes.
 
 **torch.compile crashes the hybrid trunk on MPS**
-Inductor `aten.convolution_backward` stride assertion (2026-07-13). ~33% win on dense only. Re-benchmark only after a torch/MPS upgrade.
+Inductor `aten.convolution_backward` stride assertion (2026-07-13). ~33% win on dense only. Re-tested torch 2.12 on 2026-08-03: IDENTICAL crash, same op, same assertion. Still dead whole-model.
+Partial workaround measured (successes.md): compiling only `blk.ff` and the local-attention submodules, leaving the recurrent blocks eager, does not crash and buys **1.10x** at 593M. The conv is the only blocker, so a compile-safe short conv would unlock the rest.
 
 ## training recipe kills
 
@@ -111,3 +137,24 @@ Both bench runs were the same config (22,381 vs 22,367 tok/s). What survives: se
 
 **MoE on MPS: 0.715 of hybrid throughput (kill line 0.70) — sequencing, not kill**
 Attributed to missing sparse-routing kernels on MPS, not the idea. Deferred to an 80M A/B with a pre-committed symmetric rule.
+
+**Aggregate val bpb does not measure instruction-format adherence (wren_sft, 2026-08-05)**
+wren_sft 200m, mix fineweb_edu 0.40 / openwebtext10g 0.30 / chat_5gb 0.15 / wikitext103 0.05 / veritate_v1 0.05 / instruct 0.05 — 70% general web, 20% chat/instruct. Val fell 0.7798 (step 65,000) → 0.7656 (step 95,000), ~30,000 steps. 16-prompt greedy A/B over that same interval: 95k won 2 (factual recall — "Mercury, Venus, Earth."→"Jupiter.", "I can't do that"→"Elephant"), 65k won 3 (format — correct prime definition→nonsense, one-sentence ocean→ramble, "Yes, water is wet"→"No, water is wet"), 11 ties. Arithmetic wrong at both (2+2 → 3 vs 5; Monday→Monday vs Sunday). Val tracks the 70% it is mostly made of; the 20% you actually want is invisible to it. Rule: for any SFT run, the stop/continue signal is the target behavior measured directly or a domain-split val — never aggregate bpb. n=16 greedy, single seed; enough to refuse a stop decision, not enough to rank checkpoints.
+
+**No real eval data on mirach — the suites are smoke fixtures**
+`veritate_mri/data/eval/samples/`: mmlu 3 items, hellaswag 2, ifeval 36. Any suite number computed here is noise. CPU eval also runs ~5 min/item (ifeval, 128 max_new), so even the 36 is ~3 h/checkpoint. Blocks every "did the last N steps buy anything" question. Fix before the next run: real suite data on disk + eval on GPU.
+
+**`layers` on a patched-family trunk is not the checkpoint's block count (wren1_0 launch, 2026-08-12)**
+`VeritatePatched` builds one flat list of `N_LOCAL_ENC (2) + layers + N_LOCAL_DEC (2)` blocks, so wren_base at `--size 200m` (`layers=16`) wrote 20 `blocks.N.*` entries. A resume that inferred `layers=20` by counting those entries built a 24-block model; `load_resume_state` used `strict=False`, so it loaded the 20 real blocks, left **54,649,152 params at random init**, printed no warning, and would have "SFT"ed a partly-random model to completion. Caught only because the printed param count (325,159,488) did not match the checkpoint (270,510,336). The `shape.layers: 16` in wren_base's config.json was correct all along; the earlier todo calling it a bug was wrong.
+Rule: never infer a layer count from `blocks.*` keys without subtracting the trunk's local-block overhead, and never resume on `strict=False` without asserting nothing was stranded. Both now enforced (`trunk_block_overhead`, `load_resume_state(require_complete=True)`, 34 tests). Diff `sum(p.numel())` against the checkpoint before trusting any resume.
+**Wren 1.0 chat SFT: a transcript-heavy mix buys turn depth and pays in circular filler (2026-08-16)**
+wren_base + 8,000 steps, `loss_mask=assistant`, mix mixed_chat 0.30 / chrg 0.20 / wren_identity 0.18 / hansard 0.12 / scotus 0.08 / ukinquiry 0.07 / veritate_chat 0.05. 35 h. Model deleted 2026-08-17; these are the numbers.
+
+30-prompt greedy A/B vs the base: median reply 96 B -> 276 B, but **repeats a 6-word window 0.06 -> 0.44**, grounded retrieval (answer present in the prompt) **0.62 -> 0.38**, identity 0.00 -> 0.50. Longer and worse. It learned chat cadence and filled it with restatement ("The ocean is a vast and complex ecosystem that is deeply interconnected with the ocean itself." twice in one reply), and began overwriting facts sitting in its own context ("The blue folder holds the contracts" when the prompt said the red one did).
+
+Three causes, all confirmed by the wren1_1 retry that fixed them (successes.md 2026-08-17):
+1. **47% of the mix was congressional/parliamentary/court transcript**, a formulaic register. Cutting it to 0.20 took looping to 0.19 and restored grounded retrieval to 0.62.
+2. **Identity at dose 0.18 over a 226 KB corpus (~1,250 passes) memorized question phrasings, not facts** -- "Who are you?" perfect, "What platform were you trained on?" returned a paragraph about Ariana Grande. The corpus had no spec family at all; parameters/context/platform only ever appeared inside name and maker replies. Adding 250 spec templates took identity to 0.83 at a THIRD of the dose.
+3. `sft_idk` was never in the mix, an authoring miss, so the run said nothing about refusal behaviour.
+
+Rules: cap formal-transcript corpora under 0.20 of a chat SFT mix; they are a turn-DEPTH source, not a voice source. Grade a chat SFT under GREEDY decode -- `writing_health` samples at t=0.7 and reported distinct_4 rising 0.729 -> 0.986 ("repetition collapsing") for the checkpoint that looped 44% greedily; the two metrics disagreed completely and only the greedy one predicted chat quality. For identity, buy paraphrase diversity per fact before buying dose.

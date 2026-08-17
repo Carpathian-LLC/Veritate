@@ -79,8 +79,10 @@ typedef struct {
     float*  gate_buf;       // [H]
     float*  tmp;            // [H]
     float*  logits;         // [vocab] fp32, valid after each step
-    float*  lens_u;         // [H] scratch: logit-lens norm output (trace only)
-    float*  lens_f;         // [vocab] scratch: logit-lens fp logits (trace only)
+    float*   lens_x;        // [layers x H] staged logit-lens norms, one row per staged block
+    float*   lens_f;        // [layers x vocab] staged logit-lens fp logits
+    int32_t* lens_l;        // [layers] block id of each staged row
+    int32_t  lens_n;        // staged rows awaiting the step's single unembed pass
     uint64_t bin_id;        // state-cache model fingerprint; 0 when unset
     // batched-prefill scratch, [V_PREFILL_BMAX][...]. allocated once at load,
     // used only when VERITATE_PREFILL_BATCH engages. pf_qx is int8-only.
@@ -144,7 +146,9 @@ typedef void (*hybrid_matmul_fn)(const void* w, const float* X, float* out,
                                  int32_t n, int32_t k, int32_t B,
                                  const int8_t* qx, const float* a_scale,
                                  int32_t j0, int32_t j1);
+// hybrid_matmul_wt: bin-dtype weights. hybrid_matmul_fp: always-fp32 (tok_emb).
 extern hybrid_matmul_fn hybrid_matmul_wt;
+extern hybrid_matmul_fn hybrid_matmul_fp;
 void hybrid_matmul_f32_scalar(const void* w, const float* X, float* out,
                               int32_t n, int32_t k, int32_t B, const int8_t* qx,
                               const float* a_scale, int32_t j0, int32_t j1);

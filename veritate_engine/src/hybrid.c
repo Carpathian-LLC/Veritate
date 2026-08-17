@@ -197,6 +197,7 @@ void hybrid_matmul_i8_scalar(const void* w, const float* X, float* out,
 hybrid_matvec_fn hybrid_matvec_wt = hybrid_matvec_f32_scalar;
 hybrid_matvec_fn hybrid_matvec_fp = hybrid_matvec_f32_scalar;
 hybrid_matmul_fn hybrid_matmul_wt = hybrid_matmul_f32_scalar;
+hybrid_matmul_fn hybrid_matmul_fp = hybrid_matmul_f32_scalar;
 
 // SIMD upgrades the scalar defaults per detected arch features.
 // VERITATE_HYBRID_SCALAR=1 forces the scalar references for kernel-identity
@@ -205,6 +206,7 @@ void hybrid_dispatch_init(int32_t dtype) {
     cpu_features_t feat;
     cpu_detect(&feat);
     hybrid_matvec_fp = hybrid_matvec_f32_scalar;
+    hybrid_matmul_fp = hybrid_matmul_f32_scalar;
     hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_scalar
                      : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_scalar
                      : hybrid_matvec_f32_scalar;
@@ -223,6 +225,7 @@ void hybrid_dispatch_init(int32_t dtype) {
 #elif defined(__x86_64__) || defined(_M_X64)
     if (feat.avx2 && feat.f16c) {
         hybrid_matvec_fp = hybrid_matvec_f32_avx2;
+        hybrid_matmul_fp = hybrid_matmul_f32_avx2;
         hybrid_matvec_wt = dtype == VERITATE_HYBRID_DTYPE_FP16 ? hybrid_matvec_f16_avx2
                          : dtype == VERITATE_HYBRID_DTYPE_INT8 ? hybrid_matvec_i8_avx2
                          : hybrid_matvec_f32_avx2;
@@ -794,7 +797,7 @@ static void recurrent_block_step(hybrid_t* h, const hybrid_block_t* b, int32_t g
 // trace capture — dense-frame layout, layers = total blocks. local blocks carry
 // real values; global blocks carry slot residuals on boundary bytes, byte
 // residual pass-through otherwise. The logit lens is now computed for every
-// block (trace_lens_compute). Global (GLA) attention stays zero: the recurrent
+// block (trace_lens_stage + trace_lens_flush). Global (GLA) attention stays zero: the recurrent
 // decode keeps only an O(1) state summary, so per-position attention weights do
 // not exist to emit without reintroducing O(seq) storage.
 // ------------------------------------------------------------------------------------
@@ -832,16 +835,28 @@ static void trace_attn_rows(trace_record_t* trace, const hybrid_t* h, int32_t L,
 // unembed, the same path the real logits take at step end. Fills every block's
 // lens slot (was zeroed); the last dec block's lens equals the real logits since
 // its post-residual is exactly what n_out norms. Frame layout is unchanged, so
-// the Python parser reads it transparently. rmsnorm + a vocab-sized matvec per
-// block per byte is ~2-3% of the forward and only runs in the traced path.
-static void trace_lens_compute(trace_record_t* trace, hybrid_t* h, int32_t L,
-                               const float* res) {
-    const int32_t H = h->hidden, S = h->seq, V = h->vocab;
-    rmsnorm_f32(res, h->n_out_w, h->lens_u, H);
-    hybrid_matvec_fp(h->tok_emb, h->lens_u, h->lens_f, V, H);
-    int32_t* dst = trace->lens_logits + ((size_t)L * S + h->pos) * V;
-    for (int32_t v = 0; v < V; v++)
-        dst[v] = (int32_t)lrintf(h->lens_f[v] * VERITATE_HYBRID_LOGIT_SCALE);
+// the Python parser reads it transparently.
+// Staging keeps the norm only; one flush per step then walks tok_emb once for
+// every staged block instead of once per block. hybrid_matmul_fp runs the same
+// per-(row, activation) fold as hybrid_matvec_fp, so the flush is bitwise-equal
+// to a matvec per block; only the (vocab row, block) visit order changes.
+static void trace_lens_stage(hybrid_t* h, int32_t L, const float* res) {
+    const int32_t H = h->hidden;
+    h->lens_l[h->lens_n] = L;
+    rmsnorm_f32(res, h->n_out_w, h->lens_x + (size_t)h->lens_n * H, H);
+    h->lens_n++;
+}
+
+static void trace_lens_flush(trace_record_t* trace, hybrid_t* h) {
+    const int32_t H = h->hidden, S = h->seq, V = h->vocab, B = h->lens_n;
+    hybrid_matmul_fp(h->tok_emb, h->lens_x, h->lens_f, V, H, B, NULL, NULL, 0, V);
+    for (int32_t b = 0; b < B; b++) {
+        const float* src = h->lens_f + (size_t)b * V;
+        int32_t* dst = trace->lens_logits + ((size_t)h->lens_l[b] * S + h->pos) * V;
+        for (int32_t v = 0; v < V; v++)
+            dst[v] = (int32_t)lrintf(src[v] * VERITATE_HYBRID_LOGIT_SCALE);
+    }
+    h->lens_n = 0;
 }
 
 // ------------------------------------------------------------------------------------
@@ -864,7 +879,7 @@ void hybrid_step(hybrid_t* h, int32_t byte, trace_record_t* trace) {
         if (trace) {
             trace_residual(trace, h, L, h->x, 0);
             trace_ffn(trace, h, L, h->ffn_buf);
-            if (trace->lens_logits) trace_lens_compute(trace, h, L, h->x);
+            if (trace->lens_logits) trace_lens_stage(h, L, h->x);
         }
     }
 
@@ -883,7 +898,7 @@ void hybrid_step(hybrid_t* h, int32_t byte, trace_record_t* trace) {
             if (trace->attention_scores) {
                 for (int32_t hd = 0; hd < NH; hd++) trace_attn_rows(trace, h, L, NULL, hd);
             }
-            if (trace->lens_logits) trace_lens_compute(trace, h, L, slot_live ? h->g : h->x);
+            if (trace->lens_logits) trace_lens_stage(h, L, slot_live ? h->g : h->x);
         }
     }
     if (slot_live) {
@@ -897,9 +912,10 @@ void hybrid_step(hybrid_t* h, int32_t byte, trace_record_t* trace) {
         if (trace) {
             trace_residual(trace, h, L, h->x, 0);
             trace_ffn(trace, h, L, h->ffn_buf);
-            if (trace->lens_logits) trace_lens_compute(trace, h, L, h->x);
+            if (trace->lens_logits) trace_lens_stage(h, L, h->x);
         }
     }
+    if (h->lens_n) trace_lens_flush(trace, h);
 
     rmsnorm_f32(h->x, h->n_out_w, h->u, H);
     hybrid_matvec_fp(h->tok_emb, h->u, h->logits, V, H);
@@ -1407,8 +1423,9 @@ hybrid_t* hybrid_load(FILE* f, const char* path, int32_t vocab, int32_t hidden,
     h->gate_buf = (float*)veritate_aligned_alloc((size_t)H * sizeof(float), 64);
     h->tmp      = (float*)veritate_aligned_alloc((size_t)H * sizeof(float), 64);
     h->logits   = (float*)veritate_aligned_alloc((size_t)vocab * sizeof(float), 64);
-    h->lens_u   = (float*)veritate_aligned_alloc((size_t)H * sizeof(float), 64);
-    h->lens_f   = (float*)veritate_aligned_alloc((size_t)vocab * sizeof(float), 64);
+    h->lens_x   = (float*)veritate_aligned_alloc((size_t)layers * H * sizeof(float), 64);
+    h->lens_f   = (float*)veritate_aligned_alloc((size_t)layers * vocab * sizeof(float), 64);
+    h->lens_l   = (int32_t*)veritate_aligned_alloc((size_t)layers * sizeof(int32_t), 64);
     const size_t bm = V_PREFILL_BMAX;
     h->pf_x     = (float*)veritate_aligned_alloc(bm * (size_t)H * sizeof(float), 64);
     h->pf_g     = (float*)veritate_aligned_alloc(bm * (size_t)H * sizeof(float), 64);
@@ -1422,7 +1439,7 @@ hybrid_t* hybrid_load(FILE* f, const char* path, int32_t vocab, int32_t hidden,
     if (!h->kv_k || !h->kv_v || !h->rec_state || !h->conv_ring || !h->x || !h->g ||
         !h->u || !h->qkv || !h->conv_out || !h->attn_out || !h->scores ||
         !h->ffn_buf || !h->gate_buf || !h->tmp || !h->logits ||
-        !h->lens_u || !h->lens_f || !h->pf_x || !h->pf_u || !h->pf_qkv ||
+        !h->lens_x || !h->lens_f || !h->lens_l || !h->pf_x || !h->pf_u || !h->pf_qkv ||
         !h->pf_attn || !h->pf_ff || !h->pf_tmp || !h->pf_g ||
         (dtype == VERITATE_HYBRID_DTYPE_INT8 && !h->pf_qx)) {
         hybrid_free(h); return NULL;
@@ -1458,7 +1475,8 @@ void hybrid_free(hybrid_t* h) {
     veritate_aligned_free(h->scores);   veritate_aligned_free(h->ffn_buf);
     veritate_aligned_free(h->gate_buf); veritate_aligned_free(h->tmp);
     veritate_aligned_free(h->logits);
-    veritate_aligned_free(h->lens_u);   veritate_aligned_free(h->lens_f);
+    veritate_aligned_free(h->lens_x);   veritate_aligned_free(h->lens_f);
+    veritate_aligned_free(h->lens_l);
     veritate_aligned_free(h->pf_x);     veritate_aligned_free(h->pf_u);
     veritate_aligned_free(h->pf_g);
     veritate_aligned_free(h->pf_qkv);   veritate_aligned_free(h->pf_attn);

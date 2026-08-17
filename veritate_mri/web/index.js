@@ -1851,34 +1851,33 @@ function _tierTooltip(tier, entry) {
   }
   if (status === "in_progress") return `${tier}: ${TIER_NEEDS[tier] || "training"} in progress${tag}`;
   if (status === "failed")      return `${tier}: ${TIER_NEEDS[tier] || "training"} failed${tag}`;
+  if (tier === "chat")          return "chat: usable on any model; replies sharpen with chat SFT";
   return tier === "autocomplete"
     ? "autocomplete: not trained yet"
     : `${tier}: needs ${TIER_NEEDS[tier] || "training"}`;
 }
 
-// A mode the loaded model was never trained for is not selectable: offering it
-// produces a reply the model cannot give, which reads as the platform being broken.
-// The tooltip on the greyed tier names the training it needs.
+// Chat is the default mode and is never gated: it stays selectable whatever the
+// model's capabilities say. Other tiers grey out until trained; the tooltip on a
+// greyed tier names the training it needs.
 function _applyModeAvailability() {
   const caps = _activeCapabilities();
-  let firstTrained = null;
   document.querySelectorAll('#modeRow label[data-tier]').forEach(lab => {
     const tier  = lab.dataset.tier;
     const input = lab.querySelector('input[name="genMode"]');
     const entry = (caps && caps[tier]) || { status: "untrained" };
-    const trained = entry.status === "trained";
-    input.disabled = !trained;
-    lab.classList.toggle("is-off", !trained);
+    const open  = tier === GEN_MODE_DEFAULT || entry.status === "trained";
+    input.disabled = !open;
+    lab.classList.toggle("is-off", !open);
     // Disabled inputs swallow pointer events, so the tooltip lives on both the
     // label (catches the text) and the input (catches the radio itself).
     const tip = _tierTooltip(tier, entry);
     lab.title = input.title = tip;
-    if (trained && firstTrained === null) firstTrained = tier;
   });
   const checked = document.querySelector('input[name="genMode"]:checked');
   if (!checked || !checked.disabled) return;
   const pick = document.querySelector(
-    `input[name="genMode"][value="${firstTrained || GEN_MODE_DEFAULT}"]`);
+    `input[name="genMode"][value="${GEN_MODE_DEFAULT}"]`);
   if (pick) { pick.checked = true; applyGenMode(); _primeSync(); }
 }
 

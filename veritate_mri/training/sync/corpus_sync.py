@@ -521,6 +521,7 @@ def _extract_zip_bundle(zip_path, train_dest, val_dest):
     success."""
     if not os.path.isfile(zip_path):
         return f"zip file missing: {zip_path}"
+    os.makedirs(os.path.dirname(train_dest), exist_ok=True)
     wanted = {os.path.basename(train_dest): train_dest,
               os.path.basename(val_dest):   val_dest}
     extracted = set()
@@ -614,6 +615,9 @@ def _install_hf_dataset(entry):
 
     # ---- train split ----
     train_path = _train_path(stem)
+    # A fresh install has no corpus dir yet; the generic downloader creates it in
+    # _stream_to, this path never did. Covers the val sibling too, same dir.
+    os.makedirs(os.path.dirname(train_path), exist_ok=True)
     tmp_train  = train_path + ".part"
     if os.path.isfile(tmp_train):
         try: os.remove(tmp_train)

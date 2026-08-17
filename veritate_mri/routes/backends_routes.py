@@ -96,6 +96,9 @@ AGENT_BEST_OF_N_DEFAULT  = 1
 AGENT_SEED_DEFAULT       = 0
 ABLATE_OFF           = -1
 DEFAULT_BACKEND      = "c"
+# `trace=` values that decline MRI capture. Anything else (including absence)
+# keeps it on, so no existing caller changes behavior.
+TRACE_OFF_VALUES     = ("0", "false", "off", "no")
 SSE_HEADERS          = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 PATH_LOOPBACK_ONLY   = "path params (rag/corpus/fs_root) are restricted to loopback (local) requests"
 
@@ -1106,6 +1109,11 @@ def register(app):
         addons_sel    = [s.strip() for s in addons_csv.split(",") if s.strip()]
         fast_mode     = (request.args.get("fast", "") or "").strip().lower()
         constrained_v = (request.args.get("constrained", "") or "").strip()
+        # MRI capture costs ~31 ms/byte on an 800 MHz CPU (a per-layer fp32 unembed
+        # plus a ~31 KB frame per token) against a ~4.5 ms/byte weight-streaming
+        # floor, so a caller that does not render frames must be able to decline it.
+        # Defaults on: every existing caller keeps byte-identical behavior.
+        want_trace    = request.args.get("trace", "1").strip().lower() not in TRACE_OFF_VALUES
         try:
             temperature   = float(request.args.get("temperature", TEMPERATURE_DEFAULT))
             top_k         = int(request.args.get("top_k", TOP_K_DEFAULT))
@@ -1152,7 +1160,7 @@ def register(app):
                                             ablate_layer=ablate_layer, ablate_neuron=ablate_neuron,
                                             addons_csv=",".join(addons_sel),
                                             rep_window=rep_window, rep_penalty=rep_penalty,
-                                            no_repeat_ngram=no_repeat_ngram, trace=True,
+                                            no_repeat_ngram=no_repeat_ngram, trace=want_trace,
                                             prefetched=prefetched)
                     stop_seq = _chat_stop_seq(prompt)
                     for ev in _stop_on_bytes(base, stop_seq):

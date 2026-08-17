@@ -350,6 +350,22 @@ def export_checkpoint(name, step, dtype=None):
     has_rope    = any(k.startswith(base_prefix + "rope") for k in sd) or \
                   any("rope" in k.lower() for k in sd)
     has_mtp     = any(k.startswith(base_prefix + "mtp.") for k in sd)
+    has_pkm     = any(k.endswith((".ff.values.weight", ".ff.sub_key")) for k in sd)
+    has_monarch = any(".ff.up." in k and k.endswith((".w1", ".w2")) for k in sd)
+    if has_pkm:
+        raise ValueError(
+            f"export not supported for product-key-memory trunks (model '{name}', step {step}). "
+            f"The .bin format stores an FFN as up/down matrices; a memory layer stores "
+            f"sub-keys plus a slot table and is read by top-k lookup, which needs a "
+            f"format and kernel that have not shipped. Run through the PyTorch backend."
+        )
+    if has_monarch:
+        raise ValueError(
+            f"export not supported for monarch-factored trunks (model '{name}', step {step}). "
+            f"The .bin format stores an FFN as up/down matrices; a factored FFN stores two "
+            f"block-diagonal tensors read by batched matmul over transposed axes, which needs "
+            f"a format and kernel that have not shipped. Run through the PyTorch backend."
+        )
     if not has_pos_emb or has_rope:
         kind = "RoPE" if has_rope else "non-canonical (missing pos_emb)"
         raise ValueError(

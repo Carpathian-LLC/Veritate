@@ -252,9 +252,17 @@ def _capture(model):
     cap_ffn  = [None] * model.layers
     cap_post = [None] * model.layers
     handles  = []
+    # Variants whose probe vector is narrower than the trunk ffn (product-key
+    # memory reports heads*key_dim) pad up, so the per-layer stack downstream
+    # sees one width.
+    ffn_width = int(getattr(model, "ffn", 0)) or 0
     for L, blk in enumerate(model.blocks):
-        def _ffn(_m, _i, o, L=L): cap_ffn[L] = o.detach()
-        handles.append(blk.ff.up.register_forward_hook(_ffn))
+        def _ffn(_m, _i, o, L=L):
+            o = o.detach()
+            if ffn_width and o.shape[-1] < ffn_width:
+                o = F.pad(o, (0, ffn_width - o.shape[-1]))
+            cap_ffn[L] = o
+        handles.append(blk.ff.probe_module().register_forward_hook(_ffn))
         def _blk(_m, _i, o, L=L): cap_post[L] = o.detach()
         handles.append(blk.register_forward_hook(_blk))
     return cap_ffn, cap_post, handles
@@ -346,7 +354,7 @@ def _capture_full(model, ffn_width):
             if o.shape[-1] < ffn_width:
                 o = F.pad(o, (0, ffn_width - o.shape[-1]))
             cap_ffn[L] = o
-        handles.append(blk.ff.up.register_forward_hook(_ffn))
+        handles.append(blk.ff.probe_module().register_forward_hook(_ffn))
         def _pre(_m, inp, L=L): cap_block_in[L] = inp[0].detach()
         handles.append(blk.register_forward_pre_hook(_pre))
         def _blk(_m, _i, o, L=L): cap_block_out[L] = o.detach()
@@ -508,9 +516,17 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
     # byte-direction columns per layer: BD[L][:, byte] = ff.down.weight.T @ tok_emb[byte].
     # ff.down.weight has shape (hidden, ffn); we want (ffn, hidden) @ (hidden,) per byte.
     # precompute the (layers, ffn, vocab) tensor once; for 80m this is 12*3072*256*4 = 36 MB.
+    def _down_w(blk):
+        # No (in, out) pair means no FFN-unit -> byte direction to read off; a
+        # zero block keeps the stack shape and reports no direction for it.
+        pair = blk.ff.probe_weights()
+        if pair is None:
+            return torch.zeros(model.hidden, ffn, dtype=torch.float32)
+        return pair[1].detach().float()
+
     ffn_down_T = torch.stack(
         [F.pad(w.t(), (0, 0, 0, ffn - w.shape[1]))
-         for w in (blk.ff.down.weight.detach().float() for blk in model.blocks)],
+         for w in (_down_w(blk) for blk in model.blocks)],
         dim=0,
     )  # (layers, ffn, hidden)
     bd_full = ffn_down_T @ embed_w.t()  # (layers, ffn, vocab)
@@ -769,8 +785,13 @@ def dump_generation(model, prompt: str, out_dir: str, step: int,
 
 
 def _ffn_layer_weights(model):
+    # Variants holding no (in, out) matmul pair (product-key memory) yield nothing
+    # rather than crashing the dump: they have no FFN weight matrices to report.
     for L, blk in enumerate(model.blocks):
-        yield L, blk.ff.up.weight.detach(), blk.ff.down.weight.detach()
+        pair = blk.ff.probe_weights()
+        if pair is None:
+            continue
+        yield L, pair[0].detach(), pair[1].detach()
 
 
 def _prev_state_path(out_dir):
@@ -1228,6 +1249,35 @@ WH_PROMPTS = [
 WH_MAX_NEW       = 400
 WH_TEMPERATURE   = 0.7
 WH_TOP_K         = 40
+
+# ------------------------------------------------------------------------------------
+# Chat health: the same structural questions asked under GREEDY decode, in ChatML.
+#
+# writing_health samples at temperature 0.7 / top-k 40, and sampling hides looping:
+# on wren1_0 it reported distinct_4 rising 0.729 -> 0.986 ("repetition collapsing")
+# for a checkpoint that repeated a 6-word window in 44% of greedy replies. The
+# sampling number and the greedy behaviour disagreed completely and only the greedy
+# one predicted how the model actually reads (failures.md 2026-08-16). This probe
+# exists so that disagreement is visible at the first full checkpoint rather than
+# after a 35-hour run.
+#
+# Also measures whether the turn ends: a model that never emits <|im_end|> runs to
+# the cap, which is the "cuts off / rambles" complaint in its measurable form.
+CH_IM_START, CH_IM_END = "<|im_start|>", "<|im_end|>"
+# Must exceed the reply lengths being measured or closed_rate degenerates into
+# "reply longer than the cap". At 240 it reported wren1_0 closing 17% of turns
+# where a 400-byte cap measured 94%, because a chat SFT lengthens replies on
+# purpose. 400 matches the A/B harness so the two agree.
+CH_MAX_NEW    = 400
+CH_LOOP_NGRAM = 6
+CH_PROMPTS = [
+    "What is a prime number?",
+    "Write one sentence about the ocean.",
+    "How do I boil an egg?",
+    "Give me three reasons to go for a walk.",
+    "I had a rough day at work. Any advice?",
+    "What is the difference between a lake and a sea?",
+]
 WH_PRONOUN_WINDOW = 50
 WH_PRONOUNS = {
     "he", "him", "his", "himself",
@@ -1515,6 +1565,83 @@ def _wh_self_ppl(model, text: str, device) -> float:
 
 
 @torch.no_grad()
+@torch.no_grad()
+def _ch_reply(model, user_text: str, device):
+    """One greedy assistant turn. Returns (text, closed), where closed means the
+    model emitted <|im_end|> instead of running to CH_MAX_NEW."""
+    prompt = "%suser\n%s%s\n%sassistant\n" % (CH_IM_START, user_text, CH_IM_END, CH_IM_START)
+    ids = torch.tensor([list(prompt.encode())], dtype=torch.long, device=device)
+    end = CH_IM_END.encode()
+    out = bytearray()
+    for _ in range(CH_MAX_NEW):
+        logits, _ = model(ids[:, -model.seq:])
+        nxt = int(torch.argmax(logits[0, -1]))
+        out.append(nxt)
+        if out.endswith(end):
+            return bytes(out[:-len(end)]).decode("utf-8", "replace"), True
+        ids = torch.cat([ids, torch.tensor([[nxt]], dtype=torch.long, device=device)], dim=1)
+    return bytes(out).decode("utf-8", "replace"), False
+
+
+def _ch_loops(text: str, n: int = CH_LOOP_NGRAM) -> bool:
+    """True if any n-word window repeats anywhere in the reply."""
+    w = _wh_words(text)
+    if len(w) < n:
+        return False
+    grams = [tuple(w[i:i + n]) for i in range(len(w) - n + 1)]
+    return len(grams) != len(set(grams))
+
+
+def dump_chat_health(model, out_dir: str, step: int):
+    """Write chat_health_step_<N>.json: greedy, ChatML-framed turn quality.
+
+    Three numbers, all of which a chat SFT is supposed to move and none of which
+    aggregate val or sampled writing_health can see:
+      loop_rate    fraction of replies repeating a CH_LOOP_NGRAM-word window
+      closed_rate  fraction that ended the turn instead of hitting the cap
+      median_bytes reply length, which catches the one-word-answer failure
+
+    Greedy on purpose. Sampling papers over exactly the degeneration this is for.
+    """
+    t0 = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+
+    samples = []
+    for p in CH_PROMPTS:
+        text, closed = _ch_reply(model, p, device)
+        samples.append({"prompt": p, "reply": text, "closed": bool(closed),
+                        "bytes": len(text.encode()), "looped": bool(_ch_loops(text))})
+
+    if was_training:
+        model.train()
+    n = max(1, len(samples))
+    lengths = sorted(s["bytes"] for s in samples)
+    out = {
+        "step":      int(step),
+        "precision": _precision_tag(model),
+        "samples":   samples,
+        "aggregate": {
+            "loop_rate":    sum(s["looped"] for s in samples) / n,
+            "closed_rate":  sum(s["closed"] for s in samples) / n,
+            "median_bytes": lengths[len(lengths) // 2],
+        },
+        "config": {"prompts": CH_PROMPTS, "max_new": CH_MAX_NEW,
+                   "decode": "greedy", "loop_ngram": CH_LOOP_NGRAM},
+        "caveat": ("Greedy decode, so these are the model's single most likely "
+                   "replies, not its average ones. A low loop_rate here does not "
+                   "prove the replies are true or useful, only that they are not "
+                   "degenerate."),
+        "time_s": round(time.time() - t0, 4),
+    }
+    path = os.path.join(out_dir, "chat_health_step_%d.json" % int(step))
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=1)
+    return path
+
+
 def dump_writing_health(model, out_dir: str, step: int, corpus_path: str | None = None):
     """Write writing_health_step_<N>.json with mathematical proxies for
     writing structure quality, computed over WH_PROMPTS generations.

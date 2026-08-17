@@ -154,6 +154,14 @@ class FFN(nn.Module):
             self._last_l1 = group_penalty(post) if self.reg_mode == "group" else post.abs().mean()
         return self.down(post)
 
+    def probe_module(self):
+        """Module whose forward output is this block's neuron activation vector."""
+        return self.up
+
+    def probe_weights(self):
+        """(in, out) matmul pair, or None for variants that hold no such pair."""
+        return self.up.weight, self.down.weight
+
 
 class Block(nn.Module):
     def __init__(self, hidden, ffn, heads, activation=ACT_DEFAULT, capture_l1=False,

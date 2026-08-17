@@ -74,6 +74,11 @@ def measure_activity(model, corpus_mix, n_samples=DEFAULT_SAMPLES,
     cap = [None] * layers
     handles = []
     for L, blk in enumerate(model.blocks):
+        # Variants with no (in, out) matmul pair hold no prunable FFN units at
+        # all (product-key memory addresses slots, it has no width to trim), so
+        # they are left out of the plan rather than scored on a stand-in tensor.
+        if blk.ff.probe_weights() is None:
+            continue
         # Score with the layer's own activation, not a hardcoded GELU, so ReLU
         # and SiLU models report faithful post-activation magnitudes.
         act_fn = blk.ff._act_fn
@@ -82,6 +87,12 @@ def measure_activity(model, corpus_mix, n_samples=DEFAULT_SAMPLES,
             mag  = post.amax(dim=tuple(range(post.dim() - 1)))
             cap[L] = mag if cap[L] is None else torch.maximum(cap[L], mag)
         handles.append(blk.ff.up.register_forward_hook(_hook))
+
+    if not handles:
+        raise ValueError(
+            "no prunable FFN layers in this model: width pruning needs dense FFN "
+            "up/down matrices. Product-key-memory and Mixture-of-Experts trunks "
+            "have no per-unit width to trim.")
 
     try:
         with torch.no_grad():
@@ -150,6 +161,9 @@ def apply_plan(model, scores, plan):
     new_ffn = []
 
     for L in range(model.layers):
+        if model.blocks[L].ff.probe_weights() is None:
+            new_ffn.append(model.ffn_per_layer[L])
+            continue
         orig_ffn = model.ffn_per_layer[L]
         keep_frac = float(plan.get(str(L), plan.get(L, 1.0)))
         keep_frac = max(ACTIVITY_KEEP_MIN, min(1.0, keep_frac))

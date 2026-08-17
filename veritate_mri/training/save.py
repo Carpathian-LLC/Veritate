@@ -64,9 +64,30 @@ MODEL_TYPE_ENV = "VERITATE_MODEL_TYPE"
 # surprise, quant_kl) and the checkpoint itself always run.
 LANGUAGE_DUMPS = frozenset({
     "grades", "reading_comprehension", "math", "grammar",
-    "reasoning", "concepts", "writing_health", "generation",
+    "reasoning", "concepts", "writing_health", "generation", "chat_health",
 })
 NON_LANGUAGE_TYPES = frozenset({"statistical", "other"})
+
+# The dumps that cost real wall clock. Measured on wren_base (200m, MPS, three
+# consecutive checkpoints within 2s of each other): the full suite is ~137s, of
+# which reading_comprehension 31s, generation 33s, writing_health 24s,
+# reasoning 20s, math 20s. Everything else together is ~9s, because probe /
+# lens / classroom / grades / surprise / quant_kl read weights and activations
+# rather than generating text. A long run that wants dense checkpoints without
+# paying 137s for each of them skips this set on most of them; see the trainer's
+# --hooks / --hooks_full_every.
+HEAVY_DUMPS = frozenset({
+    "reading_comprehension", "math", "reasoning", "writing_health", "generation",
+    "chat_health",
+})
+# Every dump label save() knows how to run. Callers that want "checkpoint, no
+# hooks at all" pass this as dump_set rather than restating the list and
+# drifting from it; save() asserts the two agree.
+ALL_DUMPS = frozenset({
+    "probe", "classroom", "grades", "reading_comprehension", "math", "grammar",
+    "reasoning", "concepts", "surprise", "quant_kl", "writing_health", "generation",
+    "chat_health",
+})
 
 # canonical dump filenames inside hooks/step_<N>/. dump_* in
 # training/checkpoint_probe.py emit prefixed names; we rename to these.
@@ -82,6 +103,7 @@ RENAME_MAP_TEMPLATE = {
     "surprise_step_{step}.json":  "surprise.json",
     "quant_kl_step_{step}.json":  "quant_kl.json",
     "writing_health_step_{step}.json": "writing_health.json",
+    "chat_health_step_{step}.json":    "chat_health.json",
     "reading_comprehension_step_{step}.json": "reading_comprehension.json",
     "step_{step}.json":           "generation.json",
 }
@@ -543,6 +565,7 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         dump_reading_comprehension,
         dump_reasoning,
         dump_surprise,
+        dump_chat_health,
         dump_writing_health,
         generation_prompt,
         sample_probe_prompts,
@@ -663,8 +686,12 @@ def save(model, name, step, *, optimizer=None, args=None, prompt=None,
         ("surprise",   lambda: dump_surprise  (view, prompt, step_dir, step)),
         ("quant_kl",   lambda: dump_quant_kl  (view, prompt, step_dir, step)),
         ("writing_health", lambda: dump_writing_health(view,    step_dir, step, corpus_path=corpus_path)),
+        ("chat_health", lambda: dump_chat_health(view,          step_dir, step)),
         ("generation", lambda: dump_generation(view, gen_prompt, step_dir, step, corpus_path=corpus_path)),
     ]
+    # Keeps ALL_DUMPS honest: a dump added below without being listed there would
+    # make `dump_set=ALL_DUMPS` ("no hooks") quietly start running something.
+    assert {label for label, _ in dumps} == set(ALL_DUMPS), "ALL_DUMPS is out of date"
     cuda_avail = torch.cuda.is_available()
     for label, fn in dumps:
         if label in skip:

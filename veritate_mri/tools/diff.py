@@ -132,7 +132,7 @@ def pytorch_trace(checkpoint, prompt, real_len_pad=V_SEQ):
     for L, blk in enumerate(model.blocks):
         blk.register_forward_pre_hook(pre_hook(L, cap_in))
         blk.register_forward_hook(out_hook(L, cap_out))
-        blk.ff.up.register_forward_hook(out_hook(L, cap_ffn))
+        blk.ff.probe_module().register_forward_hook(out_hook(L, cap_ffn))
         blk.attn.qkv.register_forward_hook(out_hook(L, cap_qkv))
         blk.n1.register_forward_hook(out_hook(L, cap_h_n1))
         blk.n2.register_forward_hook(out_hook(L, cap_h_n2))

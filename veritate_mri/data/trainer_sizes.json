@@ -30,7 +30,8 @@
     "optimizer": "muon",
     "use_8bit_adam": true,
     "version": "v1",
-    "size": "200m"
+    "size": "200m",
+    "grow_to_ffn": 0
   },
   "sizes": {
     "5m": {
@@ -40,6 +41,78 @@
         "ffn": 1024,
         "heads": 4,
         "params": 5000000
+      }
+    },
+    "5m_l12": {
+      "shape": {
+        "layers": 12,
+        "hidden": 180,
+        "ffn": 720,
+        "heads": 4,
+        "params": 4762260
+      },
+      "defaults": {
+        "precision": "fp32",
+        "seq": 256,
+        "batch_size": 8,
+        "total_steps": 10000,
+        "eval_every": 500,
+        "qat_enabled": false,
+        "seed": 1
+      }
+    },
+    "5m_l6": {
+      "shape": {
+        "layers": 6,
+        "hidden": 256,
+        "ffn": 1024,
+        "heads": 4,
+        "params": 4852992
+      },
+      "defaults": {
+        "precision": "fp32",
+        "seq": 256,
+        "batch_size": 8,
+        "total_steps": 10000,
+        "eval_every": 500,
+        "qat_enabled": false,
+        "seed": 1
+      }
+    },
+    "5m_l3": {
+      "shape": {
+        "layers": 3,
+        "hidden": 360,
+        "ffn": 1440,
+        "heads": 4,
+        "params": 4852440
+      },
+      "defaults": {
+        "precision": "fp32",
+        "seq": 256,
+        "batch_size": 8,
+        "total_steps": 10000,
+        "eval_every": 500,
+        "qat_enabled": false,
+        "seed": 1
+      }
+    },
+    "5m_l2": {
+      "shape": {
+        "layers": 2,
+        "hidden": 444,
+        "ffn": 1776,
+        "heads": 4,
+        "params": 4960812
+      },
+      "defaults": {
+        "precision": "fp32",
+        "seq": 256,
+        "batch_size": 8,
+        "total_steps": 10000,
+        "eval_every": 500,
+        "qat_enabled": false,
+        "seed": 1
       }
     },
     "7m": {

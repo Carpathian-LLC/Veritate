@@ -24,6 +24,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import sys
 import time
 
@@ -34,6 +35,9 @@ for _p in (_HERE, _REPO_ROOT):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# _HERE is on sys.path (set above), so this resolves whether the trainer is run
+# as a script or imported as a module.
+import grow as grow_mod
 import numpy as np
 import torch
 
@@ -51,6 +55,7 @@ try:
     from veritate_core.plugin import model_patched as _model_patched_mod
     VeritatePatched = _model_patched_mod.VeritatePatched
 except ImportError:
+    _model_patched_mod = None
     VeritatePatched = None
 try:
     from veritate_core.plugin import model_recurrent as _model_recurrent_mod
@@ -104,7 +109,8 @@ PRECISIONS      = ("fp32", "bf16")
 
 STATE_CARRIES      = ("off", "chunks")
 STATE_CARRY_CHUNKS = "chunks"
-STATE_CARRY_TRUNKS = ("hybrid", "hybrid_moe", "recurrent")
+STATE_CARRY_TRUNKS = ("hybrid", "hybrid_moe", "hybrid_monarch", "hybrid_pkm",
+                      "hybrid_pkm_fire", "recurrent")
 
 # Weights, grads, and Adam moments are all fp32 here (autocast keeps fp32 master
 # weights even at bf16 precision), so the memory planner sizes its buckets in fp32.
@@ -207,11 +213,65 @@ RESERVED_STR_FLAGS = {
     "state_rule": "gla",
     "state_carry": "off",
     "loss_mask": "off",
+    # How much of the hook suite to write at each checkpoint.
+    #   full  — every dump. ~137s per checkpoint on a 200m trunk.
+    #   light — skip save.HEAVY_DUMPS. ~9s, because what remains reads weights
+    #           and activations instead of generating text.
+    #   off   — checkpoint only, no hooks directory.
+    # Default is full: an existing run's behaviour must not change because this
+    # flag appeared. Pair `light` with --hooks_full_every to keep dense cheap
+    # signal and still get the deep probes periodically.
+    "hooks": "full",
 }
 RESERVED_FLOAT_FLAGS = {
     "l1_lambda": 0.0,
     "slm_keep": 0.6,
 }
+RESERVED_INT_FLAGS = {
+    # With --hooks light, promote every Nth checkpoint back to the full suite,
+    # so the expensive probes still trend over the run without being paid for at
+    # every checkpoint. 0 disables the promotion. Ignored when --hooks is full
+    # (already everything) or off (deliberately nothing).
+    "hooks_full_every": 0,
+}
+
+
+# Dashboard TRAINER_SCHEMA fields that reach argv but that this trainer may
+# legitimately not implement for a given configuration: the MoE router knobs and
+# quantization mode are rendered for every plugin regardless of trunk, and
+# `recipe` is uiOnly (it expands into other flags client-side). Everything not
+# listed here and not an accepted flag is an error — see parse_args.
+SCHEMA_IGNORED_FLAGS = frozenset({
+    "recipe",
+    "quant_mode",
+    "n_experts", "router_topk", "router_aux_loss", "router_aux_loss_coef",
+    "inject_layer", "mtp_aux_weight", "n_predict",
+    "freeze_base",
+    # Consumed by the runner as an environment variable (VERITATE_MODEL_TYPE) and
+    # stamped into config.json by save(); it reaches argv too, and the trainer has
+    # nothing to do with it there.
+    "model_type",
+    # Rendered for every plugin but only meaningful to trunks this file does not
+    # build: `variant`/`alpha`/`rope_base` belong to the attention variants,
+    # `init_from` to the plugins that seed weights from a foreign checkpoint.
+    "variant", "alpha", "rope_base", "init_from",
+})
+
+# Shape fields the dashboard renders. This trainer does NOT take shape from
+# flags: a fresh run gets it from --size, a resume from the checkpoint weights
+# (see shape_for_run). Ignoring them silently is the exact failure the unknown-
+# flag check exists to prevent, so they are parsed and then ASSERTED against the
+# resolved shape. 0 means "not supplied".
+SHAPE_OVERRIDE_FLAGS = ("layers", "hidden", "ffn", "heads")
+
+# Trunks built by VeritatePatched. They wrap the `layers` global blocks in
+# N_LOCAL_ENC + N_LOCAL_DEC local ones, so their checkpoints hold more block
+# entries than the layer count that produced them. Keep in step with the
+# model_cls dispatch in run().
+PATCHED_TRUNKS = frozenset({
+    "patched", "hybrid", "hybrid_moe", "hybrid_monarch",
+    "hybrid_pkm", "hybrid_pkm_fire", "looped",
+})
 
 
 def parse_args(manifest):
@@ -229,10 +289,18 @@ def parse_args(manifest):
     for k, default_val in RESERVED_FLOAT_FLAGS.items():
         manifest_val = defaults.get(k, default_val)
         ap.add_argument("--" + k, type=float, default=float(manifest_val))
+    for k, default_val in RESERVED_INT_FLAGS.items():
+        manifest_val = defaults.get(k, default_val)
+        ap.add_argument("--" + k, type=int, default=int(manifest_val))
+    for k in SHAPE_OVERRIDE_FLAGS:
+        if k not in defaults:
+            ap.add_argument("--" + k, type=int, default=0)
     for k, v in defaults.items():
         if k in RESERVED_STRING_FLAGS or k in RESERVED_BOOL_FLAGS:
             continue
         if k in RESERVED_STR_FLAGS or k in RESERVED_FLOAT_FLAGS:
+            continue
+        if k in RESERVED_INT_FLAGS:
             continue
         if isinstance(v, bool):
             ap.add_argument("--" + k, action=argparse.BooleanOptionalAction, default=bool(v))
@@ -242,11 +310,161 @@ def parse_args(manifest):
             ap.add_argument("--" + k, type=float, default=v)
         else:
             ap.add_argument("--" + k, type=str,   default=str(v))
-    # Dashboard renders the full TRAINER_SCHEMA for every plugin, so flags the
-    # plugin does not implement (quant_mode for non-MoE, freeze_base, etc.)
-    # arrive on argv and would otherwise crash parsing. Drop them silently.
-    args, _unused = ap.parse_known_args()
+    # The dashboard renders the full TRAINER_SCHEMA for every plugin, so schema
+    # flags this trainer does not implement (quant_mode on a non-MoE trunk, the
+    # MoE router knobs) legitimately arrive on argv. Those are ignorable.
+    #
+    # Anything ELSE on argv is a mistake — a typo, or a flag carried over from a
+    # trainer that no longer exists — and silently dropping it changes training
+    # behaviour with no error and no log line. Refuse to start instead.
+    args, unused = ap.parse_known_args()
+    unknown = []
+    for tok in unused:
+        if not tok.startswith("--"):
+            continue                      # a value belonging to a dropped flag
+        flag = tok[2:].split("=", 1)[0]
+        base = flag[3:] if flag.startswith("no-") else flag   # BooleanOptionalAction
+        if base not in SCHEMA_IGNORED_FLAGS:
+            unknown.append(tok.split("=", 1)[0])
+    if unknown:
+        raise SystemExit(
+            "refusing to start: unrecognized flag(s) " + ", ".join(sorted(set(unknown))) +
+            "\n\nThis trainer does not implement them, and they are not dashboard schema "
+            "flags it is allowed to ignore. Silently dropping them would change how this "
+            "run trains with no error and no log line.\n"
+            "Fix the flag, or add it to SCHEMA_IGNORED_FLAGS if it is a dashboard-only "
+            "field this trainer deliberately does not use.")
     return args
+
+
+def trunk_block_overhead(trunk):
+    """Blocks a trunk adds beyond its `layers` argument.
+
+    VeritatePatched builds N_LOCAL_ENC local blocks, then `layers` global blocks,
+    then N_LOCAL_DEC local ones, so --size 200m (layers=16) produces a 20-entry
+    blocks list. Counting entries and calling that the layer count builds a model
+    four blocks too deep; with load_state_dict(strict=False) that loads silently
+    and leaves the extra blocks random. Read the constants off the module so the
+    two cannot drift apart.
+    """
+    if trunk in PATCHED_TRUNKS and _model_patched_mod is not None:
+        return (getattr(_model_patched_mod, "N_LOCAL_ENC", 2)
+                + getattr(_model_patched_mod, "N_LOCAL_DEC", 2))
+    return 0
+
+
+def shape_from_checkpoint(name, trunk="dense"):
+    """Read the architecture out of a run's newest checkpoint weights.
+
+    The weights are the only account of a model's shape that cannot drift, but
+    they record the blocks a trunk BUILT, not the `layers` argument it was built
+    from. For the patched trunks those differ by trunk_block_overhead(); the
+    returned `layers` is always the constructor's number, so callers can hand it
+    straight back to the model class.
+    """
+    ckpt = os.path.join(paths.checkpoints_dir(name),
+                        "step_" + str(latest_checkpoint_step(name)) + ".pt")
+    sd = torch.load(ckpt, map_location="cpu", weights_only=True)["model"]
+    blocks = 1 + max((int(m.group(1)) for m in
+                      (re.match(r"blocks\.(\d+)\.", k) for k in sd) if m), default=-1)
+    if not blocks:
+        raise RuntimeError("cannot read layer count from checkpoint: " + ckpt)
+    layers = blocks - trunk_block_overhead(trunk)
+    if layers < 1:
+        raise RuntimeError("checkpoint has " + str(blocks) + " blocks, too few for trunk "
+                           + str(trunk) + ": " + ckpt)
+    hidden = int(sd["tok_emb.weight"].shape[1])
+    # The up-projection's out-features IS the FFN width. Name it across the
+    # variants this repo has shipped rather than assuming one trunk's spelling.
+    ffn = next((int(v.shape[0]) for k, v in sd.items()
+                if re.match(r"blocks\.0\.(?:ff|mlp)\.(?:up|fc1|w1|up_proj)\.weight$", k)), None)
+    # qkv packs q, k and v into one matrix, so heads is not recoverable from the
+    # weights alone; the preset's head count stands unless the caller knows better.
+    out = {"layers": layers, "hidden": hidden,
+           "params": sum(v.numel() for v in sd.values())}
+    if ffn is not None:
+        out["ffn"] = ffn
+    return out
+
+
+def check_shape_overrides(args, shape, argv):
+    """Refuse a launch whose explicit --layers/--hidden/--ffn/--heads disagree.
+
+    This trainer resolves shape from --size or from the resumed weights, so a
+    shape flag on argv cannot change what gets built. Honoring it is impossible
+    and ignoring it would build a different model than the operator asked for,
+    which is how wren_base ended up with a config.json claiming 16 layers over
+    20 layers of weights. Say no instead.
+    """
+    for field in SHAPE_OVERRIDE_FLAGS:
+        asked = int(getattr(args, field, 0) or 0)
+        flag = "--" + field
+        if not asked or not any(a == flag or a.startswith(flag + "=") for a in argv):
+            continue
+        got = shape.get(field)
+        if got is not None and asked != got:
+            raise SystemExit(
+                "refusing to start: " + flag + " " + str(asked) + " but this run's "
+                + field + " is " + str(got) + ". shape comes from --size (fresh) or "
+                "from the resumed checkpoint's weights; it cannot be set on the "
+                "command line. Drop the flag, or pick a --size whose " + field
+                + " matches.")
+
+
+def shape_for_run(args, size_presets, argv=None):
+    """Resume takes its shape from the checkpoint; a fresh run from the preset.
+
+    Any field the checkpoint disagrees with the preset on is a bug in the preset
+    or in config.json, never a reason to build the preset's model. Report both
+    numbers and use the weights.
+    """
+    shape = dict(size_presets[args.size])
+    if not getattr(args, "resume", ""):
+        check_shape_overrides(args, shape, argv if argv is not None else sys.argv)
+        return shape
+    actual = shape_from_checkpoint(args.resume, getattr(args, "trunk", "dense") or "dense")
+    for field, got in actual.items():
+        if got is None:
+            continue
+        want = shape.get(field)
+        # params is a consequence of the other dims, so it disagrees whenever they
+        # do and says nothing on its own. Announce only the structural fields.
+        if want is not None and want != got and field != "params":
+            print("shape: --size " + str(args.size) + " says " + field + "=" + str(want)
+                  + " but " + args.resume + "'s weights have " + field + "=" + str(got)
+                  + "; using the weights", flush=True)
+        shape[field] = got
+    check_shape_overrides(args, shape, argv if argv is not None else sys.argv)
+    return shape
+
+
+HOOK_MODES = ("full", "light", "off")
+
+
+def hook_plan(args, step):
+    """Which dumps to SKIP at this checkpoint, and a label for the log line.
+
+    The full hook suite costs ~137s on a 200m trunk, nearly all of it in the five
+    save.HEAVY_DUMPS. On a run with dense checkpoints that overhead is charged
+    once per checkpoint and it adds up: at ckpt_every 250 over 8000 steps it is
+    over an hour of wall clock. `light` keeps the cheap probes (~9s) so the run
+    still trends, and --hooks_full_every promotes every Nth checkpoint back to
+    the full suite so the expensive ones keep a coarse trend line too.
+    """
+    mode = (getattr(args, "hooks", "full") or "full").strip().lower()
+    if mode not in HOOK_MODES:
+        raise SystemExit("refusing to start: --hooks must be one of "
+                         + ", ".join(HOOK_MODES) + " (got " + mode + ")")
+    if mode == "off":
+        return set(save.ALL_DUMPS), "off"
+    if mode == "full":
+        return set(), "full"
+    every = int(getattr(args, "hooks_full_every", 0) or 0)
+    # Count promotions in checkpoints, not steps: `every 4` means every 4th
+    # checkpoint regardless of how ckpt_every is set.
+    if every > 0 and (step // max(1, args.ckpt_every)) % every == 0:
+        return set(), "full"
+    return set(save.HEAVY_DUMPS), "light"
 
 
 def latest_checkpoint_step(name):
@@ -488,14 +706,37 @@ def write_config(name, args, base_cfg, n_params, corpus_hash, plugin_id):
         json.dump(cfg, f, indent=2)
 
 
-def load_resume_state(model, name, step, device):
+def load_resume_state(model, name, step, device, require_complete=False):
+    """Load a checkpoint into `model`, reporting anything that did not land.
+
+    strict=False is load-bearing here: QAT seeds a new model from a plain one and
+    legitimately has observer/scale tensors the source lacks. The cost is that a
+    genuinely wrong shape also loads without a word. wren_base was resumed into a
+    trunk built four blocks too deep and 54,649,152 parameters stayed at their
+    random init, with nothing in the log but a params count nobody was diffing.
+    So: always say what was skipped, and on a plain resume refuse to continue.
+    """
     ckpt = torch.load(paths.checkpoint_path(name, step), map_location=device, weights_only=False)
     sd = ckpt["model"]
     if any(k.startswith("base.") for k in sd):
-        new_sd = {k[len("base."):]: v for k, v in sd.items() if k.startswith("base.")}
-        model.load_state_dict(new_sd, strict=False)
-    else:
-        model.load_state_dict(sd, strict=False)
+        sd = {k[len("base."):]: v for k, v in sd.items() if k.startswith("base.")}
+    result = model.load_state_dict(sd, strict=False)
+    missing, unexpected = list(result.missing_keys), list(result.unexpected_keys)
+    if missing or unexpected:
+        live = dict(model.state_dict())
+        stranded = sum(int(live[k].numel()) for k in missing if k in live)
+        print("load: " + str(len(missing)) + " tensor(s) not in the checkpoint ("
+              + str(stranded) + " params left at init), "
+              + str(len(unexpected)) + " tensor(s) in the checkpoint with no home",
+              flush=True)
+        for k in (missing[:6] + unexpected[:6]):
+            print("      " + k, flush=True)
+        if require_complete and missing:
+            raise SystemExit(
+                "refusing to continue: resuming " + name + " left " + str(stranded)
+                + " parameters at their random init. The model being built does not "
+                "match the checkpoint. Check --trunk and --size against the config "
+                "this checkpoint was written with.")
     return ckpt.get("optimizer")
 
 
@@ -709,7 +950,7 @@ def run(plugin_id, here):
     print("device: " + device, flush=True)
     amp_dtype = hardware.resolve_precision(args.precision, device)
 
-    shape = size_presets[args.size]
+    shape = shape_for_run(args, size_presets)
 
     # Plan the memory ladder from the size preset BEFORE building the model: a model
     # whose weights+grads exceed the budget cannot be built (the allocation OOMs/
@@ -753,6 +994,21 @@ def run(plugin_id, here):
             raise ValueError("trunk=hybrid_moe requested but platform lacks model_patched")
         model_cls = VeritatePatched
         model_kwargs = {"global_mixer": "recurrent", "global_ffn": "moe"}
+    elif trunk == "hybrid_monarch":
+        if VeritatePatched is None:
+            raise ValueError("trunk=hybrid_monarch requested but platform lacks model_patched")
+        model_cls = VeritatePatched
+        model_kwargs = {"global_mixer": "recurrent", "global_ffn": "monarch"}
+    elif trunk == "hybrid_pkm":
+        if VeritatePatched is None:
+            raise ValueError("trunk=hybrid_pkm requested but platform lacks model_patched")
+        model_cls = VeritatePatched
+        model_kwargs = {"global_mixer": "recurrent", "global_ffn": "pkm"}
+    elif trunk == "hybrid_pkm_fire":
+        if VeritatePatched is None:
+            raise ValueError("trunk=hybrid_pkm_fire requested but platform lacks model_patched")
+        model_cls = VeritatePatched
+        model_kwargs = {"global_mixer": "recurrent", "global_ffn": "pkm_fire"}
     elif trunk == "looped":
         if VeritatePatched is None:
             raise ValueError("trunk=looped requested but platform lacks model_patched")
@@ -767,7 +1023,7 @@ def run(plugin_id, here):
             raise ValueError("trunk=memory requested but platform lacks model_memory")
         model_cls = VeritateMemory
     state_rule = getattr(args, "state_rule", "gla") or "gla"
-    if trunk in ("hybrid", "hybrid_moe", "recurrent") and state_rule != "gla":
+    if trunk in STATE_CARRY_TRUNKS and state_rule != "gla":
         model_kwargs["state_rule"] = state_rule
     state_carry = getattr(args, "state_carry", "off") or "off"
     if state_carry not in STATE_CARRIES:
@@ -840,7 +1096,8 @@ def run(plugin_id, here):
     elif resume_mode:
         resume_step = latest_checkpoint_step(name)
         print("resume: " + name + "  from step " + str(resume_step), flush=True)
-        resume_opt_state = load_resume_state(veritate_model, name, resume_step, device)
+        resume_opt_state = load_resume_state(veritate_model, name, resume_step, device,
+                                             require_complete=True)
         dropped = truncate_train_csv_at(name, resume_step)
         if dropped:
             print("train.csv: dropped " + str(dropped) + " stale rows past step " + str(resume_step), flush=True)
@@ -873,6 +1130,9 @@ def run(plugin_id, here):
         except Exception as e:
             print("optimizer state restore skipped: " + str(e), flush=True)
 
+    grow_to_ffn = int(getattr(args, "grow_to_ffn", 0) or 0)
+    val_hist    = []
+    has_grown   = False
     t0 = time.time()
     last_log = t0
     last_log_step = resume_step
@@ -930,6 +1190,22 @@ def run(plugin_id, here):
                 print("step " + str(step) + "  val_loss " + format(v, ".4f"), flush=True)
                 append_train_row(name, step, "val", v, lr=lr,
                                  wall_s=time.time() - t0, seed=args.seed)
+                val_hist.append(v)
+                # Growth only nets compute if the cheap stage stops the moment its
+                # curve flattens (successes.md 2026-07-25); a fixed step count
+                # overspends the small shape and turns a 3.6x step win into a loss.
+                if (grow_to_ffn and not has_grown
+                        and grow_to_ffn > veritate_model.ffn
+                        and grow_mod.val_has_flattened(val_hist)):
+                    widened = grow_mod.widen_model(veritate_model, grow_to_ffn)
+                    opt = build_optimizer(veritate_model.parameters(), args, device,
+                                          model=veritate_model)
+                    has_grown = True
+                    args.ffn = grow_to_ffn
+                    print("GROW step " + str(step) + "  ffn -> " + str(grow_to_ffn)
+                          + "  layers " + str(len(widened))
+                          + "  params " + str(sum(p.numel() for p in veritate_model.parameters()))
+                          + "  (val flattened)", flush=True)
 
         if step % args.ckpt_every == 0 or step == args.total_steps:
             ckpt_args = vars(args).copy()
@@ -940,8 +1216,10 @@ def run(plugin_id, here):
             ckpt_args["heads"]  = veritate_model.heads
             ckpt_args["seq"]    = veritate_model.seq
             ckpt_args.setdefault("description", args.description)
-            ckpt_path = save.save(veritate_model, name, step, optimizer=opt, args=ckpt_args)
-            print("checkpoint + hooks: " + ckpt_path, flush=True)
+            skip_dumps, hook_label = hook_plan(args, step)
+            ckpt_path = save.save(veritate_model, name, step, optimizer=opt, args=ckpt_args,
+                                  dump_set=skip_dumps)
+            print("checkpoint + hooks(" + hook_label + "): " + ckpt_path, flush=True)
 
     print("done.", flush=True)
 
