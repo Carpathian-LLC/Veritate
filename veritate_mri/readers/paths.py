@@ -35,6 +35,18 @@ CORPUS_ROOT        = os.path.join(LOCAL_DATA_ROOT, "corpus")
 LEGACY_CORPUS_ROOT = os.path.join(PLUGINS_ROOT, "corpus")
 # Raw Project Gutenberg text cache the chat / agent corpus builders read from.
 PG_CACHE_ROOT   = os.path.join(CORPUS_ROOT, "_pg_cache")
+# The experience log: one JSONL file per local day recording every serving
+# exchange (bytes in/out + params). The substrate for sleep consolidation
+# (IDEA 20 T3) — the model trains on its own thought and actions. Bulk local
+# data, so it lives under data/ with the corpus, not under veritate_mri/.
+EXPERIENCE_ROOT = os.path.join(LOCAL_DATA_ROOT, "experience")
+# Serialized streaming-decode states (IDEA 20 T2): one .pt per conversation id
+# holding the carried recurrent states + pending window buffer + the checkpoint
+# they belong to. A state is only valid for the exact weights that wrote it.
+STREAM_STATE_ROOT = os.path.join(LOCAL_DATA_ROOT, "stream_states")
+# Sleep controller state (IDEA 20 T3): last-sleep marker, in-flight run record,
+# surviving sleep-final checkpoint steps. See training/sleep.py.
+SLEEP_ROOT      = os.path.join(LOCAL_DATA_ROOT, "sleep")
 MRI_ROOT        = os.path.join(REPO_ROOT, "veritate_mri")
 # Scratch tree for corpus builder input / output. Gitignored.
 TEMP_ROOT       = os.path.join(REPO_ROOT, "temp")

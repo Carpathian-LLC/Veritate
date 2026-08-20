@@ -19,7 +19,6 @@ import json
 import os
 import sys
 
-import pytest
 import torch
 from torch import nn
 
@@ -30,8 +29,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 if os.path.join(REPO, "veritate_mri") not in sys.path:
     sys.path.insert(0, os.path.join(REPO, "veritate_mri"))
 
-from training import checkpoint_probe as cp  # noqa: E402
-from training import save as save_mod  # noqa: E402
+from training import checkpoint_probe as cp
+from training import save as save_mod
 
 # ------------------------------------------------------------------------------------
 # Fixtures
@@ -115,10 +114,14 @@ def test_model_is_restored_to_training_mode(tmp_path):
 # Tests: the dump
 
 
+def _read_json(path):
+    with open(path) as f:
+        return json.load(f)
+
+
 def test_dump_writes_expected_shape(tmp_path):
     m = _Scripted("A prime number has exactly two distinct divisors.", close=True)
-    p = cp.dump_chat_health(m, str(tmp_path), 250)
-    d = json.load(open(p))
+    d = _read_json(cp.dump_chat_health(m, str(tmp_path), 250))
     assert d["step"] == 250
     assert len(d["samples"]) == len(cp.CH_PROMPTS)
     for k in ("loop_rate", "closed_rate", "median_bytes"):
@@ -128,7 +131,7 @@ def test_dump_writes_expected_shape(tmp_path):
 
 def test_dump_reports_a_clean_model_as_clean(tmp_path):
     m = _Scripted("A prime number has exactly two distinct divisors.", close=True)
-    d = json.load(open(cp.dump_chat_health(m, str(tmp_path), 1)))
+    d = _read_json(cp.dump_chat_health(m, str(tmp_path), 1))
     assert d["aggregate"]["loop_rate"] == 0.0
     assert d["aggregate"]["closed_rate"] == 1.0
 
@@ -138,13 +141,13 @@ def test_dump_catches_the_wren1_0_failure(tmp_path):
     looper = ("The ocean is a vast and complex ecosystem that is deeply "
               "interconnected with the ocean itself. The ocean is a vast and "
               "complex ecosystem that is deeply interconnected with the ocean itself.")
-    d = json.load(open(cp.dump_chat_health(_Scripted(looper), str(tmp_path), 1)))
+    d = _read_json(cp.dump_chat_health(_Scripted(looper), str(tmp_path), 1))
     assert d["aggregate"]["loop_rate"] == 1.0
     assert d["aggregate"]["closed_rate"] == 1.0, "closed turns hide the loop from closed_rate"
 
 
 # ------------------------------------------------------------------------------------
-# Tests: registration
+# Tests: dump registration
 
 
 def test_registered_in_all_dumps():
@@ -152,12 +155,9 @@ def test_registered_in_all_dumps():
 
 
 def test_registered_as_heavy():
-    """It generates text, so it belongs with the expensive dumps, not the ~9s set."""
+    """It generates text, so it belongs with the expensive dumps, not the ~9s set,
+    which is also what makes light hooks skip it."""
     assert "chat_health" in save_mod.HEAVY_DUMPS
-
-
-def test_light_hooks_skip_it():
-    assert "chat_health" in set(save_mod.HEAVY_DUMPS)
 
 
 def test_rename_map_covers_it():

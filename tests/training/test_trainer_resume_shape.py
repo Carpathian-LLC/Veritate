@@ -56,9 +56,9 @@ def fake_run(tmp_path, trainer, monkeypatch):
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         sd = {"tok_emb.weight": torch.zeros(256, hidden)}
         for i in range(layers):
-            sd["blocks.%d.ff.up.weight" % i] = torch.zeros(ffn, hidden)
-            sd["blocks.%d.ff.down.weight" % i] = torch.zeros(hidden, ffn)
-        torch.save({"model": sd, "step": step}, ckpt_dir / ("step_%d.pt" % step))
+            sd[f"blocks.{i}.ff.up.weight"] = torch.zeros(ffn, hidden)
+            sd[f"blocks.{i}.ff.down.weight"] = torch.zeros(hidden, ffn)
+        torch.save({"model": sd, "step": step}, ckpt_dir / f"step_{step}.pt")
         monkeypatch.setattr(trainer.paths, "checkpoints_dir",
                             lambda n, _d=str(tmp_path): os.path.join(_d, n, "checkpoints"))
         return name

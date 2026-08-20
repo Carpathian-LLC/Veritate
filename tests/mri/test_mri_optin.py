@@ -5,7 +5,7 @@
 # ------------------------------------------------------------------------------------
 # Notes:
 # - route + unit tests for the opt-in per-byte MRI telemetry field on POST
-#   /v1/chat/completions and POST /hybrid/chat(/stream). Proves: flag off is today's
+#   /v1/chat/completions. Proves: flag off is today's
 #   text-only behavior (no frames), flag on returns the same per-byte frame objects the
 #   MRI view consumes (unfiltered), and an off-the-shelf OpenAI reader still reassembles
 #   the answer with the flag on. _resolve_route / _local_events / _generate_local_mri are
@@ -76,15 +76,6 @@ def _chunks(resp):
     for f in resp.get_data(as_text=True).split("\n\n"):
         f = f.strip()
         if f.startswith("data: ") and f != "data: [DONE]":
-            out.append(json.loads(f[len("data: "):]))
-    return out
-
-
-def _sse_dicts(resp):
-    out = []
-    for f in resp.get_data(as_text=True).split("\n\n"):
-        f = f.strip()
-        if f.startswith("data: "):
             out.append(json.loads(f[len("data: "):]))
     return out
 
@@ -191,48 +182,3 @@ def test_openai_stream_on_offtheshelf_client_still_reassembles(monkeypatch):
               "messages": [{"role": "user", "content": "hi"}]})
     text = "".join(c["choices"][0]["delta"].get("content", "") for c in _chunks(r))
     assert text == ANSWER
-
-
-# --- /hybrid/chat non-streaming ------------------------------------------------------
-
-def test_hybrid_off_has_no_mri(monkeypatch):
-    """/hybrid/chat without the flag returns the usual payload, no mri key."""
-    r = _client(monkeypatch).post("/hybrid/chat", json={"model": "m", "message": "hi"})
-    body = r.get_json()
-    assert body["ok"] is True
-    assert "mri" not in body
-
-
-def test_hybrid_on_attaches_frames(monkeypatch):
-    """/hybrid/chat with mri:true on a local model attaches the captured frames."""
-    monkeypatch.setattr(H, "_generate_local_mri",
-                        lambda cfg, model, backend, messages, system: (ANSWER, FRAMES))
-    r = _client(monkeypatch).post("/hybrid/chat", json={"model": "m", "message": "hi", "mri": True})
-    body = r.get_json()
-    assert body["ok"] is True
-    assert body["answer"] == ANSWER
-    assert body["mri"] == FRAMES
-
-
-# --- /hybrid/chat/stream -------------------------------------------------------------
-
-def test_hybrid_stream_off_has_no_frame_events(monkeypatch):
-    """Flag off: the hybrid stream carries only delta + done frames, no per-byte frames."""
-    _stub_local(monkeypatch)
-    r = _client(monkeypatch).post("/hybrid/chat/stream", json={"model": "m", "message": "hi"})
-    kinds = {f["kind"] for f in _sse_dicts(r)}
-    assert kinds == {"delta", "done"}
-
-
-def test_hybrid_stream_on_interleaves_frames(monkeypatch):
-    """Flag on: per-byte frames (kind token/meta/stop) interleave with delta frames; done has no mri."""
-    _stub_local(monkeypatch)
-    r = _client(monkeypatch).post(
-        "/hybrid/chat/stream", json={"model": "m", "message": "hi", "mri": True})
-    frames = _sse_dicts(r)
-    assert any(f["kind"] == "token" for f in frames)
-    assert any(f["kind"] == "meta" for f in frames)
-    text = "".join(f["text"] for f in frames if f["kind"] == "delta")
-    assert text == ANSWER
-    done = frames[-1]
-    assert done["kind"] == "done" and "mri" not in done   # frames streamed inline, not duplicated

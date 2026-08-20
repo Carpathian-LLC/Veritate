@@ -81,16 +81,7 @@ app.config["BRAIN_LAST_USED"] = 0.0
 @app.route("/")
 @app.route("/app")
 def index():
-    # The dashboard is the front door. Chat lives inside it as a tab (embedding
-    # /chat), so loading the platform no longer drops straight into the chat UI.
     return send_from_directory(STATIC_DIR, "index.html")
-
-
-@app.route("/chat")
-def chat_page():
-    # Standalone chat page, still directly reachable and embedded by the Chat
-    # tab via an <iframe src="/chat?embed=1">.
-    return send_from_directory(STATIC_DIR, "hybrid.html")
 
 
 @app.errorhandler(Exception)
@@ -161,6 +152,7 @@ from routes import (
     rag_routes,
     runs_routes,
     settings_routes,
+    sleep_routes,
     sys_routes,
     teacher_routes,
     train_routes,
@@ -183,6 +175,7 @@ trainers_routes.register(app)
 pruning_routes.register(app)
 runs_routes.register(app)
 settings_routes.register(app)
+sleep_routes.register(app)
 sys_routes.register(app)
 teacher_routes.register(app)
 train_routes.register(app)
@@ -260,6 +253,8 @@ def main():
                            "(heartbeat still active)")
     else:
         threading.Thread(target=_pytorch_idle_watcher, name="pytorch-idle-watcher", daemon=True).start()
+        from training import sleep as sleep_mod
+        threading.Thread(target=sleep_mod.watcher, name="sleep-watcher", daemon=True).start()
         sys_metrics.warm()
 
     def _enrich_with_config(out, name):

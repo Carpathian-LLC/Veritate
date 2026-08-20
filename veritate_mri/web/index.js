@@ -1893,6 +1893,41 @@ function pollModeCaps() {
 }
 setInterval(pollModeCaps, 15000);
 
+// Sleep panel (training/sleep.py): the gen-bar chip shows whether the sleep
+// model is awake (countdown to its next consolidation) or sleeping (progress +
+// eta + last kept checkpoint, with a wake button that stops the run). Hidden
+// while the feature is disabled.
+function _fmtMin(s) { return s >= 90 ? `${Math.round(s / 60)}m` : `${Math.round(s)}s`; }
+
+function pollSleep() {
+  if (document.hidden) return;
+  fetch("/sleep").then(r => r.ok ? r.json() : null).then(d => {
+    const chip = $("sleepChip"), wake = $("sleepWake");
+    if (!chip) return;
+    if (!d || !d.enabled) { chip.style.display = "none"; wake.style.display = "none"; return; }
+    chip.style.display = "";
+    if (d.state === "sleeping" && d.run) {
+      const { step, total_steps, eta_s, last_ckpt_step } = d.run;
+      chip.textContent = `${d.model} sleeping ${step ?? "…"}/${total_steps}`
+        + (eta_s ? ` · wakes in ~${_fmtMin(eta_s)}` : "");
+      chip.title = `consolidating its own experience into weights; waking now keeps `
+        + `everything up to checkpoint ${last_ckpt_step}`;
+      wake.style.display = "";
+    } else {
+      wake.style.display = "none";
+      chip.textContent = d.sleeps_in_s != null
+        ? `${d.model} sleeps in ${_fmtMin(d.sleeps_in_s)} · ${d.pending_exchanges} new`
+        : `${d.model} awake · ${d.pending_exchanges} new`;
+      chip.title = "sleep consolidation is enabled; the model trains on new exchanges when idle";
+    }
+  }).catch(() => {});
+}
+setInterval(pollSleep, 15000);
+pollSleep();
+$("sleepWake")?.addEventListener("click", () => {
+  fetch("/sleep/wake", { method: "POST" }).then(() => pollSleep()).catch(() => {});
+});
+
 function resetRagPanel() {
   const wrap = $("ragPanel"); if (!wrap) return;
   wrap.style.display = "none";
@@ -1941,7 +1976,7 @@ function showAgentEmpty(reason) {
   const meta = $("agentPanelMeta"); if (meta) meta.textContent = "-";
 }
 
-// ---- chat framing (platform chat markers, same contract as /hybrid/chat) ----
+// ---- chat framing (platform chat markers, same contract as /v1/chat/completions) ----
 // Frames are literal byte sequences the chat-trained model learned in SFT.
 // vocab=256, so these are just bytes, not special tokens. Current chat models
 // (chat_v1/v2/v3 corpora) train on <|user|>/<|assistant|>/<|end|>; ChatML
@@ -2095,8 +2130,26 @@ function pushChatMessage(role, text, stats) {
 function clearChatHistory() {
   saveChatHistory([]);
   renderChatHistory();
+  rotateChatStateId();   // fresh conversation = fresh carried-state file
 }
 $("chatClear").addEventListener("click", clearChatHistory);
+
+// ---- streaming-state conversation id ----
+// Names the server-side carried-state file for fast=stream chat. Rotated on
+// chat clear so a cleared transcript never resumes an old state; rotated on a
+// "stream state" error (e.g. the state was written by different weights).
+const CHAT_STATE_KEY = "veritate_chat_state_id_v1";
+function chatStateId() {
+  let id = null;
+  try { id = localStorage.getItem(CHAT_STATE_KEY); } catch (_) {}
+  if (!id) { id = rotateChatStateId(); }
+  return id;
+}
+function rotateChatStateId() {
+  const id = "chat_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+  try { localStorage.setItem(CHAT_STATE_KEY, id); } catch (_) {}
+  return id;
+}
 
 // ---- mode toggle wiring ----
 function applyGenMode() {
@@ -2326,7 +2379,16 @@ $("go").addEventListener("click", async () => {
   // Built BEFORE the question joins the transcript, so it carries the same history
   // the speculative draft was built from and the claim can match.
   const mode = _genMode();
-  const wirePrompt = (mode === "chat") ? wrapChat(prompt) : prompt;
+  // Streaming-state chat (fast=stream, pytorch): prior turns live in the model's
+  // carried state server-side (data/stream_states/<id>.pt), so the wire carries
+  // ONLY the new turn. Every other mode re-feeds the transcript via _chatPast().
+  const streamChat = (mode === "chat")
+      && ((($("genFastMode") || { value: "" }).value) === "stream")
+      && ((($("backend") || { value: "pytorch" }).value || "pytorch").toLowerCase() !== "c");
+  const wirePrompt = (mode === "chat")
+      ? (streamChat ? `${CHATML_IM_START}user\n${prompt}${CHATML_IM_END}\n${CHATML_IM_START}assistant\n`
+                    : wrapChat(prompt))
+      : prompt;
   // A claimed draft is already answered: paint those bytes now, from the copy the
   // rail was already showing, so the reply is on screen before the stream reopens.
   // The arriving frames then overwrite it byte for byte.
@@ -2479,7 +2541,8 @@ $("go").addEventListener("click", async () => {
   }
 
   // Repetition control is chat-only: loops are chat-lethal but autocomplete
-  // legitimately repeats. Autocomplete omits the params (server default off).
+  // legitimately repeats. Autocomplete omits the params (the server defaults the
+  // ban on only for chat-framed or RAG prompts, off for plain completion).
   let repParam = "";
   if (mode === "chat") {
     const repWin = parseInt(($("genRepWindow") || { value: "256" }).value, 10);
@@ -2489,7 +2552,8 @@ $("go").addEventListener("click", async () => {
              + `&rep_penalty=${isNaN(repPen) ? 0.5 : repPen}`
              + `&no_repeat_ngram=${isNaN(repNg) ? 16 : repNg}`;
   }
-  const url = `/generate?prompt=${encodeURIComponent(wirePrompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}${ragParam}${repParam}${claim}`;
+  const stateParam = streamChat ? `&state_id=${encodeURIComponent(chatStateId())}` : "";
+  const url = `/generate?prompt=${encodeURIComponent(wirePrompt)}&temperature=${temp}&top_k=${topk}&max_new=${maxnew}&backend=${backend}&ablate_layer=${ablLayer}&ablate_neuron=${ablNeuron}${addonsParam}${fastParam}${constrainedParam}${ragParam}${repParam}${stateParam}${claim}`;
   evtSrc = new EventSource(url);
   const t0 = performance.now();
   _promptSent();
@@ -2512,6 +2576,9 @@ $("go").addEventListener("click", async () => {
       // backend signaled an error mid-stream (e.g., c-engine pipe desync,
       // pytorch oom). surface it instead of silently hanging.
       const msg = ev.message || "(no message)";
+      // A carried-state file written by different weights is unusable: rotate the
+      // conversation id so the next send starts a fresh state instead of failing.
+      if (/stream state/i.test(msg)) rotateChatStateId();
       const actions = (backend === "c" && /not loaded|engine/i.test(msg)) ? _cEngineActionsHtml() : "";
       _GenThink.showError(msg, actions);
       try { evtSrc.close(); } catch (_) {}
@@ -2716,13 +2783,12 @@ $("goLive").addEventListener("click", () => {
 
 // ---- tabs ----
 function activateTab(name) {
-  const valid = ["chat", "generation", "learning", "training", "wiki", "logs", "settings"];
+  const valid = ["generation", "learning", "training", "distillation", "wiki", "logs", "settings"];
   if (!valid.includes(name)) name = "generation";
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
   document.querySelectorAll(".tab-body").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
-  if (name === "chat") {
-    // Wire + network-init the chat on first open (defined in chat_tab.js).
-    if (typeof window.chatTabInit === "function") window.chatTabInit();
+  if (name === "distillation" && typeof _distOnTabActivated === "function") {
+    _distOnTabActivated();
   }
   if (name === "learning") {
     ensureLearningLoaded();
@@ -10211,7 +10277,7 @@ const TEACHER_REQUIRED_FLOWS = ["synth", "rag", "author"];
 const SYNTH_TRAIN_BTN_ID = "trainRun";
 
 const synthState = { seeds: [], jobId: null, pollTimer: null, jobs: [] };
-const authorState = { spec: null, jobId: null, pollTimer: null };
+const authorState = { spec: null, jobId: null, pollTimer: null, rate: null };
 
 // Persist the selected flow + active synth job so a reload lands the user back
 // on the same action with its live status reattached.
@@ -10351,8 +10417,8 @@ function _trUpdateTeacherGate() {
   // disable start button when teacher needed but missing
   const run = $(SYNTH_TRAIN_BTN_ID);
   if (run && need && !ok) run.disabled = true;
-  const ss = $("synthStartBtn");
-  if (ss) ss.disabled = (need && !ok);
+  // #synthStartBtn moved to the Distillation tab, whose own teacher check owns
+  // its enabled state. Touching it from here would fight that check.
   const rt = $("ragTrain");
   if (rt && need && !ok) rt.disabled = true;
 }
@@ -10546,6 +10612,7 @@ function _synthBuild() {
     .then(d => {
       if (!d || d.error) { if (stat) { stat.textContent = "error: " + (d && d.error || "failed"); stat.style.color = "var(--hot)"; } return; }
       if (stat) { stat.textContent = `built ${d.stem}: ${d.n_train} train, ${d.n_val} val`; stat.style.color = "var(--data-pos)"; }
+      _distRenderAudit(d.audit);
       _trPoll();
     })
     .catch(e => { if (stat) { stat.textContent = _backendErrMsg(e); stat.style.color = "var(--hot)"; } });
@@ -10609,8 +10676,8 @@ function _synthStartReq(prompts, fmt, ids, target, line, info) {
 }
 
 function _trShowSynthPanel(show) {
-  const panel = $("synthPanel");
-  if (panel) panel.style.display = show ? "block" : "none";
+  // #synthPanel moved to the Distillation tab 2026-08-20; its visibility is owned
+  // by that tab's mode switch. This still manages the training-form rows.
   const files = $("trainFilesPanel");
   if (files) files.style.display = show ? "block" : "none";
   // hide trainer picker + form when synth flow active
@@ -10731,6 +10798,75 @@ function _authorSelectedGenres() {
     .filter(cb => cb.checked).map(cb => cb.dataset.id);
 }
 
+// Progress against the PLAN, read from the server rather than from memory, so a
+// refresh mid-run still knows the denominator. Percentages are always shown next
+// to the raw counts they came from -- a bare percentage is how a run that is
+// producing duplicates looks identical to one that is working.
+function _authorRenderProgress(s) {
+  const host = $("authorProgress");
+  if (!host) return;
+  const a = s.authoring || {};
+  const plan = s.plan || {};
+  const targetBytes = Number(plan.target_bytes || 0);
+  const totalCalls = Number(plan.total_calls || 0);
+  // s.completed counts RECORDS kept; teacher CALLS are their own counters. Using
+  // the wrong one here reads past 100% the moment a call yields many records.
+  const doneCalls = s.calls_remaining === null || s.calls_remaining === undefined
+    ? Number(s.calls_ok || 0) + Number(s.calls_failed || 0)
+    : Math.max(0, totalCalls - Number(s.calls_remaining));
+  const records = Number(s.completed || 0);
+  const bytes = Number(a.bytes || 0);
+  if (!targetBytes && !totalCalls) { host.style.display = "none"; return; }
+  host.style.display = "block";
+
+  const byBytes = targetBytes ? bytes / targetBytes : 0;
+  const byCalls = totalCalls ? doneCalls / totalCalls : 0;
+  const frac = Math.max(0, Math.min(1, targetBytes ? byBytes : byCalls));
+
+  const fill = $("authorProgressFill");
+  if (fill) fill.style.width = (frac * 100).toFixed(1) + "%";
+
+  const left = $("authorProgressLeft");
+  if (left) {
+    left.textContent = targetBytes
+      ? `${(bytes / AUTHOR_MB).toFixed(2)} MB of ${(targetBytes / AUTHOR_MB).toFixed(0)} MB kept`
+      : `${(bytes / AUTHOR_MB).toFixed(2)} MB kept`;
+  }
+  const mid = $("authorProgressMid");
+  if (mid) {
+    mid.textContent = (totalCalls
+      ? `${doneCalls.toLocaleString()} of ${totalCalls.toLocaleString()} teacher calls`
+      : `${doneCalls.toLocaleString()} teacher calls`)
+      + ` · ${records.toLocaleString()} records`;
+  }
+  const right = $("authorProgressRight");
+  if (right) right.textContent = _authorEta(s, frac);
+}
+
+// ETA from this job's own observed rate. Reported as "not enough data yet"
+// rather than a made-up number until there is a rate worth extrapolating.
+function _authorEta(s, frac) {
+  const key = authorState.jobId || "";
+  const bytes = Number((s.authoring || {}).bytes || 0);
+  const now = Date.now();
+  if (!authorState.rate || authorState.rate.job !== key) {
+    authorState.rate = { job: key, t0: now, b0: bytes };
+    return "measuring rate...";
+  }
+  const dt = (now - authorState.rate.t0) / 1000;
+  const db = bytes - authorState.rate.b0;
+  if (!s.running) return frac >= 1 ? "complete" : "stopped";
+  if (dt < 20 || db <= 0) return "measuring rate...";
+  const perSec = db / dt;
+  const plan = s.plan || {};
+  const remaining = Number(plan.target_bytes || 0) - bytes;
+  if (remaining <= 0) return "finishing";
+  const secs = remaining / perSec;
+  if (secs < 90) return `~${Math.round(secs)}s left`;
+  if (secs < 5400) return `~${Math.round(secs / 60)}m left`;
+  return `~${(secs / 3600).toFixed(1)}h left`;
+}
+
 function _authorRenderStats(s) {
   const a = s.authoring || {};
   const row = $("authorStatsRow");
@@ -10738,6 +10874,7 @@ function _authorRenderStats(s) {
   const rej = $("authorRejectRow");
   const plan = $("authorPlanLine");
   if (!row) return;
+  _authorRenderProgress(s);
   const running = !!s.running;
   const mb = (a.bytes || 0) / AUTHOR_MB;
   const ratio = a.ngram_ratio === undefined ? 1 : a.ngram_ratio;
@@ -10908,14 +11045,14 @@ function _authorBuild() {
           `train bin sha256 <code>${_trEsc(m.train_sha256 || "")}</code><br>` +
           `val bin sha256 <code>${_trEsc(m.val_sha256 || "")}</code></div>`;
       }
+      _distRenderAudit(d.audit);
       _trPoll();
     })
     .catch(e => { if (stat) { stat.textContent = _backendErrMsg(e); stat.style.color = "var(--hot)"; } });
 }
 
 function _trShowAuthorPanel(show) {
-  const panel = $("authorPanel");
-  if (panel) panel.style.display = show ? "block" : "none";
+  // #authorPanel moved to the Distillation tab 2026-08-20; see _trShowSynthPanel.
   if (!show) return;
   const pickerRow = _trEl("trainPickerRow");
   if (pickerRow) pickerRow.style.display = "none";
@@ -10956,6 +11093,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const flowPick = (flow) => {
     const busy = trainState.running && trainState.running.status === "running";
     if (busy && flow !== "export") return;
+    if (flow === "distillation") {
+      if (flowModal) flowModal.classList.add("hidden");
+      location.hash = "distillation";
+      activateTab("distillation");
+      return;
+    }
     trainState.flow = flow;
     trainState.selected = null;
     _trStore(flow);
@@ -11003,7 +11146,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const gotoLink = $("teacherGotoSettings");
   if (gotoLink) gotoLink.addEventListener("click", _trGotoTeacherSettings);
   const synthStart = $("synthStartBtn");
-  if (synthStart) synthStart.addEventListener("click", _synthStart);
+  if (synthStart) synthStart.addEventListener("click", () => _distGuardedStart(_synthStart));
   const synthStop = $("synthStopPollBtn");
   if (synthStop) synthStop.addEventListener("click", _synthStopJob);
   const synthBuild = $("synthBuildBtn");
@@ -11011,7 +11154,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const authorImportBtn = $("authorImportBtn");
   if (authorImportBtn) authorImportBtn.addEventListener("click", _authorImport);
   const authorStart = $("authorStartBtn");
-  if (authorStart) authorStart.addEventListener("click", _authorStart);
+  if (authorStart) authorStart.addEventListener("click", () => _distGuardedStart(_authorStart));
   const authorStop = $("authorStopBtn");
   if (authorStop) authorStop.addEventListener("click", _authorStop);
   const authorBuild = $("authorBuildBtn");
@@ -15543,3 +15686,737 @@ window.ai_fail = _AI.fail;
   window._emptyStateRefresh = refresh;
 })();
 
+
+// ---- Distillation tab ----
+// One question this tab must always answer: WHERE do these teacher calls land,
+// and is that machine already busy? /teacher/target_status answers it and the
+// bar at the top never collapses, so the answer is always in the same place.
+// Contention does not disable anything -- distilling during a run is a legitimate
+// choice, it just has to be a deliberate one, so it costs a confirm.
+const DIST_TARGET_URL = "/teacher/target_status";
+const DIST_MODE_STORE = "vt:distillation:mode";
+const DIST_TARGET_POLL_MS = 20000;
+const DIST_MODES = ["interview", "author", "synth"];
+const DIST_DEFAULT_MODE = "interview";
+
+const distState = { mode: null, target: null, pollTimer: null, pending: null };
+
+function _distStoreMode(m) { try { localStorage.setItem(DIST_MODE_STORE, m); } catch (e) {} }
+function _distStoredMode() {
+  try {
+    const m = localStorage.getItem(DIST_MODE_STORE);
+    return DIST_MODES.includes(m) ? m : null;
+  } catch (e) { return null; }
+}
+
+function _distOnTab() {
+  const t = document.querySelector('.tab-body[data-tab="distillation"]');
+  return !!(t && t.classList.contains("active"));
+}
+
+function _distSetMode(mode) {
+  if (!DIST_MODES.includes(mode)) mode = DIST_DEFAULT_MODE;
+  distState.mode = mode;
+  _distStoreMode(mode);
+  document.querySelectorAll(".dist-mode").forEach(b =>
+    b.classList.toggle("active", b.getAttribute("data-mode") === mode));
+  const panels = { interview: "interviewPanel", author: "authorPanel", synth: "synthPanel" };
+  Object.keys(panels).forEach(m => {
+    const el = $(panels[m]);
+    if (el) el.style.display = (m === mode) ? "block" : "none";
+  });
+}
+
+function _distFmtAgo(ts) {
+  if (!ts) return "";
+  const secs = Math.max(0, Math.floor(Date.now() / 1000 - Number(ts)));
+  if (secs < 90) return `${secs}s ago`;
+  if (secs < 5400) return `${Math.round(secs / 60)}m ago`;
+  return `${(secs / 3600).toFixed(1)}h ago`;
+}
+
+function _distRenderTarget(d) {
+  distState.target = d || null;
+  const name = $("distTeacherName");
+  const chip = $("distTargetChip");
+  const gate = $("distTeacherGate");
+  const note = $("distContentionNote");
+  if (!d || !d.provider) {
+    if (name) name.textContent = "not configured";
+    if (chip) { chip.textContent = "no teacher"; chip.className = "dist-chip"; }
+    if (gate) gate.style.display = "block";
+    if (note) note.style.display = "none";
+    _distSetStartsEnabled(false);
+    return;
+  }
+  if (gate) gate.style.display = "none";
+  _distSetStartsEnabled(true);
+  if (name) name.textContent = `${d.provider} / ${d.model || "(provider default)"}`;
+
+  const where = d.targets_this_machine ? "this machine" : (d.host || "a hosted API");
+  if (chip) {
+    if (d.contention) {
+      chip.textContent = `${where} - training now`;
+      chip.className = "dist-chip busy";
+    } else if (d.training_active === null) {
+      chip.textContent = `${where} - state unknown`;
+      chip.className = "dist-chip unknown";
+    } else {
+      chip.textContent = `${where} - free`;
+      chip.className = "dist-chip ok";
+    }
+  }
+  if (note) {
+    if (d.contention && d.run) {
+      const started = _distFmtAgo(d.run.started_at);
+      note.innerHTML = `A training run is using this machine right now: ` +
+        `<strong>${_trEsc(d.run.name || d.run.plugin_id || "unnamed run")}</strong>` +
+        `${d.run.size ? " (" + _trEsc(d.run.size) + ")" : ""}` +
+        `${started ? ", started " + _trEsc(started) : ""}. ` +
+        `Distilling now is allowed and will ask you to confirm first.`;
+      note.style.display = "block";
+    } else if (d.training_active === null) {
+      note.innerHTML = `The teacher runs on <strong>${_trEsc(d.host || "another machine")}</strong>. ` +
+        `Whether that box is training cannot be seen from here, so no contention warning is possible.`;
+      note.style.display = "block";
+    } else {
+      note.style.display = "none";
+    }
+  }
+}
+
+function _distSetStartsEnabled(on) {
+  ["interviewStartBtn", "authorStartBtn", "synthStartBtn"].forEach(id => {
+    const b = $(id);
+    if (b) b.disabled = !on;
+  });
+}
+
+function _distFetchTarget() {
+  return fetch(DIST_TARGET_URL)
+    .then(r => r.json())
+    .then(d => { _distRenderTarget(d); return d; })
+    .catch(() => { _distRenderTarget(null); return null; });
+}
+
+function _distPollStart() {
+  if (distState.pollTimer) clearInterval(distState.pollTimer);
+  distState.pollTimer = setInterval(() => { if (_distOnTab()) _distFetchTarget(); }, DIST_TARGET_POLL_MS);
+  _distFetchTarget();
+}
+
+// The confirm is re-checked against a FRESH target read rather than the cached
+// one: a run can start in the seconds between opening the tab and pressing go.
+function _distGuardedStart(run) {
+  return _distFetchTarget().then(d => {
+    if (!d || !d.contention) { run(); return; }
+    _distShowConfirm(d, run);
+  });
+}
+
+function _distShowConfirm(d, run) {
+  const modal = $("distConfirmModal");
+  const body = $("distConfirmBody");
+  if (!modal || !body) { run(); return; }
+  const r = d.run || {};
+  const started = _distFmtAgo(r.started_at);
+  body.innerHTML =
+    `<div><span class="dist-confirm-run">${_trEsc(r.name || r.plugin_id || "A training run")}</span>` +
+    `${r.size ? " (" + _trEsc(r.size) + ")" : ""} is training on ` +
+    `<strong>${_trEsc(d.host || "this machine")}</strong>` +
+    `${started ? ", started " + _trEsc(started) : ""}.</div>` +
+    `<div style="margin-top:8px">The teacher you are about to call runs on that same machine, so both will compete for it.</div>` +
+    `<ul>` +
+    `<li>The training run gets slower. It will not fail or lose work.</li>` +
+    `<li>Teacher calls get slower too, and may time out under load.</li>` +
+    `<li>Stopping distillation later keeps every record already written.</li>` +
+    `</ul>`;
+  distState.pending = run;
+  modal.classList.remove("hidden");
+}
+
+function _distCloseConfirm(go) {
+  const modal = $("distConfirmModal");
+  if (modal) modal.classList.add("hidden");
+  const pending = distState.pending;
+  distState.pending = null;
+  if (go && typeof pending === "function") pending();
+}
+
+// ---- acceptance report ----
+// Rendered from the `audit` block the build routes return. Reports unique turns
+// and unique content bytes; file size appears only as context, never as a check.
+function _distFmtCheck(c) {
+  if (c.unit === "ratio") return (c.value * 100).toFixed(1) + "%";
+  if (c.unit === "bytes") return Math.round(c.value) + " B";
+  return c.value.toFixed(1);
+}
+
+function _distFmtBound(c) {
+  if (c.ceiling !== undefined) {
+    return "must stay at or below " + (c.unit === "rate" ? c.ceiling.toFixed(1) : c.ceiling);
+  }
+  if (c.floor === undefined) return "";
+  if (c.unit === "ratio") return "floor " + (c.floor * 100).toFixed(0) + "%";
+  if (c.unit === "bytes") return "floor " + c.floor + " B";
+  return "floor " + c.floor;
+}
+
+function _distRenderAudit(audit) {
+  const panel = $("distAuditPanel");
+  if (!panel) return;
+  if (!audit) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  const verdict = $("distAuditVerdict");
+  if (verdict) {
+    verdict.textContent = audit.passed
+      ? "Passed - this corpus clears every acceptance check."
+      : "Failed - this corpus is below the bar on at least one check.";
+    verdict.className = "dist-audit-verdict " + (audit.passed ? "pass" : "fail");
+  }
+  const host = $("distAuditChecks");
+  if (host) {
+    host.innerHTML = (audit.checks || []).map(c =>
+      `<div class="dist-audit-check ${c.passed ? "pass" : "fail"}">
+         <span class="dist-audit-name">${_trEsc(c.label)}</span>
+         <span class="dist-audit-value">${_distFmtCheck(c)}</span>
+         <span class="dist-audit-bound">${_trEsc(_distFmtBound(c))}</span>
+         <span class="dist-audit-why">${_trEsc(c.why || "")}</span>
+       </div>`).join("");
+  }
+  const detail = $("distAuditDetail");
+  if (detail) {
+    const arts = Object.keys(audit.artifacts || {});
+    const artLine = arts.length
+      ? arts.map(k => `${_trEsc(k)} &times;${audit.artifacts[k]}`).join(", ")
+      : "none found";
+    detail.innerHTML =
+      `${audit.total_user_turns.toLocaleString()} user turns ` +
+      `(${audit.unique_user_turns.toLocaleString()} unique) &middot; ` +
+      `${audit.total_assistant_turns.toLocaleString()} assistant turns ` +
+      `(${audit.unique_assistant_turns.toLocaleString()} unique) &middot; ` +
+      `${(audit.unique_content_bytes || 0).toLocaleString()} unique content bytes ` +
+      `of ${(audit.total_content_bytes || 0).toLocaleString()}<br>` +
+      `artifacts: ${artLine}` +
+      (audit.short_assistant_turns
+        ? `<br>${audit.short_assistant_turns.toLocaleString()} assistant turns under 40 B` : "");
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll(".dist-mode").forEach(b =>
+    b.addEventListener("click", () => _distSetMode(b.getAttribute("data-mode"))));
+  _distSetMode(_distStoredMode() || DIST_DEFAULT_MODE);
+
+  const refresh = $("distRefreshTarget");
+  if (refresh) refresh.addEventListener("click", _distFetchTarget);
+  ["distGotoSettings", "distGateSettings"].forEach(id => {
+    const a = $(id);
+    if (a) a.addEventListener("click", _trGotoTeacherSettings);
+  });
+  const close = $("distConfirmClose");
+  if (close) close.addEventListener("click", () => _distCloseConfirm(false));
+  const cancel = $("distConfirmCancel");
+  if (cancel) cancel.addEventListener("click", () => _distCloseConfirm(false));
+  const go = $("distConfirmGo");
+  if (go) go.addEventListener("click", () => _distCloseConfirm(true));
+  const modal = $("distConfirmModal");
+  if (modal) modal.addEventListener("click", e => { if (e.target === modal) _distCloseConfirm(false); });
+});
+
+// Rehydrate on every activation, not just first paint: a refresh mid-run has to
+// land back on the live job with its poll running. The restore that used to hang
+// off the training flow picker lives here now, because that picker no longer
+// selects synth/author.
+let _distLoadedOnce = false;
+
+function _distOnTabActivated() {
+  _distPollStart();
+  if (!_distLoadedOnce) {
+    _distLoadedOnce = true;
+    if (!authorState.spec) _authorLoadSpec();
+    if (!synthState.seeds.length) _synthLoadSeeds();
+    fetch(TEACHER_AUTHOR_SPEC).then(r => r.json())
+      .then(d => { if (d && d.genres) _ivRenderGenres(d); }).catch(() => {});
+    _ivLoadPacks();
+  }
+  _synthLoadJobs().then(() => {
+    _authorFillJobs();
+    const savedAuthor = _authorStored();
+    if (savedAuthor && (synthState.jobs || []).some(j => j.job_id === savedAuthor)) {
+      authorState.jobId = savedAuthor;
+      const sel = $("authorJobSelect");
+      if (sel) sel.value = savedAuthor;
+      _authorPollStart();
+    }
+    _ivFillJobs();
+    const savedIv = _ivStored();
+    if (savedIv && (synthState.jobs || []).some(j => j.job_id === savedIv)) {
+      interviewState.jobId = savedIv;
+      const ivSel = $("interviewJobSelect");
+      if (ivSel) ivSel.value = savedIv;
+      _ivPollStart();
+    }
+    _synthReattach();
+  }).catch(() => {});
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  // Deep link or a refresh while the tab was open: activateTab has already run
+  // by the time this fires, so check rather than assume.
+  if (_distOnTab()) _distOnTabActivated();
+});
+
+// ---- interview mode ----
+// Two-pass generation. Reuses the authoring status/stop/samples/build endpoints
+// because InterviewJob writes the same on-disk contract; only /start differs.
+// The unit of work here is a CONVERSATION, not a teacher call: one conversation
+// costs 2*depth-1 sequential calls, which is why the cost line is shown before
+// the user commits to a run.
+const TEACHER_INTERVIEW_START = "/teacher/interview/start";
+const TEACHER_SEED_PACKS = "/teacher/seed_packs";
+const INTERVIEW_TOPIC_STORE = "vt:distillation:topics";
+const INTERVIEW_VERTICAL_STORE = "vt:distillation:vertical";
+// Measured 2026-08-20: one seed yields ~150 usable openers before the distinct
+// 5-gram ratio reaches the 0.90 floor. That is what turns a topic selection into
+// an honest ceiling on how many conversations are worth asking for.
+const OPENERS_PER_SEED = 150;
+const INTERVIEW_JOB_STORE = "vt:distillation:interview_job";
+const INTERVIEW_SAMPLE_SHOWN = 4;
+
+const interviewState = { jobId: null, pollTimer: null, rate: null, packs: [], vertical: null, choices: [] };
+
+function _ivStore(id) { try { localStorage.setItem(INTERVIEW_JOB_STORE, id); } catch (e) {} }
+function _ivStored() { try { return localStorage.getItem(INTERVIEW_JOB_STORE); } catch (e) { return null; } }
+
+// Topic memory is keyed by vertical. A group id only means something inside its
+// own pack, and a half-picked selection in one subject area has to survive a trip
+// to another and back. An older flat-array store reads as empty, which just falls
+// through to the all-checked default once.
+function _ivTopicStore() {
+  try {
+    const v = JSON.parse(localStorage.getItem(INTERVIEW_TOPIC_STORE) || "{}");
+    return (v && typeof v === "object" && !Array.isArray(v)) ? v : {};
+  } catch (e) { return {}; }
+}
+function _ivStoreTopics(ids) {
+  try {
+    const all = _ivTopicStore();
+    all[interviewState.vertical || ""] = ids;
+    localStorage.setItem(INTERVIEW_TOPIC_STORE, JSON.stringify(all));
+  } catch (e) {}
+}
+function _ivStoredTopics() {
+  const v = _ivTopicStore()[interviewState.vertical || ""];
+  return Array.isArray(v) ? v : [];
+}
+
+function _ivPack() {
+  return (interviewState.packs || []).find(p => p.vertical === interviewState.vertical) || null;
+}
+
+function _ivSelectedTopics() {
+  return Array.from(document.querySelectorAll(".dist-topic-cb:checked"))
+    .map(cb => cb.getAttribute("data-id"));
+}
+
+function _ivSelectedSeedCount() {
+  const pack = _ivPack();
+  if (!pack) return 0;
+  const chosen = new Set(_ivSelectedTopics());
+  return pack.groups.filter(g => chosen.has(g.id)).reduce((n, g) => n + g.count, 0);
+}
+
+function _ivLoadPacks() {
+  return fetch(TEACHER_SEED_PACKS).then(r => r.json()).then(d => {
+    if (!d || !d.packs) return;
+    interviewState.packs = d.packs;
+    interviewState.choices = d.concurrency_choices || [];
+    _ivFillConcurrency();
+    const sel = $("interviewVertical");
+    if (sel) {
+      // Unavailable verticals stay visible but disabled: the roadmap is useful,
+      // pretending a vertical works when it has no seeds is not.
+      sel.innerHTML = d.packs.map(p =>
+        `<option value="${_trEsc(p.vertical)}"${p.available ? "" : " disabled"}>` +
+        `${_trEsc(p.label)}${p.available ? ` (${p.seed_count.toLocaleString()} seeds)` : " - no seeds yet"}` +
+        `</option>`).join("");
+      let want = null;
+      try { want = localStorage.getItem(INTERVIEW_VERTICAL_STORE); } catch (e) {}
+      const first = (d.packs.find(p => p.available) || {}).vertical || "";
+      sel.value = (d.packs.some(p => p.vertical === want && p.available)) ? want : first;
+    }
+    _ivSetVertical(sel ? sel.value : "");
+  }).catch(() => {});
+}
+
+function _ivFillConcurrency() {
+  const sel = $("interviewConcurrency");
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">settings default</option>' +
+    (interviewState.choices || []).map(n => `<option value="${n}">${n}</option>`).join("");
+  if (cur) sel.value = cur;
+}
+
+function _ivSetVertical(vertical) {
+  interviewState.vertical = vertical;
+  try { localStorage.setItem(INTERVIEW_VERTICAL_STORE, vertical); } catch (e) {}
+  const pack = _ivPack();
+  const note = $("interviewVerticalNote");
+  if (note) note.textContent = pack ? pack.description : "";
+  const host = $("interviewTopicList");
+  if (!host) return;
+  if (!pack || !pack.groups.length) {
+    host.innerHTML = '<div class="dist-topic-empty">No seeds written for this subject area yet. ' +
+      'Add a pack at <code>veritate_mri/data/authoring/seeds/&lt;vertical&gt;.json</code>.</div>';
+    _ivCost();
+    return;
+  }
+  const saved = new Set(_ivStoredTopics());
+  const anySaved = pack.groups.some(g => saved.has(g.id));
+  host.innerHTML = pack.groups.map(g =>
+    `<label class="dist-topic-row">
+       <input type="checkbox" class="dist-topic-cb" data-id="${_trEsc(g.id)}"${(anySaved ? saved.has(g.id) : true) ? " checked" : ""}>
+       <span>${_trEsc(g.label)}</span>
+       <span class="n">${g.count}</span>
+     </label>`).join("");
+  host.querySelectorAll(".dist-topic-cb").forEach(cb =>
+    cb.addEventListener("change", () => { _ivStoreTopics(_ivSelectedTopics()); _ivCost(); }));
+  _ivCost();
+}
+
+function _ivSelectedGenres() {
+  return Array.from(document.querySelectorAll(".interview-genre-cb:checked"))
+    .map(cb => cb.getAttribute("data-id"));
+}
+
+function _ivRenderGenres(spec) {
+  const host = $("interviewGenreList");
+  if (!host) return;
+  // Only dialogue genres: interviewing makes no sense for standalone-prose
+  // families (jokes, writing, news) which have no user turn to ask.
+  const dialogue = (spec.genres || []).filter(g => g.schema === "turns");
+  host.innerHTML = dialogue.map(g =>
+    `<label class="author-genre-row">
+       <input type="checkbox" class="interview-genre-cb" data-id="${_trEsc(g.id)}"${g.id === "conversation" ? " checked" : ""}>
+       <span>${_trEsc(g.id)}</span>
+       <span class="meta">${_trEsc((g.brief || "").slice(0, 90))}&hellip;</span>
+     </label>`).join("");
+  host.querySelectorAll(".interview-genre-cb").forEach(cb =>
+    cb.addEventListener("change", _ivCost));
+}
+
+function _ivCost() {
+  const line = $("interviewCostLine");
+  if (!line) return;
+  const n = parseInt(($("interviewCount") || {}).value || "0", 10) || 0;
+  const d = parseInt(($("interviewDepth") || {}).value || "0", 10) || 0;
+  const seedN = _ivSelectedSeedCount();
+  const topics = _ivSelectedTopics().length;
+  if (!seedN) { line.innerHTML = '<span style="color:var(--hot)">Pick at least one topic.</span>'; return; }
+  if (!n || !d) { line.textContent = ""; return; }
+  const calls = n * (2 * d - 1) + Math.ceil(n / 12);
+  const ceiling = seedN * OPENERS_PER_SEED;
+  const conc = parseInt(($("interviewConcurrency") || {}).value || "0", 10) || 4;
+  // 0.48 conversations/minute per worker, measured 2026-08-20
+  const mins = n / (0.48 * conc);
+  const time = mins < 90 ? `${Math.round(mins)} minutes`
+             : mins < 2880 ? `${(mins / 60).toFixed(1)} hours`
+             : `${(mins / 1440).toFixed(1)} days`;
+  let html = `${topics} topic${topics === 1 ? "" : "s"}, <b>${seedN.toLocaleString()} seeds</b> &rarr; ` +
+             `about ${calls.toLocaleString()} teacher calls, roughly <b>${time}</b> at ${conc} at once.`;
+  if (n > ceiling) {
+    html += `<br><span style="color:var(--warm)">These topics realistically support about ` +
+            `${ceiling.toLocaleString()} conversations. Above that the questions start repeating &mdash; ` +
+            `pick more topics or lower the count.</span>`;
+  }
+  line.innerHTML = html;
+}
+
+function _ivStart() {
+  const plan = $("interviewPlanLine");
+  const genres = _ivSelectedGenres();
+  if (!genres.length) {
+    if (plan) { plan.textContent = "pick at least one genre"; plan.style.color = "var(--hot)"; }
+    return;
+  }
+  const topics = _ivSelectedTopics();
+  if (!topics.length) {
+    if (plan) { plan.textContent = "pick at least one topic"; plan.style.color = "var(--hot)"; }
+    return;
+  }
+  const body = {
+    genres: genres,
+    vertical: interviewState.vertical,
+    topics: topics,
+    conversations: parseInt(($("interviewCount") || {}).value || "0", 10),
+    depth: parseInt(($("interviewDepth") || {}).value || "3", 10),
+  };
+  const conc = parseInt(($("interviewConcurrency") || {}).value || "", 10);
+  if (conc > 0) body.max_concurrency = conc;
+  const dest = ($("interviewJobSelect") || {}).value || "";
+  if (dest) body.job_id = dest;
+  if (plan) { plan.textContent = "starting..."; plan.style.color = "var(--warm)"; }
+  fetch(TEACHER_INTERVIEW_START, { method: "POST", headers: { "Content-Type": "application/json" },
+                                   body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) {
+        if (plan) { plan.textContent = "error: " + ((d && d.error) || "failed"); plan.style.color = "var(--hot)"; }
+        return;
+      }
+      interviewState.jobId = d.job_id;
+      interviewState.rate = null;
+      _ivStore(d.job_id);
+      if (plan) {
+        plan.textContent = `job ${d.job_id}: ${d.conversations} conversations at depth ${d.depth}, ` +
+          `${d.max_concurrency} at a time.`;
+        plan.style.color = "var(--warm)";
+      }
+      _ivPollStart();
+      _synthLoadJobs().then(() => _ivFillJobs());
+    })
+    .catch(e => { if (plan) { plan.textContent = _backendErrMsg(e); plan.style.color = "var(--hot)"; } });
+}
+
+function _ivStop() {
+  if (!interviewState.jobId) return;
+  confirmDialog("Stop interviewing? Conversations finished so far are kept and the run can resume.", "Stop")
+    .then(ok => {
+      if (!ok) return;
+      fetch(TEACHER_SYNTH_STOP, { method: "POST", headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ job_id: interviewState.jobId }) })
+        .then(() => _ivPollOnce()).catch(() => {});
+    });
+}
+
+function _ivFillJobs() {
+  const sel = $("interviewJobSelect");
+  if (!sel) return;
+  const cur = sel.value || interviewState.jobId || "";
+  sel.innerHTML = '<option value="">&mdash; new corpus &mdash;</option>' +
+    (synthState.jobs || []).map(j =>
+      `<option value="${_trEsc(j.job_id)}">${_trEsc(j.job_id)} (${j.completed || 0} records)</option>`).join("");
+  if (cur && (synthState.jobs || []).some(j => j.job_id === cur)) sel.value = cur;
+}
+
+function _ivPollOnce() {
+  if (!interviewState.jobId) return;
+  _ivLoadSamples();
+  fetch(`${TEACHER_SYNTH_STATUS}?job_id=${encodeURIComponent(interviewState.jobId)}`)
+    .then(r => r.json())
+    .then(s => {
+      if (!s || s.error) return;
+      _ivRenderStats(s);
+      if (!s.running && interviewState.pollTimer) {
+        clearInterval(interviewState.pollTimer);
+        interviewState.pollTimer = null;
+      }
+    })
+    .catch(() => {});
+}
+
+function _ivPollStart() {
+  if (interviewState.pollTimer) clearInterval(interviewState.pollTimer);
+  interviewState.pollTimer = setInterval(_ivPollOnce, TEACHER_POLL_MS);
+  _ivPollOnce();
+}
+
+function _ivRenderStats(s) {
+  const a = s.authoring || {};
+  const row = $("interviewStatsRow");
+  const warn = $("interviewRepWarn");
+  const rej = $("interviewRejectRow");
+  const plan = $("interviewPlanLine");
+  if (!row) return;
+  const running = !!s.running;
+  const ratio = a.ngram_ratio === undefined ? 1 : a.ngram_ratio;
+  row.style.display = "flex";
+  row.innerHTML = [
+    ["conversations kept", (s.completed || 0).toLocaleString()],
+    ["text written", ((a.bytes || 0) / AUTHOR_MB).toFixed(2) + " MB"],
+    ["wording variety", (ratio * 100).toFixed(1) + "%"],
+    ["rejected", (s.calls_failed || 0).toLocaleString()],
+  ].map(p => `<span class="author-stat"><b>${_trEsc(String(p[1]))}</b> <span>${p[0]}</span></span>`).join("");
+
+  if (warn) {
+    // Two different warnings, and the shortfall one matters more: it means the
+    // subject pool ran dry, so asking for more conversations cannot help until
+    // the genre's `situations` list is widened.
+    const short = s.opener_shortfall || {};
+    const shortKeys = Object.keys(short);
+    if (shortKeys.length) {
+      warn.style.display = "block";
+      warn.innerHTML = `Ran out of distinct questions: ` +
+        shortKeys.map(k => `<b>${_trEsc(k)}</b> short by ${short[k]}`).join(", ") +
+        `. The teacher stopped producing new openers for those genres, so fewer conversations ` +
+        `were generated than you asked for. Asking for more will not help &mdash; widen the ` +
+        `<code>situations</code> list for those genres in <code>corpus_spec.json</code>, or run ` +
+        `again into the same job later so the openers differ.`;
+    } else if (a.ngram_below_floor) {
+      warn.style.display = "block";
+      warn.innerHTML = `Repetition warning: only <b>${(ratio * 100).toFixed(1)}%</b> of five-word ` +
+        `sequences are unique, below the floor of <b>${((a.ngram_floor || 0) * 100).toFixed(1)}%</b>. ` +
+        `The teacher is reusing phrasings. Widen the situations for the affected genre before training on this.`;
+    } else { warn.style.display = "none"; }
+  }
+  if (rej) {
+    const r = a.rejects || {};
+    const keys = Object.keys(r);
+    rej.textContent = keys.length
+      ? "rejected: " + keys.slice(0, AUTHOR_REJECT_SHOWN).map(k => `${k} x${r[k]}`).join(", ")
+      : "";
+  }
+  _ivRenderProgress(s);
+  if (plan) {
+    const head = s.aborted ? "ABORTED" : (running ? "interviewing" : "stopped");
+    plan.textContent = `${head}: job ${interviewState.jobId || ""}` +
+      (s.last_error ? ` - last: ${s.last_error}` : "");
+    plan.style.color = s.aborted ? "var(--hot)" : (running ? "var(--warm)" : "var(--dim)");
+  }
+  const stop = $("interviewStopBtn");
+  if (stop) stop.style.display = running ? "" : "none";
+  const build = $("interviewBuildRow");
+  if (build) build.style.display = (!running && (s.completed || 0) > 0) ? "block" : "none";
+}
+
+function _ivRenderProgress(s) {
+  const host = $("interviewProgress");
+  if (!host) return;
+  const plan = s.plan || {};
+  const total = Number(plan.conversations || 0);
+  if (!total) { host.style.display = "none"; return; }
+  host.style.display = "block";
+  const done = Number(s.completed || 0) + Number(s.calls_failed || 0);
+  const frac = Math.max(0, Math.min(1, done / total));
+  const fill = $("interviewProgressFill");
+  if (fill) fill.style.width = (frac * 100).toFixed(1) + "%";
+  const left = $("interviewProgressLeft");
+  if (left) left.textContent = `${(s.completed || 0).toLocaleString()} of ${total.toLocaleString()} conversations kept`;
+  const mid = $("interviewProgressMid");
+  if (mid) mid.textContent = `depth ${plan.depth || "?"} · ${((s.authoring || {}).bytes || 0) / AUTHOR_MB < 0.01 ? "0" : (((s.authoring || {}).bytes || 0) / AUTHOR_MB).toFixed(2)} MB`;
+  const right = $("interviewProgressRight");
+  if (right) right.textContent = _ivEta(s, done, total);
+}
+
+function _ivEta(s, done, total) {
+  const key = interviewState.jobId || "";
+  const now = Date.now();
+  if (!interviewState.rate || interviewState.rate.job !== key) {
+    interviewState.rate = { job: key, t0: now, d0: done };
+    return "measuring rate...";
+  }
+  if (!s.running) return done >= total ? "complete" : "stopped";
+  const dt = (now - interviewState.rate.t0) / 1000;
+  const dd = done - interviewState.rate.d0;
+  if (dt < 30 || dd <= 0) return "measuring rate...";
+  const secs = (total - done) / (dd / dt);
+  if (secs < 90) return `~${Math.round(secs)}s left`;
+  if (secs < 5400) return `~${Math.round(secs / 60)}m left`;
+  return `~${(secs / 3600).toFixed(1)}h left`;
+}
+
+function _ivLoadSamples() {
+  if (!interviewState.jobId) return;
+  fetch(`${TEACHER_SYNTH_SAMPLES}?job_id=${encodeURIComponent(interviewState.jobId)}&limit=${INTERVIEW_SAMPLE_SHOWN}`)
+    .then(r => r.json())
+    .then(d => { if (d && d.samples) _ivRenderSamples(d.samples); })
+    .catch(() => {});
+}
+
+// Rendered as a readable transcript with per-reply byte counts, because the
+// thing being judged by eye is exactly whether the replies vary in length.
+function _ivRenderSamples(samples) {
+  const wrap = $("interviewLiveWrap");
+  const out = $("interviewLiveOutput");
+  const count = $("interviewLiveCount");
+  if (!wrap || !out) return;
+  if (!samples.length) { wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+  if (count) count.textContent = `(${samples.length})`;
+  out.innerHTML = samples.slice(-INTERVIEW_SAMPLE_SHOWN).map(s => {
+    let turns = [];
+    try {
+      const rec = typeof s.record === "object" ? s.record : JSON.parse(s.response || "{}");
+      turns = (rec && rec.turns) || [];
+    } catch (e) { turns = []; }
+    if (!turns.length) return "";
+    return `<div class="dist-convo">` + turns.map(t => {
+      const n = new TextEncoder().encode(t.text || "").length;
+      const who = t.role === "assistant" ? "teacher" : "person";
+      return `<span class="dist-convo-turn${t.role === "assistant" ? " asst" : ""}">` +
+             `<b>${who}</b> <span class="dist-convo-len">${n} B</span> ${_trEsc(t.text || "")}</span>`;
+    }).join("") + `</div>`;
+  }).join("");
+}
+
+function _ivBuild() {
+  const stat = $("interviewBuildStatus");
+  const stem = (($("interviewStem") || {}).value || "").trim();
+  if (!interviewState.jobId) { if (stat) { stat.textContent = "no job"; stat.style.color = "var(--hot)"; } return; }
+  if (!stem) { if (stat) { stat.textContent = "name the corpus"; stat.style.color = "var(--hot)"; } return; }
+  if (stat) { stat.textContent = "building..."; stat.style.color = "var(--warm)"; }
+  fetch(TEACHER_AUTHOR_BUILD, { method: "POST", headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  job_id: interviewState.jobId, stem: stem,
+                                  label: (($("interviewLabel") || {}).value || "").trim() || stem })})
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) {
+        if (stat) { stat.textContent = "error: " + ((d && d.error) || "failed"); stat.style.color = "var(--hot)"; }
+        return;
+      }
+      const m = d.manifest || {};
+      if (stat) {
+        stat.textContent = `built ${d.stem}: ${(m.train_bytes / AUTHOR_MB).toFixed(2)} MB train, ` +
+                           `${(m.val_bytes / AUTHOR_MB).toFixed(2)} MB val`;
+        stat.style.color = "var(--data-pos)";
+      }
+      const box = $("interviewHandoff");
+      if (box) {
+        box.style.display = "block";
+        box.innerHTML = "<b>What to do next</b><ol>" +
+          (d.next_steps || []).map(x => `<li>${_trEsc(x)}</li>`).join("") + "</ol>";
+      }
+      _distRenderAudit(d.audit);
+      _trPoll();
+    })
+    .catch(e => { if (stat) { stat.textContent = _backendErrMsg(e); stat.style.color = "var(--hot)"; } });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const start = $("interviewStartBtn");
+  if (start) start.addEventListener("click", () => _distGuardedStart(_ivStart));
+  const stop = $("interviewStopBtn");
+  if (stop) stop.addEventListener("click", _ivStop);
+  const build = $("interviewBuildBtn");
+  if (build) build.addEventListener("click", _ivBuild);
+  ["interviewCount", "interviewDepth"].forEach(id => {
+    const el = $(id);
+    if (el) el.addEventListener("input", _ivCost);
+  });
+  const conc = $("interviewConcurrency");
+  if (conc) conc.addEventListener("change", _ivCost);
+  const vert = $("interviewVertical");
+  if (vert) vert.addEventListener("change", () => _ivSetVertical(vert.value));
+  const all = $("interviewTopicAll");
+  if (all) all.addEventListener("click", () => {
+    document.querySelectorAll(".dist-topic-cb").forEach(cb => { cb.checked = true; });
+    _ivStoreTopics(_ivSelectedTopics()); _ivCost();
+  });
+  const none = $("interviewTopicNone");
+  if (none) none.addEventListener("click", () => {
+    document.querySelectorAll(".dist-topic-cb").forEach(cb => { cb.checked = false; });
+    _ivStoreTopics([]); _ivCost();
+  });
+  const sel = $("interviewJobSelect");
+  if (sel) sel.addEventListener("change", () => {
+    const jid = sel.value;
+    if (!jid) return;
+    interviewState.jobId = jid;
+    interviewState.rate = null;
+    _ivStore(jid);
+    _ivPollStart();
+  });
+});

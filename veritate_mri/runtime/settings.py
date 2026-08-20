@@ -85,6 +85,27 @@ DEFAULTS = {
     "hud_enabled": False,
     "hud_position": "top",
     "hud_detailed": False,
+    # Sleep consolidation (training/sleep.py). Off until enabled and a model is
+    # named. Idle = no serving exchange for sleep_idle_min minutes and no trainer
+    # running. Dose scales with new exchanges since the last sleep
+    # (steps = exchanges * sleep_steps_per_exchange, clamped to
+    # [sleep_min_steps, sleep_max_steps]); fewer than sleep_min_exchanges new
+    # exchanges skips the night. Sleep runs checkpoint every sleep_ckpt_every
+    # steps so an early wake keeps most of the consolidation; intermediates are
+    # deleted when the run ends and older sleep finals are thinned to
+    # sleep_keep_finals. Controls live on the Generation tab.
+    "sleep_enabled": False,
+    "sleep_model": "",
+    "sleep_idle_min": 20,
+    "sleep_days": 3,
+    "sleep_min_exchanges": 8,
+    "sleep_steps_per_exchange": 10,
+    "sleep_min_steps": 50,
+    "sleep_max_steps": 500,
+    "sleep_ckpt_every": 25,
+    "sleep_keep_finals": 3,
+    "sleep_lr": 5e-06,
+    "sleep_corpus": "experience:0.75,mixed_chat:0.25",
     # Advanced: stream reduced (compact) MRI telemetry frames. The engine summarizes
     # each byte's telemetry itself (~33x smaller per-byte frame) instead of shipping
     # full-resolution arrays for the browser to reduce. The dashboard renders the

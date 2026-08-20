@@ -16,15 +16,22 @@ import base64
 import json
 import math
 import os
+import re
 import threading
 import time
 
 import numpy as np
 from flask import Response, current_app, request
-from inference import speculate
+from inference import experience, speculate
 from inference.addons import build_chain, list_addons
 from inference.agent.loop import AgentLoop
-from inference.agent.rag import build_rag_prefix, crude_compressor, make_word_ppl_compressor
+from inference.agent.rag import (
+    DEFAULT_MAX_PASSAGES_B,
+    build_rag_prefix,
+    crude_compressor,
+    injection_budget,
+    make_word_ppl_compressor,
+)
 from inference.agent.tools import build_default_toolbox
 from inference.agent.tools.retriever import CORPUS_EXTENSIONS
 from inference.agent.tools.retriever import make_tool as _make_rag_tool
@@ -41,6 +48,7 @@ from inference.backends.pytorch import (
     TOP_K_DEFAULT,
     load_memory,
 )
+from inference.decode.repetition import NO_REPEAT_NGRAM_DEFAULT, REP_WINDOW_DEFAULT
 from readers import (
     bin as binr,
 )
@@ -75,7 +83,10 @@ ATTN_TOP_K           = 6
 INFO_FLOW_TOP_K      = 8
 PROMPT_PREFIX_CAP    = 8192
 RAG_K_MAX            = 16
-RAG_K_DEFAULT        = 3
+# Top-1. Multi-candidate injection is falsified at this scale (failures.md:
+# top-1 0.130, top-3 0.120, top-5 0.080) because a 200M reader cannot
+# disambiguate candidates. Raise only behind a re-ranker collapsing k to 1.
+RAG_K_DEFAULT        = 1
 RAG_CACHE_MAX        = 8
 AGENT_MAX_TURNS_CAP  = 16
 AGENT_BEST_OF_N_CAP  = 8
@@ -144,6 +155,16 @@ def _chat_stop_seq(prompt):
     if "<|im_start|>" in prompt or "<|assistant|>" in prompt:
         return CHAT_STOP_MARKERS
     return None
+
+def _rep_defaults(chat_framed):
+    """(rep_window, no_repeat_ngram) defaults when the caller sends neither. The
+    hard ban is on for chat-framed decode -- grounded-reply looping measured
+    0.43 -> 0.03 at unchanged accuracy (successes.md 2026-08-17) -- and off for
+    plain completion, where text legitimately repeats. Explicit params always win."""
+    if chat_framed:
+        return REP_WINDOW_DEFAULT, NO_REPEAT_NGRAM_DEFAULT
+    return REP_WINDOW_OFF, NO_REPEAT_NGRAM_OFF
+
 
 def _stop_on_bytes(gen, stop_markers):
     """Wrap an SSE-event generator and halt after the byte stream from
@@ -1053,6 +1074,7 @@ def register(app):
         if sub is None:
             return {"speculating": False, "reason": "c engine not loaded",
                     "stats": speculate.status()["stats"]}
+        rep_window_dflt, ngram_dflt = _rep_defaults(_chat_stop_seq(prompt) is not None)
         try:
             params = _decode_params(
                 body.get("temperature", TEMPERATURE_DEFAULT),
@@ -1060,9 +1082,9 @@ def register(app):
                 ablate_layer=body.get("ablate_layer", ABLATE_OFF),
                 ablate_neuron=body.get("ablate_neuron", ABLATE_OFF),
                 addons_csv=body.get("addons", ""),
-                rep_window=body.get("rep_window", REP_WINDOW_OFF),
+                rep_window=body.get("rep_window", rep_window_dflt),
                 rep_penalty=body.get("rep_penalty", REP_PENALTY_OFF),
-                no_repeat_ngram=body.get("no_repeat_ngram", NO_REPEAT_NGRAM_OFF))
+                no_repeat_ngram=body.get("no_repeat_ngram", ngram_dflt))
         except (TypeError, ValueError) as e:
             return ({"error": user_error(e, "bad prefetch param")}, 400)
         return speculate.start(sub, prompt, params, budget,
@@ -1129,15 +1151,19 @@ def register(app):
         except ValueError:
             adaptive_threshold = ADAPTIVE_THRESHOLD_DEFAULT
         adaptive_threshold = max(0.0, min(1.0, adaptive_threshold))
-        # Repetition control (chat decode). Absent params default OFF.
+        # Repetition control (chat decode). A RAG request becomes chat-framed at
+        # injection time, so it defaults like a framed prompt.
+        framed = (_chat_stop_seq(prompt) is not None
+                  or bool((request.args.get("rag") or "").strip()))
+        rep_window_dflt, ngram_dflt = _rep_defaults(framed)
         try:
-            rep_window = max(REP_WINDOW_OFF, int(request.args.get("rep_window", REP_WINDOW_OFF)))
+            rep_window = max(REP_WINDOW_OFF, int(request.args.get("rep_window", rep_window_dflt)))
             rep_penalty = max(REP_PENALTY_OFF, float(request.args.get("rep_penalty", REP_PENALTY_OFF)))
             no_repeat_ngram = max(NO_REPEAT_NGRAM_OFF,
-                                  int(request.args.get("no_repeat_ngram", NO_REPEAT_NGRAM_OFF)))
+                                  int(request.args.get("no_repeat_ngram", ngram_dflt)))
         except ValueError:
-            rep_window, rep_penalty, no_repeat_ngram = (REP_WINDOW_OFF, REP_PENALTY_OFF,
-                                                        NO_REPEAT_NGRAM_OFF)
+            rep_window, rep_penalty, no_repeat_ngram = (rep_window_dflt, REP_PENALTY_OFF,
+                                                        ngram_dflt)
 
         if backend == "c":
             if cfg.get("C_SUBPROCESS") is None:
@@ -1163,7 +1189,11 @@ def register(app):
                                             no_repeat_ngram=no_repeat_ngram, trace=want_trace,
                                             prefetched=prefetched)
                     stop_seq = _chat_stop_seq(prompt)
-                    for ev in _stop_on_bytes(base, stop_seq):
+                    wrapped = experience.record_events(
+                        _stop_on_bytes(base, stop_seq),
+                        model=os.path.basename(str(cfg.get("C_MODEL") or "c-engine")),
+                        prompt=prompt, meta={"backend": "c"})
+                    for ev in wrapped:
                         yield f"data: {json.dumps(ev)}\n\n"
                     yield "event: done\ndata: {}\n\n"
                 except GeneratorExit:
@@ -1203,8 +1233,29 @@ def register(app):
                 logmod.error("constrained", f"build failed: {type(e).__name__}: {e}")
                 return ({"error": user_error(e, "constrained")}, 400)
 
-        if fast_mode and fast_mode not in ("kv", "mtp", "mtp-verify", "adaptive"):
-            return ({"error": f"unknown fast mode: {fast_mode!r}. Allowed: kv, mtp, mtp-verify, adaptive."}, 400)
+        if fast_mode and fast_mode not in ("kv", "mtp", "mtp-verify", "adaptive", "stream"):
+            return ({"error": f"unknown fast mode: {fast_mode!r}. "
+                              "Allowed: kv, mtp, mtp-verify, adaptive, stream."}, 400)
+
+        # Per-conversation persisted streaming state (IDEA 20 T2). The id names a
+        # file under data/stream_states/; the prompt is then ONLY the new bytes —
+        # prior context lives in the state. state_reset=1 starts the id over.
+        state_id = (request.args.get("state_id", "") or "").strip()
+        stream_state_path = None
+        if state_id:
+            if fast_mode != "stream" or backend == "c":
+                return ({"error": "state_id requires fast=stream on the PyTorch backend"}, 400)
+            if not is_loopback(request.remote_addr):
+                return ({"error": PATH_LOOPBACK_ONLY}, 403)
+            if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", state_id):
+                return ({"error": "state_id must match [A-Za-z0-9._-]{1,64}"}, 400)
+            os.makedirs(paths.STREAM_STATE_ROOT, exist_ok=True)
+            stream_state_path = os.path.join(paths.STREAM_STATE_ROOT, state_id + ".pt")
+            if (request.args.get("state_reset", "") or "").strip() in ("1", "true"):
+                try:
+                    os.remove(stream_state_path)
+                except FileNotFoundError:
+                    pass
 
         rag_path  = (request.args.get("rag", "") or "").strip()
         rag_k     = request.args.get("rag_k", "")
@@ -1262,7 +1313,12 @@ def register(app):
                             compressor = make_word_ppl_compressor(brain, keep_frac=keep)
                         else:
                             compressor = None
-                        effective_prompt = build_rag_prefix(prompt, passages, compressor=compressor)
+                        seq_cap = int(getattr(brain.model, "seq", 0) or 0)
+                        budget = (injection_budget(seq_cap, len(prompt.encode("utf-8")))
+                                  if seq_cap else DEFAULT_MAX_PASSAGES_B)
+                        effective_prompt = build_rag_prefix(prompt, passages,
+                                                            max_bytes=budget,
+                                                            compressor=compressor)
                         prefix_view = effective_prompt if len(effective_prompt) <= PROMPT_PREFIX_CAP \
                                       else effective_prompt[:PROMPT_PREFIX_CAP] + " ... [trimmed]"
                         yield ("data: " + json.dumps({
@@ -1282,14 +1338,24 @@ def register(app):
                                                 addons_chain=chain, constraint=constraint,
                                                 adaptive_threshold=adaptive_threshold,
                                                 rep_window=rep_window, rep_penalty=rep_penalty,
-                                                no_repeat_ngram=no_repeat_ngram)
+                                                no_repeat_ngram=no_repeat_ngram,
+                                                stream_state=stream_state_path)
                     else:
                         gen = brain.stream(effective_prompt, temperature, top_k, max_new,
                                            addons_chain=chain, constraint=constraint,
                                            rep_window=rep_window, rep_penalty=rep_penalty,
                                            no_repeat_ngram=no_repeat_ngram)
                     stop_seq = _chat_stop_seq(effective_prompt)
-                    for ev in _stop_on_bytes(gen, stop_seq):
+                    # The experience record keeps effective_prompt: RAG injection
+                    # included, it is what the model actually experienced.
+                    wrapped = experience.record_events(
+                        _stop_on_bytes(gen, stop_seq),
+                        model=getattr(brain, "checkpoint", ""),
+                        prompt=effective_prompt,
+                        meta={"backend": "pytorch",
+                              **({"fast": fast_mode} if fast_mode else {}),
+                              **({"rag": True} if rag_cfg is not None else {})})
+                    for ev in wrapped:
                         ev["backend"] = "pytorch"
                         yield f"data: {json.dumps(ev)}\n\n"
                     yield "event: done\ndata: {}\n\n"

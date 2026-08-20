@@ -14,6 +14,14 @@ papers (`research/`), and the per-component docs (`developer_documentation/`).
 
 ## timeline (headlines)
 
+- **2026-08-20 late (seed packs: 1,520 conversation seeds in 40 selectable topics, concurrency to 256):** Interview mode was drawing openers from the genre spec's `situations` list — **14 entries for `conversation`** — which is the real ceiling on corpus size. Measured the yield first: one seed gives **143 unique openers over 12 rounds (214 over 18, still climbing) at a distinct-5-gram ratio of 0.905 against the 0.90 floor**, and zero simhash near-duplicates, so ~150 usable openers per seed is the honest working figure. That sets the arithmetic: `mixed_chat` parity (~100k conversations) needs ~700 seeds, 500 MB needs ~1,500. SHIPPED `data/authoring/seeds/conversation.json` — **1,520 seeds across 40 topic groups**, zero duplicates, zero non-ascii, covering the conversational vertical broadly as the user specified: chatting and storytelling AND answering practical questions AND asking clarifying questions when a request is underspecified (`clarifying_vague`, `narrowing_down`, `admitting_uncertainty`, `multi_step_help`, `everyday_howto`). No code, no technical subjects. `readers/seeds.py` + `/teacher/seed_packs` expose them; a vertical is selectable only when its pack exists and parses, with `PLANNED_VERTICALS` rendering the roadmap disabled — a vertical with no seeds would otherwise fall back to the thin `situations` list and build a corpus about the wrong subject. Topic selection is persisted and the opener walk shuffles the seed list so every seed is used once before any repeats. **`LOCAL_MAX_CONCURRENCY` raised 4 -> 256** with a fixed powers-of-two choice list (2…256): the old clamp protected a laptop GPU but capped a 100k-conversation run at ~36 days on this 32-core / 275 GB box; at 32 it is ~4.5 days. The cost line now sizes a run from the selected seeds and warns when the request exceeds what those topics can carry. Verified end to end: a `pets`+`music` selection (76 seeds) at concurrency 32 produced on-topic conversations only. 1,265 tests pass.
+
+- **2026-08-20 night (the terse-teacher diagnosis was wrong; two-pass 'interview' mode shipped and clears the gate):** User pushed back that the same model answers at length through the Carpathian API, and was right. Measured: asked a question AS ITSELF, qwen2.5:14b returns **2,380 / 2,296 / 2,457 B**; cardinal1:14b on the API returns **2,810 B**. Asked to WRITE A DIALOGUE it returns **120 B**. **A 20x gap on the same model and box** — the pipeline was never asking the teacher anything, it was asking it to script both sides, and models write scripts like screenplays. The earlier failures.md entry blaming model capability was replaced the same day. SHIPPED `teacher/interview.py` + `teacher/interview_job.py` + `/teacher/interview/start` + a third Distillation mode (now the default): pass 1 writes user turns, pass 2 ASKS each one and keeps the real answer, follow-ups chain to any depth — which also breaks the 7-turn ceiling every curated source has. Length is a per-turn blend by user decision (brief 0.20 / normal 0.55 / thorough 0.25) shaped at ask time, with whole-sentence trimming as a ceiling only. InterviewJob writes the SynthJob on-disk contract, so status/stop/samples/build were reused with zero change, and every conversation still passes RecordGate. End to end through the dashboard: **256-379 B median, 100% unique turns, 0 rejected of 8, variety 1.0, gate PASS**. Two real defects found by running it: (1) 8.3% of replies opened with 'Sure,'/'Of course,' against a 0.22% baseline in mixed_chat — ~38x, a register tic not noise, fixed by instruction plus a strip-and-recapitalise backstop (33% -> 0% on the captured data); (2) **a bug in my own audit** — assistant-register artifacts were counted across the whole file but normalised per assistant turn, so two USER turns opening 'Sure, I'm trying to decide between...' failed an otherwise clean corpus. Patterns now carry a scope; structural damage stays file-wide. Reference corpora unchanged by the fix (mixed_chat 4.5 -> 3.7 per 1k, still PASS). Dashboard restarted on 8001. 1,244 tests pass.
+
+- **2026-08-20 later (Distillation tab shipped: the pipeline already existed and was buried in the Training tab; contention guard + acceptance gate are the new parts):** Survey first, and it changed the job: `/teacher/synth/*` and `/teacher/authoring/*` were already a complete distillation backend (byte-target call planning, per-record gating, ChatML packing, zip, catalog registration) with UI hidden behind the Training tab's action picker, and `body.training-active` **hid `#authorPanel`/`#synthPanel` outright** so it could not run during a training run at all. So this was consolidation plus two genuinely new pieces, not a new pipeline. SHIPPED: (a) **`/teacher/target_status`** — resolves the teacher's `base_url` host and reports whether that machine is training. Hosted API never contends; local teacher on this box contends while `trainer_runner.state()` says running; local teacher on ANOTHER box reports `training_active: null`, because reporting `false` there is a guess dressed as a fact. Never raises — a guard that 500s blocks the start it exists to advise (13 tests). (b) **`tools/corpus_audit.py`**, the acceptance gate, returned as `audit` from both build routes and rendered in the tab. Scores by unique turns and unique content bytes, never by file size, because `chat_5gb` passed every size check the platform had while holding 708 unique user turns in 5.14 GB. Four checks calibrated with headroom under the weakest surviving corpus: unique user turns >=0.95 (cogito 95.9%), unique content bytes >=0.85 (mixed_chat 99.2%), median assistant turn >=200 B (veritate_sft 242 B), artifacts <=5.0 per 1k (mixed_chat 4.5). **Two of my own thresholds were wrong on first calibration and the data caught them:** I had set artifacts at 1.0/1k from a per-pattern reading when the real total for the reference corpus is 4.5/1k, and I scored unique content against FILE bytes, which counts ChatML markers as duplication and failed veritate_conversation_v1 at 56.6% when its true turn-text uniqueness is 100%. Fixed both; the gate now passes all six real conversational corpora and fails exactly the two that should fail (`instruct`, 53 B median; `sft_idk`, 67.7% unique — repetitive by design, which is a judgement call, so the gate reports and does not block). (c) The tab itself: `#authorPanel`/`#synthPanel` moved, mode switch persisted to localStorage, job rehydration moved off the training flow picker into `_distOnTabActivated` (the move had silently broken refresh-mid-run restore), plan persisted server-side to `plan.json` so progress keeps its denominator across a refresh, and the two `body.training-active` display:none rules removed. **Live-run bug found and fixed:** `/teacher/synth/status` reports `completed` as RECORDS (lines in samples.jsonl) while `state.json` counts CALLS — my progress bar summed the two and would have read 26 of 79 where the truth was 7 of 79. Added `calls_ok`/`calls_failed`/`calls_remaining` and pinned the distinction in a test. Verified end to end against the live ollama teacher WHILE wren1_4 was training (guard correctly fired on the real run; job at concurrency 1; 21 records from 2 successful calls, 5 gate rejections for turn-count and schema; build produced a bin and the audit scored it). **Side finding worth acting on: qwen2.5:14b-instruct at the current spec produced a 68 B median assistant turn** — the teacher's default verbosity is well under the 200 B floor, which is the same failure that made `instruct` useless. Raise it in `corpus_spec.json` before any real distillation run. Smoke corpus and its catalog entry deleted; wren1_4 untouched throughout. 1,168 platform tests plus 68 new ones pass.
+
+- **2026-08-20 (corpus purge: the chat data was duplicate-expanded, not dirty — 19 GB deleted, catalog cut 42 -> 31 entries, size ladders retired):** Audited every chat/agent/mcp bin at the TURN level (split on ChatML markers, hash each turn, count distinct). The finding is not messiness — artifact rates in the good bins are **under 1 per 1,000 assistant turns** (AI-disclaimer, canned refusal, mojibake, template leak, truncation all measured). The finding is **duplication**: `chat_5gb` is 5.14 GB carrying **708 unique user turns / 769 unique assistant turns = 376 KB of real text (0.01%)**, with one user turn repeated **1,298,507 times**; `chat_500mb` is a byte-identical prefix of the same 376 KB; `mcp_1500mb`/`mcp_150mb`/`mcp_15mb` share **124 unique user turns** (0.27% / 1.07% / 3.20% unique content); `agent_1500mb` holds 275,897 unique user turns in 1.5 GB (1.90%), `agent_150mb` 51,983 (4.32%). This confirms and sharpens the 2026-07-26 catalog note (which said 1,477 unique turns) — it is 1,477 turns TOTAL across both roles, and the ladder tiers are not independent corpora at any size. **The good data is genuinely good and there is only ~230 MB of it:** `mixed_chat` 218 MB / 371,214 turns / **98.8% unique user turns / 88% unique content bytes / median assistant turn 265 B / zero turns under 40 B**; `veritate_chat`, `veritate_conversation_v1`, `veritate_sft`, `wren_noloop`, `cogito` all 96-99% unique; `recall_curr` 98.5%; `chrg` 96.7%. Counter-example on the other side: `instruct` is 39% sub-40-byte assistant turns, and `chat_500mb`'s median assistant turn is **13 bytes** — even its unique content is too short to teach conversation. ACTIONS: (a) deleted 19 GB from `data/corpus/` (73 -> 53 GB) — the nine dead chat/agent/mcp bins, the abandoned 10.7 GB `the_pile_train.bin.part`, and three already-extracted `*_bundle.zip` leftovers; (b) rewrote `corpus_catalog.json` 42 -> 31 entries: dropped the nine dead stems, dropped the `py_code_100mb`/`js_code_100mb` lower tiers, dropped `the_pile` (53 GB) and `redpajama_v2` (214 GB) as unusable at consumer scale here, and **retired size ladders entirely** — `recommended_min_params`/`recommended_max_params` are now null on every entry (both fields were already optional in `index.js` and `_entry_skeleton`, so no JS or backend change was needed); (c) added a `coming_soon` **`agent`** stub (rebuild deduped via `tools/build_agent_corpus.py` with a per-conversation hash gate) so the agent topic stays populated, and a `coming_soon` **`mixed_chat`** entry — the best chat corpus on this install was never in the catalog at all, upload pending; (d) wrote `cos_delete_list.txt` at repo root with every COS URL, GitHub-repo file, and iCloud staging path that can now be deleted (~2.3 GB COS + ~68 MB GitHub). Tests: `tests/mri/test_capabilities.py` had the retired `chat_50mb`/`agent_15mb` stems hardcoded, repointed to `mixed_chat`/`agent`; 315 passed across `tests/corpus`, capabilities, chat-template alignment and both mix-planner suites. **Standing rule banked: a corpus is measured by unique turns and unique content bytes, never by file size.** Acceptance bar for any newly built or distilled chat corpus, set by `mixed_chat`: >=95% unique user turns, >=85% unique content bytes, median assistant turn >=200 B, artifact hits <1 per 1k turns — and dedup at GENERATION time with a hash gate, since every bin that failed here failed by resampling a small template pool.
+
 - **2026-08-03 (product-key memory built, trained and kernelled on cardinal: 102x capacity at 3.90x faster decode with quality parity — and the measurement instrument was the real find):** Built `veritate_core/model_pkm.py`, a memory-layer FFN that replaces the dense up/down pair with a weighted top-k read over `sub_keys^2` learned value slots, wired as `global_ffn=pkm` / `trunk=hybrid_pkm` on the patched trunk. **The headline is a methodology finding, not the layer.** In eager PyTorch the layer measured **4.9x SLOWER** than dense at batch=1 (1387 vs 281 us/token); rewritten in C it is **3.90x FASTER**. Root cause measured directly on cardinal: `x*2` on a 320-vector costs **20.3 us** and a 320x320 matmul doing **102,400 MACs** costs **38.0 us**, i.e. PyTorch charges ~20 us per OPERATION and 102k multiply-adds cost only 17.7 us more than doing nothing. Dense FFN wins in eager for a reason unrelated to being good (3 fat ops); anything sparse, gated or conditional needs more ops and loses automatically. **Every batch-1 architecture comparison run in eager PyTorch has been measuring the dispatcher, so prior batch-1 architecture conclusions are re-openable.** Two-stage speed work in C, both arms held at identical optimization throughout (the fair-comparison discipline mattered — an earlier 4.70x shrank to 3.90x once dense also got AVX2): profiling showed the **top-k sorts were 52% of cost and the scattered gather only 8%**, and forcing the gather fully contiguous gained just 7%, killing my own prediction that random access would dominate. Replacing the ranking with a **firing threshold** (AVX2 compare + movemask, 0.586 us vs topk 8.778 us = **15x** on that stage) took PKM int8 139.3 -> 69.6 us/token; adding a 4-row-blocked int8 integer-dot matvec to BOTH arms landed the final **dense 199.6 vs PKM 51.2 us/token, 102x capacity, 6.49x fewer bytes read**. Quality settled by a matched A/B trained end to end **on the clamped 800 MHz i7** (5m shape, enwik8, 10,000 steps each): dense val **1.299641**, top-k PKM **1.294813** — PKM ahead at every step from 7500 on, but 0.37% on a single seed so the reportable claim is PARITY (agent_roe seed rule). Capacity is unexploited: 12.7x the params only matches, because enwik8 at 95 MB cannot fill it. Threshold gating ported back into the PyTorch layer (hard gate forward so it matches the kernel exactly, straight-through backward so `theta` learns — verified real gradient and genuinely variable firing at ~12.8 of 32 candidates), new trunk `hybrid_pkm_fire`, third arm training. **Four negatives banked, each killing a plan I had already written down:** PKM is NOT a training-speed lever (dense 592M 2542 tok/s vs PKM 2309M-capacity 983 tok/s on MPS — capacity costs training time, it does not save it, so my "500M in 4 days via PKM" estimate was wrong and is retracted); sparse gradients on the value table LOSE on unified memory (0.209 vs 0.188 s/step at 537M capacity despite only 4.8% of slots touched); `n_chunks` does not generalize across shapes (+68% at chat200m, but 0.86x/0.70x at 593M b24 — splitting an already-large batch starves the GPU); and Muon is an **11x tax** on the clamped CPU (9.5 vs 0.81 s/step) though it remains the GPU default. Honest 500M budget now measured rather than extrapolated: **593M on M3 Ultra at b24 bf16 = 5541 tok/s = 24.8 days Chinchilla**, so the sub-week target needs `torch.compile` plus Muon convergence plus distillation, and n_chunks/PKM are NOT part of that path. Two of my own bugs were caught only by parity checks and are worth remembering: an AVX2 kernel with broken maddubs sign handling (relative error 1001) and a threshold calibration that silently measured an EMPTY gather and reported a beautiful fake 6.3x. Platform work alongside: rule-11a `probe_module()`/`probe_weights()` contract added to FFN/MoEFFN/ProductKeyMemory so the dump suite, `diff`, `pruning` and `export` stop reaching into `ff.up`/`ff.down` (dump failures 66 -> 0 in a live run; pruning now refuses non-prunable trunks with a clear message, export joins the rule-40b variant refusal), and a missing `os.makedirs` in `corpus_sync.py` that made every HF-stream and zip corpus install fail on a fresh box with no `data/corpus/`. Artifacts: `veritate_core/model_pkm.py`, `models/{pkmctl_5m,pkmmem_5m,pkmfire_5m}/`, C harnesses in cardinal `/tmp/pkm_{bench,bench_i8,bench_thresh,profile,mv,fair}.c`. Nothing staged or committed.
 
 - **2026-07-27 evening (wren instruction-following: cause found and measured; SFT v1 a net NEGATIVE, v2 tests the fix; 5 platform defects fixed incl. IFEval scoring framing not obedience):** `wren` (270M hybrid, 5.4B tokens, forked from chin200m@55000, trained to 58500 on fortis) is not broken: identity, factual recall and IDK calibration all work, and it is coherent in ChatML. It fails ONE thing, instruction execution. Measured: **IFEval 11.1% (4/36) with `item_count`, `word_count`, `starts_with` and `json` all at exactly 0%.** Cause is arithmetic, not mystery: its chat data was **0.4% instruction-following** (160 of ~44,500 authored records), because authoring genres with STRUCTURAL requirements yield far less than free-form ones on `qwen2.5:14b-instruct` — measured over two 22k-record jobs: jokes/writing 82-194%, conversation 39%, `instruct` 64%, cogito 15%, **`format_constraint` 1.3%, `carryover` 1.4%, `grounded_read` 0.5%**. A genre weighted 0.10 that yields 1.3% lands at 0.4% of the corpus and NOTHING surfaced it: per-genre yield is in `state.json` but was never read against planned calls. **Standing rule banked: planned calls are not produced records; read `authoring.per_genre` + `authoring.rejects` before trusting any mix.** Built the missing capability as data: new `instruct` genre (compose/enumerate/transform/summarize/extract/translate/compute/compare/classify/define/steps), `min_turns: 2` to keep structural demand low. Three self-inflicted errors caught mid-run: (1) the teacher **regurgitated my brief's examples verbatim** — one prompt 24x, and one of them ("write one sentence about rain") was also an EVAL prompt, which would have shown a fake improvement; fixed by stripping quotable examples and adding a `dedup_user_turn` gate flag (the existing opening cap keys on whole-record text, so the same instruction with a different answer passed freely); (2) I chased VOLUME while **diversity** was the binding constraint — distinct-5-gram decayed to the 0.90 floor at ~2,200 records; the fix was replacing 15 abstract `situations` with **40 concrete subject domains** (14 voices x 40 domains = 560 combinations) plus temperature 0.7->0.95, which took variety 0.9046 -> **0.9827**; (3) I was generating families the eval does not test (389 `define-in-one-line`) while `json` and `avoid-a-letter` had **zero** coverage — rebalanced the voice pool toward verifiable families. Result: `instruct` = **4,263 records / 1.02 MB / variety 0.983 / 0-of-36 eval contamination across 74 MB** of all four mix corpora. **the first SFT attempt (`wren_sft`, instruct 0.50 + veritate_sft/sft_idk/skills, LR 3e-5, 180 steps, batch 16, loss_mask=assistant) was a NET NEGATIVE and is not shippable.** Form compliance rose 55.6% -> 63.9% (yes/no-first **0/4 -> 4/4**, "List three colors" gibberish -> "Yellow, green, blue", "3 apples eat 1" -> "2") but strict IFEval stayed **flat at 11.1%** and it REGRESSED what wren was good at: "How many days are in a week?" **"7" -> "1) 2) Pegged to base."**, and 2 of 5 identity prompts degraded (temperature 0, so not sampling noise). Two causes, both mine: **no replay data and no cogito in the retention mix** (I named catastrophic forgetting as the top risk then protected the wrong things — wren's facts come from its pretraining `fineweb_edu`/`wikitext103`, none of which was in the SFT mix), and **template intrusion** from 344 `numbered-steps` records (8%) teaching it to answer any uncertain question with a numbered list. **Third finding, about the instrument: 47% of my eval rules required the correct ANSWER (`contains`, `starts_with` pinned to the true value), so they grade reasoning, not obedience** — which is why a real form gain scored flat. Split out `ifeval_form.json` (26 items, every rule answer-independent, `starts_with_yes_or_no` passes on either answer) selectable via `ifeval_set`. Platform defects fixed with tests: `_trim` cut only COMPLETE stop markers so every buffered reply leaked `<|im_end|`; **IFEval fed raw prompts with no chat template and no decode stop, so it scored the framing rather than the instruction following and was unusable on any chat model**; the authoring gate split teacher replies on newlines and lost every record carrying a raw newline in a string (+7.1% records via `iter_json_objects` with `raw_decode`/`strict=False`); 5 new checkers (`word_count`, `item_count`, `contains`, `starts_with`, `forbidden_words`). 912+ tests pass, ruff clean. **BOTH of my recipes FAILED, and the answer was already in this repo.** Retry (fineweb replay 0.15 + cogito 0.08, instruct 0.35, LR 2e-5, 160 steps) scored **form 30.8% against wren's 34.6%** on the answer-independent set: `starts_with_yes_or_no` 20% -> **100%** and `sentence_count` 25% -> 50%, but `word_count` **100% -> 0%** and `forbidden_words` 100% -> 0% because the SFT made the model MORE VERBOSE, so it now overshoots word ceilings it previously passed. Retention recovered only to 5/7 (still lost 'days in a week' -> '14 days'). **Then I read `successes.md` and found 2026-07-20 IDEA 8 already solved this on wren's own parent lineage: `sft_instruct_v1` on a chin200m@55000 fork, +50-58pt format lift, ZERO bleed, val drift +0.002.** Its recipe is the INVERSE of mine: **dose 0.15 (not 0.35-0.50), replay 74% (fineweb 0.42 + chat_500mb 0.22 + wikitext103 0.10), 3500 steps (not 160), 4 focused families (not 14).** Low dose + heavy replay + long training; I ran high dose + light replay + short training and got forgetting both times. **Process failure worth banking: read `successes.md` / `failures.md` / `ideas.md` at session start before designing an experiment — CLAUDE.md points at them and a week-old entry documented the working recipe for exactly this task.** Relaunched `wren_sft` in place (failed attempts deleted, no version suffixes) with the ledger recipe applied to the broader authored `instruct` corpus: `instruct:0.15,fineweb_edu:0.42,chat_500mb:0.22,wikitext103:0.10,skills:0.05,sft_idk:0.03,cogito:0.03`, 3500 steps, LR 2e-5 constant, ckpt_every 500. Measured baselines to beat: **wren form 34.6%, mixed-set IFEval 11.1%, retention 7/7.** `wren` itself is untouched at `models/wren`. Artifacts: `trainers/corpus/instruct_*`, `trainers/corpus/cogito_*`, `veritate_mri/data/eval/samples/ifeval_form.json`, `models/wren_sft/`, `models/wren_sft/`, `developer_documentation/training/deep_eval_suites.md`, genre-yield table in `developer_documentation/corpus/authoring.md`.
@@ -675,3 +683,454 @@ actually free) and the planner does not model n_chunks. Not worth an OOM on a
 `wren1_0`.
 
 **Tests:** 1,115 passed, 6 skipped, 8 xfailed.
+
+## 2026-08-18 — IDEA 19 campaign + ideas backlog (autonomous session)
+
+Plan: (1) guard-distilled corpus from wren1_0@1250 (no_repeat_ngram=16 replies to
+mixed_chat user prompts), (2) IDEA 6 closeout from the finished chin200m curve,
+(3) IDEA 10 accept-length gate measured offline from this week's reply transcripts,
+(4) wren1_2 SFT via /trainers/run per the launch checklist, (5) 30-prompt ladder
+vs wren1_0@1250. Falsifier: bare-greedy loop 0.20 -> <0.05 with grounded/identity/
+median held. Logging here as each step lands.
+
+**IDEA 6 closed** (successes.md): chin200m/wren_base val 0.7798 -> 0.7073 at 145k,
+13% under chat200m's 0.812, form A/B held. Under-training confirmed as the ceiling;
+section removed from ideas.md.
+
+**IDEA 10 gate measured** (ideas.md updated): offline simulation over 67 real
+transcripts. Grounded traffic 2.62-6.54 accept/draft (~2.2x fewer weight streams),
+clears the >=2.5 ship gate at every m; plain chat 0.84-2.99, marginal and
+loop-flattered. Engine implementation queued RAG-path-first; not started.
+
+**IDEA 19 phase A running**: 100,118 unique mixed_chat prompts harvested, generating
+2,000 guarded replies from wren1_0@1250 (ban n=16). ETA ~2h.
+
+**wren1_2 prepared**: seeded models/wren1_2/checkpoints/step_0.pt from wren1_0@1250
+(the ship checkpoint; fork route only forks latest, which is the measured-worst
+step_3000 — platform gap noted). Launch args staged: 500 steps, base_lr 2e-05,
+wsd decay last 125, ckpt_every 100, mix mixed_chat 0.60 / transcripts 0.20 /
+wren_noloop 0.08 / veritate_chat 0.04 / identity 0.04 / idk 0.04 (small-corpus
+0.20 rule held). Launch via POST /trainers/run once corpus generation frees the GPU.
+Baseline for the falsifier: wren1_0@1250 on the fixed 30-prompt set (loop 0.20,
+grounded 0.25, identity 1.00, median 168 B).
+
+**trainers/ deleted** (user-approved, 71 GB freed). Verified first: scan() tolerates
+the missing dir, native trainer lives in veritate_mri/, every trainers/corpus file
+was a byte-duplicate of data/corpus except four stale ones (June 0-byte rag_ui
+husks; a superseded Jul 27 veritate_chat). CLAUDE.md + documentation.md corpus
+locations updated. LEGACY_CORPUS_ROOT stays in code for installs that have one.
+
+**noloop generation relaunched** — the first run was stopped by a session restart
+before writing bins.
+
+**venv correction**: the raw venv/ is gone (user removed it); the correct environment
+is .veritate_venv/ at repo root (torch 2.11.0, MPS). noloop generation relaunched
+under it. Any tooling that referenced ./venv/bin/python must use .veritate_venv.
+
+**Server restarted correctly**: veritate.py VENV_DIR now points at .veritate_venv
+(it was silently rebuilding the raw venv/ the user deleted). Dashboard back on 8001,
+runner idle. **IDEA 11 unblocked**: the "missing" format-adherence set exists as
+ifeval_form.json (280 obedience-only items, deterministic checkers) — the blocker
+note was stale. Experiment needs two matched 200M runs; compute sizing is the
+user's call.
+
+**wren_noloop corpus done**: 1,929 examples / 0.9 MB, 96.5% keep (43 unclosed,
+28 residual loops dropped). Well-formed ChatML, coherent replies.
+**wren1_2 launched** via POST /trainers/run: 500 steps, base_lr 2e-05 wsd,
+mix mixed_chat 0.60 / transcripts 0.20 / wren_noloop 0.08 / small-corpus 0.20.
+Monitor armed on val rows + terminal state. Next: 30-prompt ladder + grounded
+loop check + ifeval form on the best checkpoint vs the wren1_0@1250 anchor.
+
+**wren1_2 launch #1 failed and was fixed**: apply_resume_overrides requires a
+config.json on the resume target, which a bare checkpoint seed lacks. Wrote the
+config the way fork_model does (name/step/forked_from set, corpus_bin cleared,
+resume true) and relaunched clean. Note for the fork-from-step gap: any manual
+seed needs checkpoint + config, not just the .pt.
+
+**wren1_2 run complete**: 500/500 steps, exit 0, 6 checkpoints. Val 0.548 (100)
+-> 0.543 (200) -> 0.550 (300) -> 0.549 (400) -> 0.558 (500); mild late rise,
+consistent with small-corpus passes. Ladder launched: wren1_2 x6 + wren1_0@1250
+anchor, bare greedy, fixed 30-prompt set. Verdict criteria: loop < 0.05 (from
+0.20) with grounded 0.25 / identity 1.00 / median ~168 B held.
+
+**IDEA 19 mechanism 1: FALSIFIED.** wren1_2 ladder: best loop 0.13 (@200/300) vs
+anchor 0.20, target <0.05 -- under half the gap, and grounded halved / identity
+slipped exactly where loop improved. Harness validated by wren1_2@0 scoring
+byte-identical to wren1_0@1250. Kill recorded in failures.md; ideas.md updated;
+unlikelihood loss is next in the queue. Ship model unchanged: wren1_0@1250 with
+the serving-default guard.
+
+## IDEA 7 Track A opened (2026-08-18)
+
+**Cliff measured** (wren1_0@1250, hansard_val, 3 arms): slide flat 0.89-0.95 bpb
+(but 1 forward/byte); stream 1.44 bpb first-64-B-after-wrap (+62%), 1.01 late;
+stream == stream0 to 4 decimals. Root cause read from model_recurrent.py: GLA
+per-slot decay exp(cumsum(-softplus(a))) x256/window -> state 1e-15 by window
+end; carry-off training never rewarded retention. conv tail also carries padding
+zeros on part-full windows (secondary).
+
+**wren1_3 launched** (runner confirmed running): wren1_0 recipe with ONLY
+state_carry=chunks + bptt_window=2 changed, 1,000 steps, lr 2e-05, ckpt/eval 200.
+Each step = 4,096 contiguous bytes, state threaded across boundaries, gradients
+flow 2 chunks. Falsifier: re-run cliff_measure -- stream[1-64] must close toward
+slide AND stream must beat stream0; chat ladder must hold. Escalation if it
+fails: state_rule=delta, then pinned (non-decaying slots).
+
+**wren1_3 launch #1 crashed, platform bug found and fixed**: both activation-
+checkpoint wrappers (trainer lambda + mem_executor._checkpointed) dropped kwargs,
+so state_carry=chunks (blocks called with state=/return_state=) crashed at step 1.
+Fixed with kwargs pass-through; 3 new tests in tests/training/
+test_act_ckpt_state_carry.py (wrapper composition + grads flow through wrapped
+state carry). Ruff installed into .veritate_venv; repo clean. Relaunched with
+use_act_ckpt=false anyway: de-risks the run and doubles as todo-10's
+act-ckpt-off speed measurement on this shape.
+
+**wren1_3 attempt 2 diagnosed and fixed — two platform defects, one architecture defect:**
+1. Non-finite GRADIENTS with finite loss: anomaly-traced to the slot-mask multiply
+   (model_patched.py). Under state carry, the next window's loss backprops an
+   unbounded gradient into padded slot rows; mask-multiply turns inf*0 into nan.
+   Reproduced deterministically with trained weights on MPS AND CPU (not precision,
+   not device: fp32 failed identically; tiny random weights do not repro).
+2. Fixes: torch.where for the slot mask (exact-zero grads at padding); k/v/la masked
+   out of the state stream inside RecurrentMixer (padding writes nothing, decays
+   nothing; in-window outputs bit-identical -- golden check 0.00e+00); trainer now
+   skips the optimizer step on non-finite grad norm (step 1 had stepped on nan and
+   corrupted the weights; guard validated by the relaunch rather than a unit test).
+3. Tests: tests/training/test_state_carry_padding.py (4: state no-op, padding
+   invariance, streaming==training equivalence, finite grads). Suites 647 passed,
+   ruff clean. Post-fix repro: 0 non-finite grads in bf16 and fp32.
+wren1_3 relaunched (attempt 3).
+
+**wren1_3 attempt 3 -> the deeper defect, found and fixed.** The grad-norm guard
+held (weights protected) but ~10/12 steps skipped. Bisected a 48-row batch to ONE
+culprit row; isolated the trigger to bptt_window=2 (carry with bptt=1 clean);
+instrumented seam hooks (fired 64x, all finite -- the carry seam was innocent) and
+an inf-detector that caught the true origin: padded slot rows re-inflate INSIDE
+the window walk (q@state + FF biases, never re-masked between blocks), drift out
+of the trained regime, and their FF backward goes infinite by mid-stack (first
+inf at blk4), then dies to nan at the next mixer's proj -- poisoning shared weight
+grads. Fixes: (1) re-mask the slot stream after EVERY global block in
+forward_streaming (valid rows never read padding, so behavior is unchanged --
+suites + equivalence tests green); (2) carry_seam_clip: norm-clip + nan-zero
+gradient hook at the carry seam (never fired in validation; kept as insurance for
+the truncated-BPTT explosion class, wired to args.grad_clip). Validation: culprit
+row finite in bf16+fp32; 20x16-row live-condition sweep (1.3M tokens) zero
+non-finite; unit tests cannot reach this pathology (needs trained weights), so the
+sweep is the pinning artifact. 647 tests pass, ruff clean. wren1_3 attempt 4
+launched.
+
+## IDEA 7 arm 1: VALIDATED (2026-08-19)
+
+wren1_3 completed 1,000/1,000, zero non-finite steps. Falsifier: carried state
+absmax 1e-15 -> 1.27; stream beats stream0 in every bucket; wrap cliff 1.44 ->
+1.30 (~26% of the gap to slide 0.89); mid-window stream 0.99 ~ slide 0.91. Chat
+ladder: loop 0.20 / closed 1.00 exactly match the ship anchor; identity 0.83 and
+grounded 0.12 each one question inside n-noise; median 148 B vs 168. Val carry
+shock 0.72@200 -> 0.55@400 (adapted). Graduated to successes.md; ideas.md carries
+the escalation (longer adaptation, delta, pinned; then the streaming generation
+loop). wren1_0@1250 stays the chat ship model; wren1_3 is the streaming-lane base.
+
+## Persistent-memory pivot + arm 1b launch (2026-08-19)
+
+User directive (permanent, recorded): persistent memory is THE research focus.
+"Tell an AI something once and it doesn't forget" — stateless serving with
+re-injected context is the frustration to eliminate; the net should update its
+own state/weights from what it processes, brain-like. IDEA 20 opens the program.
+
+Actions: launched IDEA 7 arm 1b — resumed wren1_3 1000 -> 3000 (triple carry
+dose, recipe otherwise frozen; falsifier: wrap bucket keeps closing from 1.30
+toward slide 0.89, chat ladder holds; ~8.5 h ETA, milestone monitor armed).
+Fanned out three literature surveys (fast weights / test-time training;
+Titans-class neural memory + surprise gating; continual learning + sleep
+consolidation at small scale) to ground IDEA 20's experiment ladder before
+writing it.
+
+## IDEA 20 opened: persistent memory program (2026-08-19)
+
+Three literature surveys returned and converged: (1) wren's GLA state is already a
+fast-weight associative memory — the delta rule makes it in-place-editable (up to
+D orthogonal associations, revisable without residue) for ~1 extra matvec; (2)
+Titans-style surprise-gated MLP memory is proven at 170-760M and serializes per
+user; (3) weight consolidation has a measured recipe (generic replay 5-25%,
+constant low LR, 10-30 augmentations/fact both directions, spaced repetition,
+merge fuse) and measured skips (EWC, ROME/MEMIT-class editing, LoRA-as-cure).
+IDEA 20 written to ideas.md with the three-tier mapping (T1 carried state / T2
+serialized state + delta or surprise-gated slow lane / T3 nightly sleep
+consolidation) and ladder E1-E5. Own-ledger caveat folded in: delta NaN'd at 10M
+pretraining; retry as low-LR adaptation with the new step-skip guard + capped
+beta. E1 (arm 1b) training now; E3 (streaming generation loop + state
+serialization) is the serving unlock that every tier needs.
+
+arm 1b progress: resumed clean at step 1000, LR re-warmed to 2e-5, ~13.8k tok/s.
+
+## E3 part 1 shipped: streaming generation loop (2026-08-19)
+
+`/generate?fast=stream` (PyTorch backend): unbounded-context generation over
+forward_streaming. Full windows commit into the carried states, one forward
+each; the partial window is recomputed per byte (avg cost half a window, vs a
+full window every byte today) and padded with a non-boundary byte to keep slots
+CHUNK-aligned. Prompt never truncated. State commits only from full windows,
+which sidesteps the known part-full conv-tail defect entirely. Gates: recurrent
+mixer + slots%64==0 (seq multiple of 256; wren's 1024 qualifies). 5 new tests
+(tests/mri/test_stream_fast_streaming.py): argmax parity with stream() inside a
+window, generation past seq with commits, 3-window prompt consumed whole,
+carried state changes next-window logits, clean error on dense models. mri
+suite 477 passed, ruff clean. documentation.md inference section updated.
+Remaining for E3: per-conversation state serialization (save/reload states
+keyed by a session id + a caller protocol that sends only new bytes).
+
+## IDEA 20 refinements + experience log shipped (2026-08-19)
+
+User refinements folded into IDEA 20 (ideas.md): consolidation substrate = the
+model's OWN thought and actions (trace consolidation m2 added as an arm vs
+fact-SFT m1); sleep is self-contained (rehearsal only from the model's own past,
+never new imports); the model may write notes but memorizes them in sleep
+(never load-bearing md infrastructure); E6 anti-copy falsifier (generate from
+absorbed state vs in-window context, measure verbatim overlap at task success);
+E7 skill ingestion (drop a resource, model studies by authoring its own
+augmentations, sleep internalizes). Digital-human-brain framing recorded as
+project identity.
+
+Shipped: the experience log — data/experience/YYYYMMDD.jsonl, both serving
+backends record every exchange (inference/experience.py; EXPERIENCE_ROOT in
+readers/paths.py; wrapped stream_c + stream_pt in backends_routes). 6 tests
+(tests/mri/test_experience_log.py): lossless byte round-trip, one record per
+exchange, disconnect still records, kill switch, never-raise. mri suite 483
+passed, ruff clean. documentation.md updated.
+
+## E3 part 2 shipped: persisted conversation state (2026-08-19)
+
+`/generate?fast=stream&state_id=<id>`: carried recurrent states + pending window
+buffer serialize to data/stream_states/<id>.pt after every call (completion,
+early stop, and client disconnect alike); the next call sends only the NEW
+bytes and continues byte-exactly — split-call parity with a single continuous
+call is pinned by test (crossing a window commit, and with a real second turn).
+State is bound to the exact checkpoint that wrote it (mismatch errors;
+state_reset=1 starts over). Loopback-only, id whitelist regex. Tier T2(a) of
+IDEA 20 is now real: tell wren something today, the state file holds it
+tomorrow — retention quality is what E1/E2 (arm 1b + delta) are improving.
+mri suite 486 passed, ruff clean. arm 1b at step 1200: val 0.5615 (was 0.5695
+at the 1000 resume point), first checkpoint banked.
+
+## E6 anti-copy baseline measured (2026-08-19)
+
+anticopy_probe.py (scratchpad) on wren1_3@1000, CPU, greedy, 2.5KB reference +
+authoring task, 256B generations. In-window: copy_8gram 0.044, engagement
+0.028, coherent on-topic proposal. Absorbed-into-state (window cleared):
+copy_8gram 0.000 but engagement 0.000 — output is topic-adjacent boilerplate
+that loops; no measurable content survived into the state at 1,000 carry steps.
+Reading: the yardstick works (copy vs engagement), and the baseline documents
+that today's state carries statistics, not content — the E6 verdict waits for
+higher-dose (arm 1b) and delta-rule checkpoints. Note: at 200M the in-window
+copy rate is already low (small models can't hold long verbatim spans); the
+copying pathology E6 targets grows with model scale, so this probe matters
+MORE at the next size, and the baseline harness is now one command.
+
+## E2 probe v1 invalid; redesigned as discrimination (2026-08-19)
+
+Generation-form E2 measured zero everywhere — then the positive control
+(facts in the SAME window) also scored 0/8: the model completes semantic
+associations ("granite is gold"), not arbitrary bound codewords. That is the
+role-binding wall (failures.md) re-surfacing, so v1's zeros measured task
+failure, not state retention. v2 asks the sensitive question instead:
+discrimination margin = NLL(foil|state) - NLL(true|state) over the codeword
+sentence, foil = another fact's codeword; for revised facts the foil is the
+OLD codeword, so residue shows as a negative margin. K sweep now includes
+K=0 as the instrument control. gla baseline running (wren1_3@1000).
+Implication for the delta arm: its falsifier line uses margins, not exact
+recall — exact-recall codeword binding at 200M is blocked by the wall, which
+scale or IDEA 8's bind-then-read must lift, not the state rule.
+
+## E2 v2 gla baseline measured (2026-08-19)
+
+wren1_3@1000, 24 facts (7 revised), discrimination margins. Result: no
+reliable retention signal at any depth — plain win rates 0.53-0.59 and revised
+0.29-0.71, all inside the n=24/n=7 binomial noise band (chance = 0.5), margins
+bounce sign across K. Even the K=0 in-window control is weak (0.53 win,
++1.46 bits from a few outliers): arbitrary-binding discrimination is hard for
+the same reason generation was impossible (binding wall). Two clean findings:
+(1) save->reload margins are EXACTLY equal to live at every K — E3's state
+persistence is lossless, measured; (2) the instrument has dynamic range
+(bits), so the delta arm's comparison will be paired same-fact margin deltas,
+and n should rise to ~64 facts for the verdict run. This is the "before"
+picture the delta arm must beat.
+
+## Arm 1b mid-run cliff read at step 2000 (2026-08-19)
+
+CPU measurement (device note: arm-1 numbers were MPS; compare gaps, not
+absolutes). Wrap bucket stream 1.2864 vs slide 0.9099 -> gap 0.377 bits.
+At step 1000 the gap was 0.407 (1.2997 vs 0.8929). So the second 1,000 carry
+steps closed ~0.03 bits where the first 1,000 closed ~0.14: the dose curve
+has flattened hard. stream still beats stream0 everywhere (1.286 vs 1.478
+wrap). Reading: gla carry dose is exhausted as a lever; the remaining wrap
+gap belongs to the write mechanism — the delta arm is now the main event.
+Letting the run finish for the WSD decay phase (final quality + chat ladder),
+then evaluating and launching wren1_4.
+
+## Chat streaming UI + sleep platform pieces (2026-08-19)
+
+User directives: verify "what did you just say" recall through the state (no
+transcript re-feed), and sleep-when-idle ("index its thoughts, train on them").
+
+Shipped: (1) chat tab wired to the streaming path — fast mode "stream (carried
+state)" sends ONLY the new turn with a localStorage per-conversation state_id,
+rotated on chat clear and stale-state errors; (2)
+tools/build_experience_corpus.py — experience log -> experience_{train,val}.bin
+(dedupe, min-reply filter, torn-line tolerant; 4 tests, ruff clean); rehearsal
+is just the corpus mixer pulling the model's own base corpus (self-contained);
+(3) scratchpad/sleep_trigger.py — idle-gated consolidation launcher (idle ->
+index -> low-LR dashboard launch), deliberately NOT armed until the E4 recipe
+validates; (4) scratchpad/chat_state_recall.py — the "what did you just say"
+behavioral test with fresh-state leak controls, gla baseline in flight.
+
+Note: training tok/s dipped (13.7k -> ~5.1k at step 2610) while CPU probes run
+beside it — co-tenancy cost, quality unaffected, ETA stretches. Probes are
+short; letting both finish.
+
+## "What did you just say" baseline: 1/6, zero leaks (2026-08-19)
+
+chat_state_recall.py on wren1_3@1000, streaming path, turn 2 sent ALONE with
+the state file as the only bridge, per-item fresh-state leak control. Result:
+1/6 recalled, 0 leaks — "Where did I just travel to?" -> "You traveled to
+Norway." is the platform's first behavioral cross-turn recall through carried
+state with no transcript re-feed. The other five answered "I don't know"
+(the sft_idk abstention showing, which is the right failure mode — no
+hallucinated answers). This is the user's own acceptance test; the number to
+move is 1/6. Delta arm and consolidation both target it.
+
+## Arm 1b closeout + wren1_4 launch (2026-08-19)
+
+Full 3000-checkpoint eval sweep: cliff gap 0.383 (vs 0.407 @1000, MPS both) —
+dose falsified, recorded in failures.md; E2 discrimination at chance both
+doses, reload lossless again; recall 0/6 (1/6 @1000, n-noise); anticopy
+absorbed engagement 0.0. Chat ladder: loop 0.20 closed 0.97 median 183B
+grounded 0.38 identity 1.00 vs anchor (0.20/1.00/168/0.25/1.00) — held, with
+identity recovered and grounded up; wren1_3@3000 is the new streaming base and
+worth a look as chat ship candidate after the memory campaign (single-ladder
+n, not a ship decision). Seeding wren1_4 (delta) from wren1_3@3000 and
+launching arm 2.
+
+## Delta-rule underflow found and fixed; wren1_4 relaunched (2026-08-19)
+
+wren1_4 attempt 1 "completed" in minutes: all 1,000 steps skipped on
+non-finite LOSS. Diagnosis (CPU, hooks): first nan inside the second recurrent
+block's delta math; chunk trace pinned it to the state-update line computing
+the decay ratio as exp(a_last)/exp(a_t) — with trained decays a chunk's cumsum
+passes ~-88, both exps underflow to 0 in fp32, 0/0 = nan. The gla path always
+used the safe difference form exp(a_last - a_t) (why gla never nan'd), and
+this closes the failures.md "delta not trainable" mystery: same text-dependent
+underflow, sporadic at 10M random init (step 2094), immediate on trained 200M
+decays. One-line fix in model_recurrent.py; forward now finite fp32+bf16;
+regression test tests/training/test_delta_underflow.py forces strong decay
+through a_proj.bias for both rules + a carried-state window walk. 668 tests
+pass. Dead wren1_4 deleted (zero steps trained), re-seeded from wren1_3@3000,
+relaunched; first-steps watcher + milestone monitor armed.
+
+## Second delta defect: pre-mask exp inf poisons backward; attempt 3 up (2026-08-19)
+
+Attempt 2's forward was finite but every step skipped on non-finite GRAD.
+Cause: the delta chunk computes exp(cl_i - cl_j) for ALL pairs, masks after —
+the upper triangle is exp(+large) = inf, discarded by tril in the forward but
+saved for backward, where 0 * inf = nan grads. Same bug class as the padding
+mask-multiply. gla masks with -inf BEFORE exp (why it never tripped). Fix:
+delta now masks the exponent pre-exp. Regression extended with a backward
+finiteness test for both rules; verified red on the reverted code, green on
+the fix. 670 tests pass. wren1_4 re-seeded and relaunched (attempt 3),
+first-steps watcher + milestone monitor armed.
+
+## Delta@600 content read: still chance; recall curriculum built (2026-08-20)
+
+E2 margins on wren1_4@600: chance at every K, same as gla. Interim reading
+(not the verdict — that is the 1000 evals): the write rule alone may not be
+the binding constraint, because NOTHING in the corpus rewards binding recall —
+chat/prose rarely restates a fact verbatim windows later, so the loss never
+pays for storing addressable content, whatever the rule permits. Arm 3 fuel
+built regardless of the verdict: tools/build_recall_corpus.py — synthetic
+codeword examples stated once, buried under 1-6 windows of real filler,
+restated at the end (second statement predictable only from memory; the byte
+loss itself rewards retention); a third of examples revise the codeword
+mid-filler and the final statement uses the newest value (rewards in-place
+revision, delta's specialty). 3 tests, ruff clean. Arm 3 shape if 1000 stays
+flat: continue the delta adaptation with recall_curr mixed at ~10%.
+
+## Arm 2 verdict + arm 3 launched (2026-08-20)
+
+wren1_4@1000 full sweep: wrap gap 0.380 (= gla 0.383), val 0.583 (worse than
+base 0.549), chat degraded (identity 0.67, closed 0.83, grounded 0.12; loop
+improved 0.10), E2 chance, recall 0/6. Configuration falsified -> failures.md.
+THE FINDING: anticopy absorbed arm jumped 0.06 -> 0.47 copy with first nonzero
+engagement — the delta state transports retrievable verbatim content across a
+cleared window; capacity exists, retrieval-on-demand was never trained
+(chat/prose corpora contain no binding-recall dependencies). Arm 3 launched:
+wren1_4 continued 1000 -> 2000 with recall_curr mixed at 10% (4,000 examples,
+13.9MB built from hansard filler), chat mix preserved. Falsifier in the run
+description; milestone monitor armed.
+
+## User corrections + flagship planning notes (2026-08-20)
+
+User: the 800M was never trained to optimal — the role-binding wall evidence at
+800M is from an UNDERTRAINED model and is not conclusive; treat the wall as
+established only at well-trained 122M/200M. Well-trained large model is a
+future task, after the memory experiments nail down. User wants: (a) sleep
+without external runtimes (confirmed: the whole loop is platform-native), (b)
+a 500M-vs-1B recommendation, (c) IDEA 21 — grow wren's trained net into the
+larger flagship instead of retraining from scratch.
+
+## Naming convention (user, 2026-08-20)
+
+Major version = base/size change: wren2 is the 500M flagship (grown or fresh,
+a new base flips the major), wren2_x its adaptations. Recorded.
+
+## Arm 3 verdict + server restart (2026-08-20)
+
+Full sweep on wren1_4@2000 (failures.md holds the entry): wrap gap 0.358 —
+best yet and the first real movement; content transport stable (absorbed copy
+0.50 / engagement 0.042); BUT binding still absent (plain margins chance,
+revisions resolve to the FIRST stamp under both phrasings — the state carries
+familiarity + primacy, not noun->word binding), recall 1/6, and the single
+template overfit into behavior ("The codeword for poroge is poroge" loops on
+ordinary prompts; identity 0.67, closed 0.87, median 123B). Three state arms
+now agree the binding wall lives inside the state mechanism at 200M —
+independent corroboration of IDEA 8. Curriculum v2 retry conditions parked in
+failures.md. Priority shifts to E4 sleep: exact facts belong in weights; the
+state's proven role is transport + gist + working memory.
+
+Ops: the long-lived server task (from the 08-18 venv fix) died during a pip
+phase (exit 241) — dashboard was down briefly, no run active. Relaunched
+detached via veritate.py; watcher armed.
+
+2026-08-20 — chat extraction purge (user-ordered). Removed the Chat tab
+(index.html block + chat_tab.js/css), the standalone /chat page (hybrid.html +
+app.py route), and the /hybrid/* chat endpoints with their chat-only helpers
+(hybrid_routes.py: /hybrid/chat, /hybrid/chat/stream, /hybrid/health,
+/hybrid/models, /hybrid/kb/upload, memory compaction, context meter, system
+budgeting, remote-model picker, KB upload). auth PUBLIC_PREFIXES trimmed to
+/static. Kept: /v1/chat/completions + /v1/chat/mri, ChatML framing + routing,
+BM25 retrieval (hallucination detector), Generation tab incl. fast=stream +
+state_id, experience log, all corpora/builders. Tests: test_chat_compaction.py
+deleted, hybrid route tests dropped from test_openai_chat.py/test_mri_optin.py,
+delta-stream tests rebased onto _local_stream_items. CHAT_HANDOFF.md written at
+repo root; documentation.md updated (auth surface, inference bullet, tabs).
+
+2026-08-20 — sleep controller shipped (IDEA 20 T3 operational layer, user
+directive: dynamic sleep + wake button + checkpoint hygiene, all on the
+Generation tab). training/sleep.py + routes/sleep_routes.py (/sleep,
+/sleep/wake, /sleep/now) + watcher thread in app.py (60 s tick, skipped in
+--minimal). Usage-scaled dose (new exchanges × sleep_steps_per_exchange,
+clamped 50–500), idle gate off the experience-log mtime (no serving hooks),
+recipe reused from the model's own config.json training_args with only sleep
+levers overridden, dense sleep ckpts (every 25) + auto-prune (intermediates
+deleted at run end, finals thinned to sleep_keep_finals, non-sleep ckpts never
+touched). 12 sleep_* settings in runtime/settings.py DEFAULTS; disabled by
+default until E4 validates. Gen-bar chip: awake countdown / sleeping progress
++ eta + wake button. tests/training/test_sleep_controller.py (8, green);
+ruff clean; node --check clean. documentation.md backend section updated.
+claude_preflight.md: scope made a standing rule (push back once on any
+expansion beyond train/eval/run, even from the user; chat extraction noted).
+
+2026-08-20 — E4 night-1 attempt 3 running: earlier relaunch died with the
+08-19 server incident; relaunched 16:02, step 60/300 at 16:20, loss 1.13→0.59,
+lr 5e-6 flat, ~15.3 s/step, terminal ~17:15. Baseline val bpb locked for the
+forgetting kill line (wren1_3@3000): mixed_chat 0.824, veritate_chat 2.071,
+hansard 1.059 (scratchpad/val_bpb.py, 24×1024 B fixed windows per bin).
+Post-sleep gate: mixed_chat ≤ 0.840 (+2%).

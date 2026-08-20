@@ -34,7 +34,7 @@ from pathlib import Path
 # Constants
 
 HERE             = Path(__file__).resolve().parent
-VENV_DIR         = HERE / "venv"
+VENV_DIR         = HERE / ".veritate_venv"
 REQUIREMENTS     = HERE / "requirements.txt"
 HASH_SENTINEL    = VENV_DIR / ".req_hash"
 DEFAULT_PORT     = 8001

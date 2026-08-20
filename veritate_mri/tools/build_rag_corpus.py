@@ -10,7 +10,7 @@
 # - Facts and question/answer pairs come from the configured Teacher Model
 #   (Settings > Teacher Model). Facts split train/test, so the held-out set
 #   measures in-context copy on facts the model never trained on.
-# - Output: trainers/corpus/<stem>_{train,val}.bin plus the held-out set at
+# - Output: data/corpus/<stem>_{train,val}.bin plus the held-out set at
 #   veritate_mri/data/eval/rag/<stem>_test.json.
 # - Spawned as a subprocess by veritate_mri/routes/rag_routes.py; stdout is the
 #   job log the RAG panel tails.

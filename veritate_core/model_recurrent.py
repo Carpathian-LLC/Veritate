@@ -111,6 +111,17 @@ class RecurrentMixer(nn.Module):
         la = -F.softplus(self.a_proj(x)).transpose(1, 2)
         return q, k, v, la, x, B, T, C, H, D, pad, tail
 
+    def _mask_stream(self, k, v, la, slot_mask, T):
+        """Zero padded slots out of the state stream: k/v write nothing and la
+        decays nothing (exp(0)=1). Padding trails the slot sequence and valid
+        rows are causal, so in-window outputs at valid positions are unchanged;
+        only the carried state is cleaned (wren1_3, 2026-08-18)."""
+        sm = slot_mask.to(k.dtype).squeeze(-1)
+        if sm.size(1) < T:
+            sm = F.pad(sm, (0, T - sm.size(1)))
+        smh = sm.unsqueeze(1)
+        return k * smh.unsqueeze(-1), v * smh.unsqueeze(-1), la * smh
+
     def _tri_inverse(self, neg_m, eye):
         n = neg_m.size(-1)
         if n <= DELTA_INV_BLOCK:
@@ -137,10 +148,12 @@ class RecurrentMixer(nn.Module):
         pin_val = pin_val + (den / (den + 1.0)) * (num / (den + PIN_EPS) - pin_val)
         return o, pin_val
 
-    def _forward_delta(self, x, state=None, return_state=False):
+    def _forward_delta(self, x, state=None, return_state=False, slot_mask=None):
         s0 = state["s"] if state is not None else None
         q, k, v, la, x, B, T, C, H, D, pad, tail = self._project(
             x, state["conv"] if state is not None else None)
+        if slot_mask is not None:
+            k, v, la = self._mask_stream(k, v, la, slot_mask, T)
         beta = torch.sigmoid(self.b_proj(x)).transpose(1, 2)
         n_chunks = T // CHUNK
         with torch.autocast(device_type=x.device.type, enabled=False):
@@ -156,13 +169,24 @@ class RecurrentMixer(nn.Module):
                 bcol = betaf[:, :, s:s + CHUNK].unsqueeze(-2)
                 cl = laf[:, :, s:s + CHUNK].cumsum(-1)
                 A = cl.exp().unsqueeze(-1)
-                decay = (cl.unsqueeze(-1) - cl.unsqueeze(-2)).exp()
+                # Mask BEFORE exp, like the gla path below: the upper triangle
+                # is exp(+large) = inf, and although tril() discards it in the
+                # forward, backward through the saved inf makes 0 * inf = nan
+                # grads (wren1_4 attempt 2: every step skipped on grad norm).
+                diff = cl.unsqueeze(-1) - cl.unsqueeze(-2)
+                decay = diff.masked_fill(
+                    torch.ones(CHUNK, CHUNK, dtype=torch.bool,
+                               device=x.device).triu(1), float("-inf")).exp()
                 M = (decay * bcol * (kc @ kc.transpose(-1, -2))).tril(-1)
                 U = self._tri_inverse(-M, eye) @ (vc - A * (kc @ state))
                 P = (decay * bcol * (qc @ kc.transpose(-1, -2))).tril(0)
                 o = A * (qc @ state) + P @ U
                 a_last = cl[:, :, -1:].exp()
-                kw = ((a_last / cl.exp()) * betaf[:, :, s:s + CHUNK]).unsqueeze(-1) * kc
+                # Difference form, matching the gla path below: exp(a)/exp(b)
+                # underflows to 0/0 = nan once trained decays push cumsum past
+                # ~-88 inside a chunk (killed the 10M delta run at step 2094 and
+                # wren1_4 attempt 1 at step 1). exp(a - b) <= 1 is always finite.
+                kw = ((cl[:, :, -1:] - cl).exp() * betaf[:, :, s:s + CHUNK]).unsqueeze(-1) * kc
                 state = a_last.unsqueeze(-1) * state + kw.transpose(-1, -2) @ U
                 outs.append(o)
             o = torch.cat(outs, dim=2)
@@ -175,15 +199,17 @@ class RecurrentMixer(nn.Module):
             return o
         return o, {"s": state, "conv": tail}
 
-    def forward(self, x, state=None, return_state=False):
+    def forward(self, x, state=None, return_state=False, slot_mask=None):
         if (state is not None or return_state) and x.size(1) % CHUNK:
             raise ValueError(f"state carry requires T multiple of {CHUNK}, got {x.size(1)}")
         if self.state_rule == "delta":
-            return self._forward_delta(x, state, return_state)
+            return self._forward_delta(x, state, return_state, slot_mask)
         s0   = state["s"] if state is not None else None
         pin0 = state["pin"] if state is not None and self.state_rule == "pinned" else None
         q, k, v, la, x, B, T, C, H, D, pad, tail = self._project(
             x, state["conv"] if state is not None else None)
+        if slot_mask is not None:
+            k, v, la = self._mask_stream(k, v, la, slot_mask, T)
         n_chunks = T // CHUNK
         causal = torch.ones(CHUNK, CHUNK, dtype=torch.bool, device=x.device).tril()
         state = torch.zeros(B, H, D, D, dtype=x.dtype, device=x.device) if s0 is None else s0
@@ -232,8 +258,9 @@ class RecurrentBlock(nn.Module):
                         reg_mode=reg_mode)
         self.qat  = False
 
-    def forward(self, x, state=None, return_state=False):
-        a = self.attn(self.n1(x), state=state, return_state=return_state)
+    def forward(self, x, state=None, return_state=False, slot_mask=None):
+        a = self.attn(self.n1(x), state=state, return_state=return_state,
+                      slot_mask=slot_mask)
         if return_state:
             a, state = a
         x = x + a

@@ -24,19 +24,27 @@ import json
 import os
 import re
 import shutil
+import socket
 import threading
+import urllib.parse
 import uuid
 import zipfile
 from collections import Counter
 
 from flask import request
 from readers import paths as paths_mod
+from readers import seeds as seeds_mod
 from runtime import logs as logmod
 from runtime import settings as settings_mod
 from teacher import authoring as authoring_mod
+from teacher import interview_job as interview_mod
 from tools.build_sft_corpus import build as build_sft_bins
+from tools.corpus_audit import audit_file
 from tools.jsonl_to_bin import jsonl_to_bin
+from training import trainer_runner
 from training.sync.corpus_sync import LOCAL_CATALOG_PATH
+
+from ._common import safe_route as _safe
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -46,6 +54,7 @@ JOB_ID_LEN = 12
 TEACHER_API_KEY_ENV = "VERITATE_TEACHER_API_KEY"
 SAMPLES_FILE = "samples.jsonl"
 STATE_FILE = "state.json"
+PLAN_FILE = "plan.json"
 JOB_META_FILE = "meta.json"
 SAMPLES_PREVIEW_DEFAULT = 20
 SAMPLES_PREVIEW_MAX = 100
@@ -57,6 +66,12 @@ CATALOG_VERSION = 1
 SYNTH_RESPONSE_KEY = "response"
 SYNTH_VAL_RATIO = 0.02
 STEM_RE = re.compile(r"^[a-z0-9_]+$")
+PROVIDER_KIND_LOCAL = "local"
+INTERVIEW_MAX_DEPTH = 20
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"})
+CONTENTION_NONE = "none"
+CONTENTION_LOCAL_RUN = "local_run"
+
 
 AUTHORING_ID_PREFIX = "auth_"
 IMPORT_ID_PREFIX = "import_"
@@ -249,6 +264,9 @@ def _render_record(rec):
 def _read_state_counts(output_dir):
     samples = os.path.join(output_dir, SAMPLES_FILE)
     failed = 0
+    shortfall = {}
+    calls_ok = 0
+    calls_remaining = None
     skipped = 0
     last_error = ""
     error_summary = {}
@@ -260,21 +278,29 @@ def _read_state_counts(output_dir):
             with open(state_path, encoding="utf-8") as f:
                 st = json.load(f)
             failed = int(st.get("failed", 0))
+            calls_ok = int(st.get("completed", 0))
+            calls_remaining = len(st.get("remaining") or [])
             skipped = int(st.get("skipped_dup", 0))
             last_error = st.get("last_error", "") or ""
             error_summary = st.get("error_summary", {}) or {}
             aborted = bool(st.get("aborted", False))
+            shortfall = st.get("opener_shortfall", {}) or {}
             authoring = st.get("authoring", {}) or {}
         except (OSError, ValueError):
             pass
     return {
-        "completed": _count_lines(samples),
+        "completed": _count_lines(samples),   # RECORDS kept, not calls
+        "calls_ok": calls_ok,
+        "calls_failed": failed,
+        "calls_remaining": calls_remaining,
         "failed": failed,
         "skipped_dup": skipped,
         "last_error": last_error,
         "error_summary": error_summary,
         "aborted": aborted,
         "authoring": authoring,
+        "opener_shortfall": shortfall,
+        "plan": _read_plan(output_dir),
         "output_path": samples,
     }
 
@@ -377,7 +403,11 @@ def _zip_bins(dist_dir, stem):
 
 
 def _register_catalog_entry(stem, label, description, manifest, min_params, max_params):
-    """Append a coming_soon zip_bundle entry so the corpus shows in the library."""
+    """Append a coming_soon zip_bundle entry so the corpus shows in the library.
+
+    min_params/max_params are accepted but written as-is and are expected to be
+    None: size ladders were retired 2026-08-20, so a corpus is matched to a model
+    by what it contains, not by how many bytes it is."""
     with open(LOCAL_CATALOG_PATH, encoding="utf-8") as f:
         cat = json.load(f)
     entry = {
@@ -403,6 +433,129 @@ def _register_catalog_entry(stem, label, description, manifest, min_params, max_
         json.dump(cat, f, indent=CATALOG_INDENT, ensure_ascii=False)
     os.replace(tmp, LOCAL_CATALOG_PATH)
     return entry
+
+
+def _write_plan(output_dir, plan):
+    """Persist the run's plan (target bytes, planned calls, genres) beside the job.
+
+    The job's own state.json only ever counts what has happened. Without the
+    denominator written down, a dashboard refresh loses "of how many?" and the
+    progress bar silently becomes a spinner."""
+    try:
+        with open(os.path.join(output_dir, PLAN_FILE), "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+    except OSError as e:
+        logmod.warn(LOG_SOURCE, f"could not write plan for {output_dir}: {e}")
+
+
+def _read_plan(output_dir):
+    try:
+        with open(os.path.join(output_dir, PLAN_FILE), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def providers_concurrency_choices():
+    providers = importlib.import_module(TEACHER_PKG + ".providers")
+    return getattr(providers, "CONCURRENCY_CHOICES", (2, 4, 8, 16))
+
+
+def _audit_or_none(path):
+    """Score a freshly built bin. A gate that 500s on a corner case would block
+    the build it is meant to advise, so failure degrades to no report."""
+    try:
+        return audit_file(path)
+    except Exception as e:
+        logmod.warn(LOG_SOURCE, f"corpus audit skipped for {path}: {type(e).__name__}: {e}")
+        return None
+
+
+def _target_host(base_url):
+    """Hostname the teacher's calls land on. Empty base_url means the provider default."""
+    if not base_url:
+        return ""
+    try:
+        return (urllib.parse.urlsplit(base_url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _is_this_machine(host):
+    """True when `host` resolves to the box this dashboard runs on."""
+    if not host:
+        return False
+    if host in LOOPBACK_HOSTS:
+        return True
+    try:
+        return host.split(".")[0] == socket.gethostname().split(".")[0].lower()
+    except OSError:
+        return False
+
+
+def _active_run():
+    """The trainer run on THIS box, or None. Never raises: the guard must not be
+    the reason a distillation start fails."""
+    try:
+        st = trainer_runner.state() or {}
+    except Exception:
+        return None
+    if st.get("status") != "running":
+        return None
+    args = st.get("args") or {}
+    return {
+        "plugin_id":  st.get("plugin_id"),
+        "name":       args.get("name") or args.get("resume") or args.get("base_ckpt") or "",
+        "size":       args.get("size") or "",
+        "started_at": st.get("started_at"),
+    }
+
+
+def _target_status(s):
+    """Where distillation calls will land, and whether a training run is already
+    using that machine. `contention` true is what raises the confirm in the UI.
+
+    A cloud provider never contends. A local provider pointed at another box
+    (an ssh tunnel to cardinal, say) cannot be inspected from here, so it
+    reports training_active=None rather than guessing a safe-looking false."""
+    provider = (s.get("teacher_provider") or "").strip()
+    model    = (s.get("teacher_model") or "").strip()
+    cfg      = (s.get("teacher_configs") or {}).get(provider) or {}
+    base_url = (cfg.get("base_url") or s.get("teacher_base_url") or "").strip()
+
+    providers = importlib.import_module(TEACHER_PKG + ".providers")
+    try:
+        kind = providers.get_provider(provider).get("kind") if provider else ""
+    except ValueError:
+        kind = ""
+
+    host     = _target_host(base_url)
+    is_local = kind == PROVIDER_KIND_LOCAL
+    on_this_box = is_local and _is_this_machine(host)
+
+    run = _active_run() if on_this_box else None
+    if not is_local:
+        training_active, reason = False, "teacher is a hosted API; nothing on this machine to contend with"
+    elif not on_this_box:
+        training_active, reason = None, f"teacher runs on {host or 'another machine'}; its training state is not visible from here"
+    elif run:
+        training_active, reason = True, "a training run is using this machine right now"
+    else:
+        training_active, reason = False, "teacher runs on this machine and no training run is active"
+
+    return {
+        "provider":        provider,
+        "model":           model,
+        "kind":            kind,
+        "base_url":        base_url,
+        "host":            host,
+        "targets_this_machine": on_this_box,
+        "training_active": training_active,
+        "run":             run,
+        "contention":      bool(run),
+        "contention_kind": CONTENTION_LOCAL_RUN if run else CONTENTION_NONE,
+        "reason":          reason,
+    }
 
 
 def register(app):
@@ -435,6 +588,10 @@ def register(app):
                                     f"base_url={view['base_url'] or '(default)'} has_key={view['has_api_key']}")
             return view
         return _public_view(settings_mod.get(), teacher_mod)
+
+    @app.route("/teacher/target_status", methods=["GET"])
+    def teacher_target_status_route():
+        return _safe(LOG_SOURCE, lambda: _target_status(settings_mod.get()))
 
     @app.route("/teacher/test", methods=["POST"])
     def teacher_test_route():
@@ -610,7 +767,8 @@ def register(app):
         logmod.ok(LOG_SOURCE, f"corpus built: stem={stem} records={stats['n_records']} "
                               f"train={stats['train_bytes']}B val={stats['val_bytes']}B")
         return {"stem": stem, "train_bin": train_bin, "val_bin": val_bin,
-                "n_records": stats["n_records"], "n_train": stats["n_train"], "n_val": stats["n_val"]}
+                "n_records": stats["n_records"], "n_train": stats["n_train"], "n_val": stats["n_val"],
+                "audit": _audit_or_none(train_bin)}
 
     @app.route("/teacher/authoring/spec", methods=["GET", "POST"])
     def teacher_authoring_spec_route():
@@ -705,6 +863,14 @@ def register(app):
             max_concurrency=conc,
             record_gate=gate,
         )
+        prior = _read_plan(out_root)
+        _write_plan(out_root, {
+            "target_bytes":  int(prior.get("target_bytes") or 0) + int(target_mb * MB),
+            "total_calls":   int(prior.get("total_calls") or 0) + len(prompts),
+            "genres":        sorted(set(list(prior.get("genres") or []) + genre_ids)),
+            "calls_by_genre": calls,
+            "max_concurrency": conc,
+        })
         thread = threading.Thread(target=job.run, name=f"teacher-authoring-{job_id}", daemon=True)
         with _JOBS_LOCK:
             _JOBS[job_id] = {"job": job, "thread": thread, "output_dir": out_root}
@@ -713,6 +879,98 @@ def register(app):
                                 f"calls={len(prompts)} concurrency={conc}")
         return {"job_id": job_id, "output_dir": out_root, "calls": calls,
                 "total_calls": len(prompts), "max_concurrency": conc}
+
+    @app.route("/teacher/seed_packs", methods=["GET"])
+    def teacher_seed_packs_route():
+        """Seed packs and their topic groups. Verticals without a pack on disk come
+        back available=False so the dashboard can show the roadmap greyed out."""
+        return _safe(LOG_SOURCE, lambda: {
+            "packs": seeds_mod.list_packs(),
+            "concurrency_choices": list(providers_concurrency_choices()),
+        })
+
+    @app.route("/teacher/interview/start", methods=["POST"])
+    def teacher_interview_start_route():
+        """Two-pass generation: the teacher is ASKED questions rather than told to
+        script a dialogue. Registers into the same job table as authoring, so
+        status / stop / samples / build all work on it unchanged."""
+        body = request.get_json(silent=True) or {}
+        spec = authoring_mod.load_spec()
+        genre_ids = [g for g in (body.get("genres") or ["conversation"])
+                     if authoring_mod.genre_by_id(spec, g) is not None]
+        if not genre_ids:
+            return {"error": "pick at least one genre"}, 400
+        s = settings_mod.get()
+        provider = s.get("teacher_provider") or ""
+        if not provider:
+            return {"error": "teacher_provider not configured"}, 400
+        n_convs = int(body.get("conversations") or 0)
+        if n_convs <= 0:
+            return {"error": "conversations must be greater than zero"}, 400
+        depth = int(body.get("depth") or 3)
+        if not 1 <= depth <= INTERVIEW_MAX_DEPTH:
+            return {"error": f"depth must be 1..{INTERVIEW_MAX_DEPTH}"}, 400
+        floor = body.get("ngram_distinct_floor")
+        if floor is not None:
+            spec["gates"]["ngram_distinct_floor"] = float(floor)
+
+        # Seeds decide what the corpus is about. A vertical with no pack on disk
+        # is refused here rather than silently falling back to the genre's own
+        # thin `situations` list, which would produce a corpus the user did not ask for.
+        vertical = (body.get("vertical") or "conversation").strip()
+        topics = body.get("topics") or []
+        seeds = seeds_mod.seeds_for(vertical, topics)
+        if not seeds:
+            return {"error": f"no seeds for vertical '{vertical}'"
+                             + (f" topics {', '.join(topics)}" if topics else "")}, 400
+
+        existing_id = (body.get("job_id") or "").strip()
+        if existing_id:
+            with _JOBS_LOCK:
+                entry = _JOBS.get(existing_id)
+            if entry is not None and entry["thread"].is_alive():
+                return {"error": "job still running"}, 409
+            job_id = existing_id
+        else:
+            job_id = uuid.uuid4().hex[:JOB_ID_LEN]
+        out_root = paths_mod.synth_job_dir(job_id)
+        os.makedirs(out_root, exist_ok=True)
+        _write_job_meta(out_root, [], genre_ids)
+
+        gate = authoring_mod.RecordGate(spec)
+        gate.seed_from_file(os.path.join(out_root, SAMPLES_FILE))
+        conc = int(body.get("max_concurrency") or 0) or _resolve_concurrency(s, provider)
+        job = interview_mod.InterviewJob(
+            job_id, out_root, spec, genre_ids, n_convs, depth,
+            provider, model=s.get("teacher_model") or None,
+            base_url=s.get("teacher_base_url") or None,
+            api_key=os.environ.get(TEACHER_API_KEY_ENV) or s.get("teacher_api_key") or None,
+            temperature=float(_setting(s, SETTING_TEMPERATURE)),
+            max_concurrency=conc, gate=gate, seeds=seeds)
+
+        prior = _read_plan(out_root)
+        _write_plan(out_root, {
+            "total_calls":   int(prior.get("total_calls") or 0) + n_convs,
+            "conversations": int(prior.get("conversations") or 0) + n_convs,
+            "depth":         depth,
+            "genres":        sorted(set(list(prior.get("genres") or []) + genre_ids)),
+            "max_concurrency": conc,
+            "mode":          "interview",
+            "vertical":      vertical,
+            "topics":        topics,
+            "seed_count":    len(seeds),
+        })
+        thread = threading.Thread(target=job.run, name=f"teacher-interview-{job_id}",
+                                 daemon=True)
+        with _JOBS_LOCK:
+            _JOBS[job_id] = {"job": job, "thread": thread, "output_dir": out_root}
+        thread.start()
+        logmod.info(LOG_SOURCE, f"interview started: job={job_id} "
+                                f"genres={','.join(genre_ids)} conversations={n_convs} "
+                                f"depth={depth} concurrency={conc}")
+        return {"job_id": job_id, "output_dir": out_root, "conversations": n_convs,
+                "depth": depth, "total_calls": n_convs, "max_concurrency": conc,
+                "vertical": vertical, "seed_count": len(seeds)}
 
     @app.route("/teacher/authoring/build", methods=["POST"])
     def teacher_authoring_build_route():
@@ -748,11 +1006,19 @@ def register(app):
             AUTHORING_PURPOSE, AUTHORING_LICENSE,
             int(spec["gates"]["build_seed"]), float(spec["gates"]["build_val_ratio"]),
             corpus_dir=paths_mod.corpus_dir())
+        train_bin = os.path.join(dist_dir, f"{stem}_train.bin")
+        audit = _audit_or_none(train_bin)
+        if audit:
+            verdict = "passed" if audit["passed"] else "FAILED"
+            logmod.info(LOG_SOURCE, f"corpus audit {verdict}: stem={stem} "
+                                    f"unique_user={audit['unique_user_ratio']:.3f} "
+                                    f"unique_content={audit['unique_content_ratio']:.3f} "
+                                    f"median_assistant={audit['median_assistant_bytes']:.0f}B "
+                                    f"artifacts_per_1k={audit['artifacts_per_1k']:.1f}")
         zip_path = _zip_bins(dist_dir, stem)
         entry = _register_catalog_entry(
             stem, body.get("label") or stem, body.get("description") or AUTHORING_PURPOSE,
-            manifest, int(body.get("recommended_min_params") or 0),
-            body.get("recommended_max_params"))
+            manifest, None, None)
         logmod.ok(LOG_SOURCE, f"authored corpus built: stem={stem} "
                               f"train={manifest['train_bytes']}B val={manifest['val_bytes']}B "
                               f"zip={zip_path}")
@@ -760,6 +1026,7 @@ def register(app):
             "stem": stem, "zip_path": zip_path, "zip_bytes": os.path.getsize(zip_path),
             "zip_sha256": _sha256_file(zip_path),
             "family_counts": counts, "manifest": manifest, "catalog_entry": entry,
+            "audit": audit,
             "next_steps": [
                 f"Upload {zip_path} to COS. The zip holds {stem}_train.bin and "
                 f"{stem}_val.bin at the top level.",
@@ -829,11 +1096,16 @@ def register(app):
             "job_id": job_id,
             "running": running,
             "completed": counts["completed"],
+            "calls_ok": counts["calls_ok"],
+            "calls_failed": counts["calls_failed"],
+            "calls_remaining": counts["calls_remaining"],
             "failed": counts["failed"],
             "skipped_dup": counts["skipped_dup"],
             "last_error": counts["last_error"],
             "error_summary": counts["error_summary"],
             "aborted": counts["aborted"],
             "authoring": counts["authoring"],
+            "opener_shortfall": counts["opener_shortfall"],
+            "plan": counts["plan"],
             "output_path": counts["output_path"],
         }

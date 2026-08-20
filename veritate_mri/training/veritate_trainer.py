@@ -612,9 +612,25 @@ def apply_role_mask(toks, tgts):
     return tg
 
 
+def carry_seam_clip(clip):
+    """Gradient hook for the state tensors carried across chunk boundaries.
+    Backprop through the carry seam explodes on some rows (truncated-BPTT
+    gradient explosion, data-dependent; wren1_3 2026-08-18): norm-clip the
+    seam gradient to `clip`, and zero it if non-finite, so the retention
+    learning signal keeps its direction and the step stays finite."""
+    def hook(g):
+        n = g.norm()
+        if not torch.isfinite(n):
+            return torch.zeros_like(g)
+        if n > clip:
+            return g * (clip / (n + 1e-6))
+        return g
+    return hook
+
+
 def chunked_step(model, tokens, targets, seq, amp_dtype, *, backward=False, bptt_window=1,
                  device_type="cuda", l1_lambda=0.0, slm_ref=None, slm_keep=0.6,
-                 state_carry="off"):
+                 state_carry="off", carry_grad_clip=0.0):
     total_len = tokens.shape[1]
     n_chunks = max(1, total_len // seq)
     K = max(1, int(bptt_window))
@@ -644,6 +660,11 @@ def chunked_step(model, tokens, targets, seq, amp_dtype, *, backward=False, bptt
         with torch.autocast(device_type=device_type, dtype=amp_dtype, enabled=(amp_dtype is not None)):
             if rec_carry:
                 logits, rec_states = model.forward_streaming(ct, rec_states)
+                if backward and carry_grad_clip > 0.0:
+                    for st in rec_states:
+                        for v in st.values():
+                            if torch.is_tensor(v) and v.requires_grad:
+                                v.register_hook(carry_seam_clip(carry_grad_clip))
                 loss = torch.nn.functional.cross_entropy(
                     logits.reshape(-1, logits.size(-1)), cg.reshape(-1), ignore_index=-1)
             else:
@@ -1051,8 +1072,10 @@ def run(plugin_id, here):
     elif getattr(args, "use_act_ckpt", False):
         print("activation checkpointing: ENABLED", flush=True)
         for blk in veritate_model.blocks:
-            blk.forward = (lambda fwd: lambda x: torch.utils.checkpoint.checkpoint(
-                fwd, x, use_reentrant=False))(blk.forward)
+            # Kwargs pass through so state_carry=chunks (state=, return_state=)
+            # composes with activation checkpointing.
+            blk.forward = (lambda fwd: lambda x, **kw: torch.utils.checkpoint.checkpoint(
+                fwd, x, use_reentrant=False, **kw))(blk.forward)
 
     veritate_model.to(device)
     slm_ref = None
@@ -1158,7 +1181,7 @@ def run(plugin_id, here):
                             backward=True, bptt_window=args.bptt_window,
                             device_type=device, l1_lambda=l1_lambda,
                             slm_ref=slm_ref, slm_keep=float(getattr(args, "slm_keep", 0.6)),
-                            state_carry=state_carry)
+                            state_carry=state_carry, carry_grad_clip=args.grad_clip)
         if loss is None:
             skipped_nonfinite += 1
             if skipped_nonfinite % args.log_every == 0 or skipped_nonfinite == 1:
@@ -1166,6 +1189,16 @@ def run(plugin_id, here):
                       f"({skipped_nonfinite} skipped so far)", flush=True)
             continue
         gn = torch.nn.utils.clip_grad_norm_(veritate_model.parameters(), args.grad_clip)
+        if not torch.isfinite(gn):
+            # A finite loss does not guarantee finite gradients; stepping on a
+            # non-finite gradient writes nan into the weights and every later
+            # step silently fails (wren1_3, 2026-08-18). Skip and keep training.
+            opt.zero_grad(set_to_none=True)
+            skipped_nonfinite += 1
+            if skipped_nonfinite % args.log_every == 0 or skipped_nonfinite == 1:
+                print(f"WARNING step {step}: non-finite grad norm, step skipped "
+                      f"({skipped_nonfinite} skipped so far)", flush=True)
+            continue
         opt.step()
 
         if step % args.log_every == 0 or step == 1:

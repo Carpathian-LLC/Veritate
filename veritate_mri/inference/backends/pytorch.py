@@ -64,9 +64,10 @@ FAST_MODE_MTP        = "mtp"
 FAST_MODE_MTP_VERIFY = "mtp-verify"
 FAST_MODE_ADAPTIVE   = "adaptive"
 FAST_MODE_LOOKAHEAD  = "lookahead"
+FAST_MODE_STREAM     = "stream"
 FAST_MTP_MODES   = (FAST_MODE_MTP, FAST_MODE_MTP_VERIFY)
 FAST_VALID_MODES = (FAST_MODE_KV, FAST_MODE_MTP, FAST_MODE_MTP_VERIFY,
-                    FAST_MODE_ADAPTIVE, FAST_MODE_LOOKAHEAD)
+                    FAST_MODE_ADAPTIVE, FAST_MODE_LOOKAHEAD, FAST_MODE_STREAM)
 
 # prompt/n-gram lookahead decode: suffix-match length to trigger a draft, and the
 # max bytes drafted per step. A longer match keeps false drafts (novel text) rare;
@@ -794,7 +795,7 @@ class Brain:
                     top_k_sample=TOP_K_DEFAULT, max_new=MAX_NEW_DEFAULT, addons_chain=None,
                     constraint=None, adaptive_threshold=ADAPTIVE_THRESHOLD_DEFAULT,
                     rep_window=REP_WINDOW_OFF, rep_penalty=REP_PENALTY_OFF,
-                    no_repeat_ngram=NO_REPEAT_NGRAM_OFF):
+                    no_repeat_ngram=NO_REPEAT_NGRAM_OFF, stream_state=None):
         from inference.decode.repetition import RepetitionController
         m = self.model
         seq = m.seq
@@ -802,7 +803,9 @@ class Brain:
         if not prompt:
             prompt = " "
         prompt_bytes = prompt.encode("utf-8")
-        if len(prompt_bytes) >= seq:
+        # Streaming mode carries context across windows in the recurrent state,
+        # so the prompt is never truncated; every other mode is window-bound.
+        if mode != FAST_MODE_STREAM and len(prompt_bytes) >= seq:
             prompt_bytes = prompt_bytes[-(seq - 1):]
 
         if addons_chain is not None:
@@ -822,6 +825,17 @@ class Brain:
             yield {"kind": "error",
                    "message": f"fast={mode} requires a model with multi-token-prediction decode support"}
             return
+        if mode == FAST_MODE_STREAM:
+            if not getattr(m, "supports_streaming", lambda: False)():
+                yield {"kind": "error",
+                       "message": "fast=stream requires a recurrent-mixer model (trunk=hybrid)"}
+                return
+            from veritate_core.model_recurrent import CHUNK
+            if getattr(m, "slots", 0) % CHUNK:
+                yield {"kind": "error",
+                       "message": f"fast=stream requires slots % {CHUNK} == 0 "
+                                  f"(seq multiple of {CHUNK * 4}); this model has {m.slots}"}
+                return
         if mode not in FAST_VALID_MODES:
             yield {"kind": "error", "message": f"unknown fast mode: {mode!r}. Allowed: {', '.join(FAST_VALID_MODES)}."}
             return
@@ -854,6 +868,10 @@ class Brain:
         elif mode == FAST_MODE_LOOKAHEAD:
             yield from self._stream_fast_lookahead(prompt_bytes, temperature, top_k_sample,
                                                    max_new, addons_chain, constraint, rep)
+        elif mode == FAST_MODE_STREAM:
+            yield from self._stream_fast_streaming(prompt_bytes, temperature, top_k_sample,
+                                                   max_new, addons_chain, constraint, rep,
+                                                   state_path=stream_state)
 
     def _sample_one(self, logits_1d, temperature, top_k_sample, addons_chain, constraint, rep=None):
         """Shared per-step sampling helper for stream_fast. Returns int byte or
@@ -921,6 +939,140 @@ class Brain:
                 if constraint is not None and constraint.done():
                     yield {"kind": "stop", "reason": "constraint complete"}
                     return
+
+    def _load_stream_state(self, state_path):
+        """Load a serialized conversation state. Returns (states, buffer_bytes,
+        total) or raises ValueError on checkpoint mismatch — a state is only
+        valid for the exact weights that wrote it."""
+        s = torch.load(state_path, map_location="cpu", weights_only=True)
+        if s.get("checkpoint") != self.checkpoint:
+            raise ValueError(
+                f"stream state was written by {s.get('checkpoint')!r}, "
+                f"loaded model is {self.checkpoint!r}; pass state_reset=1 to start over")
+        states = s.get("states")
+        if states is not None:
+            states = [{k: v.to(self.device) for k, v in st.items()} for st in states]
+        return states, list(s.get("buffer", b"")), int(s.get("total", 0))
+
+    def _save_stream_state(self, state_path, states, buf, total):
+        """Persist (states, pending buffer) — together they fully determine the
+        walk position, so a resumed session continues byte-exactly. Never
+        raises: persistence must not break the reply that was already served."""
+        try:
+            cpu_states = None
+            if states is not None:
+                cpu_states = [{k: v.detach().to("cpu") for k, v in st.items()} for st in states]
+            tmp = state_path + ".tmp"
+            torch.save({"checkpoint": self.checkpoint, "states": cpu_states,
+                        "buffer": bytes(bytearray(buf)), "total": int(total)}, tmp)
+            os.replace(tmp, state_path)
+        except Exception as e:
+            logmod.warn("backends.pytorch", f"stream state save failed: {type(e).__name__}: {e}")
+
+    def _stream_fast_streaming(self, prompt_bytes, temperature, top_k_sample, max_new,
+                               addons_chain, constraint, rep=None, state_path=None):
+        """Unbounded-context generation over forward_streaming (IDEA 7/20 E3).
+        Full windows are committed into the carried per-block recurrent states
+        (one forward each); only the current partial window is recomputed per
+        byte. Nothing older than a window is ever dropped — context beyond seq
+        lives in the state. State commits only from full windows: a part-full
+        window's conv tail carries padding-derived columns (known defect), so
+        partial windows read the committed state but never advance it. The
+        committing forward's last-position logits predict byte 0 of the next
+        window, so no byte is ever counted into the state twice. Partial windows
+        are padded with a non-boundary byte so the slot count stays a CHUNK
+        multiple (the recurrent kernel's state-carry contract); padding creates
+        no slots, writes nothing, and is causally after every real byte."""
+        from veritate_core.model_recurrent import CHUNK
+
+        m = self.model
+        seq = m.seq
+        states, carried, prior_total = None, [], 0
+        if state_path is not None and os.path.exists(state_path):
+            try:
+                states, carried, prior_total = self._load_stream_state(state_path)
+            except Exception as e:
+                yield {"kind": "error", "message": f"stream state load failed: {e}"}
+                return
+        # Carried buffer bytes were already counted into prior_total by the call
+        # that wrote them; they rejoin the walk in front of the new bytes.
+        pb = carried + list(prompt_bytes)
+        if not pb:
+            yield {"kind": "error", "message": "fast=stream needs prompt bytes or a carried state buffer"}
+            return
+        n_full = len(pb) // seq
+        # Any byte the boundary table marks non-spacelike works: it joins the
+        # last live slot instead of opening one, so bpos/slot_mask see only
+        # the real bytes.
+        pad_byte = int((m.boundary.squeeze(-1) <= 0.5).nonzero()[0].item())
+
+        def _partial_logits(buf_bytes):
+            """Logits at the last real byte of a padded partial window; the
+            returned states are never committed."""
+            T = len(buf_bytes)
+            S = min(m.slots, T)
+            padded = buf_bytes
+            if S % CHUNK:
+                target = min(m.slots, ((S + CHUNK - 1) // CHUNK) * CHUNK)
+                padded = buf_bytes + [pad_byte] * (target - T)
+            t = torch.tensor([padded], dtype=torch.long, device=self.device)
+            logits, _ = m.forward_streaming(t, states)
+            return logits[0, T - 1]
+
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            for w in range(n_full):
+                win = torch.tensor([pb[w * seq:(w + 1) * seq]], dtype=torch.long,
+                                   device=self.device)
+                logits, states = m.forward_streaming(win, states)
+                last_logits = logits[0, -1]
+            buf = pb[n_full * seq:]
+            if buf:
+                last_logits = _partial_logits(buf)
+        prefill_ms = (time.perf_counter() - t0) * 1000
+        committed = n_full
+        yield {"kind": "prefill", "prefill_ms": round(prefill_ms, 2),
+               "tokens": len(pb), "windows_committed": committed,
+               "resumed": prior_total > 0, "prior_total": prior_total}
+
+        total = prior_total + len(prompt_bytes)
+        try:
+            for _ in range(max_new):
+                t0 = time.perf_counter()
+                nxt = self._sample_one(last_logits, temperature, top_k_sample,
+                                       addons_chain, constraint, rep)
+                if nxt is None:
+                    yield {"kind": "stop", "reason": "constraint allowed no bytes"}
+                    return
+                if addons_chain is not None:
+                    addons_chain.observe(nxt)
+                if rep is not None:
+                    rep.observe(nxt)
+                if constraint is not None:
+                    constraint.step(nxt)
+                buf.append(nxt)
+                total += 1
+                with torch.no_grad():
+                    if len(buf) == seq:
+                        t = torch.tensor([buf], dtype=torch.long, device=self.device)
+                        logits, states = m.forward_streaming(t, states)
+                        last_logits = logits[0, -1]
+                        committed += 1
+                        buf = []
+                    else:
+                        last_logits = _partial_logits(buf)
+                step_ms = (time.perf_counter() - t0) * 1000
+                yield {"kind": "fast_byte", "byte": int(nxt), "ms_per_byte": round(step_ms, 2),
+                       "T": total, "windows_committed": committed}
+                if constraint is not None and constraint.done():
+                    yield {"kind": "stop", "reason": "constraint complete"}
+                    return
+        finally:
+            # Runs on completion, early stop, and client disconnect alike:
+            # (states, buffer) fully determine the walk position, so the next
+            # call with this state continues byte-exactly where this one ended.
+            if state_path is not None:
+                self._save_stream_state(state_path, states, buf, total)
 
     def _stream_fast_mtp(self, prompt_bytes, temperature, top_k_sample, max_new,
                          addons_chain, constraint, rep=None):

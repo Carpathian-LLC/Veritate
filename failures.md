@@ -2,6 +2,32 @@
 
 Falsified approaches. Each entry: the measured result that killed it and the retry condition. An approach here is dead until its retry condition is met. Short entries only.
 
+## corpus generation
+
+**Authoring both sides of a dialogue in one call is what produces terse assistant turns — not the model, the format, or the model size**
+Corrected 2026-08-20 the same day it was first written; the original entry blamed the teacher and was wrong. The authoring pipeline asks the teacher to WRITE A DIALOGUE — invent the user turns and the assistant turns together, as a script. Measured on that task, nothing clears the 200 B median floor:
+
+| configuration | median | max |
+| --- | --- | --- |
+| qwen2.5:14b, 10 records/call, qualitative brief | 68 B | — |
+| qwen2.5:14b, 10 records/call, explicit length distribution | 77 B | 166 B |
+| qwen2.5:14b, 3 records/call | 100 B | 216 B |
+| qwen2.5:14b, 1 record/call (maximum room) | 120 B | 274 B |
+| qwen2.5:72b-instruct-q4_K_M, 3 records/call | 146 B | 206 B |
+
+Then the same models were simply ASKED a question, as themselves, with no dialogue framing:
+
+| model | reply |
+| --- | --- |
+| qwen2.5:14b (local ollama) | **2,380 / 2,296 / 2,457 B** (383 / 381 / 370 words) |
+| cardinal1:14b (Carpathian API) | **2,810 B** (440 words) |
+
+**A 20x difference on the same model and the same box.** Models write dialogue like a screenplay — clipped exchanges — and write answers at length. Every lever tried against the script-writing task (brief wording x3, batch size 10 -> 3 -> 1, 14B -> 72B, JSONL -> plain prose, explicit "60 to 120 words, count the words") moved the median 68 -> 146 B and stalled, because none of them changed the task being asked.
+
+Retry / replacement: **two-pass generation**. Pass 1 authors the USER turns only (script-writing is the right task for that — you want many varied short questions). Pass 2 actually sends each user turn to the teacher as a real chat request and keeps the genuine reply. Multi-turn extends by appending the reply, generating a follow-up user turn, and asking again — which also breaks the 7-turn depth ceiling the curated sources have (successes.md 2026-08-10). Raw answers overshoot at ~2,400 B, so the proven whole-sentence truncation to the 200-400 B band from that same entry applies on top. Do NOT tune genre briefs for length again: three revisions bought +52 B. (2026-08-20)
+
+Kept as measured fact, since the lever is real and shipped: batch size does matter within the script-writing task (10 -> 3 records per call bought +23 B; `records_per_call` is now 3 for `conversation`).
+
 ## training throughput levers
 
 **Net2Net growth-at-flatten has no trigger on real text: the 3.6x was a saturating-corpus artifact**
@@ -158,3 +184,74 @@ Three causes, all confirmed by the wren1_1 retry that fixed them (successes.md 2
 3. `sft_idk` was never in the mix, an authoring miss, so the run said nothing about refusal behaviour.
 
 Rules: cap formal-transcript corpora under 0.20 of a chat SFT mix; they are a turn-DEPTH source, not a voice source. Grade a chat SFT under GREEDY decode -- `writing_health` samples at t=0.7 and reported distinct_4 rising 0.729 -> 0.986 ("repetition collapsing") for the checkpoint that looped 44% greedily; the two metrics disagreed completely and only the greedy one predicted chat quality. For identity, buy paraphrase diversity per fact before buying dose.
+
+**Wren 1.1: raising mixed_chat and landing the WSD decay on the peak does not fix looping (2026-08-17)**
+Fresh wren_base fork, mixed_chat 0.50 -> 0.60, veritate_chat 0.18 -> 0.10, transcripts held at 0.20, 1,500 steps so decay lands on the prior run's peak region (~1,250). 6.6 h. 30-prompt greedy ladder (16 format / 8 grounded / 6 identity, new fixed set) over all 10 checkpoints plus both anchors re-scored on the same set. Naming: disk `wren1_0` is the 3,000-step run the successes.md 2026-08-17 entry calls wren1_1; this run took the wren1_1 name.
+Every wren1_1 checkpoint loops 0.27-0.47; wren1_0@1250 scores 0.20 and the untouched fork point 0.10 on the same set. No wren1_1 checkpoint beats wren1_0@1250 on any metric (identity 1.00 at 750/900/1200 ties it, grounded capped at 0.25 for base and both SFTs under this set's stricter distractor-absent grading). Kill-line: veritate_chat dose and decay placement were not the loop driver -- looping is coming from somewhere else in the recipe, and wren1_0@1250 stays the ship checkpoint.
+Caveats: the prior ladder's prompt set died with its session, so cross-ladder numbers do not compare; the verdict rests on the anchors inside this ladder. Loop SE at n=30 is ~0.08, so 0.20 vs 0.27 alone is suggestive, not decisive -- the decision stands on the anchor never being beaten anywhere on the ladder.
+
+**Full-chunk injection past the model window reads as a retrieval miss (2026-08-17)**
+1,024 B retriever chunks + ChatML frame overflow wren's 1,024 B window, evicting the user-turn opener and the passage head before the model answers. Measured on wren1_0@1250, n=37 natural queries, held-out grounded set: end-to-end 0.162 shipped vs 0.270 with passages capped at 768 B vs 0.445 predicted by retriever_precision@1 (0.784) x reader_acc given the gold fact (0.568). The old 480-char preview cap masked this; making hits carry whole chunks exposed it. Rule: passage budget = seq - prompt - reply reserve, never a fixed cap. Fixed in the route (`injection_budget`, `REPLY_RESERVE_B`, tests in tests/mri/test_rag_prefix.py). The remaining gap to the product is chunk granularity: 1,024 B chunks pack ~8 unrelated teacher facts, re-importing the multi-candidate failure inside a single passage.
+
+**Guard-distilled SFT does not internalize the no-repeat behavior at 200M (IDEA 19 mechanism 1, 2026-08-18)**
+wren1_2 = wren1_0@1250 + 500 steps at base_lr 2e-05, wren_noloop 0.08 (1,929 of the model's own no_repeat_ngram=16 greedy replies, 0.9 MB) with mixed_chat 0.60 replay. 30-prompt ladder, bare greedy, wren1_0@1250 re-anchored in-run (the seeded step_0 scored byte-identical to the anchor on every metric, validating the harness). Best loop 0.13 (@200/300) vs anchor 0.20 and target <0.05 -- under half the gap -- and exactly there grounded halved (0.25 -> 0.12) and identity slipped (1.00 -> 0.83); by the decay end loop was back to 0.27. Kill-line: at this scale and dose, self-distilling the decode guard trades skills instead of absorbing the constraint. wren1_0@1250 stays the ship checkpoint; the serving-default guard (successes.md 2026-08-18) remains the mechanism that actually delivers loop-free replies. IDEA 19 mechanisms 2 (unlikelihood loss) and 3 (DPO pairs) stay open; do not re-run mechanism 1 below 1B or without a dose sweep.
+
+**IDEA 7 arm 1b: more gla carry dose does not close the wrap gap (2026-08-19)**
+wren1_3 extended 1,000 -> 3,000 steps, recipe frozen. Wrap-bucket gap to slide:
+0.407 bits at 1,000 -> 0.383 at 3,000 (MPS, same device) — the pre-registered
+"keeps closing toward 0.89" line failed; the curve flattened by step 2,000.
+Content probes agree: fact discrimination stayed at chance, behavioral recall
+0-1/6, absorbed-state authoring engagement 0.0 at both doses. Kill line: do not
+buy gla-rule retention with more carry steps at 200M. The write rule is the
+isolated variable (delta arm next). Side result, not a failure: the checkpoint
+itself improved (val 0.5695 -> 0.5491, identity 0.83 -> 1.00, grounded 0.12 ->
+0.38, loop 0.20 = anchor) — wren1_3@3000 replaces @1000 as the streaming base.
+
+**RESOLVED 2026-08-19 — the delta-rule NaN was decay-ratio underflow, not
+training instability.** The delta state update computed exp(a_last)/exp(a_t);
+trained decays push a chunk's cumsum past ~-88, both exps underflow in fp32,
+0/0 = nan. Fixed to the difference form the gla path always used
+(model_recurrent.py; regression tests/training/test_delta_underflow.py).
+Capped beta / lower delta LR were never the issue. The "not trainable on this
+stack" entry above is superseded; delta trains (wren1_4).
+
+**IDEA 7 arm 2 / IDEA 20 E1b: delta rule alone — configuration falsified, but
+the state became content-bearing (2026-08-20)**
+wren1_4 (delta on wren1_3@3000, b_proj bias -2, 1,000 low-LR steps, zero
+non-finite skips after two kernel fixes). Against the pre-registered lines:
+wrap gap 0.380 vs gla's 0.383 (no better); val 0.549 -> 0.583 and chat
+degraded (identity 1.00 -> 0.67, closed 1.00 -> 0.83, grounded 0.38 -> 0.12;
+loop improved 0.20 -> 0.10); E2 margins chance at every K; recall 0/6. Kill
+line: do not run delta-alone adaptation again expecting retention from
+prose/chat corpora. THE RETAINED LEVER: the anticopy probe moved decisively —
+generating from absorbed state alone, 47% of output 8-grams come from the
+reference (gla: 6% generic) with the first nonzero absorbed engagement
+(0.042): the delta state transports retrievable verbatim content across a
+cleared window, which no gla configuration ever did. Diagnosis: capacity
+without curriculum — nothing in chat/prose corpora rewards binding recall, so
+the rule's storage ability is never trained into retrieval-on-demand. Arm 3:
+continue wren1_4 with the recall curriculum (tools/build_recall_corpus.py)
+mixed at 10%, chat mix preserved; falsifier = E2 revised-fact margins and
+recall x/6 move, chat ladder recovers toward the arm-1b profile.
+
+**IDEA 20 E1c: recall curriculum v1 (single-template, 10%) — binding still
+absent; template overfits into behavior (2026-08-20)**
+wren1_4 continued 1000 -> 2000 with recall_curr at 10%. Against the lines:
+wrap gap 0.358 (best yet: gla 0.383, delta-alone 0.380) PASSED; E2 revised
+margins FAILED the intended way — both phrasing variants resolve confidently
+to the FIRST binding (-2.7 to -6.5 bits), while plain facts stay at chance:
+the state carries word FAMILIARITY + primacy, not noun->word binding (foils
+from other facts are familiar too, and only true binding separates them —
+it never does). Recall 1/6 unchanged. Chat partially recovered (grounded
+0.25, loop 0.17) but identity 0.67 / closed 0.87, and the template LEAKED:
+in-window authoring now emits "The codeword for poroge is poroge" loops —
+curriculum-syllable nonsense in general behavior. Kill lines: (1) single-
+template curricula at >=10% mix imprint the surface form, not the skill; (2)
+the binding wall exists INSIDE the state mechanism at 200M — three state arms
+(gla dose, delta, delta+curriculum) all fail noun->word binding, corroborating
+the IDEA 8 wall from the retrieval lane with an independent instrument.
+Retained: content transport stable across arms (absorbed copy ~0.50,
+engagement 0.042); wrap gap moved for the first time. Retry conditions for a
+curriculum v2 (parked): many surface templates, 3-5% mix, loss masked to the
+recall span, familiarity-proof foils. Priority instead: E4 sleep — exact
+facts belong in weights; the state's proven role is transport + gist.

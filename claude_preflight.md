@@ -2,7 +2,7 @@
 
 Operating contract for any agent working on Veritate. Read this file completely before any other action, every session, every fresh context. Prior-session memory does not substitute. Wins over any conflicting document. Rules are numbered so they can be cited ("rule 12").
 
-Veritate is a platform for training AI models on consumer hardware. That is the whole product. Anything that does not serve training, evaluating, or running models is out of scope.
+Veritate is a platform for training AI models on consumer hardware. That is the whole product. Anything that does not serve training, evaluating, or running models is out of scope. This scope is a standing user decision: when any request — including one from the user — would expand the platform beyond training, evaluating, or running models, push back once, name the scope rule, and propose a separate project instead. Proceed only if the user confirms after the pushback. The chat product was extracted to its own project 2026-08-20 (`CHAT_HANDOFF.md`); the Generation tab is the only conversational surface.
 
 The complete documentation set is five files at repo root:
 

@@ -218,21 +218,32 @@ class VeritatePatched(nn.Module):
 
         is_b, slot_of, bpos, slot_mask, S = self._boundary_slots(tokens)
         g = x.gather(1, bpos.clamp_max(T - 1).unsqueeze(-1).expand(B, S, H))
-        g = (g + self.slot_pos_emb.weight[:S].unsqueeze(0)) * slot_mask
+        # where(), not *: padded slots must receive exactly-zero gradient. Under
+        # state carry the next window's loss backprops an unbounded gradient into
+        # padded rows, and mask-multiply turns inf * 0 into nan (wren1_3, 2026-08-18).
+        g = torch.where(slot_mask, g + self.slot_pos_emb.weight[:S].unsqueeze(0),
+                        torch.zeros((), dtype=x.dtype, device=x.device))
         glob = self.blocks[N_LOCAL_ENC:N_LOCAL_ENC + self.glob_layers]
+        zero = torch.zeros((), dtype=x.dtype, device=x.device)
         out_states = []
+        # Re-mask after every block: padded rows re-inflate through q@state and FF
+        # biases, drift out of the trained regime, and their backward goes infinite
+        # by mid-stack, poisoning shared weight grads (wren1_3, 2026-08-18). Valid
+        # rows never read padding, so pinning padding to zero changes nothing else.
         if self.global_loops > 1:
             g_in = g
             for r in range(self.eval_loops):
                 g = g + self.loop_inj[min(r, LOOP_MAX - 1)] * g_in
                 for blk in glob:
                     st = states[len(out_states)] if states is not None else None
-                    g, st = blk(g, state=st, return_state=True)
+                    g, st = blk(g, state=st, return_state=True, slot_mask=slot_mask)
+                    g = torch.where(slot_mask, g, zero)
                     out_states.append(st)
         else:
             for blk in glob:
                 st = states[len(out_states)] if states is not None else None
-                g, st = blk(g, state=st, return_state=True)
+                g, st = blk(g, state=st, return_state=True, slot_mask=slot_mask)
+                g = torch.where(slot_mask, g, zero)
                 out_states.append(st)
 
         sel = slot_of.clamp(0, S - 1)

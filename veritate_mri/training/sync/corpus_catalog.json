@@ -1,116 +1,6 @@
 {
- "_comment": "Default corpus catalog shipped with Veritate. Each entry's stem is the on-disk basename (foo -> foo_train.bin / foo_val.bin in trainers/corpus/). format='raw_bytes' = direct URL written as a uint8 byte stream (Veritate trains byte-level, so plaintext bytes ARE tokens). format='hf_dataset' = stream rows from a HuggingFace dataset, encode each text column as UTF-8, separate rows with two newlines. format='native' = the bins ship inside the repo at veritate_mri/data/corpus/; install copies them into trainers/corpus/ with no network, and sizes are read from the bundled files. format='zip_bundle' = train_url is one hosted zip holding <stem>_train.bin + <stem>_val.bin; install extracts both and deletes the zip; sha256 fields verify the extracted bins. coming_soon=true disables install until the corpus is published: replace the PLACEHOLDER train_url with the real COS link and drop the flag to release. max_bytes_train caps how much of streaming HF data is written before stopping. val_split_ratio carves off the tail of the downloaded train file as val.bin when no separate val source is supplied. recommended_min_params / _max_params drive the training-tab size-mismatch warning. Size ladder rationale: documentation.md (corpus builders and library). The dashboard prompts the user for confirmation before installing any corpus larger than 10 GB; the backend additionally requires confirm_large=true in the install body for those. Dashboard grouping: family = 'carpathian' (Carpathian-published families: chat/agent/mcp/code/sft) or 'public' (external published datasets: fineweb_edu, wikitext103, etc.). topic groups within a family (chat, agent, mcp, code, knowledge, market, special_sft). Both are advisory; if omitted the dashboard falls back to per-stem defaults.",
+ "_comment": "Default corpus catalog shipped with Veritate. Each entry's stem is the on-disk basename (foo -> foo_train.bin / foo_val.bin in trainers/corpus/). format='raw_bytes' = direct URL written as a uint8 byte stream (Veritate trains byte-level, so plaintext bytes ARE tokens). format='hf_dataset' = stream rows from a HuggingFace dataset, encode each text column as UTF-8, separate rows with two newlines. format='native' = the bins ship inside the repo at veritate_mri/data/corpus/; install copies them into trainers/corpus/ with no network, and sizes are read from the bundled files. format='zip_bundle' = train_url is one hosted zip holding <stem>_train.bin + <stem>_val.bin; install extracts both and deletes the zip; sha256 fields verify the extracted bins. coming_soon=true disables install until the corpus is published: replace the PLACEHOLDER train_url with the real COS link and drop the flag to release. max_bytes_train caps how much of streaming HF data is written before stopping. val_split_ratio carves off the tail of the downloaded train file as val.bin when no separate val source is supplied. recommended_min_params / _max_params drive the training-tab size-mismatch warning. Size ladders were retired 2026-08-20: one entry per corpus, no small/medium/large tiers, and recommended_min_params/recommended_max_params are null on every entry. Match corpus to model by content, not by byte count. The dashboard prompts the user for confirmation before installing any corpus larger than 10 GB; the backend additionally requires confirm_large=true in the install body for those. Dashboard grouping: family = 'carpathian' (Carpathian-published families: chat/agent/mcp/code/sft) or 'public' (external published datasets: fineweb_edu, wikitext103, etc.). topic groups within a family (chat, agent, mcp, code, knowledge, market, special_sft). Both are advisory; if omitted the dashboard falls back to per-stem defaults.",
  "corpora": [
-  {
-   "stem": "chat_50mb",
-   "label": "Chat (small, 50 MB)",
-   "family": "carpathian",
-   "topic": "chat",
-   "description": "ChatML conversations. Best for 10M-80M chat models. NOT FIT FOR TRAINING (measured 2026-07-26): same generator and same prefix as chat_5gb. Not an independent corpus.",
-   "format": "raw_bytes",
-   "train_url": "https://raw.githubusercontent.com/Carpathian-LLC/Veritate-Corpus/main/chat_50mb_train.bin",
-   "val_url": "https://raw.githubusercontent.com/Carpathian-LLC/Veritate-Corpus/main/chat_50mb_val.bin",
-   "size_train": 51380754,
-   "size_val": 1049049,
-   "sha256_train": "c482a4ad3900fdecb6dd04449880cc32c642176f0c18a8c68856374e986f77e2",
-   "sha256_val": "384a93f5d28e40b8466f42311deb01f1c11a48e5fbe830fa434084ae7797a1a9",
-   "trained_modes": [
-    "chat"
-   ],
-   "recommended_min_params": 0,
-   "recommended_max_params": 100000000
-  },
-  {
-   "stem": "chat_500mb",
-   "label": "Chat (medium, 500 MB)",
-   "family": "carpathian",
-   "topic": "chat",
-   "description": "ChatML conversations. Best for 200M-1B chat models. NOT FIT FOR TRAINING (measured 2026-07-26): byte-identical prefix of chat_5gb, same 1,477 unique turns. Not an independent corpus.",
-   "format": "zip_bundle",
-   "train_url": "https://usc1.carpathian.ai/cos/0ced9436be5c2478db55a5b20b50afea41245c773893ea0204009aa0bd3a19ee/1713baa762b2b87a7cc64dba4f27a080388a83bd95589f2b95ee32438399ef2aa98fa82c51a191e32c0cabb693a905893c868041aa063febfd4a18e52954a114",
-   "size_train": 513802730,
-   "size_val": 10486351,
-   "sha256_train": "0b906357f9cbed18d347be03e1d948f72d09b2f570d04917804f1b56b3be48c7",
-   "sha256_val": "61d2ac76ea9092f0c6187064be7d7286bed16eb94897607090faf974337f2c4a",
-   "trained_modes": [
-    "chat"
-   ],
-   "recommended_min_params": 100000000,
-   "recommended_max_params": 1500000000
-  },
-  {
-   "stem": "chat_5gb",
-   "label": "Chat (large, 5 GB)",
-   "family": "carpathian",
-   "topic": "chat",
-   "description": "ChatML conversations. Best for 1.5B+ chat models. NOT FIT FOR TRAINING (measured 2026-07-26): only 1,477 unique turns / 376 KB of real text, repeated ~13,649x. 98.6% of 5-grams are repeats. Turns are unrelated Q/A concatenated, so it teaches that turn N+1 does not follow turn N.",
-   "format": "zip_bundle",
-   "train_url": "https://usc1.carpathian.ai/cos/dc48d78844427171983e7b10b5f967bd69822fd9718604ba2dbeeda0d5182cb0/126effad98a196382116985502c27b9a697316c016e01fb12770bc3c70afc0a1fb40d7dd2b9bb25eaf8b9c6e75193fd14f2ac814f6f317e67e8ada4285455a0b",
-   "size_train": 5138023139,
-   "size_val": 104858273,
-   "sha256_train": "ccd18f301d2a646f43d35161e79c2b728aefc6c8e2ea1660f106b5b4535dc62a",
-   "sha256_val": "4264f652621b5499cf05f9ac349adce906f26c2eebde03f38fd79864d6826505",
-   "trained_modes": [
-    "chat"
-   ],
-   "recommended_min_params": 1500000000,
-   "recommended_max_params": null
-  },
-  {
-   "stem": "agent_15mb",
-   "label": "Agent tools (small, 15 MB)",
-   "family": "carpathian",
-   "topic": "agent",
-   "description": "Tool-calling conversations (calculator, fetch, etc.). Layer on top of a chat model. Best for 10M-80M models.",
-   "format": "raw_bytes",
-   "train_url": "https://raw.githubusercontent.com/Carpathian-LLC/Veritate-Corpus/main/agent_15mb_train.bin",
-   "val_url": "https://raw.githubusercontent.com/Carpathian-LLC/Veritate-Corpus/main/agent_15mb_val.bin",
-   "size_train": 15414070,
-   "size_val": 314812,
-   "sha256_train": "2d9b09ddcb04c2581a8f4048a35d98c157adf336eaa364372a0edaba5650d728",
-   "sha256_val": "095bb4a02e298241f74d553df4a100fbb7fabc55310b0f73fd9e6b8ac4a89323",
-   "trained_modes": [
-    "agent"
-   ],
-   "recommended_min_params": 0,
-   "recommended_max_params": 100000000
-  },
-  {
-   "stem": "agent_150mb",
-   "label": "Agent tools (medium, 150 MB)",
-   "family": "carpathian",
-   "topic": "agent",
-   "description": "Tool-calling conversations (calculator, fs_read, fetch, retrieve). Layer on top of a chat model. Best for 200M-1B models. Tool-call JSON, 95% repeated 5-grams (measured 2026-07-26). Use only for tool-calling work, never as conversational or general pretraining data.",
-   "format": "zip_bundle",
-   "train_url": "https://usc1.carpathian.ai/cos/38fa3c38001cd226e57c4b502b33ce671f200c11b07c4d4fe02cdab059dc5fcc/043eae263e9df2bd4ecf8a27717ed42528d3572c38d9682a08cefcfba0c6e81cde5e8fc71aa54ffdf4839255c09231fcd7d03494ce46ce05e242641497f3c9df",
-   "size_train": 154141038,
-   "size_val": 3146243,
-   "sha256_train": "408db098a114c82b120546e010edd3346a33c42c66936a5c3261e5f1c219720c",
-   "sha256_val": "df5c271871b64c6294ab13c84d334e9bccce25c9391671aaedc5dee1b35cc0a6",
-   "trained_modes": [
-    "agent"
-   ],
-   "recommended_min_params": 100000000,
-   "recommended_max_params": 1500000000
-  },
-  {
-   "stem": "agent_1500mb",
-   "label": "Agent tools (large, 1.5 GB)",
-   "family": "carpathian",
-   "topic": "agent",
-   "description": "Tool-calling conversations at scale. Layer on top of a chat model. Best for 1.5B+ models. Tool-call JSON, 95% repeated 5-grams (measured 2026-07-26). Use only for tool-calling work, never as conversational or general pretraining data.",
-   "format": "zip_bundle",
-   "train_url": "https://usc1.carpathian.ai/cos/082cb5cee8c3ff56a2941c994f6e18b396a267c45aaf11916149714b7a5d5b99/935384631028d7c7c5d6556c90a892150800bea096ba1a16687909ea7d9d4c4099fa52be247800e1f7eabdc501bebc1d05b75bb69a7baae886c623620b5dc023",
-   "size_train": 1541407297,
-   "size_val": 31457972,
-   "sha256_train": "f153b70134341e06531756d2f09284b7dea0987a7aae19f167fb0e853e15f194",
-   "sha256_val": "6de4e49fbb298d06f1e286c4086ae5dcdbf3529d65daaedfca19f099ca3b9fd7",
-   "trained_modes": [
-    "agent"
-   ],
-   "recommended_min_params": 1500000000,
-   "recommended_max_params": null
-  },
   {
    "stem": "mcp_docs",
    "label": "Model Context Protocol docs",
@@ -121,61 +11,7 @@
    "trained_modes": [
     "autocomplete"
    ],
-   "recommended_min_params": 0,
-   "recommended_max_params": null
-  },
-  {
-   "stem": "mcp_15mb",
-   "label": "MCP protocol (small, 15 MB)",
-   "family": "carpathian",
-   "topic": "mcp",
-   "description": "MCP JSON-RPC transcripts, protocol Q&A, and MCP tool-calling. Layer on top of a chat model. Best for 10M-80M models.",
-   "format": "zip_bundle",
-   "train_url": "https://usc1.carpathian.ai/cos/ffa97f470cf9abb003367593750987c1c213bc2044bc61ff0f4395f28f40ea34/7a53c8f0a013e590f6a6f06f8ff395c469eef6262f5cbcbd99e0e80a553faff1e0a7bd75575a22827c0a037e6b22017136ebf97f21ab576096022bb2ac9f31ee",
-   "size_train": 15415068,
-   "size_val": 315681,
-   "sha256_train": "3bcd4d615ca51e50735694f09fdc8c5bea60ebd6b4c4a0f5f82004b324c167f6",
-   "sha256_val": "68cdab4f1b03db4a3baf535cbd02373eafc6c581390578d6c8cb2f3614de5497",
-   "trained_modes": [
-    "agent"
-   ],
-   "recommended_min_params": 0,
-   "recommended_max_params": 100000000
-  },
-  {
-   "stem": "mcp_150mb",
-   "label": "MCP protocol (medium, 150 MB)",
-   "family": "carpathian",
-   "topic": "mcp",
-   "description": "MCP transcripts and tool-calling at scale. Layer on top of a chat model. Best for 200M-1B models. JSON-RPC transcripts, 95% repeated 5-grams (measured 2026-07-26). Protocol data only, not conversation.",
-   "format": "zip_bundle",
-   "train_url": "https://usc1.carpathian.ai/cos/b28753d19f34ea3cd0431c30819e57379debbcbe4456526d17692d684aecdac3/199649f3ed2a978a6009e75bf68fe12e673fed99bc8dd012f2f031a5d77b750ea1979b0af8b549fc5055d5e6d804dcf0ed6eeaa7592d318d804f76e36a9f2122",
-   "size_train": 154141336,
-   "size_val": 3146487,
-   "sha256_train": "7803a229af7c65f74428030418df1fb6a37ed988c0bd9151d3b988d850b9c26a",
-   "sha256_val": "48f4a1c35ecead15ab4cdb8c28d8bef9abfb4bb0d9623533d68cdd695e1fd0ce",
-   "trained_modes": [
-    "agent"
-   ],
-   "recommended_min_params": 100000000,
-   "recommended_max_params": 1500000000
-  },
-  {
-   "stem": "mcp_1500mb",
-   "label": "MCP protocol (large, 1.5 GB)",
-   "family": "carpathian",
-   "topic": "mcp",
-   "description": "MCP transcripts and tool-calling at scale. Layer on top of a chat model. Best for 1.5B+ models. JSON-RPC transcripts, 95% repeated 5-grams (measured 2026-07-26). Protocol data only, not conversation.",
-   "format": "zip_bundle",
-   "train_url": "https://usc1.carpathian.ai/cos/4bb89b372bac76800016e2b760e4a478b1adc83144128d016dab163370034b97/a2bbfa7def3439d0f3d2a656762a919bb5881dcad1e846e537423aa2cab740325da1bad95164d02d7d61b17f228a90d7182d0ea3f80d415ae7e6a61ffb49015d",
-   "size_train": 1541407629,
-   "size_val": 31457682,
-   "sha256_train": "160b5a6cdb28514b8efa5e16f34296d1de1f03ca85d931b0edb46cb060df8396",
-   "sha256_val": "ffeb4c5b70d733c8d0b58ff5f031514cad23a47a7259a310ec24d9286b1b3fa6",
-   "trained_modes": [
-    "agent"
-   ],
-   "recommended_min_params": 1500000000,
+   "recommended_min_params": null,
    "recommended_max_params": null
   },
   {
@@ -193,7 +29,7 @@
    "sha256_train": null,
    "sha256_val": null,
    "recommended_min_params": null,
-   "recommended_max_params": 5000000
+   "recommended_max_params": null
   },
   {
    "stem": "fineweb_edu",
@@ -210,8 +46,8 @@
    "val_split_ratio": 0.005,
    "size_train": 5368709120,
    "size_val": 26843545,
-   "recommended_min_params": 50000000,
-   "recommended_max_params": 500000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "wikitext103",
@@ -229,8 +65,8 @@
    "max_bytes_val": 5242880,
    "size_train": 524288000,
    "size_val": 5242880,
-   "recommended_min_params": 30000000,
-   "recommended_max_params": 200000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "enwik8",
@@ -243,8 +79,8 @@
    "val_split_ratio": 0.05,
    "size_train": 100000000,
    "size_val": 5000000,
-   "recommended_min_params": 5000000,
-   "recommended_max_params": 50000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "pg19",
@@ -261,7 +97,7 @@
    "max_bytes_val": 50331648,
    "size_train": 9663676416,
    "size_val": 50331648,
-   "recommended_min_params": 50000000,
+   "recommended_min_params": null,
    "recommended_max_params": null
   },
   {
@@ -278,26 +114,8 @@
    "val_split_ratio": 0.01,
    "size_train": 10000000000,
    "size_val": 100000000,
-   "recommended_min_params": 100000000,
-   "recommended_max_params": 500000000
-  },
-  {
-   "stem": "the_pile",
-   "label": "The Pile (uncopyrighted, 50 GB subset)",
-   "family": "public",
-   "topic": "knowledge",
-   "description": "Multi-source mix: academic, code, web, books, dialogue. Capped at 50 GB. Best for 500M-3B models (Chinchilla-fit).",
-   "format": "hf_dataset",
-   "hf_dataset": "monology/pile-uncopyrighted",
-   "hf_split_train": "train",
-   "hf_split_val": "validation",
-   "hf_text_column": "text",
-   "max_bytes_train": 53687091200,
-   "max_bytes_val": 536870912,
-   "size_train": 53687091200,
-   "size_val": 536870912,
-   "recommended_min_params": 500000000,
-   "recommended_max_params": 3000000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "slimpajama627b",
@@ -314,25 +132,7 @@
    "max_bytes_val": 268435456,
    "size_train": 22000000000,
    "size_val": 268435456,
-   "recommended_min_params": 100000000,
-   "recommended_max_params": 500000000
-  },
-  {
-   "stem": "redpajama_v2",
-   "label": "RedPajama-V2 (200 GB subset)",
-   "family": "public",
-   "topic": "knowledge",
-   "description": "Filtered Common Crawl (Together), capped at 200 GB. Best for 10B+ models; raise the cap for full 30T tokens.",
-   "format": "hf_dataset",
-   "hf_dataset": "togethercomputer/RedPajama-Data-V2",
-   "hf_config": "default",
-   "hf_split_train": "train",
-   "hf_text_column": "raw_content",
-   "max_bytes_train": 214748364800,
-   "val_split_ratio": 0.005,
-   "size_train": 214748364800,
-   "size_val": 1073741824,
-   "recommended_min_params": 10000000000,
+   "recommended_min_params": null,
    "recommended_max_params": null
   },
   {
@@ -352,24 +152,6 @@
    "recommended_max_params": null
   },
   {
-   "stem": "py_code_100mb",
-   "label": "Python code (ultra-clean, 100 MB)",
-   "family": "carpathian",
-   "topic": "code",
-   "description": "Top-tier (edu score 4+) Python from Stack-Edu, syntax-validated and near-deduplicated. Best for 10M-200M models.",
-   "format": "zip_bundle",
-   "train_url": "https://usc1.carpathian.ai/cos/16e8c2ecbd5f9403d0d5c2f4b6ed183f7c31430813261840ffdba965890da530/def4931c71fb327a712e71e5956b5941320e36e8bff12b0e88f55bfb92606dcd40b497b95ac3f08b740782a15939cdace21497a84d89dbe720d5cafcc5a27b7b",
-   "size_train": 102761925,
-   "size_val": 2120444,
-   "sha256_train": "2ee2fc88f63e29092b368cb530d2967e9c03106fcd8e8a1b2392c7488eae3cd4",
-   "sha256_val": "778192fa6af373d12b8d021f566ab639817e860fd5bd03afc1baf59e2ab3a04d",
-   "trained_modes": [
-    "autocomplete"
-   ],
-   "recommended_min_params": 10000000,
-   "recommended_max_params": 200000000
-  },
-  {
    "stem": "py_code_1gb",
    "label": "Python code (clean, 1 GB)",
    "family": "carpathian",
@@ -384,26 +166,8 @@
    "trained_modes": [
     "autocomplete"
    ],
-   "recommended_min_params": 200000000,
-   "recommended_max_params": 3000000000
-  },
-  {
-   "stem": "js_code_100mb",
-   "label": "JavaScript code (ultra-clean, 100 MB)",
-   "family": "carpathian",
-   "topic": "code",
-   "description": "Top-tier (edu score 4+) JavaScript from Stack-Edu, minified files rejected, near-deduplicated. Best for 10M-200M models.",
-   "format": "zip_bundle",
-   "train_url": "https://usc1.carpathian.ai/cos/4ee756a1be4709962c27899a2876de32bfffd2bb11eab9bcceac01d4c1a03530/91c9894c03d0c6de3119fb1585e78a71ea353e3ff83504d70f3e2cd98299a70f9ca16cd0f110d1b88fc1a3f29c6a42fc113ce08b7e618971f4c1fd539290e448",
-   "size_train": 102760696,
-   "size_val": 2097560,
-   "sha256_train": "24c4011c1b47e1c3fe540ba541dacba0a2e6e093e5aaaaca11d94d8220294b9c",
-   "sha256_val": "587842bfb082ea69679a162aa58b14ac5b3882ed7a037f1a71787ebcb6656730",
-   "trained_modes": [
-    "autocomplete"
-   ],
-   "recommended_min_params": 10000000,
-   "recommended_max_params": 200000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "js_code_1gb",
@@ -420,8 +184,8 @@
    "trained_modes": [
     "autocomplete"
    ],
-   "recommended_min_params": 200000000,
-   "recommended_max_params": 3000000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "html_code_50mb",
@@ -438,8 +202,8 @@
    "trained_modes": [
     "autocomplete"
    ],
-   "recommended_min_params": 10000000,
-   "recommended_max_params": 3000000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "css_code_3mb",
@@ -456,8 +220,8 @@
    "trained_modes": [
     "autocomplete"
    ],
-   "recommended_min_params": 10000000,
-   "recommended_max_params": 3000000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "code_qa_100mb",
@@ -474,8 +238,8 @@
    "trained_modes": [
     "chat"
    ],
-   "recommended_min_params": 10000000,
-   "recommended_max_params": 3000000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "mixed_code_raw_200mb",
@@ -492,8 +256,8 @@
    "trained_modes": [
     "autocomplete"
    ],
-   "recommended_min_params": 80000000,
-   "recommended_max_params": 800000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "mixed_code_files_200mb",
@@ -510,8 +274,8 @@
    "trained_modes": [
     "autocomplete"
    ],
-   "recommended_min_params": 80000000,
-   "recommended_max_params": 800000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "mixed_code_edu_200mb",
@@ -528,8 +292,8 @@
    "trained_modes": [
     "autocomplete"
    ],
-   "recommended_min_params": 80000000,
-   "recommended_max_params": 800000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "mixed_code_qa_200mb",
@@ -547,8 +311,8 @@
     "autocomplete",
     "chat"
    ],
-   "recommended_min_params": 80000000,
-   "recommended_max_params": 800000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "code_textbook_v1",
@@ -561,8 +325,8 @@
    "trained_modes": [
     "autocomplete"
    ],
-   "recommended_min_params": 10000000,
-   "recommended_max_params": 800000000,
+   "recommended_min_params": null,
+   "recommended_max_params": null,
    "size_train": 2487337,
    "size_val": 32946,
    "sha256_train": "0981473931f12a2d6d4e497c44596e2676b9c920c2edd83d2b0d7be7d1a6b785",
@@ -583,8 +347,8 @@
    "trained_modes": [
     "chat"
    ],
-   "recommended_min_params": 80000000,
-   "recommended_max_params": 1000000000
+   "recommended_min_params": null,
+   "recommended_max_params": null
   },
   {
    "stem": "veritate_conversation_v1",
@@ -601,8 +365,8 @@
    "trained_modes": [
     "chat"
    ],
-   "recommended_min_params": 10000000,
-   "recommended_max_params": 1000000000000,
+   "recommended_min_params": null,
+   "recommended_max_params": null,
    "coming_soon": true
   },
   {
@@ -620,7 +384,7 @@
    "trained_modes": [
     "chat"
    ],
-   "recommended_min_params": 0,
+   "recommended_min_params": null,
    "recommended_max_params": null,
    "coming_soon": true
   },
@@ -639,7 +403,7 @@
    "trained_modes": [
     "chat"
    ],
-   "recommended_min_params": 0,
+   "recommended_min_params": null,
    "recommended_max_params": null,
    "coming_soon": true
   },
@@ -658,7 +422,7 @@
    "trained_modes": [
     "chat"
    ],
-   "recommended_min_params": 0,
+   "recommended_min_params": null,
    "recommended_max_params": null,
    "coming_soon": true
   },
@@ -677,7 +441,7 @@
    "trained_modes": [
     "chat"
    ],
-   "recommended_min_params": 0,
+   "recommended_min_params": null,
    "recommended_max_params": null,
    "coming_soon": true
   },
@@ -696,9 +460,95 @@
    "trained_modes": [
     "chat"
    ],
-   "recommended_min_params": 0,
+   "recommended_min_params": null,
    "recommended_max_params": null,
    "coming_soon": true
+  },
+  {
+   "stem": "chrg",
+   "label": "US Congressional Hearings",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "Transcripts of United States congressional hearings (CHRG collection, govinfo.gov). U.S. Government work: public domain. Formal-register turn-depth source for chat SFT mixes; cap transcript corpora at 0.20 of a mix (measured 2026-08-16).",
+   "format": "zip_bundle",
+   "train_url": "PLACEHOLDER",
+   "size_train": 1224595190,
+   "size_val": 25180014,
+   "sha256_train": "cee1cd7e86cd772c39474b7fc56ed48a20a56193ef40395f8143e92624749a50",
+   "sha256_val": "88963fe8c78cfe5fefd927e3eae7763f9d4c850f80411162b1826da5fa96cdca",
+   "coming_soon": true,
+   "recommended_min_params": null,
+   "recommended_max_params": null
+  },
+  {
+   "stem": "hansard",
+   "label": "UK Hansard Debates",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "Transcripts of United Kingdom parliamentary debates (Hansard). Parliamentary information licensed under the Open Parliament Licence v3.0. Formal-register turn-depth source for chat SFT mixes; cap transcript corpora at 0.20 of a mix (measured 2026-08-16).",
+   "format": "zip_bundle",
+   "train_url": "PLACEHOLDER",
+   "size_train": 321419103,
+   "size_val": 6639696,
+   "sha256_train": "1dfcd1dfc9e006c86a3c317fdf673622664e5b926c4e0fd0acab959c86794ad5",
+   "sha256_val": "6196197ec7674c77102f59f8d5d9106cbaf1d3c7ff2f40eb80ca3e5f4936454f",
+   "coming_soon": true,
+   "recommended_min_params": null,
+   "recommended_max_params": null
+  },
+  {
+   "stem": "scotus",
+   "label": "US Supreme Court Opinions",
+   "family": "public",
+   "topic": "knowledge",
+   "description": "Opinions of the Supreme Court of the United States. Edicts of government: public domain. Formal legal-register source for chat SFT mixes.",
+   "format": "zip_bundle",
+   "train_url": "PLACEHOLDER",
+   "size_train": 71333032,
+   "size_val": 1302589,
+   "sha256_train": "bbbe97f5699be4504b5d255cfdd486473b2ef5b0a8eead7f41a93006149a4ad5",
+   "sha256_val": "fd2d6dc22da225ae7071cbfd59c18de7035b0834c70006d4b386ba1ad0ec0836",
+   "coming_soon": true,
+   "recommended_min_params": null,
+   "recommended_max_params": null
+  },
+  {
+   "stem": "agent",
+   "label": "Agent tools",
+   "family": "carpathian",
+   "topic": "agent",
+   "description": "Tool-calling conversations (calculator, fs_read, fetch, retrieve). REBUILD PENDING: the three retired size tiers held 275,897 unique user turns inside 1.5 GB (1.9% unique content, measured 2026-08-20). Rebuild deduped via tools/build_agent_corpus.py with a per-conversation hash gate, then publish one tier.",
+   "format": "zip_bundle",
+   "train_url": "PLACEHOLDER_URL",
+   "size_train": 0,
+   "size_val": 0,
+   "sha256_train": null,
+   "sha256_val": null,
+   "trained_modes": [
+    "agent"
+   ],
+   "coming_soon": true,
+   "recommended_min_params": null,
+   "recommended_max_params": null
+  },
+  {
+   "stem": "mixed_chat",
+   "label": "Mixed chat",
+   "family": "carpathian",
+   "topic": "chat",
+   "description": "Multi-turn ChatML conversations. Measured 2026-08-20: 218 MB, 371,214 turns, 98.8% unique user turns, 88% unique content bytes, median assistant turn 265 B, artifact rate <1 per 1k turns. The reference quality bar for any newly built chat corpus. UPLOAD PENDING: local-only, needs a COS link.",
+   "format": "zip_bundle",
+   "train_url": "PLACEHOLDER_URL",
+   "size_train": 0,
+   "size_val": 0,
+   "sha256_train": null,
+   "sha256_val": null,
+   "trained_modes": [
+    "chat"
+   ],
+   "coming_soon": true,
+   "recommended_min_params": null,
+   "recommended_max_params": null
   }
  ]
 }

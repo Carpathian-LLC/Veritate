@@ -1,0 +1,71 @@
+COS OBJECTS SAFE TO DELETE
+Generated 2026-08-20. Reason: corpus catalog cleanup — dead (duplicate-expanded)
+corpora purged, size ladders retired. Every object below was removed from
+veritate_mri/training/sync/corpus_catalog.json in the same change, so nothing in
+the platform can request them any more.
+
+Local bins for all of these were deleted from data/corpus/ on 2026-08-20 (19 GB
+reclaimed). Deleting the COS objects makes the removal permanent.
+
+================================================================================
+GROUP 1 — DEAD DATA (measured 2026-08-20, do not republish)
+================================================================================
+Turn-level audit of the shipped bins. "unique" = distinct user turns after
+splitting on ChatML markers.
+
+  chat_5gb      5.14 GB  ->    708 unique user turns / 769 assistant
+                              376 KB of real text (0.01%), one user turn
+                              repeated 1,298,507 times
+  chat_500mb     514 MB  ->    same 708/769 turns, byte-identical prefix
+  chat_50mb       51 MB  ->    same generator and prefix (measured 2026-07-26)
+  mcp_1500mb    1.54 GB  ->    124 unique user turns, 4.2 MB unique (0.27%)
+  mcp_150mb      154 MB  ->    same 124 user turns, 1.6 MB unique (1.07%)
+  mcp_15mb        15 MB  ->    same 124 user turns, 493 KB unique (3.20%)
+  agent_1500mb  1.54 GB  ->    275,897 unique user turns, 29 MB unique (1.90%)
+  agent_150mb    154 MB  ->     51,983 unique user turns, 6.7 MB unique (4.32%)
+  agent_15mb      15 MB  ->    same generator ladder (not measured — never
+                              downloaded to this install)
+
+COS objects (zip_bundle, one zip holds <stem>_train.bin + <stem>_val.bin):
+
+  chat_500mb      ~178 MB   https://usc1.carpathian.ai/cos/0ced9436be5c2478db55a5b20b50afea41245c773893ea0204009aa0bd3a19ee/1713baa762b2b87a7cc64dba4f27a080388a83bd95589f2b95ee32438399ef2aa98fa82c51a191e32c0cabb693a905893c868041aa063febfd4a18e52954a114
+  chat_5gb       ~1.74 GB   https://usc1.carpathian.ai/cos/dc48d78844427171983e7b10b5f967bd69822fd9718604ba2dbeeda0d5182cb0/126effad98a196382116985502c27b9a697316c016e01fb12770bc3c70afc0a1fb40d7dd2b9bb25eaf8b9c6e75193fd14f2ac814f6f317e67e8ada4285455a0b
+  agent_150mb      ~17 MB   https://usc1.carpathian.ai/cos/38fa3c38001cd226e57c4b502b33ce671f200c11b07c4d4fe02cdab059dc5fcc/043eae263e9df2bd4ecf8a27717ed42528d3572c38d9682a08cefcfba0c6e81cde5e8fc71aa54ffdf4839255c09231fcd7d03494ce46ce05e242641497f3c9df
+  agent_1500mb    ~169 MB   https://usc1.carpathian.ai/cos/082cb5cee8c3ff56a2941c994f6e18b396a267c45aaf11916149714b7a5d5b99/935384631028d7c7c5d6556c90a892150800bea096ba1a16687909ea7d9d4c4099fa52be247800e1f7eabdc501bebc1d05b75bb69a7baae886c623620b5dc023
+  mcp_15mb          ~2 MB   https://usc1.carpathian.ai/cos/ffa97f470cf9abb003367593750987c1c213bc2044bc61ff0f4395f28f40ea34/7a53c8f0a013e590f6a6f06f8ff395c469eef6262f5cbcbd99e0e80a553faff1e0a7bd75575a22827c0a037e6b22017136ebf97f21ab576096022bb2ac9f31ee
+  mcp_150mb        ~18 MB   https://usc1.carpathian.ai/cos/b28753d19f34ea3cd0431c30819e57379debbcbe4456526d17692d684aecdac3/199649f3ed2a978a6009e75bf68fe12e673fed99bc8dd012f2f031a5d77b750ea1979b0af8b549fc5055d5e6d804dcf0ed6eeaa7592d318d804f76e36a9f2122
+  mcp_1500mb      ~184 MB   https://usc1.carpathian.ai/cos/4bb89b372bac76800016e2b760e4a478b1adc83144128d016dab163370034b97/a2bbfa7def3439d0f3d2a656762a919bb5881dcad1e846e537423aa2cab740325da1bad95164d02d7d61b17f228a90d7182d0ea3f80d415ae7e6a61ffb49015d
+
+GitHub-hosted (Carpathian-LLC/Veritate-Corpus repo, main branch) — delete the
+files from that repo, not from COS:
+
+  chat_50mb_train.bin, chat_50mb_val.bin
+  agent_15mb_train.bin, agent_15mb_val.bin
+
+Staging copies also exist in iCloud at Mirach-Corpuses/{chat,agent,mcp}/ per the
+2026-07-14 upload manifest. Delete those too or the ladder can be re-uploaded by
+accident.
+
+================================================================================
+GROUP 2 — SIZE-LADDER LOWER TIERS (strict subsets of a surviving corpus)
+================================================================================
+Retired because the catalog no longer carries small/medium/large tiers. The 1 GB
+entries survive and contain this content.
+
+  py_code_100mb   ~103 MB bin   https://usc1.carpathian.ai/cos/16e8c2ecbd5f9403d0d5c2f4b6ed183f7c31430813261840ffdba965890da530/def4931c71fb327a712e71e5956b5941320e36e8bff12b0e88f55bfb92606dcd40b497b95ac3f08b740782a15939cdace21497a84d89dbe720d5cafcc5a27b7b
+  js_code_100mb   ~103 MB bin   https://usc1.carpathian.ai/cos/4ee756a1be4709962c27899a2876de32bfffd2bb11eab9bcceac01d4c1a03530/91c9894c03d0c6de3119fb1585e78a71ea353e3ff83504d70f3e2cd98299a70f9ca16cd0f110d1b88fc1a3f29c6a42fc113ce08b7e618971f4c1fd539290e448
+
+================================================================================
+NOT COS — dropped from the catalog, nothing to delete
+================================================================================
+  the_pile        HuggingFace stream, 53 GB   — unusable at consumer scale here
+  redpajama_v2    HuggingFace stream, 214 GB  — unusable at consumer scale here
+Both were hf_dataset entries with no hosted object. Re-add the catalog entry if
+you ever want them back; no data was destroyed.
+
+================================================================================
+APPROX RECLAIM
+================================================================================
+  COS zip objects        ~2.3 GB
+  GitHub repo files       ~68 MB
+  local data/corpus/       19 GB  (already deleted 2026-08-20)

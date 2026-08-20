@@ -1565,11 +1565,10 @@ def _wh_self_ppl(model, text: str, device) -> float:
 
 
 @torch.no_grad()
-@torch.no_grad()
 def _ch_reply(model, user_text: str, device):
     """One greedy assistant turn. Returns (text, closed), where closed means the
     model emitted <|im_end|> instead of running to CH_MAX_NEW."""
-    prompt = "%suser\n%s%s\n%sassistant\n" % (CH_IM_START, user_text, CH_IM_END, CH_IM_START)
+    prompt = f"{CH_IM_START}user\n{user_text}{CH_IM_END}\n{CH_IM_START}assistant\n"
     ids = torch.tensor([list(prompt.encode())], dtype=torch.long, device=device)
     end = CH_IM_END.encode()
     out = bytearray()
@@ -1636,7 +1635,7 @@ def dump_chat_health(model, out_dir: str, step: int):
                    "degenerate."),
         "time_s": round(time.time() - t0, 4),
     }
-    path = os.path.join(out_dir, "chat_health_step_%d.json" % int(step))
+    path = os.path.join(out_dir, f"chat_health_step_{int(step)}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=1)
     return path

@@ -12,7 +12,6 @@
 <link rel="stylesheet" href="/static/tutorial.css">
 <link rel="stylesheet" href="/static/prune.css">
 <link rel="stylesheet" href="/static/rag_train.css">
-<link rel="stylesheet" href="/static/chat_tab.css">
 </head>
 <body>
 
@@ -80,99 +79,13 @@
 </div>
 
 <div class="tabs">
-  <div class="tab" data-tab="chat">Chat</div>
   <div class="tab active" data-tab="generation">Generation</div>
   <div class="tab" data-tab="learning">Models</div>
   <div class="tab" data-tab="training">Training</div>
+  <div class="tab" data-tab="distillation">Distillation</div>
   <div class="tab" data-tab="wiki">Wiki</div>
   <div class="tab" data-tab="logs">Logs</div>
   <div class="tab" data-tab="settings">Settings<span class="notify-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warm);margin-left:6px;vertical-align:middle"></span></div>
-</div>
-
-<!-- ============================ CHAT TAB ============================ -->
-<!-- Inlined port of the front-door chat (hybrid.html). Same features: model
-     picker, PyTorch/C engine toggle, BM25 grounding + file upload, context
-     ring, server-compacted conversation memory. All ids are prefixed "ch-"
-     and styles are scoped under #chatMount to avoid clashing with the
-     dashboard. Wired by chatTabInit() in chat_tab.js on first activation. -->
-<div class="tab-body" data-tab="chat">
-  <div id="chatMount">
-    <header>
-      <div class="meta">answering with <b id="ch-activeModel">…</b></div>
-      <div class="actions">
-        <button class="gear" id="ch-newChat">new chat</button>
-        <button class="gear" id="ch-gear">settings</button>
-      </div>
-    </header>
-
-    <div id="ch-settings">
-      <div class="panel">
-        <div class="sgroup">
-          <div class="srow">
-            <span class="lbl">Model</span>
-            <select id="ch-modelSel"><option value="cloud">loading…</option></select>
-          </div>
-          <a class="link" href="/app#training">Train your own →</a>
-        </div>
-
-        <div class="sgroup" id="ch-engineRow">
-          <div class="srow">
-            <span class="lbl">Engine</span>
-            <div class="seg" id="ch-engineSeg">
-              <button data-engine="pytorch" class="on">PyTorch</button>
-              <button data-engine="c">Veritate (C)</button>
-            </div>
-          </div>
-          <div class="hint" id="ch-engineHint"></div>
-        </div>
-
-        <div class="sgroup" id="ch-ragRow">
-          <div class="srow">
-            <span class="lbl">Context</span>
-            <label class="check"><input type="checkbox" id="ch-ragChk"> Use my uploaded files when answering</label>
-          </div>
-          <div class="srow">
-            <span class="lbl"></span>
-            <label class="check"><input type="checkbox" id="ch-logChk"> Read my recent training logs</label>
-          </div>
-          <div class="kb">
-            <label class="filebtn">Choose file<input type="file" id="ch-kbFile" accept=".txt,.md,.rst,.text" hidden></label>
-            <span class="fname" id="ch-kbFileName">no file selected</span>
-            <button class="btn" id="ch-kbUpload">Add file</button>
-          </div>
-          <div class="hint" id="ch-kbHint"></div>
-        </div>
-
-        <button class="settings-close" id="ch-settingsClose">Close settings</button>
-      </div>
-    </div>
-
-    <div class="wrap">
-      <div id="ch-log"><div class="hint-row">Ask a question. Pick one of your trained models in settings, or let the cloud answer.</div></div>
-      <div class="bar">
-        <div class="ctxwrap">
-          <svg id="ch-ctxRing" width="34" height="34" viewBox="0 0 34 34" role="button" tabindex="0" aria-label="context used">
-            <title>context used</title>
-            <circle cx="17" cy="17" r="14" fill="none" stroke="var(--line)" stroke-width="3"></circle>
-            <circle id="ch-ctxArc" cx="17" cy="17" r="14" fill="none" stroke="var(--accent)" stroke-width="3"
-                    stroke-linecap="round" transform="rotate(-90 17 17)"
-                    stroke-dasharray="87.96" stroke-dashoffset="87.96"></circle>
-            <text id="ch-ctxPct" x="17" y="17" text-anchor="middle" dominant-baseline="central"
-                  font-size="9" fill="var(--soft)">0%</text>
-          </svg>
-          <div id="ch-ctxPop" class="ctxpop" hidden>
-            <b>Model context</b><br>
-            How full the conversation is against this model's context window, before it auto-compacts. At
-            100% the oldest turns are summarized and dropped to free room. The window differs per model
-            (a local model is small; cloud models are far larger).
-            <div id="ch-ctxPopDetail" class="ctxpop-detail"></div>
-          </div>
-        </div>
-        <input id="ch-q" placeholder="Ask anything..." autocomplete="off">
-        <button id="ch-send">Send</button>
-      </div>
-    </div>
-  </div>
 </div>
 
 <!-- ============================ GENERATION TAB ============================ -->
@@ -206,6 +119,8 @@
           <a href="#" id="cQatHelpLink">Help</a>
         </span>
         <span id="ablBadge" class="stat gen-chip gen-chip-hot" style="display:none">ablated</span>
+        <span id="sleepChip" class="stat gen-chip" style="display:none"></span>
+        <button id="sleepWake" style="display:none">wake</button>
         <span class="stat gen-chip" id="modeBadge" style="margin-left:auto"></span>
       </div>
 
@@ -323,6 +238,7 @@
             <option value="mtp">multi-byte head</option>
             <option value="mtp-verify">verified multi-byte</option>
             <option value="adaptive">adaptive depth</option>
+            <option value="stream">stream (carried state)</option>
           </select>
         </label>
         <label title="Constrain the output shape.">
@@ -1124,99 +1040,6 @@
         Teacher Model not configured. <a href="#" id="teacherGotoSettings">Configure in Settings</a> before using this flow.
       </div>
 
-      <div id="synthPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
-        <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Synthetic Corpus</div>
-        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Run the configured teacher over selected seed prompts. Output writes to <code>veritate_mri/data/synth_jobs/&lt;job_id&gt;/samples.jsonl</code>. When the job finishes, build a corpus from it, then train any model on that corpus via Start new / Continue.</div>
-        <div id="synthSeedList" class="synth-seed-list"></div>
-        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
-          <label>destination
-            <select id="synthJobSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:240px">
-              <option value="">&mdash; new job &mdash;</option>
-            </select>
-          </label>
-          <label>format
-            <select id="synthFormat" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px">
-              <option value="text">text</option>
-              <option value="json">json</option>
-            </select>
-          </label>
-          <button id="synthStartBtn" class="action" type="button">Start Synthesis</button>
-          <button id="synthStopPollBtn" class="action" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
-          <span id="synthStatusLine" class="meta" style="flex-basis:100%;font-size:10.5px;color:var(--dim);margin-top:2px;word-break:break-word"></span>
-        </div>
-        <div id="synthJobInfo" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:6px;display:none"></div>
-        <div id="synthBuildRow" class="inline" style="gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;display:none">
-          <label>corpus name
-            <input type="text" id="synthCorpusStem" placeholder="teacher_synth" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-          </label>
-          <button id="synthBuildBtn" class="action" type="button">Build corpus</button>
-          <span id="synthBuildStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
-        </div>
-        <div id="synthLiveWrap" style="display:none;margin-top:12px">
-          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:4px">live output <span id="synthLiveCount"></span></div>
-          <div id="synthLiveOutput" style="max-height:340px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:8px;font:11px monospace;white-space:pre-wrap;word-break:break-word"></div>
-        </div>
-      </div>
-
-      <div id="authorPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
-        <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Author a corpus</div>
-        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">The teacher writes original conversations and prose from scratch, one batch per call. Every record is checked before it is kept: schema, banned phrases, em dashes, duplicates, and repeated wording. Genres, prompts, the banned list, and the quality limits are editable data in <code>veritate_mri/data/authoring/corpus_spec.json</code>. Concurrency and the teacher model come from Settings.</div>
-
-        <div id="authorImportBlock" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">
-          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:6px">Already have externally-authored records (agent-written, not from the teacher above)? Import a directory of <code>*.jsonl</code> files: one bare record per line, <code>{"genre","voice","turns":[{"role","text"},...]}</code> or <code>{"genre","voice","text"}</code>. Every record runs through the exact same gates as teacher output before it is kept, and importing the same directory twice adds nothing the second time.</div>
-          <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-            <label>source directory
-              <input type="text" id="authorImportDir" placeholder="/path/to/authored_v1" style="width:320px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-            </label>
-            <button id="authorImportBtn" class="action" type="button">Import directory</button>
-            <span id="authorImportStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
-          </div>
-          <div id="authorImportResult" style="display:none;margin-top:8px;font-size:11px;line-height:1.6"></div>
-        </div>
-
-        <div id="authorGenreList" class="author-genre-list"></div>
-        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
-          <label>destination
-            <select id="authorJobSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:220px">
-              <option value="">&mdash; new corpus &mdash;</option>
-            </select>
-          </label>
-          <label>target size (MB)
-            <input type="number" id="authorTargetMb" min="1" step="1" value="50" style="width:90px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-          </label>
-          <label title="How many teacher calls run at once. Leave blank to use the value saved in Settings.">calls at once
-            <input type="number" id="authorConcurrency" min="1" max="128" placeholder="settings" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-          </label>
-          <label title="Share of 5-word sequences that must be unique. Below this the corpus is repeating itself and the run is warned loudly.">variety floor
-            <input type="number" id="authorNgramFloor" min="0" max="1" step="0.01" value="0.9" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-          </label>
-          <button id="authorStartBtn" class="action" type="button">Start authoring</button>
-          <button id="authorStopBtn" class="action" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
-        </div>
-        <div id="authorPlanLine" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:6px"></div>
-        <div id="authorRepWarn" class="author-warn" style="display:none"></div>
-        <div id="authorStatsRow" class="author-stats" style="display:none"></div>
-        <div id="authorRejectRow" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px;word-break:break-word"></div>
-        <div id="authorBuildRow" style="display:none;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
-          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:6px">Package what has been authored so far into <code>&lt;name&gt;_train.bin</code> and <code>&lt;name&gt;_val.bin</code>, zip them, and add the corpus to the library.</div>
-          <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-            <label>corpus name
-              <input type="text" id="authorStem" placeholder="authored_chat_v1" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-            </label>
-            <label>label
-              <input type="text" id="authorLabel" placeholder="Authored chat (v1)" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-            </label>
-            <button id="authorBuildBtn" class="action" type="button">Build corpus</button>
-            <span id="authorBuildStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
-          </div>
-          <div id="authorHandoff" class="author-handoff" style="display:none"></div>
-        </div>
-        <div id="authorLiveWrap" style="display:none;margin-top:12px">
-          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:4px">live output <span id="authorLiveCount"></span></div>
-          <div id="authorLiveOutput" style="max-height:300px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:8px;font:11px monospace;white-space:pre-wrap;word-break:break-word"></div>
-        </div>
-      </div>
-
       <div id="ragTrainPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
         <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Answer from context (RAG)</div>
         <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Fine-tune a saved model so it answers from supplied context. Training auto-generates a small question/answer corpus from your configured Teacher Model the first time, then fine-tunes. One job runs at a time; the log below tails it.</div>
@@ -1535,6 +1358,239 @@
 </div>
 
 <!-- ============================ LOGS TAB ============================ -->
+
+<!-- ========================= DISTILLATION TAB ========================= -->
+<div class="tab-body" data-tab="distillation">
+
+  <div class="panel" style="margin-bottom:16px;padding:22px 24px">
+    <h2>distillation <em>a bigger model writes the training data for a smaller one</em></h2>
+    <div class="body">
+
+      <div class="meta dist-intro">The teacher selected in Settings writes original records; every one is quality-gated before it is kept; what survives is packed into a corpus you can train on. Nothing here changes a model &mdash; it produces data.</div>
+
+      <div id="distTeacherBar" class="dist-teacher-bar">
+        <span class="dist-teacher-label">teacher</span>
+        <span id="distTeacherName" class="dist-teacher-name">loading&hellip;</span>
+        <span id="distTargetChip" class="dist-chip">&nbsp;</span>
+        <button id="distRefreshTarget" class="action dist-refresh" type="button" title="Re-check the teacher and the target machine">recheck</button>
+        <a href="#" id="distGotoSettings" class="dist-settings-link">change in Settings</a>
+      </div>
+
+      <div id="distTeacherGate" class="teacher-gate" style="display:none">
+        No teacher model is configured. <a href="#" id="distGateSettings">Configure one in Settings</a> before distilling.
+      </div>
+
+      <div id="distContentionNote" class="dist-contention" style="display:none"></div>
+
+      <div class="dist-mode-row" role="tablist" aria-label="distillation mode">
+        <button class="dist-mode" data-mode="interview" type="button" role="tab">
+          <span class="dist-mode-title">Interview the teacher <span class="dist-rec">recommended</span></span>
+          <span class="dist-mode-desc">Ask the teacher real questions and keep its real answers, then follow up. Produces conversation-length replies and any depth you want.</span>
+        </button>
+        <button class="dist-mode" data-mode="author" type="button" role="tab">
+          <span class="dist-mode-title">Author a corpus</span>
+          <span class="dist-mode-desc">The teacher invents conversations and prose from a genre spec. This is the path to a chat corpus.</span>
+        </button>
+        <button class="dist-mode" data-mode="synth" type="button" role="tab">
+          <span class="dist-mode-title">Answer seed prompts</span>
+          <span class="dist-mode-desc">The teacher answers a fixed list of seed prompts. Use when you already have the questions.</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:16px;padding:22px 24px">
+    <div class="body">
+      <div id="interviewPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
+        <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Interview the teacher</div>
+        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Two passes. First the teacher writes opening questions a person might ask. Then each one is actually <em>asked</em>, and its real answer is kept. Follow-up questions are generated from the exchange, so conversations go as deep as you set &mdash; past the 7-turn limit every public dataset has. Reply length is a deliberate blend: about a fifth short, half normal, a quarter long and thorough. Every conversation still passes the same quality gates as authoring.</div>
+
+        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px">
+          <label>subject area
+            <select id="interviewVertical" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:230px">
+              <option value="">loading&hellip;</option>
+            </select>
+          </label>
+          <span id="interviewVerticalNote" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+        </div>
+        <div class="dist-topic-head">
+          <span>topics &mdash; pick as many as you want, each becomes part of this corpus</span>
+          <span>
+            <button id="interviewTopicAll" class="action dist-mini" type="button">all</button>
+            <button id="interviewTopicNone" class="action dist-mini" type="button">none</button>
+          </span>
+        </div>
+        <div id="interviewTopicList" class="dist-topic-list"></div>
+        <div id="interviewGenreList" class="author-genre-list" style="display:none"></div>
+        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+          <label>destination
+            <select id="interviewJobSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:220px">
+              <option value="">&mdash; new corpus &mdash;</option>
+            </select>
+          </label>
+          <label title="How many complete conversations to generate.">conversations
+            <input type="number" id="interviewCount" min="1" step="1" value="50" style="width:90px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+          </label>
+          <label title="Assistant replies per conversation. Each one costs two teacher calls, so depth is the main driver of run time.">depth
+            <input type="number" id="interviewDepth" min="1" max="20" step="1" value="3" style="width:70px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+          </label>
+          <label title="How many conversations run at once. Higher finishes sooner and loads the machine harder.">at once
+            <select id="interviewConcurrency" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+              <option value="">settings default</option>
+            </select>
+          </label>
+          <button id="interviewStartBtn" class="action" type="button">Start interviewing</button>
+          <button id="interviewStopBtn" class="action" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
+        </div>
+        <div id="interviewCostLine" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:6px"></div>
+        <div id="interviewPlanLine" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
+        <div id="interviewRepWarn" class="author-warn" style="display:none"></div>
+        <div id="interviewStatsRow" class="author-stats" style="display:none"></div>
+        <div id="interviewProgress" class="dist-progress" style="display:none">
+          <div class="dist-progress-track"><div id="interviewProgressFill" class="dist-progress-fill" style="width:0%"></div></div>
+          <div class="dist-progress-legend">
+            <span id="interviewProgressLeft"></span>
+            <span id="interviewProgressMid"></span>
+            <span id="interviewProgressRight"></span>
+          </div>
+        </div>
+        <div id="interviewRejectRow" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px;word-break:break-word"></div>
+        <div id="interviewBuildRow" style="display:none;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:6px">Package what has been generated so far into <code>&lt;name&gt;_train.bin</code> and <code>&lt;name&gt;_val.bin</code>, then score it against the acceptance gate.</div>
+          <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <label>corpus name
+              <input type="text" id="interviewStem" placeholder="interview_chat_v1" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+            </label>
+            <label>label
+              <input type="text" id="interviewLabel" placeholder="Interview chat (v1)" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+            </label>
+            <button id="interviewBuildBtn" class="action" type="button">Build corpus</button>
+            <span id="interviewBuildStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+          </div>
+          <div id="interviewHandoff" class="author-handoff" style="display:none"></div>
+        </div>
+        <div id="interviewLiveWrap" style="display:none;margin-top:12px">
+          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:4px">latest conversations <span id="interviewLiveCount"></span></div>
+          <div id="interviewLiveOutput" style="max-height:340px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:8px;font:11px monospace;white-space:pre-wrap;word-break:break-word"></div>
+        </div>
+      </div>
+
+      <div id="authorPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
+        <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Author a corpus</div>
+        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">The teacher writes original conversations and prose from scratch, one batch per call. Every record is checked before it is kept: schema, banned phrases, em dashes, duplicates, and repeated wording. Genres, prompts, the banned list, and the quality limits are editable data in <code>veritate_mri/data/authoring/corpus_spec.json</code>. Concurrency and the teacher model come from Settings.</div>
+
+        <div id="authorImportBlock" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">
+          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:6px">Already have externally-authored records (agent-written, not from the teacher above)? Import a directory of <code>*.jsonl</code> files: one bare record per line, <code>{"genre","voice","turns":[{"role","text"},...]}</code> or <code>{"genre","voice","text"}</code>. Every record runs through the exact same gates as teacher output before it is kept, and importing the same directory twice adds nothing the second time.</div>
+          <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <label>source directory
+              <input type="text" id="authorImportDir" placeholder="/path/to/authored_v1" style="width:320px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+            </label>
+            <button id="authorImportBtn" class="action" type="button">Import directory</button>
+            <span id="authorImportStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+          </div>
+          <div id="authorImportResult" style="display:none;margin-top:8px;font-size:11px;line-height:1.6"></div>
+        </div>
+
+        <div id="authorGenreList" class="author-genre-list"></div>
+        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+          <label>destination
+            <select id="authorJobSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:220px">
+              <option value="">&mdash; new corpus &mdash;</option>
+            </select>
+          </label>
+          <label>target size (MB)
+            <input type="number" id="authorTargetMb" min="1" step="1" value="50" style="width:90px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+          </label>
+          <label title="How many teacher calls run at once. Leave blank to use the value saved in Settings.">calls at once
+            <input type="number" id="authorConcurrency" min="1" max="128" placeholder="settings" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+          </label>
+          <label title="Share of 5-word sequences that must be unique. Below this the corpus is repeating itself and the run is warned loudly.">variety floor
+            <input type="number" id="authorNgramFloor" min="0" max="1" step="0.01" value="0.9" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+          </label>
+          <button id="authorStartBtn" class="action" type="button">Start authoring</button>
+          <button id="authorStopBtn" class="action" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
+        </div>
+        <div id="authorPlanLine" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:6px"></div>
+        <div id="authorRepWarn" class="author-warn" style="display:none"></div>
+        <div id="authorStatsRow" class="author-stats" style="display:none"></div>
+        <div id="authorProgress" class="dist-progress" style="display:none">
+          <div class="dist-progress-track"><div id="authorProgressFill" class="dist-progress-fill" style="width:0%"></div></div>
+          <div class="dist-progress-legend">
+            <span id="authorProgressLeft"></span>
+            <span id="authorProgressMid"></span>
+            <span id="authorProgressRight"></span>
+          </div>
+        </div>
+        <div id="authorRejectRow" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px;word-break:break-word"></div>
+        <div id="authorBuildRow" style="display:none;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:6px">Package what has been authored so far into <code>&lt;name&gt;_train.bin</code> and <code>&lt;name&gt;_val.bin</code>, zip them, and add the corpus to the library.</div>
+          <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <label>corpus name
+              <input type="text" id="authorStem" placeholder="authored_chat_v1" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+            </label>
+            <label>label
+              <input type="text" id="authorLabel" placeholder="Authored chat (v1)" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+            </label>
+            <button id="authorBuildBtn" class="action" type="button">Build corpus</button>
+            <span id="authorBuildStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+          </div>
+          <div id="authorHandoff" class="author-handoff" style="display:none"></div>
+        </div>
+        <div id="authorLiveWrap" style="display:none;margin-top:12px">
+          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:4px">live output <span id="authorLiveCount"></span></div>
+          <div id="authorLiveOutput" style="max-height:300px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:8px;font:11px monospace;white-space:pre-wrap;word-break:break-word"></div>
+        </div>
+      </div>
+
+      <div id="synthPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
+        <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Synthetic Corpus</div>
+        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Run the configured teacher over selected seed prompts. Output writes to <code>veritate_mri/data/synth_jobs/&lt;job_id&gt;/samples.jsonl</code>. When the job finishes, build a corpus from it, then train any model on that corpus via Start new / Continue.</div>
+        <div id="synthSeedList" class="synth-seed-list"></div>
+        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
+          <label>destination
+            <select id="synthJobSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:240px">
+              <option value="">&mdash; new job &mdash;</option>
+            </select>
+          </label>
+          <label>format
+            <select id="synthFormat" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px">
+              <option value="text">text</option>
+              <option value="json">json</option>
+            </select>
+          </label>
+          <button id="synthStartBtn" class="action" type="button">Start Synthesis</button>
+          <button id="synthStopPollBtn" class="action" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
+          <span id="synthStatusLine" class="meta" style="flex-basis:100%;font-size:10.5px;color:var(--dim);margin-top:2px;word-break:break-word"></span>
+        </div>
+        <div id="synthJobInfo" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:6px;display:none"></div>
+        <div id="synthBuildRow" class="inline" style="gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;display:none">
+          <label>corpus name
+            <input type="text" id="synthCorpusStem" placeholder="teacher_synth" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+          </label>
+          <button id="synthBuildBtn" class="action" type="button">Build corpus</button>
+          <span id="synthBuildStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+        </div>
+        <div id="synthLiveWrap" style="display:none;margin-top:12px">
+          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:4px">live output <span id="synthLiveCount"></span></div>
+          <div id="synthLiveOutput" style="max-height:340px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:8px;font:11px monospace;white-space:pre-wrap;word-break:break-word"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="distAuditPanel" class="panel" style="display:none;margin-bottom:16px;padding:22px 24px">
+    <h2>corpus acceptance <em>measured on the bin that was just built</em></h2>
+    <div class="body">
+      <div class="meta dist-intro">Scored by unique turns and unique content bytes, never by file size. The retired <code>chat_5gb</code> passed every size check the platform had while holding 708 unique user turns in 5.14 GB.</div>
+      <div id="distAuditVerdict" class="dist-audit-verdict"></div>
+      <div id="distAuditChecks" class="dist-audit-checks"></div>
+      <div id="distAuditDetail" class="meta dist-audit-detail"></div>
+    </div>
+  </div>
+
+</div>
+
 <div class="tab-body" data-tab="logs">
 
   <div class="panel" style="margin-bottom: 10px;">
@@ -2186,6 +2242,20 @@
   </div>
 </div>
 
+<div id="distConfirmModal" class="modal-backdrop hidden">
+  <div class="modal-box" style="max-width:560px">
+    <div class="modal-header">
+      <h3>That machine is already training</h3>
+      <button id="distConfirmClose">&times;</button>
+    </div>
+    <div id="distConfirmBody" class="dist-confirm-body"></div>
+    <div class="dist-confirm-actions">
+      <button id="distConfirmCancel" class="action" type="button">Cancel</button>
+      <button id="distConfirmGo" class="action dist-confirm-go" type="button">Start anyway</button>
+    </div>
+  </div>
+</div>
+
 <div id="trainFlowModal" class="modal-backdrop hidden">
   <div class="modal-box" style="max-width:720px">
     <div class="modal-header">
@@ -2211,13 +2281,9 @@
       </div>
       <div class="train-flow-group">
         <div class="train-flow-group-title">Prepare data</div>
-        <button class="train-flow-card" data-flow="synth" type="button">
-          <span class="train-flow-card-title">Generate training data</span>
-          <span class="train-flow-card-desc">Run the teacher to build a corpus. Needs a teacher in Settings.</span>
-        </button>
-        <button class="train-flow-card" data-flow="author" type="button">
-          <span class="train-flow-card-title">Author a corpus</span>
-          <span class="train-flow-card-desc">Write original conversations and prose from scratch, quality-gated. Needs a teacher in Settings.</span>
+        <button class="train-flow-card" data-flow="distillation" type="button">
+          <span class="train-flow-card-title">Distill a corpus</span>
+          <span class="train-flow-card-desc">Have the teacher write training data, quality-gated. Opens the Distillation tab, which also runs while a model is training.</span>
         </button>
       </div>
       <div class="train-flow-group">
@@ -2450,7 +2516,6 @@
 <script src="/static/tutorial.js"></script>
 <script src="/static/prune.js"></script>
 <script src="/static/rag_train.js"></script>
-<script src="/static/chat_tab.js"></script>
 <script>
 /* Extensions gate. Self-contained: unique IDs, no overlap with index.js.
    Drives the toggle + a single Extensions menu that collapses installed

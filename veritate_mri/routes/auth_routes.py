@@ -6,8 +6,8 @@
 # Notes:
 # - Optional password gate for the dashboard. Auth is OFF unless a password is set
 #   (env VERITATE_DASHBOARD_PASSWORD), so a fresh install is never locked out. When
-#   enabled, the public surface (chat, static) stays open; the dashboard
-#   (/app) and management/training APIs require a session login.
+#   enabled, the static assets stay open; the dashboard (/app) and
+#   management/training APIs require a session login.
 # veritate_mri/routes/auth_routes.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -24,7 +24,7 @@ PASSWORD_ENV = "VERITATE_DASHBOARD_PASSWORD"
 SECRET_ENV   = "VERITATE_SECRET_KEY"
 # Open without a session even when auth is enabled. Everything else is gated.
 PUBLIC_EXACT    = ("/", "/login", "/logout", "/favicon.ico")
-PUBLIC_PREFIXES = ("/static", "/chat", "/hybrid")
+PUBLIC_PREFIXES = ("/static",)
 
 
 # ------------------------------------------------------------------------------------

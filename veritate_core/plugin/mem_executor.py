@@ -52,8 +52,10 @@ class AppliedPlan:
 
 def _checkpointed(forward):
     import torch
-    def run(x):
-        return torch.utils.checkpoint.checkpoint(forward, x, use_reentrant=False)
+    # Kwargs pass through so state-carrying calls (state=, return_state=) survive
+    # wrapping; non-reentrant checkpoint forwards them to the block.
+    def run(x, **kw):
+        return torch.utils.checkpoint.checkpoint(forward, x, use_reentrant=False, **kw)
     return run
 
 

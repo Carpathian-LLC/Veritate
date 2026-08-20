@@ -8,8 +8,8 @@
 #   /agent/stream). Independent of the dashboard password gate. Off unless a key
 #   is set in settings, so a LAN box stays open by default. When set, protected
 #   endpoints require Authorization: Bearer <key>; each authed hit bumps the
-#   per-key request counter. Dashboard pages, /chat, /hybrid, /static, heartbeat
-#   are never gated here.
+#   per-key request counter. Dashboard pages, /static, heartbeat are never
+#   gated here.
 # veritate_mri/routes/api_auth_routes.py
 # ------------------------------------------------------------------------------------
 # Imports:

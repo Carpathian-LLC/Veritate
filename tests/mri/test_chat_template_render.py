@@ -4,7 +4,7 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - Regression: /hybrid/chat renders prompts in the SAME ChatML format as the
+# - Regression: hybrid_routes prompt rendering uses the SAME ChatML format as the
 #   Carpathian-hosted chat corpora (build_chat_corpus.py IM_START/IM_END) so the
 #   trained model recognises the turn markers. Prior version emitted <|user|> /
 #   <|assistant|> tags which the models never saw in training, producing garbled

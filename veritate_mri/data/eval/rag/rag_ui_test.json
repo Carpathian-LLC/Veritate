@@ -1,0 +1,229 @@
+{
+  "test": [
+    {
+      "fact": "The Earth is approximately 4.5 billion years old.",
+      "q": "How old is the Earth?",
+      "a": "4.5 billion years",
+      "prompt": "<|im_start|>system\ncontext: The Earth is approximately 4.5 billion years old.<|im_end|>\n<|im_start|>user\nHow old is the Earth?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Mount Everest is the highest mountain peak above sea level on Earth.",
+      "q": "Which mountain is the highest peak above sea level on Earth?",
+      "a": "Mount Everest",
+      "prompt": "<|im_start|>system\ncontext: Mount Everest is the highest mountain peak above sea level on Earth.<|im_end|>\n<|im_start|>user\nWhich mountain is the highest peak above sea level on Earth?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The Dead Sea is the lowest point below sea level on Earth's land surface.",
+      "q": "What unique geographical feature does the Dead Sea have?",
+      "a": "lowest point below sea level",
+      "prompt": "<|im_start|>system\ncontext: The Dead Sea is the lowest point below sea level on Earth's land surface.<|im_end|>\n<|im_start|>user\nWhat unique geographical feature does the Dead Sea have?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The Pacific Ocean is the largest ocean by area, covering about one-third of the Earth's surface.",
+      "q": "What fraction of the Earth's surface does the Pacific Ocean cover?",
+      "a": "one-third",
+      "prompt": "<|im_start|>system\ncontext: The Pacific Ocean is the largest ocean by area, covering about one-third of the Earth's surface.<|im_end|>\n<|im_start|>user\nWhat fraction of the Earth's surface does the Pacific Ocean cover?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Antarctica is the coldest continent on Earth.",
+      "q": "Which continent has the lowest temperatures?",
+      "a": "Antarctica",
+      "prompt": "<|im_start|>system\ncontext: Antarctica is the coldest continent on Earth.<|im_end|>\n<|im_start|>user\nWhich continent has the lowest temperatures?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Lake Baikal in Russia contains around 20% of the world's fresh water.",
+      "q": "What percentage of the world's fresh water does Lake Baikal contain?",
+      "a": "20%",
+      "prompt": "<|im_start|>system\ncontext: Lake Baikal in Russia contains around 20% of the world's fresh water.<|im_end|>\n<|im_start|>user\nWhat percentage of the world's fresh water does Lake Baikal contain?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The Sahara Desert is the largest hot desert in the world.",
+      "q": "What is the name of the largest hot desert in the world?",
+      "a": "Sahara Desert",
+      "prompt": "<|im_start|>system\ncontext: The Sahara Desert is the largest hot desert in the world.<|im_end|>\n<|im_start|>user\nWhat is the name of the largest hot desert in the world?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The Amazon Rainforest spans across nine countries and covers over half a billion acres.",
+      "q": "How many countries does the Amazon Rainforest span across?",
+      "a": "nine",
+      "prompt": "<|im_start|>system\ncontext: The Amazon Rainforest spans across nine countries and covers over half a billion acres.<|im_end|>\n<|im_start|>user\nHow many countries does the Amazon Rainforest span across?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Greenland is the largest island by area, but it has less than 60,000 inhabitants.",
+      "q": "How many people live on Greenland?",
+      "a": "less than 60,000",
+      "prompt": "<|im_start|>system\ncontext: Greenland is the largest island by area, but it has less than 60,000 inhabitants.<|im_end|>\n<|im_start|>user\nHow many people live on Greenland?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The Great Barrier Reef off Australia's coast is the world\u2019s biggest single structure made by living organisms.",
+      "q": "What unique characteristic does the Great Barrier Reef have?",
+      "a": "world's biggest single structure made by living organisms",
+      "prompt": "<|im_start|>system\ncontext: The Great Barrier Reef off Australia's coast is the world\u2019s biggest single structure made by living organisms.<|im_end|>\n<|im_start|>user\nWhat unique characteristic does the Great Barrier Reef have?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The longest river in the world is the Nile River, stretching over 4,135 miles (6,650 km).",
+      "q": "What is the length of the Nile River in kilometers?",
+      "a": "6,650 km",
+      "prompt": "<|im_start|>system\ncontext: The longest river in the world is the Nile River, stretching over 4,135 miles (6,650 km).<|im_end|>\n<|im_start|>user\nWhat is the length of the Nile River in kilometers?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Japan has more than 6,800 islands and is located between East Asia and Oceania.",
+      "q": "How many islands does Japan have?",
+      "a": "more than 6,800",
+      "prompt": "<|im_start|>system\ncontext: Japan has more than 6,800 islands and is located between East Asia and Oceania.<|im_end|>\n<|im_start|>user\nHow many islands does Japan have?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "India shares its border with seven countries: Pakistan, China, Nepal, Bhutan, Myanmar, Bangladesh, and Afghanistan.",
+      "q": "How many countries does India share its border with?",
+      "a": "seven",
+      "prompt": "<|im_start|>system\ncontext: India shares its border with seven countries: Pakistan, China, Nepal, Bhutan, Myanmar, Bangladesh, and Afghanistan.<|im_end|>\n<|im_start|>user\nHow many countries does India share its border with?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The United States is the third-largest country by total area in the world.",
+      "q": "What is the rank of the United States in terms of total area among all countries?",
+      "a": "third-largest",
+      "prompt": "<|im_start|>system\ncontext: The United States is the third-largest country by total area in the world.<|im_end|>\n<|im_start|>user\nWhat is the rank of the United States in terms of total area among all countries?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Brazil is home to one-third of the Amazon rainforest.",
+      "q": "What portion of the Amazon rainforest is located within Brazil?",
+      "a": "one-third",
+      "prompt": "<|im_start|>system\ncontext: Brazil is home to one-third of the Amazon rainforest.<|im_end|>\n<|im_start|>user\nWhat portion of the Amazon rainforest is located within Brazil?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Canada has more lakes than any other country in the world.",
+      "q": "Which country has the most lakes in the world?",
+      "a": "Canada",
+      "prompt": "<|im_start|>system\ncontext: Canada has more lakes than any other country in the world.<|im_end|>\n<|im_start|>user\nWhich country has the most lakes in the world?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Italy\u2019s longest river, the Po River, originates from springs near Mount Viso.",
+      "q": "Where does Italy's longest river, the Po River, originate?",
+      "a": "springs near Mount Viso",
+      "prompt": "<|im_start|>system\ncontext: Italy\u2019s longest river, the Po River, originates from springs near Mount Viso.<|im_end|>\n<|im_start|>user\nWhere does Italy's longest river, the Po River, originate?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Madagascar is located 250 miles off the southeastern coast of Africa.",
+      "q": "How far is Madagascar from the southeastern coast of Africa?",
+      "a": "250 miles",
+      "prompt": "<|im_start|>system\ncontext: Madagascar is located 250 miles off the southeastern coast of Africa.<|im_end|>\n<|im_start|>user\nHow far is Madagascar from the southeastern coast of Africa?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The Gulf Stream is a warm ocean current that starts near Florida and runs up the U.S. eastern seaboard to Europe.",
+      "q": "What warm ocean current starts near Florida and runs up the U.S. eastern seaboard to Europe?",
+      "a": "The Gulf Stream",
+      "prompt": "<|im_start|>system\ncontext: The Gulf Stream is a warm ocean current that starts near Florida and runs up the U.S. eastern seaboard to Europe.<|im_end|>\n<|im_start|>user\nWhat warm ocean current starts near Florida and runs up the U.S. eastern seaboard to Europe?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Lake Victoria in East Africa is the second-largest freshwater lake by surface area globally.",
+      "q": "What is the global ranking of Lake Victoria in terms of surface area among freshwater lakes?",
+      "a": "second-largest",
+      "prompt": "<|im_start|>system\ncontext: Lake Victoria in East Africa is the second-largest freshwater lake by surface area globally.<|im_end|>\n<|im_start|>user\nWhat is the global ranking of Lake Victoria in terms of surface area among freshwater lakes?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Denali (formerly known as Mount McKinley) is North America\u2019s highest peak, standing at 20,310 feet (6,190 meters).",
+      "q": "What is the height of Denali in feet?",
+      "a": "20,310 feet",
+      "prompt": "<|im_start|>system\ncontext: Denali (formerly known as Mount McKinley) is North America\u2019s highest peak, standing at 20,310 feet (6,190 meters).<|im_end|>\n<|im_start|>user\nWhat is the height of Denali in feet?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The Strait of Gibraltar connects the Atlantic Ocean to the Mediterranean Sea and separates Europe from Africa.",
+      "q": "What body of water does the Strait of Gibraltar connect to?",
+      "a": "Atlantic Ocean",
+      "prompt": "<|im_start|>system\ncontext: The Strait of Gibraltar connects the Atlantic Ocean to the Mediterranean Sea and separates Europe from Africa.<|im_end|>\n<|im_start|>user\nWhat body of water does the Strait of Gibraltar connect to?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Peru has a diverse range of ecosystems including rainforests, deserts, and mountains due to its extensive territory stretching across various latitudes.",
+      "q": "What are some of the ecosystems found in Peru due to its varied geography?",
+      "a": "rainforests, deserts, mountains",
+      "prompt": "<|im_start|>system\ncontext: Peru has a diverse range of ecosystems including rainforests, deserts, and mountains due to its extensive territory stretching across various latitudes.<|im_end|>\n<|im_start|>user\nWhat are some of the ecosystems found in Peru due to its varied geography?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The Alps are one of the most important mountain ranges in Europe, with peaks over 4,000 meters high.",
+      "q": "What distinguishes the Alps among European mountain ranges?",
+      "a": "peaks over 4,000 meters high",
+      "prompt": "<|im_start|>system\ncontext: The Alps are one of the most important mountain ranges in Europe, with peaks over 4,000 meters high.<|im_end|>\n<|im_start|>user\nWhat distinguishes the Alps among European mountain ranges?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Sydney Opera House is located on Port Jackson (Sydney Harbour), New South Wales, Australia.",
+      "q": "Where is the Sydney Opera House located?",
+      "a": "Port Jackson",
+      "prompt": "<|im_start|>system\ncontext: Sydney Opera House is located on Port Jackson (Sydney Harbour), New South Wales, Australia.<|im_end|>\n<|im_start|>user\nWhere is the Sydney Opera House located?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The Great Wall of China was built across northern China to protect against invasions from nomadic tribes.",
+      "q": "What was the purpose of building the Great Wall of China?",
+      "a": "protect against invasions",
+      "prompt": "<|im_start|>system\ncontext: The Great Wall of China was built across northern China to protect against invasions from nomadic tribes.<|im_end|>\n<|im_start|>user\nWhat was the purpose of building the Great Wall of China?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Iceland\u2019s active volcanoes and geysers are a result of its location along the Mid-Atlantic Ridge.",
+      "q": "What geographical feature explains Iceland's active volcanoes and geysers?",
+      "a": "Mid-Atlantic Ridge",
+      "prompt": "<|im_start|>system\ncontext: Iceland\u2019s active volcanoes and geysers are a result of its location along the Mid-Atlantic Ridge.<|im_end|>\n<|im_start|>user\nWhat geographical feature explains Iceland's active volcanoes and geysers?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Water freezes at 0 degrees Celsius.",
+      "q": "At what temperature does water freeze?",
+      "a": "0 degrees Celsius",
+      "prompt": "<|im_start|>system\ncontext: Water freezes at 0 degrees Celsius.<|im_end|>\n<|im_start|>user\nAt what temperature does water freeze?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The Earth orbits the Sun.",
+      "q": "What does the Earth orbit?",
+      "a": "the Sun",
+      "prompt": "<|im_start|>system\ncontext: The Earth orbits the Sun.<|im_end|>\n<|im_start|>user\nWhat does the Earth orbit?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "DNA contains the genetic instructions for life.",
+      "q": "What does DNA contain?",
+      "a": "genetic instructions for life",
+      "prompt": "<|im_start|>system\ncontext: DNA contains the genetic instructions for life.<|im_end|>\n<|im_start|>user\nWhat does DNA contain?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Oxygen makes up about 21% of Earth's atmosphere.",
+      "q": "What percentage of Earth's atmosphere is composed of oxygen?",
+      "a": "21%",
+      "prompt": "<|im_start|>system\ncontext: Oxygen makes up about 21% of Earth's atmosphere.<|im_end|>\n<|im_start|>user\nWhat percentage of Earth's atmosphere is composed of oxygen?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Photosynthesis is the process by which plants use sunlight to synthesize foods with water and carbon dioxide.",
+      "q": "What process do plants use to create food using sunlight?",
+      "a": "photosynthesis",
+      "prompt": "<|im_start|>system\ncontext: Photosynthesis is the process by which plants use sunlight to synthesize foods with water and carbon dioxide.<|im_end|>\n<|im_start|>user\nWhat process do plants use to create food using sunlight?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Gravity pulls objects towards the center of the Earth.",
+      "q": "What does gravity do with respect to objects on Earth?",
+      "a": "pulls towards center",
+      "prompt": "<|im_start|>system\ncontext: Gravity pulls objects towards the center of the Earth.<|im_end|>\n<|im_start|>user\nWhat does gravity do with respect to objects on Earth?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Sound travels faster in solids than in liquids or gases.",
+      "q": "In which state of matter does sound travel slowest?",
+      "a": "gases",
+      "prompt": "<|im_start|>system\ncontext: Sound travels faster in solids than in liquids or gases.<|im_end|>\n<|im_start|>user\nIn which state of matter does sound travel slowest?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "The largest organ in the human body is the skin.",
+      "q": "What is the largest organ in the human body?",
+      "a": "skin",
+      "prompt": "<|im_start|>system\ncontext: The largest organ in the human body is the skin.<|im_end|>\n<|im_start|>user\nWhat is the largest organ in the human body?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Bacteria can survive without oxygen.",
+      "q": "Can bacteria live in environments without oxygen?",
+      "a": "can survive without oxygen",
+      "prompt": "<|im_start|>system\ncontext: Bacteria can survive without oxygen.<|im_end|>\n<|im_start|>user\nCan bacteria live in environments without oxygen?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "fact": "Lightning strikes are estimated to occur 3 million times a day worldwide.",
+      "q": "How many lightning strikes are estimated to occur daily around the globe?",
+      "a": "3 million",
+      "prompt": "<|im_start|>system\ncontext: Lightning strikes are estimated to occur 3 million times a day worldwide.<|im_end|>\n<|im_start|>user\nHow many lightning strikes are estimated to occur daily around the globe?<|im_end|>\n<|im_start|>assistant\n"
+    }
+  ],
+  "n_train_examples": 298,
+  "n_train_facts": 149,
+  "n_test_facts": 37
+}

@@ -41,7 +41,7 @@ def trainer():
 
 
 def _parse(trainer, argv, monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["veritate_trainer.py"] + argv)
+    monkeypatch.setattr(sys, "argv", ["veritate_trainer.py", *argv])
     return trainer.parse_args(MANIFEST)
 
 
@@ -105,19 +105,19 @@ def test_every_dashboard_schema_field_is_handled(trainer):
     import re
 
     from readers import trainers as reader
-    src = open(os.path.join(REPO, "veritate_mri", "web", "index.js"),
-               encoding="utf-8").read()
+    with open(os.path.join(REPO, "veritate_mri", "web", "index.js"), encoding="utf-8") as f:
+        src = f.read()
     seg = src[src.find("TRAINER_SCHEMA"):][:40000]
     fields = {m.group(1) for m in re.finditer(r'\{\s*name:\s*"([a-z0-9_]+)"', seg)}
     assert "base_lr" in fields, "TRAINER_SCHEMA scrape found nothing; the JS moved"
-    accepted = (set((reader.NATIVE_TRAINER_MANIFEST.get("defaults") or {}))
+    accepted = (set(reader.NATIVE_TRAINER_MANIFEST.get("defaults") or {})
                 | set(trainer.RESERVED_STRING_FLAGS) | set(trainer.RESERVED_BOOL_FLAGS)
                 | set(trainer.RESERVED_STR_FLAGS) | set(trainer.RESERVED_FLOAT_FLAGS)
                 | set(trainer.RESERVED_INT_FLAGS) | set(trainer.SHAPE_OVERRIDE_FLAGS)
                 | {"bench"})
     unhandled = sorted(f for f in fields
                        if f not in accepted and f not in trainer.SCHEMA_IGNORED_FLAGS)
-    assert not unhandled, "dashboard fields the trainer would reject: %s" % unhandled
+    assert not unhandled, f"dashboard fields the trainer would reject: {unhandled}"
 
 
 def test_model_type_is_not_fatal(trainer, monkeypatch):

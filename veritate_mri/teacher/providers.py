@@ -21,7 +21,13 @@ DEFAULT_MAX_RETRIES = 5
 DEFAULT_BACKOFF_BASE_S = 1.0
 DEFAULT_BACKOFF_MAX_S = 30.0
 DEFAULT_MAX_CONCURRENCY = 16
-LOCAL_MAX_CONCURRENCY = 4
+# Raised from 4 on 2026-08-20. The old value protected a single small GPU from
+# OOM, but it also capped corpus generation at roughly 36 days for a 100k
+# conversation run on a 32-core / 275 GB box. The ceiling is now the user's
+# choice; CONCURRENCY_CHOICES is what the dashboard offers.
+LOCAL_MAX_CONCURRENCY = 256
+MAX_CONCURRENCY = 256
+CONCURRENCY_CHOICES = (2, 4, 8, 16, 32, 64, 128, 256)
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_MAX_TOKENS = 2048
 ENV_KEY = "VERITATE_TEACHER_API_KEY"

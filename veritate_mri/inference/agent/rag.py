@@ -4,196 +4,104 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - In-context RAG prefix injection. The right mechanism for byte-level
-#   models per the sprint-2 survey: retrieve passages, inject as prompt
-#   PREFIX, let the model's attention figure out what to use.
-# - This is the OPPOSITE of the F09 corpus-echo failure. F09 mixed an
-#   n-gram retrieval distribution with the model's logits at alpha=1.5;
-#   it tanked the 85M's val NLL by +36%. Survey verdict: F09 was the
-#   logit-fusion choice, not byte-level RAG itself. Prefix injection is
-#   how every published 1B-class SLM-RAG actually works.
-# - Composition:
-#     1. Retriever (e.g., veritate_mri.agent.tools.retriever's BM25) returns
-#        top-K passages for the user query.
-#     2. We build a prefix of the form:
-#          Context: newline, [1] <passage1>, [2] <passage2>, ...,
-#          then Question: <user>, then Answer:
-#     3. Brain.stream(prefix, ...) generates the answer, optionally under
-#        constrained decoding.
-# - LongLLMLingua-style compression hook is a stub for now; the published
-#   technique compresses retrieved context 4-6x at +21pt accuracy. When
-#   we have a compressor model, plug it in here.
-# veritate_mri/agent/rag.py
+# - In-context RAG injection: retrieve passages, put them in front of the user's
+#   question inside the same turn, let attention decide what to use. The right
+#   mechanism for byte-level models per the sprint-2 survey, and how published
+#   1B-class SLM-RAG works.
+# - This is the OPPOSITE of the F09 corpus-echo failure. F09 mixed an n-gram
+#   retrieval distribution into the model's logits at alpha=1.5 and cost the 85M
+#   +36% val NLL. That falsified logit fusion, not byte-level RAG.
+# - Framing is ChatML because the chat SFT is. `loss_mask=assistant` grades only
+#   the bytes after <|im_start|>assistant\n, so that marker is the sole signal
+#   meaning "answer now, stop at <|im_end|>". Injecting a bare Context/Question/
+#   Answer prefix instead drops the model into completion mode, where it continues
+#   the document rather than replying, and the measured grounded rate does not
+#   describe that path.
+# - One passage by default. Multi-candidate injection is falsified at this scale
+#   (failures.md: top-1 0.130, top-3 0.120, top-5 0.080) because a 200M reader
+#   cannot disambiguate candidates. Raise k only behind a re-ranker collapsing k
+#   to 1.
+# - The LongLLMLingua-style compression hook is where a compressor model plugs in;
+#   the published technique compresses retrieved context 4-6x at +21pt accuracy.
+# veritate_mri/inference/agent/rag.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+
+from .loop import IM_END, IM_START, ROLE_ASSISTANT, ROLE_USER
 
 # ------------------------------------------------------------------------------------
 # Constants
 
-DEFAULT_TOP_K          = 3
-DEFAULT_MAX_PASSAGES_B = 4096   # cap concatenated context bytes (~4 chunks at 1 kB)
-DEFAULT_PREFIX_FORMAT  = "Context:\n{passages}\n\nQuestion: {query}\nAnswer: "
-DEFAULT_PASSAGE_FORMAT = "[{i}] {chunk}"
+DEFAULT_MAX_PASSAGES_B = 4096   # cap on concatenated context bytes
+PASSAGE_SEPARATOR      = "\n\n"
+TRUNCATION_MARK        = "... [truncated]"
+TRUNCATION_FLOOR       = 32     # below this a truncated tail carries nothing; drop it
+REPLY_RESERVE_B        = 256    # window bytes held back for the frame and the reply;
+                                # 1024B window capped at 768B of passages measured
+                                # end-to-end 0.270 vs 0.162 uncapped (2026-08-17)
+
+USER_OPEN      = f"{IM_START}{ROLE_USER}\n"
+ASSISTANT_OPEN = f"{IM_START}{ROLE_ASSISTANT}\n"
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_WORD_RE           = re.compile(r"\S+")
 
 # ------------------------------------------------------------------------------------
 # Functions
 
 
-@dataclass
-class RAGResult:
-    """One RAG-augmented generation result."""
-    query:             str
-    retrieved:         list[str] = field(default_factory=list)
-    retrieved_scores:  list[float] = field(default_factory=list)
-    prefix:            str = ""
-    prefix_bytes:      int = 0
-    answer:            str = ""
-    full_text:         str = ""
-    elapsed_s:         float = 0.0
-    compression_ratio: float = 1.0
-
-
-def build_rag_prefix(query: str, passages: list[str],
-                     prefix_format: str = DEFAULT_PREFIX_FORMAT,
-                     passage_format: str = DEFAULT_PASSAGE_FORMAT,
-                     max_bytes: int = DEFAULT_MAX_PASSAGES_B,
-                     compressor: Callable[[str], str] | None = None) -> str:
-    """Build a prompt prefix from retrieved passages + a user query.
-    If `compressor` is provided, run each passage through it first
-    (LongLLMLingua-style).
-    Caps the concatenated passages at `max_bytes`."""
-    chunks = []
+def _passage_body(passages: list[str], max_bytes: int,
+                  compressor: Callable[[str], str] | None) -> str:
+    """Concatenated passage text capped at `max_bytes`. The passage that crosses the
+    cap is truncated rather than dropped, so one oversized chunk still grounds."""
+    chunks: list[str] = []
     total = 0
-    for i, p in enumerate(passages, 1):
+    for p in passages:
         if compressor is not None:
             p = compressor(p)
-        line = passage_format.format(i=i, chunk=p)
-        if total + len(line.encode("utf-8")) > max_bytes:
-            # Truncate the last passage instead of dropping it
+        cost = len(p.encode("utf-8"))
+        if total + cost > max_bytes:
             remaining = max_bytes - total
-            if remaining > 32:
-                line = line[:remaining] + "... [truncated]"
-                chunks.append(line)
+            if remaining > TRUNCATION_FLOOR:
+                chunks.append(p[:remaining] + TRUNCATION_MARK)
             break
-        chunks.append(line)
-        total += len(line.encode("utf-8"))
-    body = "\n".join(chunks)
-    return prefix_format.format(passages=body, query=query)
+        chunks.append(p)
+        total += cost
+    return PASSAGE_SEPARATOR.join(chunks)
 
 
-class RAGRunner:
-    """In-context RAG runner. Wraps a Brain-shaped backend and a retriever-
-    callable that returns (passages, scores) given a query."""
-
-    def __init__(self, backend, retriever: Callable[[str, int], list],
-                 compressor: Callable[[str], str] | None = None,
-                 top_k: int = DEFAULT_TOP_K,
-                 prefix_format: str = DEFAULT_PREFIX_FORMAT,
-                 passage_format: str = DEFAULT_PASSAGE_FORMAT,
-                 max_prefix_bytes: int = DEFAULT_MAX_PASSAGES_B):
-        self.backend = backend
-        self.retriever = retriever
-        self.compressor = compressor
-        self.top_k = top_k
-        self.prefix_format = prefix_format
-        self.passage_format = passage_format
-        self.max_prefix_bytes = max_prefix_bytes
-
-    def run(self, query: str,
-            temperature: float = 0.7,
-            top_k_sample: int = 40,
-            max_new: int = 200,
-            constraint=None) -> RAGResult:
-        import time
-        t0 = time.time()
-
-        # Retrieve
-        try:
-            hits = self.retriever(query, self.top_k)
-        except Exception:
-            hits = []
-        passages = [h[0] if isinstance(h, (tuple, list)) else str(h) for h in hits]
-        scores = [float(h[1]) if isinstance(h, (tuple, list)) and len(h) > 1 else 0.0
-                  for h in hits]
-
-        # Build prefix
-        raw_byte_count = sum(len(p.encode("utf-8")) for p in passages)
-        prefix = build_rag_prefix(
-            query, passages,
-            prefix_format=self.prefix_format,
-            passage_format=self.passage_format,
-            max_bytes=self.max_prefix_bytes,
-            compressor=self.compressor,
-        )
-        prefix_byte_count = len(prefix.encode("utf-8"))
-        compression = (raw_byte_count / max(1, prefix_byte_count)) if self.compressor else 1.0
-
-        # Generate
-        out_bytes = bytearray()
-        for ev in self.backend.stream(prefix,
-                                       temperature=temperature,
-                                       top_k_sample=top_k_sample,
-                                       max_new=max_new,
-                                       constraint=constraint):
-            kind = ev.get("kind")
-            if kind == "token" or kind == "fast_byte":
-                b = ev.get("byte")
-                if isinstance(b, int):
-                    out_bytes.append(b & 0xff)
-            elif kind in ("stop", "error"):
-                break
-
-        answer_text = bytes(out_bytes).decode("utf-8", errors="replace")
-        full_text = prefix + answer_text
-
-        return RAGResult(
-            query=query,
-            retrieved=passages,
-            retrieved_scores=scores,
-            prefix=prefix,
-            prefix_bytes=prefix_byte_count,
-            answer=answer_text,
-            full_text=full_text,
-            elapsed_s=time.time() - t0,
-            compression_ratio=compression,
-        )
+def injection_budget(seq: int, prompt_bytes: int,
+                     reserve: int = REPLY_RESERVE_B,
+                     cap: int = DEFAULT_MAX_PASSAGES_B) -> int:
+    """Passage-byte budget that keeps prompt + passages + reply inside a `seq`-byte
+    window. Injecting past the window evicts the user-turn opener and the passage
+    head before the model answers, which reads as a retrieval miss end-to-end.
+    Zero (inject nothing) when the prompt alone fills the window."""
+    return max(0, min(cap, seq - reserve - prompt_bytes))
 
 
-def bm25_retriever_from_tool(tool):
-    """Adapter: wrap our existing BM25 Tool (veritate_mri.agent.tools.retriever)
-    so it satisfies the `retriever(query, k) -> list[(passage, score)]`
-    signature expected by RAGRunner. The Tool's execute() returns a
-    pre-formatted string; we parse it back."""
-    def _retrieve(query: str, k: int):
-        out = tool.call({"query": query, "k": k})
-        if out.startswith("error"):
-            return []
-        if out == "no matches":
-            return []
-        # one block per hit, blocks split by a blank line, each block
-        # opening with the source, offset, and parenthesised score
-        hits = []
-        for chunk in out.split("\n\n"):
-            chunk = chunk.strip()
-            if not chunk:
-                continue
-            # Parse leading score
-            score = 0.0
-            if "(score " in chunk:
-                rest = chunk.partition("(score ")[2]
-                score_s, _, body = rest.partition(") ")
-                try:
-                    score = float(score_s)
-                except ValueError:
-                    pass
-                hits.append((body, score))
-            else:
-                hits.append((chunk, 0.0))
-        return hits
-    return _retrieve
+def build_rag_prefix(prompt: str, passages: list[str],
+                     max_bytes: int = DEFAULT_MAX_PASSAGES_B,
+                     compressor: Callable[[str], str] | None = None) -> str:
+    """Ground `prompt` by opening its user turn with the retrieved passages.
+
+    `prompt` arrives either as a raw user message or already ChatML-framed by the
+    client; both return one ChatML prompt ending at the assistant turn opening.
+    Passages go INSIDE the final user turn, ahead of the question, which is the
+    shape the grounded A/B measured. Retrieving nothing returns `prompt` untouched
+    rather than an empty context block.
+    """
+    body = _passage_body(passages, max_bytes, compressor)
+    if not body:
+        return prompt
+    cut = prompt.rfind(USER_OPEN)
+    if cut >= 0:
+        head = cut + len(USER_OPEN)
+        return prompt[:head] + body + PASSAGE_SEPARATOR + prompt[head:]
+    return USER_OPEN + body + PASSAGE_SEPARATOR + prompt + IM_END + "\n" + ASSISTANT_OPEN
 
 
 def make_word_ppl_compressor(brain, keep_frac: float = 0.5, max_ctx_bytes: int = 1024):
@@ -202,16 +110,14 @@ def make_word_ppl_compressor(brain, keep_frac: float = 0.5, max_ctx_bytes: int =
     aggregated to word boundaries by mean; words with the lowest mean
     NLL (most predictable from preceding bytes, least informative) are
     dropped. Single-space joiner between kept words.
-    `keep_frac` ∈ (0, 1] is the fraction of words to retain.
+    `keep_frac` in (0, 1] is the fraction of words to retain.
     `max_ctx_bytes` caps scoring cost; longer passages are truncated.
-    Smoke (85M, S60): word-level @ keep=0.5 ≈ 2× compression for
-    +0.19 nll on held-out continuations; @ keep=0.25 ≈ 4.3× for +0.27.
+    Smoke (85M, S60): word-level @ keep=0.5 ~ 2x compression for
+    +0.19 nll on held-out continuations; @ keep=0.25 ~ 4.3x for +0.27.
     Output is human-readable, unlike per-byte deletion."""
-    import re
-
     import torch
     import torch.nn.functional as F
-    _WORD_RE = re.compile(rb"\S+|\s+")
+    _BYTE_WORD_RE = re.compile(rb"\S+|\s+")
     keep_frac = max(1e-3, min(1.0, float(keep_frac)))
     max_ctx_bytes = max(64, int(max_ctx_bytes))
 
@@ -246,7 +152,7 @@ def make_word_ppl_compressor(brain, keep_frac: float = 0.5, max_ctx_bytes: int =
             from runtime import logs as logmod
             logmod.warn("rag", f"compressor scoring failed; passing through: {type(e).__name__}: {e}")
             return passage
-        spans = [(m.start(), m.end()) for m in _WORD_RE.finditer(b)
+        spans = [(m.start(), m.end()) for m in _BYTE_WORD_RE.finditer(b)
                  if not m.group(0).isspace()]
         if not spans:
             return passage
@@ -272,23 +178,21 @@ def crude_compressor(passage: str, ratio: float = 0.5) -> str:
     substitute for LongLLMLingua; this is a smoke baseline."""
     if not passage or ratio >= 1.0:
         return passage
-    import re
-    sentences = re.split(r'(?<=[.!?])\s+', passage)
+    sentences = _SENTENCE_SPLIT_RE.split(passage)
     if len(sentences) <= 1:
         return passage[:int(len(passage) * ratio)]
-    # Score each sentence by its fraction of capitalized words + digits
+
     def info_score(s: str) -> float:
-        words = re.findall(r"\S+", s)
+        words = _WORD_RE.findall(s)
         if not words:
             return 0.0
         caps = sum(1 for w in words if w[:1].isupper())
         digs = sum(1 for w in words if any(c.isdigit() for c in w))
         return (caps + 2 * digs) / len(words)
+
     scored = [(info_score(s), s) for s in sentences]
     scored.sort(reverse=True)
     keep = max(1, int(len(scored) * ratio))
-    selected = scored[:keep]
-    # Restore original order
-    selected_set = {id(s) for _, s in selected}
+    selected_set = {id(s) for _, s in scored[:keep]}
     out = [s for s in sentences if id(s) in selected_set]
     return " ".join(out) or sentences[0]

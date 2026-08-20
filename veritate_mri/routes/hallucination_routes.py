@@ -9,7 +9,7 @@
 #   with their per-byte confidence stream, and hands them to inference.hallucination
 #   for span/grounding/divergence/provenance scoring. Owns no decode loop and pins
 #   no model: reuses hybrid_routes framing + backend loaders and backends_routes
-#   streaming, the same state the chat page uses.
+#   streaming, the same state the serving routes use.
 # - The training-provenance index is built once per process over a bounded sample
 #   of trainers/corpus (cheap, similarity-only proxy) and cached in _TRAIN_INDEX.
 # veritate_mri/routes/hallucination_routes.py

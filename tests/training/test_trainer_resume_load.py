@@ -53,7 +53,7 @@ class _Net(nn.Module):
 def ckpt(tmp_path, trainer, monkeypatch):
     """Write a checkpoint holding `blocks` linear layers, keyed like the trainer's."""
     def _make(blocks=4, name="faker", step=100, prefix=""):
-        path = tmp_path / ("step_%d.pt" % step)
+        path = tmp_path / f"step_{step}.pt"
         sd = {prefix + k: v for k, v in _Net(blocks).state_dict().items()}
         torch.save({"model": sd, "step": step, "optimizer": {"state": {}}}, path)
         monkeypatch.setattr(trainer.paths, "checkpoint_path",

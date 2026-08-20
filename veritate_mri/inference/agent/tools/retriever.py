@@ -37,7 +37,6 @@ _CHUNK_OVERLAP = 128
 _TOP_K_DEFAULT = 4
 _K_MIN         = 1
 _K_MAX         = 16
-_PREVIEW_CHARS = 480
 
 _BM25_K1 = 1.5
 _BM25_B  = 0.75
@@ -49,7 +48,7 @@ _TOOL_NAME        = "retrieve"
 _TOOL_DESCRIPTION = "Search a local text corpus by keywords. Returns top-K chunks by BM25 score."
 _QUERY_DOC        = "Search query (free text). Tokens are matched case-insensitively."
 _K_DOC_FMT        = "Number of results to return (default {default}, max {maximum})."
-_HIT_FMT          = "[{source} @{offset}] (score {score:.2f}) {preview}"
+_HIT_FMT          = "[{source} @{offset}] (score {score:.2f}) {chunk}"
 _HIT_SEPARATOR    = "\n\n"
 _NO_MATCHES       = "no matches"
 
@@ -185,9 +184,12 @@ def make_tool(corpus_path: str, top_k: int = _TOP_K_DEFAULT,
         lines = []
         for score, did in hits:
             src, off = chunk_sources[did]
-            chunk = idx.chunks[did][1]
-            preview = chunk[:_PREVIEW_CHARS].replace("\n", " ").strip()
-            lines.append(_HIT_FMT.format(source=src, offset=off, score=score, preview=preview))
+            # Whole chunk, never a preview: this string IS the context the reader
+            # gets, so truncating here silently drops the answer whenever it sits
+            # past the cut. Newlines flatten because callers split hits on a blank
+            # line; consumers cap length themselves.
+            chunk = idx.chunks[did][1].replace("\n", " ").strip()
+            lines.append(_HIT_FMT.format(source=src, offset=off, score=score, chunk=chunk))
         return _HIT_SEPARATOR.join(lines)
 
     return Tool(

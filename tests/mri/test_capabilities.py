@@ -56,12 +56,12 @@ def test_read_new_schema_block(monkeypatch, tmp_path):
 
 def test_modes_for_corpus_single_chat():
     """A chat catalog stem resolves to the chat tier."""
-    assert caps.modes_for_corpus("chat_50mb") == ("chat",)
+    assert caps.modes_for_corpus("mixed_chat") == ("chat",)
 
 
 def test_modes_for_corpus_mix_unions_tiers():
     """A chat+agent mix spec unions both tiers in TIERS order."""
-    assert caps.modes_for_corpus("chat_50mb:1,agent_15mb:1") == ("chat", "agent")
+    assert caps.modes_for_corpus("mixed_chat:1,agent:1") == ("chat", "agent")
 
 
 def test_modes_for_corpus_custom_stem_empty():
