@@ -177,6 +177,21 @@
         </div>
       </div>
 
+      <!-- sleep review: the model's consolidation life, directly below the chat.
+           Live status plus the recent history of sleeps (training/sleep.py). -->
+      <div id="sleepPanel" class="sleep-panel" style="display:none">
+        <div class="sleep-head">
+          <span class="sleep-title">sleep</span>
+          <span id="sleepStateChip" class="stat gen-chip"></span>
+          <span id="sleepMeta" class="stat gen-chip"></span>
+          <span style="margin-left:auto"></span>
+          <button id="sleepNowBtn" style="display:none" title="Skip the idle timer and consolidate now (still requires enough new exchanges)">sleep now</button>
+          <button id="sleepWakeBtn" style="display:none" title="Stop the run; the model keeps everything up to its last sleep checkpoint">wake</button>
+        </div>
+        <div id="sleepActivity" class="sleep-activity" style="display:none"></div>
+        <div id="sleepHistory" class="sleep-history"></div>
+      </div>
+
       <details id="advancedWrap">
       <summary>advanced <span>- engine, sampling, decode, RAG, tools, addons</span></summary>
       <div class="controls adv-row">
@@ -1123,15 +1138,6 @@
     <p class="desc" title="The trainer is veritate_mri/training/veritate_trainer.py. It reads a corpus from data/corpus/ and writes to models/<name>/."><code>veritate_trainer.py</code> &rarr; <code>data/corpus/</code> &rarr; <code>models/&lt;name&gt;/</code> (hover for full layout)</p>
   </div>
 
-  <div class="panel" id="trainFilesPanel" style="margin-bottom:16px;display:none">
-    <h2>training files <em>delete old synth job output you no longer need</em></h2>
-    <div class="body">
-      <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Each synth run writes to <code>veritate_mri/data/synth_jobs/&lt;job_id&gt;/</code> (samples, cache, state). Deleting one removes those files from disk. Built corpora and trained models are not touched.</div>
-      <div id="trainFilesList" class="meta" style="font-size:11px;color:var(--dim)">loading&hellip;</div>
-      <button id="trainFilesRefresh" type="button" style="margin-top:10px">refresh</button>
-    </div>
-  </div>
-
   <div id="trainMetricsSection">
   <div class="panel" style="margin-bottom: 10px;">
     <h2>live training <em>loss curve from train.csv. brain-scan rows appear when the trainer publishes them.</em><span id="trainStreamStatus" class="stat" style="margin-left:auto;font-size:10.5px;color:var(--dim)"></span></h2>
@@ -1362,11 +1368,11 @@
 <!-- ========================= DISTILLATION TAB ========================= -->
 <div class="tab-body" data-tab="distillation">
 
-  <div class="panel" style="margin-bottom:16px;padding:22px 24px">
+  <div class="panel dist-panel">
     <h2>distillation <em>a bigger model writes the training data for a smaller one</em></h2>
     <div class="body">
 
-      <div class="meta dist-intro">The teacher selected in Settings writes original records; every one is quality-gated before it is kept; what survives is packed into a corpus you can train on. Nothing here changes a model &mdash; it produces data.</div>
+      <div class="meta dist-intro">The teacher selected in Settings writes original records; every one is quality-gated before it is kept; what survives is packed into a corpus you can train on. Nothing here changes a model, it only produces data.</div>
 
       <div id="distTeacherBar" class="dist-teacher-bar">
         <span class="dist-teacher-label">teacher</span>
@@ -1384,202 +1390,327 @@
 
       <div class="dist-mode-row" role="tablist" aria-label="distillation mode">
         <button class="dist-mode" data-mode="interview" type="button" role="tab">
-          <span class="dist-mode-title">Interview the teacher <span class="dist-rec">recommended</span></span>
+          <span class="dist-mode-title">Interview the teacher<span class="dist-mode-live" title="a run is active in this mode"></span></span>
           <span class="dist-mode-desc">Ask the teacher real questions and keep its real answers, then follow up. Produces conversation-length replies and any depth you want.</span>
         </button>
         <button class="dist-mode" data-mode="author" type="button" role="tab">
-          <span class="dist-mode-title">Author a corpus</span>
+          <span class="dist-mode-title">Author a corpus<span class="dist-mode-live" title="a run is active in this mode"></span></span>
           <span class="dist-mode-desc">The teacher invents conversations and prose from a genre spec. This is the path to a chat corpus.</span>
         </button>
         <button class="dist-mode" data-mode="synth" type="button" role="tab">
-          <span class="dist-mode-title">Answer seed prompts</span>
+          <span class="dist-mode-title">Answer seed prompts<span class="dist-mode-live" title="a run is active in this mode"></span></span>
           <span class="dist-mode-desc">The teacher answers a fixed list of seed prompts. Use when you already have the questions.</span>
         </button>
       </div>
     </div>
   </div>
 
-  <div class="panel" style="margin-bottom:16px;padding:22px 24px">
+  <div class="panel dist-panel">
     <div class="body">
-      <div id="interviewPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
-        <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Interview the teacher</div>
-        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Two passes. First the teacher writes opening questions a person might ask. Then each one is actually <em>asked</em>, and its real answer is kept. Follow-up questions are generated from the exchange, so conversations go as deep as you set &mdash; past the 7-turn limit every public dataset has. Reply length is a deliberate blend: about a fifth short, half normal, a quarter long and thorough. Every conversation still passes the same quality gates as authoring.</div>
 
-        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px">
-          <label>subject area
-            <select id="interviewVertical" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:230px">
-              <option value="">loading&hellip;</option>
-            </select>
-          </label>
-          <span id="interviewVerticalNote" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+      <div id="interviewPanel" class="dist-work" style="display:none">
+        <div class="dist-work-head">
+          <span class="dist-work-title">Interview the teacher</span>
+          <span class="dist-note dist-config">Two passes. First the teacher writes opening questions a person might ask. Then each one is actually <em>asked</em>, and its real answer is kept. Follow-up questions are generated from the exchange, so conversations go as deep as you set, past the 7-turn limit every public dataset has. Reply length is a deliberate blend: about a fifth short, half normal, a quarter long and thorough. Every conversation still passes the same quality gates as authoring.</span>
         </div>
-        <div class="dist-topic-head">
-          <span>topics &mdash; pick as many as you want, each becomes part of this corpus</span>
-          <span>
-            <button id="interviewTopicAll" class="action dist-mini" type="button">all</button>
-            <button id="interviewTopicNone" class="action dist-mini" type="button">none</button>
-          </span>
+
+        <div id="interviewRunBar" class="dist-run-bar" style="display:none">
+          <span id="interviewRunWhat" class="dist-run-what"></span>
+          <button id="interviewStopBtn" class="action dist-stop" type="button">Stop</button>
         </div>
-        <div id="interviewTopicList" class="dist-topic-list"></div>
-        <div id="interviewGenreList" class="author-genre-list" style="display:none"></div>
-        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
-          <label>destination
-            <select id="interviewJobSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:220px">
-              <option value="">&mdash; new corpus &mdash;</option>
-            </select>
-          </label>
-          <label title="How many complete conversations to generate.">conversations
-            <input type="number" id="interviewCount" min="1" step="1" value="50" style="width:90px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-          </label>
-          <label title="Assistant replies per conversation. Each one costs two teacher calls, so depth is the main driver of run time.">depth
-            <input type="number" id="interviewDepth" min="1" max="20" step="1" value="3" style="width:70px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-          </label>
-          <label title="How many conversations run at once. Higher finishes sooner and loads the machine harder.">at once
-            <select id="interviewConcurrency" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-              <option value="">settings default</option>
-            </select>
-          </label>
-          <button id="interviewStartBtn" class="action" type="button">Start interviewing</button>
-          <button id="interviewStopBtn" class="action" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
+
+        <div class="dist-step dist-config">
+          <div class="dist-step-head">choose the subject and topics</div>
+          <div class="dist-fields">
+            <label class="dist-field"><span>subject area</span>
+              <select id="interviewVertical" class="dist-wide">
+                <option value="">loading&hellip;</option>
+              </select>
+            </label>
+            <span id="interviewVerticalNote" class="dist-note dist-field-note"></span>
+          </div>
+          <div class="dist-topic-head">
+            <span>topics. Pick as many as you want, each becomes part of this corpus.</span>
+            <span>
+              <button id="interviewTopicAll" class="action dist-mini" type="button">all</button>
+              <button id="interviewTopicNone" class="action dist-mini" type="button">none</button>
+            </span>
+          </div>
+          <div id="interviewTopicList" class="dist-topic-list"></div>
+          <div id="interviewGenreList" class="author-genre-list" style="display:none"></div>
         </div>
-        <div id="interviewCostLine" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:6px"></div>
-        <div id="interviewPlanLine" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
-        <div id="interviewRepWarn" class="author-warn" style="display:none"></div>
-        <div id="interviewStatsRow" class="author-stats" style="display:none"></div>
-        <div id="interviewProgress" class="dist-progress" style="display:none">
-          <div class="dist-progress-track"><div id="interviewProgressFill" class="dist-progress-fill" style="width:0%"></div></div>
-          <div class="dist-progress-legend">
-            <span id="interviewProgressLeft"></span>
-            <span id="interviewProgressMid"></span>
-            <span id="interviewProgressRight"></span>
+
+        <div class="dist-step dist-config">
+          <div class="dist-step-head">set the size and start</div>
+          <div class="dist-step-sub">A conversation is one complete dialogue between a person and the teacher. You are asking for <b>conversations</b> of them, each <b>replies each</b> turns long, so the corpus ends up roughly that many turns in total. Every single reply costs two calls to the teacher, which is what makes the run take as long as it does.</div>
+          <div class="dist-fields">
+            <label class="dist-field"><span>save into</span>
+              <select id="interviewJobSelect" class="dist-wide">
+                <option value="">create a new corpus</option>
+              </select>
+              <small>new, or append to existing</small>
+            </label>
+            <label class="dist-field"><span>name it</span>
+              <input type="text" id="interviewJobName" class="dist-wide" maxlength="80" placeholder="name this corpus">
+              <small>optional, rename later</small>
+            </label>
+            <label class="dist-field"><span>conversations</span>
+              <input type="number" id="interviewCount" min="1" step="1" value="50" class="dist-num">
+              <small>separate dialogues in the corpus</small>
+            </label>
+            <label class="dist-field"><span>replies each</span>
+              <input type="number" id="interviewDepth" min="1" max="20" step="1" value="3" class="dist-num">
+              <small>how long each dialogue runs</small>
+            </label>
+            <label class="dist-field"><span>run in parallel</span>
+              <select id="interviewConcurrency">
+                <option value="">settings default</option>
+              </select>
+              <small>faster, heavier load</small>
+            </label>
+          </div>
+          <div class="dist-launch">
+            <button id="interviewStartBtn" class="action dist-go" type="button">Start interviewing</button>
+            <span id="interviewCostLine" class="dist-note dist-launch-note"></span>
           </div>
         </div>
-        <div id="interviewRejectRow" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px;word-break:break-word"></div>
-        <div id="interviewBuildRow" style="display:none;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
-          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:6px">Package what has been generated so far into <code>&lt;name&gt;_train.bin</code> and <code>&lt;name&gt;_val.bin</code>, then score it against the acceptance gate.</div>
-          <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-            <label>corpus name
-              <input type="text" id="interviewStem" placeholder="interview_chat_v1" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+
+        <div id="interviewProgressStep" class="dist-step" style="display:none">
+          <div class="dist-step-head">progress</div>
+          <div id="interviewOutcome" class="dist-outcome" style="display:none"></div>
+          <div id="interviewPlanLine" class="dist-note"></div>
+          <div id="interviewRepWarn" class="author-warn" style="display:none"></div>
+          <div id="interviewStatsRow" class="author-stats" style="display:none"></div>
+          <div id="interviewProgress" class="dist-progress" style="display:none">
+            <div class="dist-progress-track"><div id="interviewProgressFill" class="dist-progress-fill" style="width:0%"></div></div>
+            <div class="dist-progress-legend">
+              <span id="interviewProgressLeft"></span>
+              <span id="interviewProgressMid"></span>
+              <span id="interviewProgressRight"></span>
+            </div>
+          </div>
+          <div id="interviewRejectRow" class="dist-note dist-line dist-wrap"></div>
+
+          <div id="interviewLiveWrap" class="dist-live-wrap" style="display:none">
+            <div class="dist-live-head">
+              <span class="dist-live-title">latest conversations</span>
+              <span id="interviewLiveCount" class="dist-live-count"></span>
+            </div>
+            <div id="interviewLiveOutput" class="dist-live"></div>
+          </div>
+        </div>
+
+        <div id="interviewBuildRow" class="dist-step" style="display:none">
+          <div class="dist-step-head">package it into a corpus</div>
+          <div class="dist-note">Package what has been generated so far into <code>&lt;name&gt;_train.bin</code> and <code>&lt;name&gt;_val.bin</code>, then score it against the acceptance gate.</div>
+          <div class="dist-fields">
+            <label class="dist-field"><span>corpus name</span>
+              <input type="text" id="interviewStem" placeholder="interview_chat_v1">
             </label>
-            <label>label
-              <input type="text" id="interviewLabel" placeholder="Interview chat (v1)" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+            <label class="dist-field"><span>label</span>
+              <input type="text" id="interviewLabel" placeholder="Interview chat (v1)">
             </label>
-            <button id="interviewBuildBtn" class="action" type="button">Build corpus</button>
-            <span id="interviewBuildStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+          </div>
+          <div class="dist-launch">
+            <button id="interviewBuildBtn" class="action dist-go" type="button">Build corpus</button>
+            <span id="interviewBuildStatus" class="dist-note dist-launch-note"></span>
           </div>
           <div id="interviewHandoff" class="author-handoff" style="display:none"></div>
         </div>
-        <div id="interviewLiveWrap" style="display:none;margin-top:12px">
-          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:4px">latest conversations <span id="interviewLiveCount"></span></div>
-          <div id="interviewLiveOutput" style="max-height:340px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:8px;font:11px monospace;white-space:pre-wrap;word-break:break-word"></div>
-        </div>
+
       </div>
 
-      <div id="authorPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
-        <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Author a corpus</div>
-        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">The teacher writes original conversations and prose from scratch, one batch per call. Every record is checked before it is kept: schema, banned phrases, em dashes, duplicates, and repeated wording. Genres, prompts, the banned list, and the quality limits are editable data in <code>veritate_mri/data/authoring/corpus_spec.json</code>. Concurrency and the teacher model come from Settings.</div>
-
-        <div id="authorImportBlock" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">
-          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:6px">Already have externally-authored records (agent-written, not from the teacher above)? Import a directory of <code>*.jsonl</code> files: one bare record per line, <code>{"genre","voice","turns":[{"role","text"},...]}</code> or <code>{"genre","voice","text"}</code>. Every record runs through the exact same gates as teacher output before it is kept, and importing the same directory twice adds nothing the second time.</div>
-          <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-            <label>source directory
-              <input type="text" id="authorImportDir" placeholder="/path/to/authored_v1" style="width:320px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-            </label>
-            <button id="authorImportBtn" class="action" type="button">Import directory</button>
-            <span id="authorImportStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
-          </div>
-          <div id="authorImportResult" style="display:none;margin-top:8px;font-size:11px;line-height:1.6"></div>
+      <div id="authorPanel" class="dist-work" style="display:none">
+        <div class="dist-work-head">
+          <span class="dist-work-title">Author a corpus</span>
+          <span class="dist-note dist-config">The teacher writes original conversations and prose from scratch, one batch per call. Every record is checked before it is kept: schema, banned phrases, em dashes, duplicates, and repeated wording. Genres, prompts, the banned list, and the quality limits are editable data in <code>veritate_mri/data/authoring/corpus_spec.json</code>. Concurrency and the teacher model come from Settings.</span>
         </div>
 
-        <div id="authorGenreList" class="author-genre-list"></div>
-        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
-          <label>destination
-            <select id="authorJobSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:220px">
-              <option value="">&mdash; new corpus &mdash;</option>
-            </select>
-          </label>
-          <label>target size (MB)
-            <input type="number" id="authorTargetMb" min="1" step="1" value="50" style="width:90px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-          </label>
-          <label title="How many teacher calls run at once. Leave blank to use the value saved in Settings.">calls at once
-            <input type="number" id="authorConcurrency" min="1" max="128" placeholder="settings" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-          </label>
-          <label title="Share of 5-word sequences that must be unique. Below this the corpus is repeating itself and the run is warned loudly.">variety floor
-            <input type="number" id="authorNgramFloor" min="0" max="1" step="0.01" value="0.9" style="width:80px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-          </label>
-          <button id="authorStartBtn" class="action" type="button">Start authoring</button>
-          <button id="authorStopBtn" class="action" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
+        <div id="authorRunBar" class="dist-run-bar" style="display:none">
+          <span id="authorRunWhat" class="dist-run-what"></span>
+          <button id="authorStopBtn" class="action dist-stop" type="button">Stop</button>
         </div>
-        <div id="authorPlanLine" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:6px"></div>
-        <div id="authorRepWarn" class="author-warn" style="display:none"></div>
-        <div id="authorStatsRow" class="author-stats" style="display:none"></div>
-        <div id="authorProgress" class="dist-progress" style="display:none">
-          <div class="dist-progress-track"><div id="authorProgressFill" class="dist-progress-fill" style="width:0%"></div></div>
-          <div class="dist-progress-legend">
-            <span id="authorProgressLeft"></span>
-            <span id="authorProgressMid"></span>
-            <span id="authorProgressRight"></span>
+
+        <div class="dist-step dist-config">
+          <div class="dist-step-head">choose genres</div>
+          <div id="authorGenreList" class="author-genre-list"></div>
+        </div>
+
+        <div class="dist-step dist-config">
+          <div class="dist-step-head">set the size and start</div>
+          <div class="dist-step-sub">The run keeps calling the teacher until the corpus reaches the target size, then stops. Records that repeat what is already there are thrown away, so a low <b>variety floor</b> is the warning that the teacher has run out of things to say.</div>
+          <div class="dist-fields">
+            <label class="dist-field"><span>save into</span>
+              <select id="authorJobSelect" class="dist-wide">
+                <option value="">create a new corpus</option>
+              </select>
+              <small>new, or append to existing</small>
+            </label>
+            <label class="dist-field"><span>name it</span>
+              <input type="text" id="authorJobName" class="dist-wide" maxlength="80" placeholder="name this corpus">
+              <small>optional, rename later</small>
+            </label>
+            <label class="dist-field"><span>target size (MB)</span>
+              <input type="number" id="authorTargetMb" min="1" step="1" value="50" class="dist-num">
+              <small>stops when reached</small>
+            </label>
+            <label class="dist-field"><span>run in parallel</span>
+              <input type="number" id="authorConcurrency" min="1" max="128" placeholder="settings" class="dist-num">
+              <small>faster, heavier load</small>
+            </label>
+            <label class="dist-field"><span>variety floor</span>
+              <input type="number" id="authorNgramFloor" min="0" max="1" step="0.01" value="0.9" class="dist-num">
+              <small>warns if phrasing repeats</small>
+            </label>
+          </div>
+          <div class="dist-launch">
+            <button id="authorStartBtn" class="action dist-go" type="button">Start authoring</button>
+            <span class="dist-note dist-launch-note">Writes until the target size is reached, then stops on its own.</span>
           </div>
         </div>
-        <div id="authorRejectRow" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px;word-break:break-word"></div>
-        <div id="authorBuildRow" style="display:none;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
-          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:6px">Package what has been authored so far into <code>&lt;name&gt;_train.bin</code> and <code>&lt;name&gt;_val.bin</code>, zip them, and add the corpus to the library.</div>
-          <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-            <label>corpus name
-              <input type="text" id="authorStem" placeholder="authored_chat_v1" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+
+        <div id="authorProgressStep" class="dist-step" style="display:none">
+          <div class="dist-step-head">progress</div>
+          <div id="authorOutcome" class="dist-outcome" style="display:none"></div>
+          <div id="authorPlanLine" class="dist-note"></div>
+          <div id="authorRepWarn" class="author-warn" style="display:none"></div>
+          <div id="authorStatsRow" class="author-stats" style="display:none"></div>
+          <div id="authorProgress" class="dist-progress" style="display:none">
+            <div class="dist-progress-track"><div id="authorProgressFill" class="dist-progress-fill" style="width:0%"></div></div>
+            <div class="dist-progress-legend">
+              <span id="authorProgressLeft"></span>
+              <span id="authorProgressMid"></span>
+              <span id="authorProgressRight"></span>
+            </div>
+          </div>
+          <div id="authorRejectRow" class="dist-note dist-line dist-wrap"></div>
+        </div>
+
+        <div id="authorBuildRow" class="dist-step" style="display:none">
+          <div class="dist-step-head">package it into a corpus</div>
+          <div class="dist-note">Package what has been authored so far into <code>&lt;name&gt;_train.bin</code> and <code>&lt;name&gt;_val.bin</code>, zip them, and add the corpus to the library.</div>
+          <div class="dist-fields">
+            <label class="dist-field"><span>corpus name</span>
+              <input type="text" id="authorStem" placeholder="authored_chat_v1">
             </label>
-            <label>label
-              <input type="text" id="authorLabel" placeholder="Authored chat (v1)" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
+            <label class="dist-field"><span>label</span>
+              <input type="text" id="authorLabel" placeholder="Authored chat (v1)">
             </label>
-            <button id="authorBuildBtn" class="action" type="button">Build corpus</button>
-            <span id="authorBuildStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+          </div>
+          <div class="dist-launch">
+            <button id="authorBuildBtn" class="action dist-go" type="button">Build corpus</button>
+            <span id="authorBuildStatus" class="dist-note dist-launch-note"></span>
           </div>
           <div id="authorHandoff" class="author-handoff" style="display:none"></div>
         </div>
-        <div id="authorLiveWrap" style="display:none;margin-top:12px">
-          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:4px">live output <span id="authorLiveCount"></span></div>
-          <div id="authorLiveOutput" style="max-height:300px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:8px;font:11px monospace;white-space:pre-wrap;word-break:break-word"></div>
-        </div>
+
+        <details id="authorImportBlock" class="dist-step dist-fold dist-config">
+          <summary>import externally-authored records</summary>
+          <div class="dist-note">Already have externally-authored records (agent-written, not from the teacher above)? Import a directory of <code>*.jsonl</code> files: one bare record per line, <code>{"genre","voice","turns":[{"role","text"},...]}</code> or <code>{"genre","voice","text"}</code>. Every record runs through the exact same gates as teacher output before it is kept, and importing the same directory twice adds nothing the second time.</div>
+          <div class="dist-fields">
+            <label class="dist-field"><span>source directory</span>
+              <input type="text" id="authorImportDir" placeholder="/path/to/authored_v1" class="dist-wide">
+            </label>
+            <div class="dist-field-actions">
+              <button id="authorImportBtn" class="action" type="button">Import directory</button>
+              <span id="authorImportStatus" class="dist-note"></span>
+            </div>
+          </div>
+          <div id="authorImportResult" class="dist-import-result" style="display:none"></div>
+        </details>
+
+        <details id="authorLiveWrap" class="dist-live-wrap" style="display:none">
+          <summary>live output <span id="authorLiveCount"></span></summary>
+          <div id="authorLiveOutput" class="dist-live"></div>
+        </details>
       </div>
 
-      <div id="synthPanel" style="display:none;border:1px solid var(--line);border-radius:4px;padding:12px 14px;margin-bottom:14px">
-        <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em;margin-bottom:6px">Synthetic Corpus</div>
-        <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:8px">Run the configured teacher over selected seed prompts. Output writes to <code>veritate_mri/data/synth_jobs/&lt;job_id&gt;/samples.jsonl</code>. When the job finishes, build a corpus from it, then train any model on that corpus via Start new / Continue.</div>
-        <div id="synthSeedList" class="synth-seed-list"></div>
-        <div class="inline" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
-          <label>destination
-            <select id="synthJobSelect" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px;min-width:240px">
-              <option value="">&mdash; new job &mdash;</option>
-            </select>
-          </label>
-          <label>format
-            <select id="synthFormat" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:5px 8px;font:inherit;border-radius:3px">
-              <option value="text">text</option>
-              <option value="json">json</option>
-            </select>
-          </label>
-          <button id="synthStartBtn" class="action" type="button">Start Synthesis</button>
-          <button id="synthStopPollBtn" class="action" type="button" style="display:none;background:var(--hot);color:#000;font-weight:600">Stop</button>
-          <span id="synthStatusLine" class="meta" style="flex-basis:100%;font-size:10.5px;color:var(--dim);margin-top:2px;word-break:break-word"></span>
+      <div id="synthPanel" class="dist-work" style="display:none">
+        <div class="dist-work-head">
+          <span class="dist-work-title">Answer seed prompts</span>
+          <span class="dist-note dist-config">Run the configured teacher over selected seed prompts. Output writes to <code>veritate_mri/data/synth_jobs/&lt;job_id&gt;/samples.jsonl</code>. When the job finishes, build a corpus from it, then train any model on that corpus via Start new / Continue.</span>
         </div>
-        <div id="synthJobInfo" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:6px;display:none"></div>
-        <div id="synthBuildRow" class="inline" style="gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;display:none">
-          <label>corpus name
-            <input type="text" id="synthCorpusStem" placeholder="teacher_synth" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 8px;font:inherit;border-radius:3px;font-size:11px;margin-left:4px">
-          </label>
-          <button id="synthBuildBtn" class="action" type="button">Build corpus</button>
-          <span id="synthBuildStatus" class="meta" style="font-size:10.5px;color:var(--dim)"></span>
+
+        <div id="synthRunBar" class="dist-run-bar" style="display:none">
+          <span id="synthRunWhat" class="dist-run-what"></span>
+          <button id="synthStopPollBtn" class="action dist-stop" type="button">Stop</button>
         </div>
-        <div id="synthLiveWrap" style="display:none;margin-top:12px">
-          <div class="meta" style="font-size:10.5px;color:var(--dim);margin-bottom:4px">live output <span id="synthLiveCount"></span></div>
-          <div id="synthLiveOutput" style="max-height:340px;overflow-y:auto;background:#0a0c12;border:1px solid var(--line);border-radius:3px;padding:8px;font:11px monospace;white-space:pre-wrap;word-break:break-word"></div>
+
+        <div class="dist-step dist-config">
+          <div class="dist-step-head">pick seed packs</div>
+          <div id="synthSeedList" class="synth-seed-list"></div>
         </div>
+
+        <div class="dist-step dist-config">
+          <div class="dist-step-head">choose a destination and start</div>
+          <div class="dist-step-sub">Every seed prompt above is sent to the teacher once and the reply is kept verbatim. The run is as big as the seed packs you picked, so there is no size to set.</div>
+          <div class="dist-fields">
+            <label class="dist-field"><span>save into</span>
+              <select id="synthJobSelect" class="dist-wide">
+                <option value="">create a new corpus</option>
+              </select>
+              <small>new, or append to existing</small>
+            </label>
+            <label class="dist-field"><span>name it</span>
+              <input type="text" id="synthJobName" class="dist-wide" maxlength="80" placeholder="name this corpus">
+              <small>optional, rename later</small>
+            </label>
+            <label class="dist-field"><span>format</span>
+              <select id="synthFormat">
+                <option value="text">text</option>
+                <option value="json">json</option>
+              </select>
+              <small>json keeps turn structure</small>
+            </label>
+          </div>
+          <div class="dist-launch">
+            <button id="synthStartBtn" class="action dist-go" type="button">Start synthesis</button>
+            <span class="dist-note dist-launch-note">Sends every seed prompt above to the teacher once.</span>
+          </div>
+        </div>
+
+        <div id="synthProgressStep" class="dist-step" style="display:none">
+          <div class="dist-step-head">progress</div>
+          <div id="synthOutcome" class="dist-outcome" style="display:none"></div>
+          <div id="synthStatusLine" class="dist-note dist-wrap"></div>
+          <div id="synthJobInfo" class="dist-note dist-line" style="display:none"></div>
+        </div>
+
+        <div id="synthBuildRow" class="dist-step" style="display:none">
+          <div class="dist-step-head">package it into a corpus</div>
+          <div class="dist-fields">
+            <label class="dist-field"><span>corpus name</span>
+              <input type="text" id="synthCorpusStem" placeholder="teacher_synth">
+            </label>
+          </div>
+          <div class="dist-launch">
+            <button id="synthBuildBtn" class="action dist-go" type="button">Build corpus</button>
+            <span id="synthBuildStatus" class="dist-note dist-launch-note"></span>
+          </div>
+        </div>
+
+        <details id="synthLiveWrap" class="dist-live-wrap" style="display:none">
+          <summary>live output <span id="synthLiveCount"></span></summary>
+          <div id="synthLiveOutput" class="dist-live"></div>
+        </details>
       </div>
 
     </div>
   </div>
 
-  <div id="distAuditPanel" class="panel" style="display:none;margin-bottom:16px;padding:22px 24px">
+  <div class="panel dist-panel">
+    <h2>corpora on disk <em>every job this tab has written</em></h2>
+    <div class="body">
+      <div class="meta dist-intro">Each row is one directory under <code>veritate_mri/data/synth_jobs/</code>: the raw records a run produced, before packaging. <b>view</b> opens the records themselves and pages through them. <b>rename</b> gives a corpus a name you will recognise in the pickers above. Deleting one removes those files from disk; built corpora and trained models are not touched.</div>
+      <div class="dist-jobs-bar">
+        <span id="distJobsSummary" class="dist-note"></span>
+        <button id="distJobsRefresh" class="action dist-mini" type="button">refresh</button>
+      </div>
+      <div id="distJobsList" class="dist-jobs">loading&hellip;</div>
+    </div>
+  </div>
+
+  <div id="distAuditPanel" class="panel dist-panel" style="display:none">
     <h2>corpus acceptance <em>measured on the bin that was just built</em></h2>
     <div class="body">
       <div class="meta dist-intro">Scored by unique turns and unique content bytes, never by file size. The retired <code>chat_5gb</code> passed every size check the platform had while holding 708 unique user turns in 5.14 GB.</div>
@@ -2256,6 +2387,25 @@
   </div>
 </div>
 
+<div id="distViewModal" class="modal-backdrop hidden">
+  <div class="modal-box dist-view-box">
+    <div class="modal-header">
+      <h3 id="distViewTitle">corpus</h3>
+      <button id="distViewClose">&times;</button>
+    </div>
+    <div class="dist-view-bar">
+      <span id="distViewRange" class="dist-note"></span>
+      <span class="dist-view-nav">
+        <button id="distViewPrev" class="action dist-mini" type="button">&larr; back</button>
+        <input type="number" id="distViewJump" min="1" step="1" class="dist-num" title="jump to a record number">
+        <button id="distViewGo" class="action dist-mini" type="button">go</button>
+        <button id="distViewNext" class="action dist-mini" type="button">next &rarr;</button>
+      </span>
+    </div>
+    <div id="distViewBody" class="dist-view-body"></div>
+  </div>
+</div>
+
 <div id="trainFlowModal" class="modal-backdrop hidden">
   <div class="modal-box" style="max-width:720px">
     <div class="modal-header">
@@ -2277,13 +2427,6 @@
         <button class="train-flow-card" data-flow="rag" type="button">
           <span class="train-flow-card-title">Answer from context (RAG)</span>
           <span class="train-flow-card-desc">Fine-tune to answer from supplied text.</span>
-        </button>
-      </div>
-      <div class="train-flow-group">
-        <div class="train-flow-group-title">Prepare data</div>
-        <button class="train-flow-card" data-flow="distillation" type="button">
-          <span class="train-flow-card-title">Distill a corpus</span>
-          <span class="train-flow-card-desc">Have the teacher write training data, quality-gated. Opens the Distillation tab, which also runs while a model is training.</span>
         </button>
       </div>
       <div class="train-flow-group">
@@ -2469,6 +2612,46 @@
         <button id="forkModelConfirm" class="action" type="button" style="border-color:var(--accent);color:var(--accent);font-weight:600">fork &amp; switch to new model</button>
         <button id="forkModelCancel"  class="action" type="button">cancel</button>
         <span id="forkModelStatus" class="meta" style="font-size:10.5px"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="growModelModal" class="modal-backdrop hidden">
+  <div class="modal-box" style="max-width:620px">
+    <div class="modal-header">
+      <h3>Grow model</h3>
+      <button id="growModelModalClose">×</button>
+    </div>
+    <div style="font-size:12px;line-height:1.55;color:var(--text);display:flex;flex-direction:column;gap:10px">
+      <div id="growModelSummary" style="color:var(--text);font-size:12px"></div>
+      <div style="color:var(--dim);font-size:11px;line-height:1.5">
+        A grown model computes <b>exactly what the source computes</b> — bigger and slower until you continue training it. Continue-train with warmup. Growth is function-preserving (Net2Net duplication + identity blocks); the new model starts at step 0 with a fresh optimizer and the source is left untouched.
+      </div>
+      <div class="inline" style="gap:12px;flex-wrap:wrap">
+        <label style="display:flex;flex-direction:column;gap:3px">
+          <span style="font-size:11px;color:var(--dim)">source checkpoint</span>
+          <select id="growModelStep" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:monospace"></select>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:3px">
+          <span style="font-size:11px;color:var(--dim)">target size</span>
+          <select id="growModelTarget" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:monospace"></select>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:3px">
+          <span style="font-size:11px;color:var(--dim)">context (seq)</span>
+          <select id="growModelSeq" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:monospace"></select>
+        </label>
+      </div>
+      <div id="growModelParams" style="font-size:11px;color:var(--dim);min-height:14px"></div>
+      <label style="display:flex;flex-direction:column;gap:3px">
+        <span style="font-size:11px;color:var(--dim)">new model name</span>
+        <input type="text" id="growModelNewName" placeholder="my_bigger_model" style="background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 8px;font-size:11.5px;color:var(--text);font-family:monospace">
+        <span id="growModelNameValidity" style="font-size:10.5px;color:var(--hot);min-height:14px"></span>
+      </label>
+      <div class="inline" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+        <button id="growModelConfirm" class="action" type="button" style="border-color:var(--accent);color:var(--accent);font-weight:600">grow to new model</button>
+        <button id="growModelCancel"  class="action" type="button">cancel</button>
+        <span id="growModelStatus" class="meta" style="font-size:10.5px"></span>
       </div>
     </div>
   </div>

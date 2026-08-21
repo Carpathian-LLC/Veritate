@@ -77,6 +77,7 @@ ignore = [
 "veritate_mri/training/rag_sft.py"          = ["T20"]  # rag sft subprocess; stdout is .rag_run.log
 "veritate_mri/training/builders/**"         = ["T20"]  # standalone eval-set builders; stdout is the build report
 "veritate_mri/training/checkpoint_probe.py" = ["T20"]  # CLI probe entry; main() lists written artifacts on stdout
+"veritate_mri/training/grow.py"             = ["T20"]  # growth CLI entry; main() reports the shape/param delta on stdout
 "veritate_mri/eval/**"                      = ["T20"]  # eval CLI; --verbose and the report print, in-process uses progress_cb
 
 # Signatures fixed by a contract, so a parameter a given implementation ignores must still be accepted.

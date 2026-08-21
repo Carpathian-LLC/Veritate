@@ -90,6 +90,20 @@
   .gen-chip-warm a { color: var(--accent); text-decoration: underline; }
   .gen-chip-hot { color: var(--hot); border: 1px solid var(--hot); border-radius: 3px; padding: 2px 8px; }
 
+  /* sleep review box, directly below the chat composer */
+  .sleep-panel { margin-top: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; background: #0a0c12; }
+  .sleep-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sleep-title { color: var(--accent); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; }
+  .sleep-head button { padding: 3px 10px; font-size: 11px; }
+  .sleep-activity { margin-top: 6px; font-size: 11px; color: var(--dim); letter-spacing: 1px; white-space: nowrap; overflow-x: auto; }
+  .sleep-activity b { color: var(--accent); font-weight: 400; }
+  .sleep-history { margin-top: 6px; font-size: 11px; color: var(--dim); max-height: 140px; overflow-y: auto; }
+  .sleep-history:empty { display: none; }
+  .sleep-history .ev { display: flex; gap: 10px; padding: 2px 0; border-top: 1px dotted var(--line); }
+  .sleep-history .ev:first-child { border-top: 0; }
+  .sleep-history .ev time { flex: 0 0 auto; color: var(--dim); opacity: .7; }
+  .sleep-history .ev span { color: var(--text); }
+
   /* Mode picker as one segmented control: three exclusive states read as one control. */
   .mode-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
   .mode-seg label { margin: 0; padding: 5px 14px; font-size: 11px; color: var(--dim); cursor: pointer; border-right: 1px solid var(--line); background: #0a0c12; transition: color .15s, background .15s; }
@@ -1065,7 +1079,7 @@
   body.training-active #trainFormWrap,
   body.training-active #trainRun,
   body.training-active #trainFormToggle { display: none !important; }
-  body.training-active .train-flow-card:not([data-flow="export"]):not([data-flow="distillation"]) { opacity: 0.35; pointer-events: none; }
+  body.training-active .train-flow-card:not([data-flow="export"]) { opacity: 0.35; pointer-events: none; }
   body.training-active .train-flow-card[data-flow="export"] .train-flow-card-desc::after { content: " Works while a run is training."; color: var(--data-pos); }
 
   /* hallucination panel */
@@ -1122,6 +1136,158 @@
   .halluc-sent .g-dot.g-no { background: var(--hot); }
 
   /* ---- distillation tab ---- */
+  /* One control style for the whole tab. Every field used to carry its own
+     inline style, which is why no two rows lined up. */
+  .tab-body[data-tab="distillation"] select,
+  .tab-body[data-tab="distillation"] input[type=text],
+  .tab-body[data-tab="distillation"] input[type=number] {
+    background: #0a0c12; border: 1px solid var(--line); color: var(--text);
+    padding: 7px 9px; font: inherit; font-size: 11.5px; border-radius: 3px; width: 100%;
+  }
+  .tab-body[data-tab="distillation"] select:focus,
+  .tab-body[data-tab="distillation"] input:focus { outline: none; border-color: var(--accent); }
+  .dist-panel { margin-bottom: 20px; padding: 24px 26px; }
+  .dist-panel > .body { padding-top: 4px; }
+
+  .dist-work-head { margin-bottom: 4px; }
+  .dist-work-title { display: block; color: var(--text); font-size: 13px; font-weight: 600; letter-spacing: .03em; margin-bottom: 7px; }
+  .dist-note { display: block; font-size: 11px; color: var(--dim); line-height: 1.6; max-width: 92ch; }
+  .dist-line { margin-top: 8px; }
+  .dist-wrap { word-break: break-word; }
+
+  /* Each mode is a three-step recipe: what to make, how much, then package it.
+     The numbered rules are the only thing separating them, so the eye can find
+     the start button without reading every paragraph. */
+  .dist-step { border-top: 1px solid var(--line); margin-top: 22px; padding-top: 20px; }
+  .dist-step-head { display: flex; align-items: center; gap: 9px; font-size: 11px; color: var(--soft); text-transform: uppercase; letter-spacing: .09em; font-weight: 600; margin-bottom: 12px; }
+  /* every step now explains itself in a sentence instead of wearing a number */
+  .dist-step-sub { font-size: 11px; color: var(--dim); line-height: 1.6; margin: -6px 0 13px; max-width: 78ch; }
+  .dist-step-sub b { color: var(--soft); font-weight: 600; }
+  .dist-step .dist-note + .dist-fields { margin-top: 12px; }
+
+  .dist-fields { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: flex-end; }
+  .dist-field { display: flex; flex-direction: column; gap: 6px; margin: 0; font-size: 10.5px; color: var(--dim); letter-spacing: .04em; }
+  .dist-field > span { text-transform: uppercase; }
+  .dist-field.dist-field-note { justify-content: flex-end; padding-bottom: 8px; }
+  /* per-field hint: a tooltip only helps someone who already suspects there is
+     something to hover, so the explanation is on the page instead */
+  .dist-field small { font-size: 9.5px; color: var(--dim); opacity: .62; letter-spacing: 0; text-transform: none; line-height: 1.4; max-width: 24ch; margin-top: -2px; }
+  .dist-field-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .dist-wide { min-width: 260px; }
+  .dist-num { max-width: 96px; }
+  .dist-go { font-weight: 600; padding: 7px 16px; }
+
+  /* The action that launches the run had been one more cell in the field grid,
+     wearing the same outline as Build corpus, all / none and Import directory.
+     It gets its own bar under a rule, and it is the only filled button on the
+     tab: nothing else competes for "this is the thing that starts it". */
+  /* Each step ends in one bar holding that step's single action, on a plain rule
+     like every other divider on the tab. No fill, no tint: the accent is a state,
+     not a decoration. `.is-next` is set by the poller on whichever button is the
+     next natural thing to press, so at most one button on screen is lit. */
+  .dist-launch { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+                 margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .dist-launch-note { flex: 1 1 220px; margin: 0; font-size: 10.5px; }
+  .dist-launch-note:empty { display: none; }
+  .dist-go { border-color: var(--line); color: var(--dim); }
+  .dist-go:hover { background: #232a3a; border-color: var(--accent); color: var(--text); }
+  .dist-go.is-next { border-color: var(--accent); color: var(--accent); }
+  .dist-go.is-next:hover { background: rgba(106,166,255,0.12); color: var(--accent); }
+  .dist-stop { background: var(--hot); border-color: var(--hot); color: #000; font-weight: 600; padding: 7px 16px; }
+
+  /* Running state: a run's settings are already fixed on the server, so the form
+     that set them is noise. Collapse every configuration block to one line that
+     says what is running, and leave progress, warnings, and output. */
+  .dist-work.is-running .dist-config { display: none; }
+  .dist-run-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding: 11px 14px; border: 1px solid var(--warm); border-left-width: 3px; border-radius: 4px; background: rgba(255,174,93,0.06); }
+  .dist-run-what { flex: 1 1 240px; font-size: 11.5px; color: var(--text); line-height: 1.5; }
+  .dist-work.is-running .dist-step.dist-config + .dist-step { border-top: 0; margin-top: 8px; padding-top: 0; }
+  .dist-mode-live { display: none; width: 7px; height: 7px; border-radius: 50%; background: var(--warm); margin-left: 7px; vertical-align: middle; }
+  .dist-mode.has-run .dist-mode-live { display: inline-block; }
+  .dist-mode.active .dist-mode-live { display: none; }
+
+  .dist-fold > summary, .dist-live-wrap > summary { cursor: pointer; color: var(--accent); font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; font-weight: 600; list-style: none; padding: 2px 0; }
+  .dist-fold > summary::-webkit-details-marker, .dist-live-wrap > summary::-webkit-details-marker { display: none; }
+  .dist-fold > summary::before, .dist-live-wrap > summary::before { content: "+ "; }
+  .dist-fold[open] > summary::before, .dist-live-wrap[open] > summary::before { content: "\2212 "; }
+  .dist-fold > summary { margin-bottom: 12px; }
+  .dist-live-wrap { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; }
+  .dist-live { max-height: 380px; overflow-y: auto; background: #0a0c12; border: 1px solid var(--line); border-radius: 3px; padding: 10px 12px; margin-top: 9px; }
+
+  /* live transcript header: a state light and a count, same weight as every
+     other section label on the tab */
+  .dist-live-head { display: flex; align-items: center; gap: 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; font-weight: 600; color: var(--accent); }
+  .dist-live-title { color: var(--accent); }
+  .dist-live-count { color: var(--dim); letter-spacing: 0; text-transform: none; font-weight: 400; margin-left: auto; }
+  @keyframes distPulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+  /* one conversation per card: what the seed asked, then what came back */
+  .dist-convo-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  .dist-convo-chip { font-size: 9.5px; color: var(--dim); border: 1px solid var(--line); border-radius: 8px; padding: 1px 7px; }
+  .dist-convo-facts { margin-left: auto; font-size: 9.5px; color: var(--dim); }
+  .dist-convo-seed { display: flex; gap: 8px; align-items: baseline; padding: 6px 8px; margin-bottom: 6px; border-left: 2px solid var(--accent); background: rgba(106,166,255,0.05); }
+  .dist-convo-seed-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .09em; color: var(--accent); font-weight: 600; flex: none; }
+  .dist-convo-who { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--accent); font-weight: 600; margin-bottom: 2px; }
+  .dist-convo-turn.asst .dist-convo-who { color: var(--cool); }
+  .dist-convo-text { font-size: 11.5px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .dist-convo.fresh { animation: distFresh .5s ease-out; }
+  @keyframes distFresh { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+  /* why the run is in the state it is in, before any of the numbers */
+  .dist-outcome { border: 1px solid var(--line); border-left-width: 3px; border-radius: 3px; padding: 10px 13px; margin-bottom: 12px; background: #0a0c12; }
+  .dist-outcome-head { display: flex; align-items: center; gap: 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; font-weight: 600; }
+  .dist-outcome-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: currentColor; }
+  .dist-outcome-job { margin-left: auto; color: var(--dim); text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 10px; }
+  .dist-outcome-why { font-size: 11px; color: var(--dim); line-height: 1.6; margin-top: 6px; max-width: 88ch; }
+  .dist-outcome-why b { color: var(--text); font-weight: 600; }
+  .dist-outcome-errs { display: flex; flex-wrap: wrap; gap: 5px 8px; margin-top: 8px; }
+  .dist-outcome-err { font-size: 10px; color: var(--dim); border: 1px solid var(--line); border-radius: 8px; padding: 2px 8px; }
+  .dist-outcome-err b { color: var(--hot); font-weight: 600; }
+  .dist-outcome.is-go   { border-left-color: var(--warm); } .dist-outcome.is-go   .dist-outcome-head { color: var(--warm); }
+  .dist-outcome.is-ok   { border-left-color: var(--data-pos); } .dist-outcome.is-ok   .dist-outcome-head { color: var(--data-pos); }
+  .dist-outcome.is-warn { border-left-color: var(--warm); } .dist-outcome.is-warn .dist-outcome-head { color: var(--warm); }
+  .dist-outcome.is-bad  { border-left-color: var(--hot); } .dist-outcome.is-bad  .dist-outcome-head { color: var(--hot); }
+  .dist-outcome.is-idle { border-left-color: var(--line); } .dist-outcome.is-idle .dist-outcome-head { color: var(--dim); }
+  .dist-outcome.is-go .dist-outcome-dot { animation: distPulse 1.4s ease-in-out infinite; }
+  .dist-import-result { margin-top: 12px; font-size: 11px; line-height: 1.6; }
+
+  /* Corpora on disk: the destination pickers name jobs by hex id, so this list
+     is where a job gets a human name or gets removed. */
+  .dist-jobs-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .dist-jobs-bar .dist-mini { margin-left: auto; }
+  .dist-jobs { display: flex; flex-direction: column; gap: 8px; font-size: 11px; color: var(--dim); }
+  .dist-job { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 11px 14px; border: 1px solid var(--line); border-radius: 4px; background: #0a0c12; }
+  .dist-job.running { border-left: 3px solid var(--warm); }
+  .dist-job-main { display: flex; flex-direction: column; gap: 4px; min-width: 240px; flex: 1 1 240px; }
+  .dist-job-name { color: var(--text); font-size: 12px; font-weight: 600; }
+  .dist-job-name input { font-size: 12px; }
+  .dist-job-id { font-family: ui-monospace, monospace; font-size: 10px; color: var(--dim); }
+  .dist-job-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 10.5px; color: var(--dim); flex: 2 1 260px; }
+  .dist-job-facts b { color: var(--soft); font-weight: 600; }
+  .dist-job-run { color: var(--warm); font-weight: 600; }
+  .dist-job-acts { display: flex; gap: 8px; margin-left: auto; }
+  .dist-job-acts .action { font-size: 10px; padding: 4px 10px; }
+  .dist-job-del { border-color: var(--hot); color: var(--hot); }
+  .dist-job-del:hover { background: rgba(255,93,93,0.12); }
+  .dist-job-empty { padding: 14px 2px; }
+
+  /* corpus viewer: a list of records is only worth keeping if you can read it */
+  .dist-view-box { max-width: 900px; width: 92vw; display: flex; flex-direction: column; max-height: 86vh; }
+  .dist-view-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 0 2px 10px; border-bottom: 1px solid var(--line); }
+  .dist-view-nav { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .dist-view-nav .dist-num { width: 78px; }
+  .dist-view-body { overflow-y: auto; padding: 12px 2px 2px; flex: 1 1 auto; min-height: 160px; }
+  .dist-rec-card { border: 1px solid var(--line); border-radius: 4px; background: #0a0c12; padding: 10px 13px; margin-bottom: 9px; }
+  .dist-rec-head { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; font-size: 10px; color: var(--dim); margin-bottom: 7px; }
+  .dist-rec-n { color: var(--accent); font-weight: 600; }
+  .dist-rec-id { font-family: ui-monospace, monospace; }
+  .dist-rec-tag { border: 1px solid var(--line); border-radius: 8px; padding: 1px 7px; }
+  .dist-rec-turn { display: block; font-size: 11.5px; color: var(--text); line-height: 1.62; margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }
+  .dist-rec-turn:last-child { margin-bottom: 0; }
+  .dist-rec-turn b { color: var(--accent); font-weight: 600; }
+  .dist-rec-turn.asst b { color: var(--cool); }
+  .dist-view-empty { color: var(--dim); font-size: 11px; padding: 18px 2px; }
+
   /* The teacher bar is the tab's status line: who is being called, where those
      calls land, and whether that machine is busy. It never collapses, so the
      answer is always in the same place on the page. */
@@ -1171,15 +1337,11 @@
   .dist-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
   .dist-confirm-go { border-color: var(--warm); color: var(--warm); font-weight: 600; }
 
-  /* interview mode: the recommended path, so it is marked as such rather than
-     left for the user to guess between three equal-looking cards */
-  .dist-rec { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--data-pos); border: 1px solid var(--data-pos); border-radius: 8px; padding: 1px 6px; margin-left: 6px; vertical-align: middle; font-weight: 600; }
-  .dist-convo { border-bottom: 1px solid var(--line); padding: 7px 0; }
-  .dist-convo:last-child { border-bottom: 0; }
-  .dist-convo-turn { display: block; margin-bottom: 3px; line-height: 1.5; }
-  .dist-convo-turn b { color: var(--accent); font-weight: 600; }
-  .dist-convo-turn.asst b { color: var(--cool); }
-  .dist-convo-len { color: var(--dim); font-size: 9.5px; }
+  .dist-convo { border: 1px solid var(--line); border-radius: 3px; padding: 9px 11px; margin-bottom: 8px; background: #0d111a; }
+  .dist-convo:last-child { margin-bottom: 0; }
+  .dist-convo-turn { display: block; margin-bottom: 7px; }
+  .dist-convo-turn:last-child { margin-bottom: 0; }
+  .dist-convo-len { color: var(--dim); font-size: 9px; font-weight: 400; letter-spacing: 0; margin-left: 6px; text-transform: none; }
 
   /* topic picker: 40 groups need to be scannable, so a dense grid with counts */
   .dist-topic-head { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: var(--dim); margin-bottom: 5px; gap: 10px; }

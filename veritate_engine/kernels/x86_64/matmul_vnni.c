@@ -248,6 +248,7 @@ static void vnni_worker(void* raw, int32_t worker_idx) {
 // pre-prepare b once. real inference loads weights once and reuses across forwards.
 // ------------------------------------------------------------------------------------
 
+VERITATE_BASELINE_CODEGEN
 void prep_b(const int8_t* b, int32_t n, int32_t k, prepped_b_t* out) {
     out->n             = n;
     out->k             = k;
@@ -275,6 +276,7 @@ void prep_b(const int8_t* b, int32_t n, int32_t k, prepped_b_t* out) {
 }
 
 // prep_b plus a row-major copy of b retained for the sparse decode path.
+VERITATE_BASELINE_CODEGEN
 void prep_b_keep_raw(const int8_t* b, int32_t n, int32_t k, prepped_b_t* out) {
     prep_b(b, n, k, out);
     out->b_rowmaj = (int8_t*)veritate_aligned_alloc((size_t)k * n, 64);

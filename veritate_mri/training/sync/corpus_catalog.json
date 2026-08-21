@@ -549,6 +549,25 @@
    "coming_soon": true,
    "recommended_min_params": null,
    "recommended_max_params": null
+  },
+  {
+   "stem": "fact_sft",
+   "label": "E4 memory benchmark (50 facts)",
+   "family": "carpathian",
+   "topic": "memory",
+   "description": "IDEA 20 E4 sleep-consolidation benchmark corpus: 50 novel person->attribute facts (25 residences, 25 occupations) x 20 templated augmentations each, both directions, rendered as assistant-masked chat turns. Deterministic rebuild: python -m tools.build_fact_sft veritate_mri/data/eval/e4_facts.json --per-fact 20 --seed 0. Validated recipe: fact_sft:0.75,mixed_chat:0.25 at constant lr 5e-6 (successes.md 2026-08-21, wren1_5@700 fwd 45/50 rev 49/50). Experiment artifact, not general training data: models trained on it will score high on tools/e4_retention_quiz.py by design.",
+   "format": "native",
+   "train_url": null,
+   "size_train": 110685,
+   "size_val": 5764,
+   "sha256_train": null,
+   "sha256_val": null,
+   "trained_modes": [
+    "chat"
+   ],
+   "coming_soon": false,
+   "recommended_min_params": null,
+   "recommended_max_params": null
   }
  ]
 }

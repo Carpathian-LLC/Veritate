@@ -17,6 +17,7 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import collections
 import contextlib
 import hashlib
 import importlib
@@ -56,8 +57,17 @@ SAMPLES_FILE = "samples.jsonl"
 STATE_FILE = "state.json"
 PLAN_FILE = "plan.json"
 JOB_META_FILE = "meta.json"
+JOB_LABEL_MAX = 80
+LINE_COUNT_CACHE_MAX = 256
 SAMPLES_PREVIEW_DEFAULT = 20
 SAMPLES_PREVIEW_MAX = 100
+# Browsing a finished corpus is a different job from previewing a running one:
+# it pages from an offset instead of tailing, and it must stay memory-bounded on
+# a 100 MB samples.jsonl, so a page is streamed line by line and never collected
+# whole. One runaway record cannot blow up the page either.
+BROWSE_PAGE_DEFAULT = 25
+BROWSE_PAGE_MAX = 100
+BROWSE_TEXT_MAX = 8000
 TEACHER_PKG = "teacher"
 SEEDS_DIRNAME = "seeds"
 SEEDS_DIR = os.path.join(paths_mod.DATA_ROOT, SEEDS_DIRNAME)
@@ -97,6 +107,8 @@ SETTING_TEMPERATURE = "teacher_temperature"
 
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
+_LINE_COUNTS = {}
+_LINE_COUNTS_LOCK = threading.Lock()
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -156,14 +168,46 @@ def _stored_key(s, provider):
 
 
 def _count_lines(path):
-    if not os.path.isfile(path):
+    """Non-blank lines in an append-only file, counted incrementally.
+
+    The Distillation tab polls a running job every couple of seconds and the
+    corpora list counts every job on disk, so a full re-read would scale with
+    corpus size on every poll. The cache is keyed by (size, mtime_ns); a file
+    that only grew is resumed from the byte offset the previous count covered,
+    and that resume is taken only when the offset lands on a record boundary."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        with _LINE_COUNTS_LOCK:
+            _LINE_COUNTS.pop(path, None)
         return 0
-    n = 0
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                n += 1
-    return n
+    with _LINE_COUNTS_LOCK:
+        prev = _LINE_COUNTS.get(path)
+    if prev is not None and prev[0] == st.st_size and prev[1] == st.st_mtime_ns:
+        return prev[2]
+    offset, count = 0, 0
+    if prev is not None and prev[0] <= st.st_size and _ends_on_record_boundary(path, prev[0]):
+        offset, count = prev[0], prev[2]
+    with open(path, "rb") as f:
+        f.seek(offset)
+        count += sum(1 for line in f if line.strip())
+    with _LINE_COUNTS_LOCK:
+        if len(_LINE_COUNTS) >= LINE_COUNT_CACHE_MAX:
+            _LINE_COUNTS.clear()
+        _LINE_COUNTS[path] = (st.st_size, st.st_mtime_ns, count)
+    return count
+
+
+def _ends_on_record_boundary(path, offset):
+    """True when byte `offset` starts a fresh line, so a resumed count is exact.
+
+    A writer caught mid-record would otherwise have its half-line counted twice:
+    once as a tail here, once as a head on the next pass."""
+    if offset == 0:
+        return True
+    with open(path, "rb") as f:
+        f.seek(offset - 1)
+        return f.read(1) == b"\n"
 
 
 def _load_seed_catalog():
@@ -215,36 +259,127 @@ def _read_job_meta(output_dir):
         return {}
 
 
-def _write_job_meta(output_dir, seeds, categories):
+def _write_job_meta(output_dir, seeds, categories, label=None):
     cur = _read_job_meta(output_dir)
-    merged = {
-        "seeds": sorted(set(cur.get("seeds", [])) | set(seeds or [])),
-        "categories": sorted(set(cur.get("categories", [])) | set(categories or [])),
-    }
+    merged = dict(cur)
+    merged["seeds"] = sorted(set(cur.get("seeds", [])) | set(seeds or []))
+    merged["categories"] = sorted(set(cur.get("categories", [])) | set(categories or []))
+    # A name given at start time is the same field `/teacher/synth/rename`
+    # writes, so a corpus can be named once and never carry a hex id. Blank
+    # leaves whatever name it already had alone: appending to a named corpus
+    # must not silently strip its name.
+    label = (label or "").strip()[:JOB_LABEL_MAX]
+    if label:
+        merged["label"] = label
+    return _save_job_meta(output_dir, merged)
+
+
+def _save_job_meta(output_dir, meta):
     tmp = os.path.join(output_dir, JOB_META_FILE) + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(merged, f)
+        json.dump(meta, f)
     os.replace(tmp, os.path.join(output_dir, JOB_META_FILE))
-    return merged
+    return meta
+
+
+def _job_dir(job_id):
+    """Realpath of a job directory, or None when job_id escapes the jobs root."""
+    root = os.path.realpath(paths_mod.synth_jobs_root())
+    target = os.path.realpath(os.path.join(root, job_id))
+    if os.path.dirname(target) != root or not os.path.isdir(target):
+        return None
+    return target
+
+
+def _path_size(path):
+    return os.path.getsize(path) if os.path.isfile(path) else 0
+
+
+def _path_mtime(path):
+    return os.path.getmtime(path) if os.path.exists(path) else 0.0
 
 
 def _read_recent_samples(output_dir, limit):
+    """The last `limit` records, without parsing the ones in front of them.
+
+    The live panel polls this every couple of seconds for six conversations. The
+    file it is tailing reaches 100 MB, so decoding every line to throw all but
+    the last six away burned the whole corpus through json.loads on every tick.
+    A deque keeps only the raw tail; parsing happens once, on those lines."""
+    path = os.path.join(output_dir, SAMPLES_FILE)
+    if not os.path.isfile(path):
+        return []
+    tail = collections.deque(maxlen=max(1, limit))
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                tail.append(line)
+    rows = []
+    for line in tail:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        # `response` is the flat text the raw-synth and authoring panels print.
+        # The live interview transcript needs the turns themselves -- it was
+        # JSON.parsing this rendered string and silently getting nothing -- so
+        # the structured form rides along beside it.
+        row = _browse_row(rec)
+        row["response"] = rec.get("response") or _render_record(rec.get(authoring_mod.RECORD_KEY))
+        rows.append(row)
+    return rows
+
+
+def _browse_row(rec):
+    """One samples.jsonl line as structured data the viewer can render.
+
+    Structured rather than pre-joined text: every corpus on this install is
+    conversational, and the viewer styles user and assistant turns differently.
+    Raw-synth rows carry a flat `response` instead and fall back to `text`."""
+    if not isinstance(rec, dict):
+        return {"id": "", "text": ""}
+    out = {"id": str(rec.get("id", ""))}
+    body = rec.get(authoring_mod.RECORD_KEY)
+    if isinstance(body, dict):
+        out["genre"] = body.get(authoring_mod.GENRE_KEY, "")
+        out["voice"] = body.get(authoring_mod.VOICE_KEY, "")
+        turns = body.get(authoring_mod.TURNS_KEY)
+        if isinstance(turns, list):
+            out["turns"] = [{"role": t.get(authoring_mod.ROLE_KEY, ""),
+                             "text": str(t.get(authoring_mod.TEXT_KEY, ""))[:BROWSE_TEXT_MAX]}
+                            for t in turns if isinstance(t, dict)]
+        else:
+            out["text"] = str(body.get(authoring_mod.TEXT_KEY, ""))[:BROWSE_TEXT_MAX]
+    else:
+        out["text"] = str(rec.get("response") or "")[:BROWSE_TEXT_MAX]
+    return out
+
+
+def _browse_samples(output_dir, offset, limit):
+    """A page of records starting at `offset`, counted over non-blank lines.
+
+    Streams and stops as soon as the page is full: reading the whole file to
+    slice 25 rows out of it would pull 100 MB into memory per request."""
     path = os.path.join(output_dir, SAMPLES_FILE)
     if not os.path.isfile(path):
         return []
     rows = []
+    seen = 0
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            rows.append({"id": rec.get("id", ""),
-                         "response": rec.get("response") or _render_record(rec.get(authoring_mod.RECORD_KEY))})
-    return rows[-limit:]
+            if seen >= offset + limit:
+                break
+            if seen >= offset:
+                try:
+                    rows.append(_browse_row(json.loads(line)))
+                except ValueError:
+                    rows.append({"id": "", "text": "(unreadable record)"})
+            seen += 1
+    return rows
 
 
 def _render_record(rec):
@@ -686,8 +821,8 @@ def register(app):
             job_id = uuid.uuid4().hex[:JOB_ID_LEN]
             out_root = body.get("output_dir") or paths_mod.synth_job_dir(job_id)
         os.makedirs(out_root, exist_ok=True)
-        _write_job_meta(out_root, seed_ids, categories)
-        api_key = os.environ.get(TEACHER_API_KEY_ENV) or s.get("teacher_api_key") or None
+        _write_job_meta(out_root, seed_ids, categories, body.get("label"))
+        api_key = os.environ.get(TEACHER_API_KEY_ENV) or _stored_key(s, provider) or None
         job = synth_mod.SynthJob(
             job_id, provider, model, prompts, out_root,
             format=fmt,
@@ -716,13 +851,32 @@ def register(app):
                 d = os.path.join(root, jid)
                 if not os.path.isdir(d):
                     continue
-                counts = _read_state_counts(d)
                 meta = _read_job_meta(d)
-                out.append({"job_id": jid, "completed": counts["completed"],
+                samples = os.path.join(d, SAMPLES_FILE)
+                out.append({"job_id": jid, "completed": _count_lines(samples),
+                            "label": meta.get("label", ""),
                             "categories": meta.get("categories", []),
                             "seeds": meta.get("seeds", []),
+                            "bytes": _path_size(samples),
+                            "updated_at": _path_mtime(samples) or _path_mtime(d),
                             "running": jid in running_ids})
         return {"jobs": out}
+
+    @app.route("/teacher/synth/rename", methods=["POST"])
+    def teacher_synth_rename_route():
+        body = request.get_json(silent=True) or {}
+        job_id = (body.get("job_id") or "").strip()
+        label = (body.get("label") or "").strip()[:JOB_LABEL_MAX]
+        if not job_id:
+            return {"error": "job_id required"}, 400
+        target = _job_dir(job_id)
+        if target is None:
+            return {"error": "unknown job"}, 404
+        meta = _read_job_meta(target)
+        meta["label"] = label
+        _save_job_meta(target, meta)
+        logmod.info(LOG_SOURCE, f"synth job renamed: job={job_id} label={label!r}")
+        return {"job_id": job_id, "label": label}
 
     @app.route("/teacher/synth/delete", methods=["POST"])
     def teacher_synth_delete_route():
@@ -734,13 +888,14 @@ def register(app):
             entry = _JOBS.get(job_id)
             if entry is not None and entry["thread"].is_alive():
                 return {"error": "job still running"}, 409
-        root = os.path.realpath(paths_mod.synth_jobs_root())
-        target = os.path.realpath(os.path.join(root, job_id))
-        if os.path.dirname(target) != root or not os.path.isdir(target):
+        target = _job_dir(job_id)
+        if target is None:
             return {"error": "unknown job"}, 404
         shutil.rmtree(target)
         with _JOBS_LOCK:
             _JOBS.pop(job_id, None)
+        with _LINE_COUNTS_LOCK:
+            _LINE_COUNTS.pop(os.path.join(target, SAMPLES_FILE), None)
         logmod.info(LOG_SOURCE, f"synth job deleted: job={job_id}")
         return {"job_id": job_id, "deleted": True}
 
@@ -799,6 +954,7 @@ def register(app):
         out_root = paths_mod.synth_job_dir(job_id)
         os.makedirs(out_root, exist_ok=True)
         samples_path = os.path.join(out_root, SAMPLES_FILE)
+        _write_job_meta(out_root, [], [], body.get("label"))
         spec = authoring_mod.load_spec()
         gate = authoring_mod.RecordGate(spec)
         gate.seed_from_file(samples_path)
@@ -848,7 +1004,7 @@ def register(app):
             job_id = uuid.uuid4().hex[:JOB_ID_LEN]
         out_root = paths_mod.synth_job_dir(job_id)
         os.makedirs(out_root, exist_ok=True)
-        _write_job_meta(out_root, [], genre_ids)
+        _write_job_meta(out_root, [], genre_ids, body.get("label"))
         prompts = authoring_mod.build_prompts(spec, calls, int(spec["gates"]["build_seed"]),
                                               AUTHORING_ID_PREFIX)
         gate = authoring_mod.RecordGate(spec)
@@ -857,7 +1013,7 @@ def register(app):
         job = synth_mod.SynthJob(
             job_id, provider, s.get("teacher_model") or None, prompts, out_root,
             base_url=s.get("teacher_base_url") or None,
-            api_key=os.environ.get(TEACHER_API_KEY_ENV) or s.get("teacher_api_key") or None,
+            api_key=os.environ.get(TEACHER_API_KEY_ENV) or _stored_key(s, provider) or None,
             temperature=float(_setting(s, SETTING_TEMPERATURE)),
             max_tokens=int(_setting(s, SETTING_MAX_TOKENS)),
             max_concurrency=conc,
@@ -935,7 +1091,7 @@ def register(app):
             job_id = uuid.uuid4().hex[:JOB_ID_LEN]
         out_root = paths_mod.synth_job_dir(job_id)
         os.makedirs(out_root, exist_ok=True)
-        _write_job_meta(out_root, [], genre_ids)
+        _write_job_meta(out_root, [], genre_ids, body.get("label"))
 
         gate = authoring_mod.RecordGate(spec)
         gate.seed_from_file(os.path.join(out_root, SAMPLES_FILE))
@@ -944,7 +1100,7 @@ def register(app):
             job_id, out_root, spec, genre_ids, n_convs, depth,
             provider, model=s.get("teacher_model") or None,
             base_url=s.get("teacher_base_url") or None,
-            api_key=os.environ.get(TEACHER_API_KEY_ENV) or s.get("teacher_api_key") or None,
+            api_key=os.environ.get(TEACHER_API_KEY_ENV) or _stored_key(s, provider) or None,
             temperature=float(_setting(s, SETTING_TEMPERATURE)),
             max_concurrency=conc, gate=gate, seeds=seeds)
 
@@ -1077,6 +1233,35 @@ def register(app):
         if not job_id or not os.path.isdir(output_dir):
             return {"error": "unknown job"}, 404
         return {"job_id": job_id, "samples": _read_recent_samples(output_dir, limit)}
+
+    @app.route("/teacher/synth/browse", methods=["GET"])
+    def teacher_synth_browse_route():
+        """Paged read of any corpus on disk, running or long finished.
+
+        `/teacher/synth/samples` tails the live job and cannot page; the corpora
+        list needs to open a year-old job at record 4,000. Resolves through
+        `_job_dir`, so nothing outside the jobs root is readable."""
+        job_id = (request.args.get("job_id") or "").strip()
+        if not job_id:
+            return {"error": "job_id required"}, 400
+        target = _job_dir(job_id)
+        if target is None:
+            return {"error": "unknown job"}, 404
+        try:
+            offset = int(request.args.get("offset") or 0)
+        except ValueError:
+            offset = 0
+        try:
+            limit = int(request.args.get("limit") or BROWSE_PAGE_DEFAULT)
+        except ValueError:
+            limit = BROWSE_PAGE_DEFAULT
+        offset = max(0, offset)
+        limit = max(1, min(limit, BROWSE_PAGE_MAX))
+        meta = _read_job_meta(target)
+        return {"job_id": job_id, "label": meta.get("label", ""),
+                "offset": offset, "limit": limit,
+                "total": _count_lines(os.path.join(target, SAMPLES_FILE)),
+                "rows": _browse_samples(target, offset, limit)}
 
     @app.route("/teacher/synth/status", methods=["GET"])
     def teacher_synth_status_route():

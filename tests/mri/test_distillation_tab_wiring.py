@@ -38,6 +38,9 @@ REQUIRED_IDS = (
     "distRefreshTarget", "distGotoSettings", "distGateSettings",
     "distConfirmModal", "distConfirmBody", "distConfirmClose", "distConfirmCancel",
     "distConfirmGo",
+    "distViewModal", "distViewTitle", "distViewClose", "distViewRange",
+    "distViewPrev", "distViewNext", "distViewJump", "distViewGo", "distViewBody",
+    "interviewJobName", "authorJobName", "synthJobName",
     "distAuditPanel", "distAuditVerdict", "distAuditChecks", "distAuditDetail",
     "authorProgress", "authorProgressFill",
     "authorProgressLeft", "authorProgressMid", "authorProgressRight",
@@ -49,7 +52,14 @@ REQUIRED_IDS = (
     "interviewBuildBtn", "interviewBuildStatus", "interviewLiveWrap", "interviewLiveOutput",
     "interviewVertical", "interviewVerticalNote", "interviewTopicList",
     "interviewTopicAll", "interviewTopicNone",
+    "distJobsList", "distJobsSummary", "distJobsRefresh",
+    "interviewRunBar", "interviewRunWhat", "interviewProgressStep",
+    "authorRunBar", "authorRunWhat", "authorProgressStep",
+    "synthRunBar", "synthRunWhat", "synthProgressStep",
 )
+
+# Every mode collapses the same way while its job runs.
+MODES = ("interview", "author", "synth")
 
 # Panels that moved out of the Training tab and must now live in this one.
 MOVED_PANELS = ("synthPanel", "authorPanel")
@@ -73,6 +83,15 @@ def _tab_body(name):
     rest = HTML[start + 1:]
     nxt = rest.find('<div class="tab-body" data-tab=')
     return rest if nxt < 0 else rest[:nxt]
+
+
+def _mode_panel(mode):
+    """The markup of one mode's workspace, up to the next one."""
+    body = _tab_body(TAB_ID)
+    starts = sorted(body.index(f'id="{m}Panel"') for m in MODES)
+    here = body.index(f'id="{mode}Panel"')
+    after = [x for x in starts if x > here]
+    return body[here:after[0]] if after else body[here:body.index("corpora on disk")]
 
 
 def test_the_tab_has_a_nav_entry():
@@ -117,11 +136,12 @@ def test_training_active_no_longer_hides_the_panels(panel):
     assert f"body.training-active #{panel}" not in CSS
 
 
-def test_the_distillation_flow_card_is_not_dimmed_during_training():
-    """The Training tab's pointer to this tab must stay clickable mid-run."""
-    rule = next(ln for ln in CSS.splitlines()
-                if "body.training-active .train-flow-card" in ln and "opacity" in ln)
-    assert f'not([data-flow="{TAB_ID}"])' in rule
+def test_the_training_menu_has_no_distillation_card():
+    """The tab is reached from the nav, not from the training flow menu. A card
+    left behind would still route through a flow branch that no longer exists."""
+    assert f'data-flow="{TAB_ID}"' not in HTML
+    assert f'flow === "{TAB_ID}"' not in JS
+    assert f'data-flow="{TAB_ID}"' not in CSS
 
 
 def test_both_start_buttons_go_through_the_contention_guard():
@@ -281,3 +301,239 @@ def test_the_cost_line_warns_when_the_request_exceeds_the_seed_ceiling():
     body = body[:body.index("\nfunction ")]
     assert "OPENERS_PER_SEED" in JS
     assert "ceiling" in body
+
+
+def test_every_job_is_listed_with_a_view_rename_and_delete():
+    """Jobs accumulate in the destination pickers with no way out of them. The
+    list is the only surface that can read, rename or remove one."""
+    body = JS[JS.index("function _distJobRow"):]
+    body = body[:body.index("\nfunction ")]
+    assert '["view", "use", "ren", "del"]' in body
+    for act in ("view", "use", "ren", "del"):
+        assert f"{act}: _distJob" in JS[JS.index("const DIST_JOB_ACTIONS"):][:200]
+
+
+def test_a_running_job_can_still_be_read():
+    """A run that is writing records is exactly when you want to see them, so
+    view survives the swap to the running row; the mutating actions do not."""
+    body = JS[JS.index("function _distJobRow"):]
+    body = body[:body.index("\nfunction ")]
+    assert 'j.running ? ["view"]' in body
+
+
+def test_deleting_a_job_names_what_it_will_remove():
+    """Rule: a destructive action restates its exact target before it runs."""
+    body = JS[JS.index("function _distJobDelete"):]
+    body = body[:body.index("\nfunction ")]
+    assert "confirm(" in body
+    assert "synth_jobs/${jobId}" in body
+
+
+def test_the_list_refreshes_after_a_rename_or_a_delete():
+    """A stale row still offers `use` on a directory that no longer exists. Both
+    mutations go through one poster, so the reload cannot be forgotten on one."""
+    for fn in ("_distJobRename", "_distJobDelete"):
+        body = JS[JS.index(f"function {fn}"):]
+        body = body[:body.index("\nfunction ")]
+        assert "_distJobPost(" in body
+    post = JS[JS.index("function _distJobPost"):]
+    post = post[:post.index("\n}")]
+    assert ".then(_synthLoadJobs)" in post
+
+
+def test_one_fetch_feeds_every_picker_and_the_list():
+    """Three pickers reading three copies of the job list is how they drift out
+    of agreement about what exists. `_synthLoadJobs` is the only reader."""
+    assert JS.count("fetch(TEACHER_SYNTH_JOBS)") == 1
+    loader = JS[JS.index("function _synthLoadJobs"):]
+    loader = loader[:loader.index("\n}")]
+    assert "_distFillJobPickers()" in loader
+    assert "_distRenderJobs()" in loader
+    for gone in ("_authorFillJobs", "_ivFillJobs"):
+        assert gone not in JS
+
+
+def test_the_pickers_show_the_label_not_the_hex_id():
+    """The whole point of rename: `_distJobName` falls back to the id, and one
+    filler drives all three pickers off the same option text."""
+    body = JS[JS.index("function _distFillJobPickers"):]
+    body = body[:body.index("\n}\n")]
+    assert "_distJobName(j)" in body
+    ids = re.findall(r'id: "(\w+JobSelect)"', JS)
+    assert sorted(ids) == ["authorJobSelect", "interviewJobSelect", "synthJobSelect"]
+
+
+def test_the_tab_carries_no_inline_control_styling():
+    """Every field used to repeat its own background/border/padding inline,
+    which is why no two rows lined up. The styling is one CSS rule now."""
+    body = _tab_body(TAB_ID)
+    assert "background:#0a0c12" not in body.replace(" ", "")
+    assert '.tab-body[data-tab="distillation"] select' in CSS
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_each_mode_marks_its_configuration_blocks(mode):
+    """`.dist-config` is what the running state hides. A step without it stays on
+    screen mid-run showing controls that no longer affect anything."""
+    assert _mode_panel(mode).count("dist-config") >= 3
+
+
+def test_running_hides_the_configuration_and_nothing_else():
+    """The rule is one selector. If it ever grows to hide the progress block or
+    the stop button, a run becomes unobservable and unstoppable."""
+    rule = next(ln for ln in CSS.splitlines() if ".dist-work.is-running .dist-config" in ln)
+    assert "display: none" in rule
+    assert ".dist-work.is-running .dist-progress" not in CSS
+    assert ".dist-work.is-running .dist-run-bar" not in CSS
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_stop_button_lives_in_the_run_bar(mode):
+    """It used to sit in the settings row, which the running state now hides."""
+    body = _tab_body(TAB_ID)
+    bar = body[body.index(f'id="{mode}RunBar"'):]
+    bar = bar[:bar.index("</div>")]
+    stop = "synthStopPollBtn" if mode == "synth" else f"{mode}StopBtn"
+    assert f'id="{stop}"' in bar
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_every_status_poll_drives_the_running_state(mode):
+    """A poll that forgets this leaves the form collapsed after the job stops, or
+    shows the form while it is still burning teacher calls."""
+    assert f'_distSetRunning("{mode}"' in JS
+
+
+def test_the_run_bar_says_what_is_running():
+    """Hiding the settings is only safe if the one line that replaces them names
+    the destination and the size that were chosen."""
+    body = JS[JS.index("function _ivRenderStats"):]
+    body = body[:body.index("\nfunction ")]
+    assert "_distJobNameById" in body
+    assert "p.conversations" in body and "p.depth" in body
+
+
+def test_a_run_is_visible_from_the_other_mode_cards():
+    """Switching mode mid-run must not make the run look like it stopped."""
+    assert "dist-mode-live" in HTML
+    assert ".dist-mode.has-run .dist-mode-live" in CSS
+    body = JS[JS.index("function _distSetRunning"):]
+    body = body[:body.index("\nfunction ")]
+    assert 'classList.toggle("has-run"' in body
+
+
+def test_the_list_binds_one_listener_not_one_per_button():
+    """The list re-renders on every job change; per-button binding leaks a fresh
+    closure per row per render."""
+    assert "_distRenderJobs" in JS
+    render = JS[JS.index("function _distRenderJobs"):]
+    render = render[:render.index("\nfunction ")]
+    assert "addEventListener" not in render
+    assert 'jobsList.addEventListener("click"' in JS
+
+
+def test_a_running_row_is_patched_not_rebuilt():
+    """Re-rendering the whole list on a 2 s poll throws away scroll position and
+    any open confirm. Only the count moves while a job runs."""
+    body = JS[JS.index("function _distSyncJobRow"):]
+    body = body[:body.index("\nfunction ")]
+    assert "textContent" in body
+    assert "innerHTML" not in body
+
+
+def test_a_finished_run_rebuilds_the_row():
+    """Patching alone would leave the row showing `running` with no actions after
+    the job stops."""
+    body = JS[JS.index("function _distSyncJobRow"):]
+    body = body[:body.index("\nfunction ")]
+    assert "const ended = job.running && !running" in body
+    assert "if (ended) { _synthLoadJobs(); return; }" in body
+
+
+def test_an_unchanged_poll_touches_no_dom():
+    """Three modes polling every 2 s would otherwise write six style properties a
+    tick for the entire life of a run."""
+    body = JS[JS.index("function _distSetRunning"):]
+    body = body[:body.index("\nfunction ")]
+    assert "distState.running[mode] === running" in body
+    assert body.index("return;") < body.index("classList.toggle")
+
+
+@pytest.mark.parametrize("flow", ("synth", "author"))
+def test_the_moved_flows_are_gone_from_the_training_tab(flow):
+    """`synth` and `author` became modes of this tab. A flow left in the valid
+    list restores from localStorage into a screen with no card and no controls."""
+    valid = re.search(r"const TRAIN_VALID_FLOWS = \[([^\]]+)\]", JS).group(1)
+    assert f'"{flow}"' not in valid
+    assert f'data-flow="{flow}"' not in HTML
+
+
+# ------------------------------------------------------------------------------------
+# Corpus viewer and start-time naming.
+
+def test_the_viewer_pages_instead_of_loading_a_whole_corpus():
+    """A finished job is 100 MB of jsonl. The viewer must ask for a window of it,
+    never the file: /teacher/synth/samples tails and cannot page at all."""
+    body = JS[JS.index("function _distViewLoad"):]
+    body = body[:body.index("\nfunction ")]
+    assert "TEACHER_SYNTH_BROWSE" in body
+    assert "offset=${distView.offset}" in body
+    assert "limit=${DIST_VIEW_PAGE}" in body
+
+
+def test_the_viewer_reads_paging_state_back_from_the_server():
+    """Trusting the local offset would drift past the end of a corpus that was
+    deleted from or is still being written."""
+    body = JS[JS.index("function _distViewLoad"):]
+    body = body[:body.index("\nfunction ")]
+    assert "distView.total = d.total" in body
+    assert "distView.offset = d.offset" in body
+
+
+def test_the_viewer_escapes_every_record_it_prints():
+    """Records are teacher output: unescaped, one of them eventually closes a tag."""
+    body = JS[JS.index("function _distViewCard"):]
+    body = body[:body.index("\nfunction ")]
+    assert "_trEsc(t.text" in body and "_trEsc(t.role" in body
+    assert "_trEsc(r.text" in body and "_trEsc(r.id" in body
+
+
+def test_the_viewer_can_be_dismissed_three_ways():
+    """A modal with only an X is a trap on a laptop trackpad."""
+    body = JS[JS.index('const vClose = $("distViewClose")'):]
+    body = body[:body.index("});", body.index('e.key !== "Escape"'))]
+    assert "_distViewClose" in body
+    assert 'e.target === vModal' in body
+    assert 'e.key !== "Escape"' in body
+
+
+def test_the_name_box_is_disabled_when_appending_to_an_existing_corpus():
+    """The box names a corpus at creation. Left live over an existing job it reads
+    as a rename the start route would have to guess the intent of."""
+    body = JS[JS.index("function _distSyncNameField"):]
+    body = body[:body.index("\nfunction ")]
+    assert "box.disabled = true" in body
+    assert "box.disabled = false" in body
+
+
+def test_a_typed_name_is_only_sent_for_a_new_corpus():
+    """_distNewName returns nothing while the box is disabled, so appending never
+    silently renames the corpus it appends to."""
+    body = JS[JS.index("function _distNewName"):]
+    body = body[:body.index("\nfunction ")]
+    assert "if (!box || box.disabled) return \"\";" in body
+
+
+@pytest.mark.parametrize("pick", ("interviewJobSelect", "authorJobSelect", "synthJobSelect"))
+def test_every_mode_sends_its_start_time_name(pick):
+    """A mode that forgets the label mints a hex id the user then has to rename."""
+    assert f'_distNewName("{pick}")' in JS
+
+
+def test_the_steps_explain_themselves_instead_of_wearing_numbers():
+    """The numbered badges implied an order the tab does not enforce; each step
+    carries a sentence saying what its controls do instead."""
+    assert "dist-step-num" not in HTML
+    assert "dist-step-num" not in CSS
+    assert HTML.count('class="dist-step-sub"') >= 3
+    assert ".dist-step-sub" in CSS

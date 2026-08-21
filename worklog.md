@@ -1134,3 +1134,232 @@ lr 5e-6 flat, ~15.3 s/step, terminal ~17:15. Baseline val bpb locked for the
 forgetting kill line (wren1_3@3000): mixed_chat 0.824, veritate_chat 2.071,
 hansard 1.059 (scratchpad/val_bpb.py, 24×1024 B fixed windows per bin).
 Post-sleep gate: mixed_chat ≤ 0.840 (+2%).
+
+2026-08-20 — cardinal optimization track: wren1_3@3000 exported to v13 fp16
+(POST /export/wren1_3, 541 MB) and ported to cardinal (config.json +
+veritate.bin + train.csv, md5-verified); dashboard picked it up warm without a
+restart and generated a coherent identity reply via /v1/chat/completions;
+active C slot restored to wren1_0_int8 after. Decode on cardinal (CLI
+chat_greedy, 200 B, traceless): wren1_3 p50 9.48 ms/byte, wren1_0 9.53,
+wren1_0_int8 6.63 (int8 1.43x) — the ~35 ms/byte successes.md figure is
+dashboard decode with MRI trace on. Finding: v13 int8 COMPUTE already shipped
+(hybrid_matvec/matmul_i8 scalar+AVX2+SDOT, per-row weight scales + dynamic
+maxabs act quant, engine tests pin SIMD to scalar bitwise) — documentation.md
+"computes fp32 end-to-end" and IDEA 21's "int8 kernels must be built" are
+stale. Micro-benchmark on cardinal (core-pinned, FFN shapes 200m/400m): scalar
+int8 1.9-2.0x vs scalar fp32, BITWISE-OK vs plain-C ref; AVX2 int8 2.3-3.3x vs
+AVX2 fp32, 1.8-1.9x vs AVX2 fp16. Engine suite: mac arm64 34/34 green;
+cardinal 38/40 — 2 pre-existing failures (also in cardinal's pytest lastfailed
+before this session): v9 dense loads SIGILL in prep_b (vpbroadcastq %zmm0) —
+plain-C prep_b lives in matmul_vnni.c which builds with -mavx512vnni, clang 18
+auto-vectorizes it AVX-512 and it runs un-gated at load; v13 unaffected.
+
+2026-08-20 — seed packs extended to all five verticals. The earlier request was
+1,500 seeds PER VERTICAL, not 1,500 total; `conversation` alone was a misread.
+Wrote `code`, `technical`, `business`, `medical` at 1,520 seeds / 40 topic
+groups each via eight parallel agents (two per vertical, 20 groups x 38 seeds
+apiece), merged through a validator that enforces what the test suite enforces
+plus the cross-fragment duplicates neither half could see. Ships 7,600 seeds
+over 200 selectable topics, zero duplicates within or across packs, ASCII only.
+Vertical and genre are orthogonal — pack supplies the subject, genre supplies
+the behaviour and its gate — so no new genre was needed. At the measured ~150
+openers/seed that is ~1.1M conversations (~2.5 GB) of headroom.
+tests/corpus/test_seed_packs.py now parametrises over whatever packs are on
+disk (16 -> 37 tests), so a future vertical is held to the same bar the day it
+lands; added a check that seeds are subject phrases rather than capitalised
+sentences, since they interpolate into "Subject area: {seed}" where a sentence
+reads as an instruction. Fixed a latent bug that only bites with >1 pack:
+INTERVIEW_TOPIC_STORE was one flat list, so switching vertical overwrote the
+other's selection — now keyed by vertical. All five verticals went live on the
+running dashboard without a restart (the route reads from disk).
+Suite: 921 passed, 9 skipped, 1 xfailed (corpus + mri).
+
+2026-08-20 — SIGILL fix (go-ahead granted): VERITATE_BASELINE_CODEGEN macro in
+veritate_engine/src/veritate.h pins un-gated load helpers to SSE4.2 codegen
+(target no-avx512*/no-avx2/no-avx); applied to prep_b + prep_b_keep_raw
+(matmul_vnni.c) and prep_b_int4 (matmul_int4.c). prep_b_ternary was already
+safe (defined in the baseline TU matmul_ternary_scalar.c). New regression test
+tests/engine/test_kernel_isa.py disassembles the built binary and asserts no
+zmm/ymm in those symbols (linux x86_64 only; skips where inlined by LTO —
+observed for prep_b_keep_raw, whose copy inherits the baseline caller's
+codegen). Verified: mac arm64 34 passed 3 skipped, behavior unchanged;
+cardinal x86_64 40 passed 1 skipped — v9 model LOAD no longer SIGILLs
+(prep_b/prep_b_int4 disassemble clean) and hot-path kernels are untouched
+(no-op on AVX-512 boxes; prep output is integer/IEEE-identical). REMAINING:
+the two v9 golden tests still fail on cardinal one layer deeper —
+model.c's dense forward hard-calls matmul_int8_vnni_mt_prep/_vnni_prep
+(gdb: SIGILL vpbroadcastq %zmm1 in matmul_int8_vnni_mt_prep <- attention),
+a portable symbol with only AVX-512-VNNI (x86) and NEON-SDOT (arm64)
+implementations; dense v9/v11/v12 cannot run on AVX2-only x86 without a new
+fallback prepped-kernel family + runtime selection (rule 25 obligations) —
+needs its own mandate. v13 hybrid unaffected throughout.
+
+2026-08-20 — conversation pack expanded 1,520 -> 3,500 seeds (50 groups x 70).
+Six parallel agents: four deepened the existing 40 groups 38 -> 70, each given a
+brief listing every seed already in its groups and told to write AROUND them
+(different relationships, channels and failure modes) since the obvious
+situations were taken and a near-paraphrase buys no openers; two wrote 10 new
+groups at 70 each — giving_advice, asking_for_help, explaining_things,
+changing_your_mind, everyday_decisions, shopping_and_buying, getting_around,
+etiquette_and_rules, memories_nostalgia, downtime_boredom. The merge validator
+caught 4 cross-shard collisions no single agent could see (bees in pets vs
+hobbies_crafts, nativity in learning_school vs celebrations, damp patch in
+home_living vs worries_fears, repeat prescription in health_body vs
+errands_admin); the later occurrence was replaced by hand and re-validated.
+Pack set now 9,580 seeds over 210 topics, zero duplicates within or across
+packs. Went live on the running dashboard without a restart.
+Suite: 1,297 passed, 12 skipped, 8 xfailed (skips are environment-gated:
+missing chat200m bin, gitignored trainers/corpus, linux objdump).
+
+2026-08-20 — E4 night-1 verdict (wren1_5@300): fwd 6/50, rev 6/50 closed-book
+(baseline 0/50 both), dose curve 0→0→2→6 rising. Safety green: mixed_chat
++0.26% (limit +2%), ladder loop 0.10, closure 0.97. Identity 0.83 / grounded
+0.25 dips noted as watch items. Full entry in successes.md. Launching night 2:
+resume wren1_5 → total_steps 600 absolute, identical recipe (spaced
+repetition). Battery on completion: e4_qa_probe {400,500,600}, val_bpb,
+ladder. Also shipped: sleep review box below the Generation chat (status +
+event history from data/sleep/history.jsonl; sleep-now / wake buttons);
+history() + _log_event in training/sleep.py; 9 controller tests green.
+
+2026-08-20 21:59 — OVERNIGHT AUTONOMOUS RUN START (user directive: work,
+decide, test until 2026-08-21 09:59, then send summarized report). Open lanes
+at start: night 2 at step ~570/600 (battery watcher armed); cardinal sleep
+benchmark agent mid-run; sleep UI awaiting dashboard restart (I may restart
+between runs — user push to cardinal stays user-gated); branch logic for
+night 3 pre-registered in handoff.md.
+
+2026-08-20 22:30 — NIGHT 2 VERDICT: fwd 45/50, rev 47/50 (curve 6→26→38→45).
+Identity recovered 1.00; grounded 0.25 (watch). Forgetting +1.49% cumulative
+(kill line 0.840 vs 0.83626 — thin headroom). Full entry successes.md.
+Dashboard restarted in the idle window: sleep box + usage ledger live
+(/sleep serves history + activity_by_hour; real pattern shows 16-17h/20-21h
+busiest). Night 3 launched (600→900, recipe unchanged) with per-checkpoint
+tripwire: val_bpb at 700/800, auto /trainers/stop if mixed_chat > 0.840;
+final battery (exams 700/800/900, val, ladder) armed. Cardinal benchmark
+agent still mid-run.
+
+2026-08-20 ~23:20 — Cardinal sleep benchmark landed (agent, 2.5 h on-box).
+Headline: recipe-batch sleep is >=920 s/step on cardinal (>=65-80x Mac) — 0/15
+steps in 77 min, bf16 CPU emulation + 1-core phases dominate; RAM 13.0 GB
+peak; serving survived (p50 flat, worst 5.7x); on-box export .pt->bin 9.8 s;
+the staging gap is the 2.17 GB .pt (7.4 min scp). The run resumed REAL
+weights (Mac step_0.pt staged, md5-verified). Benchmark also caught 4
+controller bugs — all fixed tonight with tests (14 green, training dir 196
+green): bookkeeping-key launch refusal, retry-storm (now 60-min cooldown +
+"failed" event + panel line), missing corpus-size gate (seq*n_chunks+2),
+_model_step now reads latest checkpoint not config "step". Deferred levers
+recorded in handoff cardinal track (fp32 CPU sleep A/B, thread cap, batch/seq
+override, probe-traffic exclusion). Cardinal restored: sleep off, bin
+md5-verified, dashboard serving. Mac server still pre-fix (sleep disabled
+here, harmless); fold in at next idle-window restart. Night 3 mid-run,
+unaffected.
+
+2026-08-21 ~00:00 — E4 CAMPAIGN CLOSED. Tripwire fired exactly as designed:
+step 800 mixed_chat 0.84217 > 0.840 -> auto /trainers/stop mid-night-3.
+Dose-response complete: fwd 0(base)->6(300)->45(600)->45(700)->46(800);
+rev 0->6->47->49(700)->47(800). Peak = wren1_5@700 (fwd 45/50, rev 49/50,
+mixed_chat 0.83632 green). Recall plateaued while forgetting climbed: the
++2% budget binds at ~700 steps at lr 5e-6 — that is the measured ceiling of
+this recipe. Retention harness moved into the repo:
+veritate_mri/tools/e4_retention_quiz.py + data/eval/e4_facts.json (ruff
+clean, smoke-tested); quiz dates 2026-08-27 and 2026-09-19 in handoff.
+Ladder@700 running to certify the closeout checkpoint.
+
+2026-08-21 ~00:20 — Closeout certified: ladder@700 loop 0.17 / closed 0.97 /
+median 161B / identity 1.00 / grounded 0.25. E4 closeout entry written to
+successes.md (dose-response table). Dashboard restarted; serves the fixed
+sleep controller (verified /sleep). Per-fact analysis: residual is
+RARE-WORD OCCUPATIONS — 4/5 fwd misses @700 are job facts (jobs fwd 21/25 vs
+residences 24/25; rev 49/50 near-saturated); model answers in trained format
+with wrong occupation (doorman-for-milliner, archivist-for-farrier); 3 job
+facts never landed fwd across all 8 checkpoints; 2 landed-then-lost. Recipe
+note: augmentation count should scale with object-word rarity. Grounded
+probe: @700 = 2/8, all misses are two-entity selection failures (wrong
+entity's attribute or refusal-to-select) — running wren1_3@3000 per-item A/B
+to separate interference from n=8 noise.
+
+2026-08-21 ~00:25 — Grounded dip CLEARED: per-item A/B (wren1_3@3000 vs
+wren1_5@700, same 8 prompts) shows 7/8 identical outcomes; exactly one item
+flipped (blue/red folder, 3/8 -> 2/8) = n=8 noise, not interference. The
+two-entity selection failures (Amelia/Marcus, Leeds/York, password, eggs)
+are missed by the BASE model too — a pre-existing capability gap, not
+sleep damage. E4 safety record is fully clean: no metric shows systematic
+regression from consolidation.
+
+2026-08-21 ~00:35 — Platform green post-restart (805 passed, 9 skipped,
+2 xfailed). Bonus probes on wren1_5@700: ACCEPTANCE TEST ("what did you just
+say") = 3/6 recalled, zero leaks — up from 1/6 (wren1_3@1000 baseline);
+running wren1_3@3000 (direct fork parent) for clean attribution of whether
+consolidation or the parent's improvement bought it. Anticopy absorbed:
+copy 0.0241 / engagement 0.0 (looping sample) — unchanged profile, E6
+verdict still waits for delta/higher-dose arms.
+
+2026-08-21 ~00:45 — ATTRIBUTION RESULT (secondary discovery): acceptance
+test ("what did you just say", 2-turn state recall, leak-controlled):
+wren1_3@3000 (direct fork parent) = 0/6 — all abstentions ("I don't know");
+wren1_5@700 (slept child) = 3/6, zero leaks. Sleep consolidation itself
+moved cross-turn state recall 0 -> 3 of 6. Reading: fact-QA consolidation
+taught answer-from-what-you-hold over the sft_idk abstention reflex, and
+the gain shows up through the carried state with no hallucination cost on
+the fresh-state control. Goal remains 6/6. Logged to handoff + ideas.md
+acceptance line + memory.
+
+2026-08-21 ~01:15 — User-approved deletions executed: models/wren1_1 (v2 SFT,
+falsified), models/wren1_2 (guard distillation, falsified), models/wren1_4
+(delta arm, falsified twice; user accepted losing the delta checkpoint) —
+~54 GB freed. Fleet now: wren_base, wren1_0, wren1_3, wren1_5. Publications
+agent delivered 3 drafts to publications/ (arXiv-style paper, blog post,
+technical note) — honest limitations included, retention quizzes flagged as
+pending. wren1_5 thinning deferred pending growth-source decision.
+
+2026-08-21 ~01:40 — E4 m2 arm LAUNCHED (user-ordered: settle whether raw
+transcripts consolidate before wren2 starts). New repo tool
+tools/build_fact_chats.py: same 50 facts as natural multi-turn conversations
+(user tells, assistant echoes so the mask sees fact bytes, distractor turns,
+reverse framing at ~1/3 natural frequency) -> fact_chat bins 368KB/19.5KB.
+wren1_6 = fresh fork of wren1_3@3000 (step_0 seeded). Night 1: 300 steps,
+identical dose/recipe to m1 night 1 (lr 5e-6 flat, assistant mask,
+ckpt_every 100). m1 reference @300: 6/50 fwd, 6/50 rev. Battery watcher
+armed (exams 100/200/300, val, ladder). Decision rule: m2 within ~2x of m1's
+curve -> raw-transcript sleep is enough, sleep-as-shipped is complete; far
+below -> extraction pre-pass needed. fact_sft also added to the corpus
+catalog as native (deterministic rebuild documented in the entry).
+Earlier same hour: user approved + executed deletion of wren1_1/wren1_2/
+wren1_4 (~54GB); publications drafts delivered to publications/.
+
+2026-08-21 ~02:00 — wren2 growth machinery SHIPPED (agent): training/grow.py
+gained checkpoint-to-checkpoint function-preserving growth + CLI; proof in
+tests/training/test_grow_function_preserving.py (9 tests green, 56
+trainer-adjacent still green). Measured: max |dlogits| <= 4.8e-7 fp32 across
+width/heads/ffn axes, exactly 0 for depth; grads finite on all params incl.
+new. Key exactness decisions logged in the file header (RMS-exact duplicate
+scaling, tie-preserving lm_head, zero-proj new heads/blocks, GLA o_norm/
+D**-0.5 cancellation). Refuses delta/pinned/looped/MoE variants. Recommended
+wren2 path: wren1_3@3000 (gla/hybrid — verified compatible) -> trainer_sizes
+"400m" 24L/1280/5120/20h ~472M, head_dim 64 preserved, no head_dim growth
+needed. Optimizer state dropped by design -> continue with warmup > 0.
+documentation.md "model growth (IDEA 21)" section added. m2 (wren1_6) at
+step 60/300 mid-run, on pace.
+
+2026-08-21 ~02:40 — Growth shipped to the dashboard (user-ordered): POST
+/models/grow + /status + /options (server-side target filtering via the
+tool's own validate_growth), Training-tab "grow model" modal with params
+before->after and the not-an-upgrade caveat, full continue-flow handshake
+verified (step-0-only discovery, fresh-optimizer guard, strict load).
+27 tests green (8 new route tests). Reviewer caveats recorded: heads come
+from the size preset on resume (UI restricted to size keys; raw-API explicit
+shapes with novel head counts strict-fail safely); variant refusal is
+config-based at POST, weight-based in the worker. documentation.md growth
+section extended. User directives captured to memory: wren2 = conversation/
+writing ONLY (no code), clean-data bar, dense ckpts, seq/context expansion
+wanted, git push before launch.
+
+2026-08-21 ~03:10 — Context (seq) growth axis SHIPPED: pos_emb/slot_pos_emb
+extension (copy-of-last init, never interpolation), bit-exact preservation
+asserted delta==0.0 on in-domain inputs, slot-cap subtlety traced and
+documented (previously-truncated boundary overflow becomes real capacity),
+stride derived from checkpoint, refusals for shrink/non-multiple. Route/UI:
+target_seq + seq selector (1x/2x/4x), seq-only growth supported. 34 tests
+green (4 new tool + 3 new route), trainer regression 56 green, ruff clean.
+export.py verified: grown-seq models export to v13 unchanged (header carries
+seq+slots). wren2 can now be grown to 400m shape AND seq 4096 in one call.

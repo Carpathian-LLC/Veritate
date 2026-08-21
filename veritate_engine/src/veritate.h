@@ -60,6 +60,17 @@ void matmul_int8_vnni_mt(const int8_t* a, const int8_t* b, int32_t* c,
 void matmul_int8_neon_sdot(const int8_t* a, const int8_t* b, int32_t* c,
                            int32_t m, int32_t n, int32_t k);
 
+// un-gated helpers defined inside AVX-512 kernel TUs run at model load on every
+// x86_64 CPU (runtime dispatch gates the matmuls, not the prep path). pin their
+// codegen to the SSE4.2 baseline so the auto-vectorizer cannot emit AVX/AVX-512
+// for them — SIGILL on AVX2-only boxes otherwise (measured: i7-9700T).
+#if defined(__x86_64__) && (defined(__clang__) || defined(__GNUC__))
+#define VERITATE_BASELINE_CODEGEN \
+    __attribute__((target("no-avx512f,no-avx512bw,no-avx512vl,no-avx512vnni,no-avx2,no-avx")))
+#else
+#define VERITATE_BASELINE_CODEGEN
+#endif
+
 // pre-prepare weights (B) for hot-loop matmul. real inference loads weights once.
 // scale_per_col, when non-null, holds n q24 multipliers — one per output column.
 // when null, requant uses the uniform scale_q24.

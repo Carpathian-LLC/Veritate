@@ -1893,18 +1893,86 @@ function pollModeCaps() {
 }
 setInterval(pollModeCaps, 15000);
 
-// Sleep panel (training/sleep.py): the gen-bar chip shows whether the sleep
-// model is awake (countdown to its next consolidation) or sleeping (progress +
-// eta + last kept checkpoint, with a wake button that stops the run). Hidden
-// while the feature is disabled.
+// Sleep (training/sleep.py): the gen-bar chip is the one-line status; the
+// review box below the chat carries the same status plus the event history
+// (fell asleep / woken / awake) and the sleep-now / wake controls. The chip
+// hides while the feature is disabled; the box stays visible so past sleeps
+// remain reviewable and the feature is discoverable.
 function _fmtMin(s) { return s >= 90 ? `${Math.round(s / 60)}m` : `${Math.round(s)}s`; }
+
+function _fmtEvTime(ts) {
+  const d = new Date(ts * 1000), now = new Date();
+  const hm = d.toTimeString().slice(0, 5);
+  return d.toDateString() === now.toDateString()
+    ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+
+function _sleepEvLine(ev) {
+  if (ev.event === "sleep")
+    return `${ev.model} fell asleep — ${ev.exchanges} exchanges → ${ev.steps} steps `
+      + `(step ${ev.start_step} → ${ev.target_step})`;
+  if (ev.event === "wake") return `${ev.model || "model"} woken by user`;
+  if (ev.event === "awake")
+    return `${ev.model} awake at step ${ev.end_step} (+${ev.steps_gained} steps consolidated)`;
+  if (ev.event === "failed")
+    return `${ev.model} sleep failed (no steps gained) — cooling down ${Math.round((ev.cooldown_s || 0) / 60)}m`;
+  return ev.event;
+}
+
+function _renderSleepPanel(d) {
+  const panel = $("sleepPanel");
+  if (!panel) return;
+  panel.style.display = "";
+  const state = $("sleepStateChip"), meta = $("sleepMeta");
+  const now = $("sleepNowBtn"), wake = $("sleepWakeBtn");
+  if (!d.enabled) {
+    state.textContent = "disabled";
+    meta.textContent = "enable sleep_enabled + sleep_model in settings to let the model consolidate its chats while idle";
+    now.style.display = "none"; wake.style.display = "none";
+  } else if (d.state === "sleeping" && d.run) {
+    const { step, total_steps, eta_s, last_ckpt_step } = d.run;
+    state.textContent = `${d.model} · sleeping`;
+    meta.textContent = `step ${step ?? "…"}/${total_steps}`
+      + (eta_s ? ` · wakes in ~${_fmtMin(eta_s)}` : "")
+      + ` · waking now keeps up to step ${last_ckpt_step}`;
+    now.style.display = "none"; wake.style.display = "";
+  } else {
+    state.textContent = `${d.model} · awake`;
+    meta.textContent = (d.cooldown_s != null ? `cooling down ${_fmtMin(d.cooldown_s)} (last sleep failed) · `
+        : d.sleeps_in_s != null ? `sleeps in ${_fmtMin(d.sleeps_in_s)} · ` : "")
+      + `${d.pending_exchanges} new exchange${d.pending_exchanges === 1 ? "" : "s"}`
+      + (d.last_sleep_ts ? ` · last slept ${_fmtEvTime(d.last_sleep_ts)}` : " · never slept");
+    now.style.display = ""; wake.style.display = "none";
+  }
+  // usage ledger: exchanges per hour of day, so the sleep cycle can be
+  // judged against when the model is actually talked to
+  const actEl = $("sleepActivity"), act = d.activity_by_hour;
+  if (actEl && act && act.some(v => v)) {
+    const max = Math.max(...act), blocks = "▁▂▃▄▅▆▇█";
+    const hr = new Date().getHours();
+    const spark = act.map((v, i) => {
+      const ch = v ? blocks[Math.min(7, Math.max(1, Math.round(v / max * 7)))] : "·";
+      return i === hr ? `<b title="now">${ch}</b>` : ch;
+    }).join("");
+    const busy = act.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]).slice(0, 3)
+      .filter(x => x[0] > 0).map(x => `${String(x[1]).padStart(2, "0")}h`).join(" ");
+    actEl.innerHTML = `usage ${d.activity_days || 7}d, 00→23h&nbsp; ${spark}&nbsp; busiest ${busy}`;
+    actEl.style.display = "";
+  } else if (actEl) { actEl.style.display = "none"; }
+  const hist = $("sleepHistory");
+  const evs = d.history || [];
+  hist.innerHTML = evs.map(ev =>
+    `<div class="ev"><time>${_fmtEvTime(ev.ts)}</time><span></span></div>`).join("");
+  hist.querySelectorAll(".ev span").forEach((el, i) => { el.textContent = _sleepEvLine(evs[i]); });
+}
 
 function pollSleep() {
   if (document.hidden) return;
   fetch("/sleep").then(r => r.ok ? r.json() : null).then(d => {
     const chip = $("sleepChip"), wake = $("sleepWake");
-    if (!chip) return;
-    if (!d || !d.enabled) { chip.style.display = "none"; wake.style.display = "none"; return; }
+    if (!chip || !d) return;
+    _renderSleepPanel(d);
+    if (!d.enabled) { chip.style.display = "none"; wake.style.display = "none"; return; }
     chip.style.display = "";
     if (d.state === "sleeping" && d.run) {
       const { step, total_steps, eta_s, last_ckpt_step } = d.run;
@@ -1924,9 +1992,10 @@ function pollSleep() {
 }
 setInterval(pollSleep, 15000);
 pollSleep();
-$("sleepWake")?.addEventListener("click", () => {
-  fetch("/sleep/wake", { method: "POST" }).then(() => pollSleep()).catch(() => {});
-});
+function _sleepPost(path) { fetch(path, { method: "POST" }).then(() => pollSleep()).catch(() => {}); }
+$("sleepWake")?.addEventListener("click", () => _sleepPost("/sleep/wake"));
+$("sleepWakeBtn")?.addEventListener("click", () => _sleepPost("/sleep/wake"));
+$("sleepNowBtn")?.addEventListener("click", () => _sleepPost("/sleep/now"));
 
 function resetRagPanel() {
   const wrap = $("ragPanel"); if (!wrap) return;
@@ -9508,6 +9577,7 @@ function _trRenderForkButton() {
   wrap.style.cssText = "margin-top:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap";
   wrap.innerHTML = `
     <button type="button" class="action train-fork-btn" style="font-size:10.5px;padding:2px 8px" title="Copy the latest checkpoint into a new model dir so you can train it on a different corpus.">fork to new model</button>
+    <button type="button" class="action train-grow-btn" style="font-size:10.5px;padding:2px 8px" title="Function-preserving expansion: grow this checkpoint into a larger shape from trainer_sizes.json, then continue training it.">grow model</button>
     <button type="button" class="action train-prune-btn" style="font-size:10.5px;padding:2px 8px" title="Delete old checkpoints, keeping a milestone ladder plus the newest few. Hook captures are never touched.">prune checkpoints</button>
   `;
   cell.appendChild(wrap);
@@ -9518,6 +9588,14 @@ function _trRenderForkButton() {
       return;
     }
     _trOpenForkModal(src);
+  });
+  wrap.querySelector(".train-grow-btn").addEventListener("click", () => {
+    const src = resumeEl.value;
+    if (!src) {
+      alert("Pick a model in 'model to continue' first.");
+      return;
+    }
+    _trOpenGrowModal(src);
   });
   wrap.querySelector(".train-prune-btn").addEventListener("click", () => {
     const src = resumeEl.value;
@@ -9711,6 +9789,199 @@ function _trDoFork() {
       status.style.color = "var(--hot)";
       status.textContent = "request failed: " + String(e);
     });
+}
+
+// ---- model growth --------------------------------------------------------------
+// Function-preserving expansion (IDEA 21): the server enumerates reachable
+// trainer_sizes.json targets (/models/grow/options) so the reachability rules
+// live in one place; the client only renders and polls /models/grow/status.
+
+let _growPollTimer = null;
+
+function _trFmtParams(n) {
+  return n == null ? "?" : (n / 1e6).toFixed(1) + "M";
+}
+
+function _trOpenGrowModal(source) {
+  const modal = document.getElementById("growModelModal");
+  if (!modal) return;
+  modal._growSource = source;
+  modal._growOptions = null;
+  document.getElementById("growModelSummary").innerHTML =
+    `Source: <code>${_trEsc(source)}</code>`;
+  document.getElementById("growModelStep").innerHTML = "";
+  document.getElementById("growModelTarget").innerHTML = "<option>loading…</option>";
+  document.getElementById("growModelParams").textContent = "";
+  document.getElementById("growModelStatus").textContent = "";
+  const nameInput = document.getElementById("growModelNewName");
+  let suggested = source + "_grown";
+  const known = new Set((trainState.discovery.models || []).map(x => x.name));
+  if (known.has(suggested)) {
+    let i = 2;
+    while (known.has(suggested + i)) i++;
+    suggested = suggested + i;
+  }
+  nameInput.value = suggested;
+  modal.classList.remove("hidden");
+  _trWireGrowNameValidator();
+  fetch("/models/grow/options?source=" + encodeURIComponent(source))
+    .then(r => r.json())
+    .then(out => {
+      if (!out.ok) {
+        document.getElementById("growModelTarget").innerHTML = "";
+        const st = document.getElementById("growModelStatus");
+        st.style.color = "var(--hot)";
+        st.textContent = out.error || "options failed";
+        document.getElementById("growModelConfirm").disabled = true;
+        return;
+      }
+      modal._growOptions = out;
+      const stepSel = document.getElementById("growModelStep");
+      stepSel.innerHTML = out.steps.slice().reverse().map(s =>
+        `<option value="${s}" ${s === out.step ? "selected" : ""}>step_${s}${s === out.step ? " (latest)" : ""}</option>`).join("");
+      const tgtSel = document.getElementById("growModelTarget");
+      // seq is orthogonal to size, so "keep size" is a valid target when the
+      // user only wants a longer context.
+      const opts = out.targets.map(t =>
+        `<option value="${_trEsc(t.size)}">${_trEsc(t.size)} — ${t.layers}L/${t.hidden}h/${t.ffn}f/${t.heads}heads</option>`);
+      opts.push(`<option value="">(keep size — grow context only)</option>`);
+      tgtSel.innerHTML = opts.join("");
+      const seqSel = document.getElementById("growModelSeq");
+      seqSel.innerHTML = (out.seq_choices || [out.seq]).map((s, i) =>
+        `<option value="${s}" ${i === 0 ? "selected" : ""}>${s}${i === 0 ? " (current)" : " (" + Math.round(s / out.seq) + "x)"}</option>`).join("");
+      _trGrowRenderParams();
+    })
+    .catch(e => {
+      const st = document.getElementById("growModelStatus");
+      st.style.color = "var(--hot)";
+      st.textContent = "options failed: " + String(e);
+    });
+}
+
+function _trGrowRenderParams() {
+  const modal = document.getElementById("growModelModal");
+  const out = modal && modal._growOptions;
+  const line = document.getElementById("growModelParams");
+  if (!out) { line.textContent = ""; return; }
+  const key = document.getElementById("growModelTarget").value;
+  const seqEl = document.getElementById("growModelSeq");
+  const seq = parseInt(seqEl.value, 10) || out.seq;
+  const t = out.targets.find(x => x.size === key) || null;
+  const bySeq = t ? t.params_seq : out.source_params_seq;
+  const after = (bySeq && bySeq[String(seq)] != null) ? bySeq[String(seq)]
+    : (t ? t.params : out.params);
+  const dst = t || out.shape;
+  line.innerHTML = `params: <b>${_trFmtParams(out.params)}</b> → <b>${_trFmtParams(after)}</b>` +
+    ` &nbsp;·&nbsp; ${out.shape.layers}L/${out.shape.hidden}h/${out.shape.ffn}f/${out.shape.heads}heads @ seq ${out.seq} → ` +
+    `${dst.layers}L/${dst.hidden}h/${dst.ffn}f/${dst.heads}heads @ seq ${seq}`;
+}
+
+function _trCloseGrowModal() {
+  const modal = document.getElementById("growModelModal");
+  if (modal) {
+    modal.classList.add("hidden");
+    modal._growSource = null;
+    modal._growOptions = null;
+  }
+  if (_growPollTimer) { clearTimeout(_growPollTimer); _growPollTimer = null; }
+}
+
+function _trWireGrowNameValidator() {
+  const input = document.getElementById("growModelNewName");
+  const msg   = document.getElementById("growModelNameValidity");
+  const conf  = document.getElementById("growModelConfirm");
+  if (!input || !msg || !conf) return;
+  const update = () => {
+    const v = (input.value || "").trim();
+    if (!v) { msg.textContent = ""; conf.disabled = true; return; }
+    if (_trForkNameValid(v)) { msg.style.color = "var(--data-pos)"; msg.textContent = "valid"; conf.disabled = false; }
+    else                     { msg.style.color = "var(--hot)";      msg.textContent = "lowercase letters, digits, and underscores only"; conf.disabled = true; }
+  };
+  input.addEventListener("input", update);
+  input.addEventListener("change", update);
+  update();
+}
+
+function _trDoGrow() {
+  const modal = document.getElementById("growModelModal");
+  if (!modal || !modal._growSource) return;
+  const source  = modal._growSource;
+  const name    = (document.getElementById("growModelNewName").value || "").trim();
+  const step    = parseInt(document.getElementById("growModelStep").value, 10);
+  const target  = document.getElementById("growModelTarget").value;
+  const seq     = parseInt(document.getElementById("growModelSeq").value, 10) || null;
+  const curSeq  = modal._growOptions ? modal._growOptions.seq : null;
+  const status  = document.getElementById("growModelStatus");
+  const confirm = document.getElementById("growModelConfirm");
+  if (!name) { status.style.color = "var(--hot)"; status.textContent = "name is required"; return; }
+  if (!target && (!seq || seq === curSeq)) {
+    status.style.color = "var(--hot)";
+    status.textContent = "pick a larger size or a longer context";
+    return;
+  }
+  confirm.disabled = true;
+  status.style.color = "var(--dim)";
+  status.textContent = "starting…";
+  const body = { source, step, name };
+  if (target) body.target_size = target;
+  if (seq)    body.target_seq  = seq;
+  fetch("/models/grow", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then(r => r.json().then(out => ({ code: r.status, out })))
+    .then(({ code, out }) => {
+      if (!out.ok) {
+        confirm.disabled = false;
+        status.style.color = "var(--hot)";
+        status.textContent = out.error || ("grow failed (" + code + ")");
+        return;
+      }
+      _trPollGrowStatus(out.name);
+    })
+    .catch(e => {
+      confirm.disabled = false;
+      status.style.color = "var(--hot)";
+      status.textContent = "request failed: " + String(e);
+    });
+}
+
+function _trPollGrowStatus(name) {
+  const status  = document.getElementById("growModelStatus");
+  const confirm = document.getElementById("growModelConfirm");
+  fetch("/models/grow/status").then(r => r.json()).then(st => {
+    if (st.running) {
+      status.style.color = "var(--dim)";
+      status.textContent = "growing… (" + (st.phase || "working") + ")";
+      _growPollTimer = setTimeout(() => _trPollGrowStatus(name), 1500);
+      return;
+    }
+    confirm.disabled = false;
+    if (st.error) {
+      status.style.color = "var(--hot)";
+      status.textContent = st.error;
+      return;
+    }
+    const res = st.result || {};
+    status.style.color = "var(--data-pos)";
+    status.textContent = `grown → ${name} (${_trFmtParams(res.n_params_total)} params). Continue-train it with warmup.`;
+    // Same post-action flow as fork: refresh discovery, point the resume
+    // picker at the new model, close after a beat.
+    fetch("/train/discovery").then(r => r.json()).then(disc => {
+      trainState.discovery = disc || trainState.discovery;
+      _trRenderForm();
+      const resumeEl = _trArgEl("resume");
+      if (resumeEl) {
+        resumeEl.value = name;
+        _trApplyResumeConfig(name);
+      }
+      setTimeout(_trCloseGrowModal, 1200);
+    });
+  }).catch(e => {
+    confirm.disabled = false;
+    status.style.color = "var(--hot)";
+    status.textContent = "status poll failed: " + String(e);
+  });
 }
 
 
@@ -10171,7 +10442,7 @@ function _trRenderPicker() {
   const hint = _trEl("trainEmptyHint");
   const flowLabel = _trEl("trainFlowCurrent");
   if (flowLabel) {
-    const labels = { scratch: "start a new model", continue: "continue a saved model", rag: "answer from context (RAG)", synth: "generate training data", author: "author a corpus", export: "export to .bin" };
+    const labels = { scratch: "start a new model", continue: "continue a saved model", rag: "answer from context (RAG)", export: "export to .bin" };
     if (trainState.flow) {
       flowLabel.textContent = labels[trainState.flow] || trainState.flow;
       flowLabel.style.color = "var(--accent)";
@@ -10183,7 +10454,7 @@ function _trRenderPicker() {
   if (!sel || !row) return;
   // export uses its own model/step picker; synth and rag have their own
   // inline panels. None of them use the trainer picker.
-  const NO_PICKER = ["export", "synth", "rag", "author"];
+  const NO_PICKER = ["export", "rag"];
   if (!trainState.flow || NO_PICKER.includes(trainState.flow)) { row.style.display = "none"; return; }
   row.style.display = "flex";
   const list = _trFiltered();
@@ -10273,8 +10544,8 @@ function _exPopulateSteps() {
 }
 
 // flows that require a configured teacher model
-const TEACHER_REQUIRED_FLOWS = ["synth", "rag", "author"];
-const SYNTH_TRAIN_BTN_ID = "trainRun";
+const TEACHER_REQUIRED_FLOWS = ["rag"];
+const TRAIN_RUN_BTN_ID = "trainRun";
 
 const synthState = { seeds: [], jobId: null, pollTimer: null, jobs: [] };
 const authorState = { spec: null, jobId: null, pollTimer: null, rate: null };
@@ -10283,7 +10554,7 @@ const authorState = { spec: null, jobId: null, pollTimer: null, rate: null };
 // on the same action with its live status reattached.
 const TRAIN_FLOW_STORE = "vt:training:flow";
 const SYNTH_JOB_STORE = "vt:training:synth_job";
-const TRAIN_VALID_FLOWS = ["scratch", "continue", "rag", "synth", "author", "export"];
+const TRAIN_VALID_FLOWS = ["scratch", "continue", "rag", "export"];
 
 // Per-flow job descriptors: one place owns how to stop each running job type.
 // Consumed by the per-panel stop buttons (all confirm-gated).
@@ -10291,19 +10562,9 @@ const TRAIN_JOB = { stop: () => fetch("/trainers/stop", { method: "POST" }) };
 const SYNTH_JOB = { stop: () => fetch(TEACHER_SYNTH_STOP, { method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ job_id: synthState.jobId }) }) };
-const RAG_JOB = { stop: () => fetch("/rag/stop", { method: "POST" }) };
 const AUTHOR_JOB = { stop: () => fetch(TEACHER_SYNTH_STOP, { method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ job_id: authorState.jobId }) }) };
-const TRAIN_FLOWS = {
-  scratch:  { job: TRAIN_JOB },
-  continue: { job: TRAIN_JOB },
-  rag: { job: RAG_JOB },
-  synth:    { job: SYNTH_JOB },
-  author:   { job: AUTHOR_JOB },
-  export:   { job: null },
-};
-
 function _trStore(flow) { try { localStorage.setItem(TRAIN_FLOW_STORE, flow); } catch (e) {} }
 function _trStored() { try { return localStorage.getItem(TRAIN_FLOW_STORE); } catch (e) { return null; } }
 
@@ -10415,7 +10676,7 @@ function _trUpdateTeacherGate() {
   const ok = _teacherConfigured();
   gate.style.display = (need && !ok) ? "block" : "none";
   // disable start button when teacher needed but missing
-  const run = $(SYNTH_TRAIN_BTN_ID);
+  const run = $(TRAIN_RUN_BTN_ID);
   if (run && need && !ok) run.disabled = true;
   // #synthStartBtn moved to the Distillation tab, whose own teacher check owns
   // its enabled state. Touching it from here would fight that check.
@@ -10492,54 +10753,16 @@ function _synthLoadSeeds() {
 }
 
 function _synthLoadJobs() {
-  const sel = $("synthJobSelect");
-  if (!sel) return Promise.resolve();
   return fetch(TEACHER_SYNTH_JOBS).then(r => r.json()).then(d => {
     synthState.jobs = (d && d.jobs) || [];
-    const cur = sel.value;
-    const opts = synthState.jobs.map(j => {
-      const cats = (j.categories || []).join(", ") || "empty";
-      const run = j.running ? " · running" : "";
-      return `<option value="${_trEsc(j.job_id)}">${_trEsc(j.job_id)} · ${j.completed || 0} samples · ${_trEsc(cats)}${run}</option>`;
-    }).join("");
-    sel.innerHTML = '<option value="">&mdash; new job &mdash;</option>' + opts;
-    if (cur && synthState.jobs.some(j => j.job_id === cur)) sel.value = cur;
-    _trFilesRender();
+    _distFillJobPickers();
+    _distRenderJobs();
   }).catch(() => {});
 }
 
 function _synthSelectedIds() {
   return Array.from(document.querySelectorAll(".synth-seed-cb"))
     .filter(cb => cb.checked).map(cb => cb.dataset.id);
-}
-
-function _trFilesRender() {
-  const host = $("trainFilesList");
-  if (!host) return;
-  const jobs = synthState.jobs || [];
-  if (!jobs.length) { host.textContent = "no synth jobs on disk."; return; }
-  host.innerHTML = jobs.map(j => {
-    const cats = (j.categories || []).join(", ") || "empty";
-    const run = j.running ? ' <span style="color:var(--warm)">running</span>' : "";
-    const del = j.running
-      ? '<button type="button" disabled style="opacity:.5">delete</button>'
-      : `<button type="button" class="train-file-del" data-id="${_trEsc(j.job_id)}" style="background:var(--hot);color:#000">delete</button>`;
-    return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)">`
-      + `<code style="min-width:130px">${_trEsc(j.job_id)}</code>`
-      + `<span style="flex:1">${j.completed || 0} samples · ${_trEsc(cats)}${run}</span>${del}</div>`;
-  }).join("");
-  host.querySelectorAll(".train-file-del").forEach(b => {
-    b.addEventListener("click", () => _trFilesDelete(b.dataset.id));
-  });
-}
-
-function _trFilesDelete(jobId) {
-  if (!jobId || !confirm(`Delete synth job ${jobId}? This removes its files from disk.`)) return;
-  fetch(TEACHER_SYNTH_DELETE, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ job_id: jobId }) })
-    .then(r => r.json())
-    .then(() => { _synthLoadJobs(); })
-    .catch(() => {});
 }
 
 function _synthGatherPrompts(ids) {
@@ -10559,6 +10782,13 @@ function _synthStopPoll(msg) {
   const stop = $("synthStopPollBtn"); if (stop) stop.style.display = "none";
   const line = $("synthStatusLine");
   if (line && msg) { line.textContent = msg; line.style.color = "var(--dim)"; }
+}
+
+// Selecting a different corpus in the picker has to start watching that one.
+function _synthPollStart() {
+  if (synthState.pollTimer) clearInterval(synthState.pollTimer);
+  synthState.pollTimer = setInterval(_synthPollOnce, TEACHER_POLL_MS);
+  _synthPollOnce();
 }
 
 function _synthPollOnce() {
@@ -10583,16 +10813,18 @@ function _synthPollOnce() {
       }
       line.textContent = txt;
       line.style.color = s.aborted ? "var(--hot)" : (running ? "var(--warm)" : (f > c ? "var(--hot)" : "var(--data-pos)"));
-      const job = (synthState.jobs || []).find(j => j.job_id === synthState.jobId);
-      if (job) { job.running = running; job.completed = c; }
+      _distSyncJobRow(synthState.jobId, c, running);
       _synthSyncStartLabel();
-      const stopBtn = $("synthStopPollBtn");
-      if (stopBtn) stopBtn.style.display = running ? "" : "none";
+      const remaining = s.calls_remaining == null ? "" : `, ${s.calls_remaining.toLocaleString()} prompts left`;
+      _distRenderOutcome("synth", s, 0, "records", synthState.jobId);
+      _distSyncNextAction("synth", running, Number(s.completed || 0));
+      _distSetRunning("synth", running,
+        `Answering seed prompts into ${_distJobNameById(synthState.jobId)}${remaining}.`);
       // Build corpus only after the job is complete or stopped, and only with
       // samples to build from; disabled (and hidden) while still running.
       const ready = !running && c > 0;
       const buildRow = $("synthBuildRow");
-      if (buildRow) buildRow.style.display = ready ? "flex" : "none";
+      if (buildRow) buildRow.style.display = ready ? "block" : "none";
       const buildBtn = $("synthBuildBtn");
       if (buildBtn) buildBtn.disabled = !ready;
       if (!running) _synthStopPoll();
@@ -10654,12 +10886,14 @@ function _synthStartReq(prompts, fmt, ids, target, line, info) {
   if (line) { line.textContent = "starting..."; line.style.color = "var(--warm)"; }
   const body = { prompts: prompts, format: fmt, seed_ids: ids };
   if (target) body.job_id = target;
+  else { const nm = _distNewName("synthJobSelect"); if (nm) body.label = nm; }
   fetch(TEACHER_SYNTH_START, { method: "POST", headers: { "Content-Type": "application/json" },
                                body: JSON.stringify(body) })
     .then(r => r.json())
     .then(d => {
       if (!d || d.error) { if (line) { line.textContent = "error: " + (d && d.error || "failed"); line.style.color = "var(--hot)"; } return; }
       synthState.jobId = d.job_id;
+      _distConsumeName("synth");
       try { localStorage.setItem(SYNTH_JOB_STORE, d.job_id); } catch (e) {}
       if (info) { info.style.display = "block"; info.textContent = `job ${d.job_id} -> ${d.output_dir}`; }
       const stop = $("synthStopPollBtn"); if (stop) stop.style.display = "";
@@ -10673,20 +10907,6 @@ function _synthStartReq(prompts, fmt, ids, target, line, info) {
       });
     })
     .catch(e => { if (line) { line.textContent = _backendErrMsg(e); line.style.color = "var(--hot)"; } });
-}
-
-function _trShowSynthPanel(show) {
-  // #synthPanel moved to the Distillation tab 2026-08-20; its visibility is owned
-  // by that tab's mode switch. This still manages the training-form rows.
-  const files = $("trainFilesPanel");
-  if (files) files.style.display = show ? "block" : "none";
-  // hide trainer picker + form when synth flow active
-  const pickerRow = _trEl("trainPickerRow");
-  if (show && pickerRow) pickerRow.style.display = "none";
-  const formWrap = _trEl("trainFormWrap");
-  if (show && formWrap) formWrap.style.display = "none";
-  const runRow = _trEl("trainRunRow");
-  if (show && runRow) runRow.style.display = "none";
 }
 
 function _trShowRagPanel(show) {
@@ -10768,6 +10988,7 @@ function _authorImport() {
   const body = { source_dir: dir };
   const dest = ($("authorJobSelect") || {}).value || "";
   if (dest) body.job_id = dest;
+  else { const nm = _distNewName("authorJobSelect"); if (nm) body.label = nm; }
   fetch(TEACHER_AUTHOR_IMPORT, { method: "POST", headers: { "Content-Type": "application/json" },
                                  body: JSON.stringify(body) })
     .then(r => r.json())
@@ -10778,10 +10999,10 @@ function _authorImport() {
       }
       if (stat) { stat.textContent = `imported ${d.accepted_total} record(s)`; stat.style.color = "var(--data-pos)"; }
       authorState.jobId = d.job_id;
+      _distConsumeName("author");
       _authorStore(d.job_id);
       _authorRenderImportResult(d);
       _synthLoadJobs().then(() => {
-        _authorFillJobs();
         const sel = $("authorJobSelect");
         if (sel) sel.value = d.job_id;
       });
@@ -10912,8 +11133,14 @@ function _authorRenderStats(s) {
       (s.last_error ? ` - last error: ${s.last_error}` : "");
     plan.style.color = s.aborted ? "var(--hot)" : (running ? "var(--warm)" : "var(--dim)");
   }
-  const stop = $("authorStopBtn");
-  if (stop) stop.style.display = running ? "" : "none";
+  _distSyncJobRow(authorState.jobId, a.records || 0, running);
+  const p = s.plan || {};
+  _distRenderOutcome("author", s, 0, "records", authorState.jobId);
+  _distSyncNextAction("author", running, Number(s.completed || 0));
+  _distSetRunning("author", running,
+    `Authoring into ${_distJobNameById(authorState.jobId)} - target ` +
+    `${((p.target_bytes || 0) / AUTHOR_MB).toFixed(0)} MB across ${(p.genres || []).length} genres, ` +
+    `${p.max_concurrency || 0} calls at once.`);
   const build = $("authorBuildRow");
   if (build) build.style.display = (!running && (a.records || 0) > 0) ? "block" : "none";
 }
@@ -10977,6 +11204,7 @@ function _authorStart() {
   if (conc > 0) body.max_concurrency = conc;
   const dest = ($("authorJobSelect") || {}).value || "";
   if (dest) body.job_id = dest;
+  else { const nm = _distNewName("authorJobSelect"); if (nm) body.label = nm; }
   if (plan) { plan.textContent = "starting..."; plan.style.color = "var(--warm)"; }
   fetch(TEACHER_AUTHOR_START, { method: "POST", headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify(body) })
@@ -10987,6 +11215,7 @@ function _authorStart() {
         return;
       }
       authorState.jobId = d.job_id;
+      _distConsumeName("author");
       _authorStore(d.job_id);
       if (plan) {
         plan.textContent = `job ${d.job_id}: ${d.total_calls} teacher calls planned, ` +
@@ -10994,7 +11223,7 @@ function _authorStart() {
         plan.style.color = "var(--warm)";
       }
       _authorPollStart();
-      _synthLoadJobs().then(() => _authorFillJobs());
+      _synthLoadJobs();
     })
     .catch(e => { if (plan) { plan.textContent = _backendErrMsg(e); plan.style.color = "var(--hot)"; } });
 }
@@ -11003,16 +11232,6 @@ function _authorStop() {
   if (!authorState.jobId) return;
   confirmDialog("Stop authoring? Records written so far are kept and the run can resume.", "Stop")
     .then(ok => { if (ok) AUTHOR_JOB.stop().then(() => _authorPollOnce()).catch(() => {}); });
-}
-
-function _authorFillJobs() {
-  const sel = $("authorJobSelect");
-  if (!sel) return;
-  const cur = sel.value || authorState.jobId || "";
-  sel.innerHTML = '<option value="">&mdash; new corpus &mdash;</option>' +
-    (synthState.jobs || []).map(j =>
-      `<option value="${_trEsc(j.job_id)}">${_trEsc(j.job_id)} (${j.completed || 0} records)</option>`).join("");
-  if (cur && (synthState.jobs || []).some(j => j.job_id === cur)) sel.value = cur;
 }
 
 function _authorBuild() {
@@ -11051,17 +11270,6 @@ function _authorBuild() {
     .catch(e => { if (stat) { stat.textContent = _backendErrMsg(e); stat.style.color = "var(--hot)"; } });
 }
 
-function _trShowAuthorPanel(show) {
-  // #authorPanel moved to the Distillation tab 2026-08-20; see _trShowSynthPanel.
-  if (!show) return;
-  const pickerRow = _trEl("trainPickerRow");
-  if (pickerRow) pickerRow.style.display = "none";
-  const formWrap = _trEl("trainFormWrap");
-  if (formWrap) formWrap.style.display = "none";
-  const runRow = _trEl("trainRunRow");
-  if (runRow) runRow.style.display = "none";
-}
-
 function _trGotoTeacherSettings(ev) {
   if (ev && ev.preventDefault) ev.preventDefault();
   location.hash = "settings";
@@ -11093,39 +11301,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const flowPick = (flow) => {
     const busy = trainState.running && trainState.running.status === "running";
     if (busy && flow !== "export") return;
-    if (flow === "distillation") {
-      if (flowModal) flowModal.classList.add("hidden");
-      location.hash = "distillation";
-      activateTab("distillation");
-      return;
-    }
     trainState.flow = flow;
     trainState.selected = null;
     _trStore(flow);
     _trToggleMetrics(flow);
     // Core Trainers list is flow-scoped; force a refetch on the next render.
     coreTrainersState.ready = false;
-    _trShowSynthPanel(flow === "synth");
     _trShowRagPanel(flow === "rag");
-    _trShowAuthorPanel(flow === "author");
     _trUpdateTeacherGate();
-    if (flow === "synth") {
-      if (!synthState.seeds.length) _synthLoadSeeds();
-      _synthLoadJobs().then(() => _synthReattach());
-    }
-    if (flow === "author") {
-      if (!authorState.spec) _authorLoadSpec();
-      _synthLoadJobs().then(() => {
-        _authorFillJobs();
-        const saved = _authorStored();
-        if (saved && (synthState.jobs || []).some(j => j.job_id === saved)) {
-          authorState.jobId = saved;
-          const sel = $("authorJobSelect");
-          if (sel) sel.value = saved;
-          _authorPollStart();
-        }
-      });
-    }
     _trRenderPicker();
     _trRenderForm();
     _trRenderStatus();
@@ -11167,8 +11350,6 @@ document.addEventListener("DOMContentLoaded", () => {
     _authorStore(jid);
     _authorPollStart();
   });
-  const filesRefresh = $("trainFilesRefresh");
-  if (filesRefresh) filesRefresh.addEventListener("click", _synthLoadJobs);
   const synthJobSel = $("synthJobSelect");
   if (synthJobSel) synthJobSel.addEventListener("change", () => {
     _synthSyncStartLabel();
@@ -11855,6 +12036,7 @@ const TEACHER_SYNTH_STOP = "/teacher/synth/stop";
 const TEACHER_SYNTH_SAMPLES = "/teacher/synth/samples";
 const TEACHER_SYNTH_JOBS = "/teacher/synth/jobs";
 const TEACHER_SYNTH_DELETE = "/teacher/synth/delete";
+const TEACHER_SYNTH_RENAME = "/teacher/synth/rename";
 const TEACHER_KIND_API = "api";
 const TEACHER_KIND_LOCAL = "local";
 const TEACHER_DEFAULT_MAX_CONC = 16;
@@ -15065,6 +15247,17 @@ document.addEventListener("DOMContentLoaded", () => {
   const fmconf = document.getElementById("forkModelConfirm");
   if (fmconf) fmconf.addEventListener("click", _trDoFork);
 
+  const gmc = document.getElementById("growModelModalClose");
+  if (gmc) gmc.addEventListener("click", _trCloseGrowModal);
+  const gmcancel = document.getElementById("growModelCancel");
+  if (gmcancel) gmcancel.addEventListener("click", _trCloseGrowModal);
+  const gmconf = document.getElementById("growModelConfirm");
+  if (gmconf) gmconf.addEventListener("click", _trDoGrow);
+  const gmtarget = document.getElementById("growModelTarget");
+  if (gmtarget) gmtarget.addEventListener("change", _trGrowRenderParams);
+  const gmseq = document.getElementById("growModelSeq");
+  if (gmseq) gmseq.addEventListener("change", _trGrowRenderParams);
+
   const cpc = document.getElementById("ckptPruneModalClose");
   if (cpc) cpc.addEventListener("click", _ckptClosePruneModal);
   const cpcancel = document.getElementById("ckptPruneCancel");
@@ -15698,8 +15891,13 @@ const DIST_MODE_STORE = "vt:distillation:mode";
 const DIST_TARGET_POLL_MS = 20000;
 const DIST_MODES = ["interview", "author", "synth"];
 const DIST_DEFAULT_MODE = "interview";
+const DIST_MODE_PANELS = { interview: "interviewPanel", author: "authorPanel", synth: "synthPanel" };
+const DIST_MODE_PREFIX = { interview: "interview", author: "author", synth: "synth" };
 
-const distState = { mode: null, target: null, pollTimer: null, pending: null };
+// running / runWhat memoise the last state pushed to the DOM per mode, so a poll
+// that reports no change costs one lookup instead of six style writes.
+const distState = { mode: null, target: null, pollTimer: null, pending: null,
+                    running: {}, runWhat: {} };
 
 function _distStoreMode(m) { try { localStorage.setItem(DIST_MODE_STORE, m); } catch (e) {} }
 function _distStoredMode() {
@@ -15720,11 +15918,34 @@ function _distSetMode(mode) {
   _distStoreMode(mode);
   document.querySelectorAll(".dist-mode").forEach(b =>
     b.classList.toggle("active", b.getAttribute("data-mode") === mode));
-  const panels = { interview: "interviewPanel", author: "authorPanel", synth: "synthPanel" };
-  Object.keys(panels).forEach(m => {
-    const el = $(panels[m]);
+  Object.keys(DIST_MODE_PANELS).forEach(m => {
+    const el = $(DIST_MODE_PANELS[m]);
     if (el) el.style.display = (m === mode) ? "block" : "none";
   });
+}
+
+// A run's settings are fixed on the server the moment it starts, so the form that
+// set them is dead controls. Collapse them to one line naming what is running,
+// and mark the mode card so switching away still shows where the run is.
+function _distSetRunning(mode, running, what) {
+  const step = $(`${DIST_MODE_PREFIX[mode]}ProgressStep`);
+  if (step) step.style.display = "block";
+  if (distState.running[mode] === running && distState.runWhat[mode] === what) return;
+  distState.running[mode] = running;
+  distState.runWhat[mode] = what;
+  const work = $(DIST_MODE_PANELS[mode]);
+  if (work) work.classList.toggle("is-running", running);
+  const bar = $(`${DIST_MODE_PREFIX[mode]}RunBar`);
+  if (bar) bar.style.display = running ? "flex" : "none";
+  const line = $(`${DIST_MODE_PREFIX[mode]}RunWhat`);
+  if (line && running) line.textContent = what;
+  const card = document.querySelector(`.dist-mode[data-mode="${mode}"]`);
+  if (card) card.classList.toggle("has-run", running);
+}
+
+function _distJobNameById(id) {
+  const j = (synthState.jobs || []).find(x => x.job_id === id);
+  return j ? _distJobName(j) : (id || "a new corpus");
 }
 
 function _distFmtAgo(ts) {
@@ -15769,15 +15990,13 @@ function _distRenderTarget(d) {
   if (note) {
     if (d.contention && d.run) {
       const started = _distFmtAgo(d.run.started_at);
-      note.innerHTML = `A training run is using this machine right now: ` +
-        `<strong>${_trEsc(d.run.name || d.run.plugin_id || "unnamed run")}</strong>` +
-        `${d.run.size ? " (" + _trEsc(d.run.size) + ")" : ""}` +
-        `${started ? ", started " + _trEsc(started) : ""}. ` +
-        `Distilling now is allowed and will ask you to confirm first.`;
+      note.innerHTML = `<strong>${_trEsc(d.run.name || d.run.plugin_id || "unnamed run")}</strong>` +
+        `${d.run.size ? " (" + _trEsc(d.run.size) + ")" : ""} has been training here` +
+        `${started ? " for " + _trEsc(started.replace(" ago", "")) : ""}. Teacher calls share the machine.`;
       note.style.display = "block";
     } else if (d.training_active === null) {
-      note.innerHTML = `The teacher runs on <strong>${_trEsc(d.host || "another machine")}</strong>. ` +
-        `Whether that box is training cannot be seen from here, so no contention warning is possible.`;
+      note.innerHTML = `Teacher runs on <strong>${_trEsc(d.host || "another machine")}</strong>; ` +
+        `its load is not visible from here.`;
       note.style.display = "block";
     } else {
       note.style.display = "none";
@@ -15822,14 +16041,13 @@ function _distShowConfirm(d, run) {
   const started = _distFmtAgo(r.started_at);
   body.innerHTML =
     `<div><span class="dist-confirm-run">${_trEsc(r.name || r.plugin_id || "A training run")}</span>` +
-    `${r.size ? " (" + _trEsc(r.size) + ")" : ""} is training on ` +
+    `${r.size ? " (" + _trEsc(r.size) + ")" : ""} has been training on ` +
     `<strong>${_trEsc(d.host || "this machine")}</strong>` +
-    `${started ? ", started " + _trEsc(started) : ""}.</div>` +
-    `<div style="margin-top:8px">The teacher you are about to call runs on that same machine, so both will compete for it.</div>` +
+    `${started ? " for " + _trEsc(started.replace(" ago", "")) : ""}, and the teacher runs there too.</div>` +
     `<ul>` +
-    `<li>The training run gets slower. It will not fail or lose work.</li>` +
-    `<li>Teacher calls get slower too, and may time out under load.</li>` +
-    `<li>Stopping distillation later keeps every record already written.</li>` +
+    `<li>Both slow down; the run keeps its work.</li>` +
+    `<li>Teacher calls may time out under load.</li>` +
+    `<li>Stopping keeps every record already written.</li>` +
     `</ul>`;
   distState.pending = run;
   modal.classList.remove("hidden");
@@ -15903,6 +16121,418 @@ function _distRenderAudit(audit) {
   }
 }
 
+// ---- corpora on disk ----
+// One fetch of /teacher/synth/jobs feeds every destination picker and this list,
+// so the three modes cannot disagree about what exists. A job is named by a hex
+// id nobody recognises a week later; this list is where it gets a human name,
+// gets loaded into the picker for the current mode, or gets removed.
+const DIST_JOB_PICKERS = [
+  { id: "interviewJobSelect", name: "interviewJobName", mode: "interview", blank: "create a new corpus",
+    state: () => interviewState, poll: () => _ivPollStart() },
+  { id: "authorJobSelect",    name: "authorJobName",    mode: "author",    blank: "create a new corpus",
+    state: () => authorState,    poll: () => _authorPollStart() },
+  { id: "synthJobSelect",     name: "synthJobName",     mode: "synth",     blank: "create a new corpus",
+    state: () => synthState,     poll: () => _synthPollStart() },
+];
+const DIST_JOB_SELECTS = { interview: "interviewJobSelect", author: "authorJobSelect", synth: "synthJobSelect" };
+const DIST_JOB_ACT_LABEL = { view: "view", use: "use", ren: "rename", del: "delete" };
+const DIST_JOB_ACTIONS = { view: _distJobView, use: _distJobUse, ren: _distJobRename, del: _distJobDelete };
+
+function _distJobName(j) {
+  return (j.label || "").trim() || j.job_id;
+}
+
+function _distFillJobPickers() {
+  const jobs = synthState.jobs || [];
+  const opts = jobs.map(j =>
+    `<option value="${_trEsc(j.job_id)}">${_trEsc(_distJobName(j))} (${(j.completed || 0).toLocaleString()} records)</option>`).join("");
+  DIST_JOB_PICKERS.forEach(pick => {
+    const sel = $(pick.id);
+    if (!sel) return;
+    const keep = sel.value || pick.state().jobId || "";
+    sel.innerHTML = `<option value="">${pick.blank}</option>` + opts;
+    if (jobs.some(j => j.job_id === keep)) sel.value = keep;
+    _distSyncNameField(pick);
+  });
+}
+
+// A typed name survives a mode switch, a tab switch and a reload. Losing it on
+// the way to picking topics and back is the whole reason it would go untyped.
+function _distNameStore(mode) { return `vt:distillation:${mode}_name`; }
+
+function _distStoreName(mode, value) {
+  try {
+    if (value) localStorage.setItem(_distNameStore(mode), value);
+    else localStorage.removeItem(_distNameStore(mode));
+  } catch (e) {}
+}
+
+function _distStoredName(mode) {
+  try { return localStorage.getItem(_distNameStore(mode)) || ""; } catch (e) { return ""; }
+}
+
+function _distConsumeName(mode) {
+  _distStoreName(mode, "");
+  const pick = DIST_JOB_PICKERS.find(p => p.mode === mode);
+  const box = pick && $(pick.name);
+  if (box) { box.value = ""; box.dataset.pending = ""; }
+}
+
+// The name box names a corpus at birth. Appending to an existing one has nothing
+// to name, so the box goes disabled and shows that corpus's current name rather
+// than sitting there inviting a rename that the start route would have to guess
+// the intent of. Renaming an existing corpus is the list's `rename` button.
+function _distSyncNameField(pick) {
+  const sel = $(pick.id);
+  const box = $(pick.name);
+  if (!sel || !box) return;
+  const dest = sel.value || "";
+  if (!dest) {
+    box.disabled = false;
+    box.value = box.dataset.pending || _distStoredName(pick.mode) || "";
+    box.placeholder = box.dataset.ph || box.placeholder;
+    return;
+  }
+  // Parking the typed name before the box is taken over by the selected corpus's
+  // own name, so switching back to "create a new corpus" gets it back.
+  if (!box.disabled) box.dataset.pending = box.value;
+  const job = (synthState.jobs || []).find(j => j.job_id === dest);
+  box.disabled = true;
+  box.value = job ? _distJobName(job) : dest;
+}
+
+// Read the typed name back out, and only when it would actually be used.
+function _distNewName(pickId) {
+  const pick = DIST_JOB_PICKERS.find(p => p.id === pickId);
+  const box = pick && $(pick.name);
+  if (!box || box.disabled) return "";
+  return (box.value || "").trim();
+}
+
+function _distRenderJobs() {
+  const host = $("distJobsList");
+  if (!host) return;
+  const jobs = synthState.jobs || [];
+  const summary = $("distJobsSummary");
+  if (summary) {
+    const bytes = jobs.reduce((a, j) => a + (j.bytes || 0), 0);
+    const records = jobs.reduce((a, j) => a + (j.completed || 0), 0);
+    summary.textContent = jobs.length
+      ? `${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${records.toLocaleString()} records · ${_fmtBytes(bytes)} on disk`
+      : "";
+  }
+  host.innerHTML = jobs.length
+    ? jobs.map(_distJobRow).join("")
+    : '<div class="dist-job-empty">Nothing generated yet. Pick a mode above and start a run.</div>';
+}
+
+function _distJobRow(j) {
+  const cats = (j.categories || []).join(", ");
+  const ago = _distFmtAgo(j.updated_at);
+  const id = _trEsc(j.job_id);
+  // view stays available on a running job: watching records land is the point.
+  const acts = (j.running ? ["view"] : ["view", "use", "ren", "del"]).map(a =>
+        `<button type="button" class="action dist-job-${a}" data-act="${a}" data-id="${id}">` +
+        `${DIST_JOB_ACT_LABEL[a]}</button>`).join("")
+    + (j.running ? '<span class="dist-job-run">running</span>' : "");
+  return `<div class="dist-job${j.running ? " running" : ""}" data-job="${id}">`
+    + `<span class="dist-job-main"><span class="dist-job-name">${_trEsc(_distJobName(j))}</span>`
+    + `<span class="dist-job-id">${id}</span></span>`
+    + `<span class="dist-job-facts"><span><b data-records>${(j.completed || 0).toLocaleString()}</b> records</span>`
+    + `<span><b data-bytes>${_fmtBytes(j.bytes || 0)}</b> on disk</span>`
+    + (cats ? `<span>${_trEsc(cats)}</span>` : "")
+    + (ago ? `<span>written ${_trEsc(ago)}</span>` : "")
+    + `</span><span class="dist-job-acts">${acts}</span></div>`;
+}
+
+// A running job's row would otherwise sit at the count it had when the tab
+// opened. Patching two text nodes beats re-rendering the list every two seconds;
+// the row only needs rebuilding when the run ends and its actions come back.
+function _distSyncJobRow(jobId, records, running) {
+  const job = (synthState.jobs || []).find(j => j.job_id === jobId);
+  if (!job) return;
+  const ended = job.running && !running;
+  job.running = running;
+  job.completed = records;
+  if (ended) { _synthLoadJobs(); return; }
+  const row = document.querySelector(`.dist-job[data-job="${CSS.escape(jobId)}"]`);
+  if (!row) return;
+  const cell = row.querySelector("[data-records]");
+  const next = records.toLocaleString();
+  if (cell && cell.textContent !== next) cell.textContent = next;
+}
+
+const TEACHER_SYNTH_BROWSE = "/teacher/synth/browse";
+const DIST_VIEW_PAGE = 25;
+const distView = { jobId: "", offset: 0, total: 0, busy: false };
+
+function _distJobView(jobId) {
+  distView.jobId = jobId;
+  distView.offset = 0;
+  distView.total = 0;
+  const job = (synthState.jobs || []).find(j => j.job_id === jobId) || {};
+  const title = $("distViewTitle");
+  if (title) title.textContent = _distJobName(job);
+  const modal = $("distViewModal");
+  if (modal) modal.classList.remove("hidden");
+  _distViewLoad();
+}
+
+function _distViewClose() {
+  const modal = $("distViewModal");
+  if (modal) modal.classList.add("hidden");
+  distView.jobId = "";
+}
+
+function _distViewLoad() {
+  if (!distView.jobId || distView.busy) return;
+  const body = $("distViewBody");
+  distView.busy = true;
+  if (body && !body.children.length) body.innerHTML = '<div class="dist-view-empty">loading&hellip;</div>';
+  fetch(`${TEACHER_SYNTH_BROWSE}?job_id=${encodeURIComponent(distView.jobId)}` +
+        `&offset=${distView.offset}&limit=${DIST_VIEW_PAGE}`)
+    .then(r => r.json())
+    .then(d => {
+      distView.busy = false;
+      if (!d || d.error) {
+        if (body) body.innerHTML = `<div class="dist-view-empty">could not read this corpus: ${_trEsc((d && d.error) || "failed")}</div>`;
+        return;
+      }
+      distView.total = d.total || 0;
+      distView.offset = d.offset || 0;
+      _distViewRender(d.rows || []);
+    })
+    .catch(e => {
+      distView.busy = false;
+      if (body) body.innerHTML = `<div class="dist-view-empty">${_trEsc(_backendErrMsg(e))}</div>`;
+    });
+}
+
+function _distViewRender(rows) {
+  const body = $("distViewBody");
+  const range = $("distViewRange");
+  const first = distView.offset + 1;
+  const last = distView.offset + rows.length;
+  if (range) {
+    range.textContent = distView.total
+      ? `records ${first.toLocaleString()} to ${last.toLocaleString()} of ${distView.total.toLocaleString()}`
+      : "this corpus has no records yet";
+  }
+  const prev = $("distViewPrev");
+  if (prev) prev.disabled = distView.offset <= 0;
+  const next = $("distViewNext");
+  if (next) next.disabled = last >= distView.total;
+  const jump = $("distViewJump");
+  if (jump) { jump.max = String(Math.max(1, distView.total)); jump.placeholder = String(first); }
+  if (!body) return;
+  body.innerHTML = rows.length
+    ? rows.map((r, i) => _distViewCard(r, distView.offset + i + 1)).join("")
+    : '<div class="dist-view-empty">Nothing here. The run may not have written a record yet.</div>';
+  body.scrollTop = 0;
+}
+
+function _distViewCard(r, n) {
+  const tags = [r.genre, r.voice].filter(Boolean)
+    .map(t => `<span class="dist-rec-tag">${_trEsc(t)}</span>`).join("");
+  const turns = Array.isArray(r.turns) && r.turns.length
+    ? r.turns.map(t => {
+        const asst = (t.role || "") === "assistant";
+        return `<span class="dist-rec-turn${asst ? " asst" : ""}"><b>${_trEsc(t.role || "?")}</b> ${_trEsc(t.text || "")}</span>`;
+      }).join("")
+    : `<span class="dist-rec-turn">${_trEsc(r.text || "")}</span>`;
+  return `<div class="dist-rec-card"><div class="dist-rec-head">`
+    + `<span class="dist-rec-n">#${n.toLocaleString()}</span>`
+    + (r.id ? `<span class="dist-rec-id">${_trEsc(r.id)}</span>` : "")
+    + tags + `</div>${turns}</div>`;
+}
+
+function _distViewPage(delta) {
+  const next = distView.offset + delta * DIST_VIEW_PAGE;
+  if (next < 0 || next >= distView.total) return;
+  distView.offset = next;
+  _distViewLoad();
+}
+
+function _distViewJump() {
+  const box = $("distViewJump");
+  const want = parseInt((box && box.value) || "", 10);
+  if (!(want > 0)) return;
+  distView.offset = Math.max(0, Math.min(want - 1, Math.max(0, distView.total - 1)));
+  _distViewLoad();
+}
+
+// ---------------------------------------------------------------------------
+// Why a run is in the state it is in. A stopped job used to say so in one grey
+// line of body text that read the same whether it finished, was stopped by hand,
+// or died on the teacher. Every terminal state now gets a banner that names
+// itself, says why, and lists what actually went wrong.
+
+const DIST_OUTCOME = {
+  running:  { cls: "go",   head: "running" },
+  done:     { cls: "ok",   head: "finished" },
+  partial:  { cls: "warn", head: "stopped early" },
+  aborted:  { cls: "bad",  head: "run aborted" },
+  empty:    { cls: "bad",  head: "nothing was produced" },
+  idle:     { cls: "idle", head: "not started" },
+};
+
+function _distOutcomeKind(s, planned) {
+  if (s.running) return "running";
+  if (s.aborted) return "aborted";
+  if (!(s.completed > 0)) return "empty";
+  if (planned && s.completed >= planned) return "done";
+  if (s.calls_remaining > 0) return "partial";
+  return "done";
+}
+
+// The teacher's own error strings, counted. This is the single most useful thing
+// on the panel when a run dies and it was previously not rendered anywhere.
+function _distOutcomeErrors(s) {
+  const sum = s.error_summary || {};
+  const keys = Object.keys(sum).sort((a, b) => sum[b] - sum[a]);
+  if (!keys.length) return "";
+  return `<div class="dist-outcome-errs">` + keys.slice(0, 6).map(k =>
+    `<span class="dist-outcome-err"><b>${sum[k]}&times;</b> ${_trEsc(k)}</span>`).join("") +
+    (keys.length > 6 ? `<span class="dist-outcome-err">+${keys.length - 6} more</span>` : "") +
+    `</div>`;
+}
+
+function _distRenderOutcome(mode, s, planned, noun, jobId) {
+  const host = $(`${mode}Outcome`);
+  if (!host) return;
+  const kind = _distOutcomeKind(s, planned);
+  const spec = DIST_OUTCOME[kind];
+  const kept = Number(s.completed || 0);
+  const failed = Number(s.calls_failed || 0);
+  const left = Number(s.calls_remaining || 0);
+  let why;
+  if (kind === "running") {
+    why = `Writing ${noun} now. ${kept.toLocaleString()} kept so far` +
+          (failed ? `, ${failed.toLocaleString()} calls failed` : "") + `.`;
+  } else if (kind === "aborted") {
+    why = `The run stopped itself. ` +
+          (s.last_error ? `Last error: <b>${_trEsc(s.last_error)}</b>. ` : "") +
+          `${kept.toLocaleString()} ${noun} written before it died are still on disk and can be built or resumed.`;
+  } else if (kind === "empty") {
+    why = `Not one record survived. ` +
+          (s.last_error ? `Last error: <b>${_trEsc(s.last_error)}</b>. `
+                        : `Every call either failed or was rejected by the quality gate. `) +
+          `Check the teacher in Settings, then start again.`;
+  } else if (kind === "partial") {
+    why = `${kept.toLocaleString()} ${noun} kept, <b>${left.toLocaleString()}</b> calls never ran` +
+          (failed ? ` and ${failed.toLocaleString()} failed` : "") +
+          `. Either you pressed Stop or the teacher ran dry. Starting again into this same corpus resumes where it left off.`;
+  } else {
+    why = `All ${kept.toLocaleString()} ${noun} written` +
+          (failed ? `, ${failed.toLocaleString()} calls failed along the way` : "") +
+          `. Package it into a corpus below.`;
+  }
+  host.style.display = "block";
+  host.className = `dist-outcome is-${spec.cls}`;
+  host.innerHTML = `<div class="dist-outcome-head"><span class="dist-outcome-dot"></span>`
+    + `<span class="dist-outcome-title">${spec.head}</span>`
+    + `<span class="dist-outcome-job">${_trEsc(_distJobNameById(jobId || ""))}</span></div>`
+    + `<div class="dist-outcome-why">${why}</div>`
+    + _distOutcomeErrors(s);
+}
+
+// Exactly one action is lit at a time, and it is whichever one you would press
+// next: Start until a run has produced something, Build once it has, neither
+// while a run is in flight. Every button on the tab looking equally clickable is
+// what made the page unreadable.
+function _distSyncNextAction(mode, running, records) {
+  const start = $(`${mode}StartBtn`);
+  const build = $(`${mode}BuildBtn`);
+  if (start) start.classList.toggle("is-next", !running && !(records > 0));
+  if (build) build.classList.toggle("is-next", !running && records > 0);
+}
+
+// Picking "create a new corpus" must let go of the job that was on screen.
+// Otherwise the previous run's progress, its live transcript and its Build
+// corpus step all stay up while you configure a brand new one, which reads as
+// though the new corpus already has records in it.
+// Everything on screen below the form belongs to one job. Switching to another
+// job -- or to no job at all -- has to wipe it, not wait for the next poll to
+// overwrite some of it: the gap showed the previous run's progress, transcript
+// and Build step under the new corpus's name.
+function _distClearJobPanels(mode) {
+  ["ProgressStep", "BuildRow", "LiveWrap", "Outcome"].forEach(part => {
+    const el = $(`${mode}${part}`);
+    if (el) el.style.display = "none";
+  });
+  const out = $(`${mode}LiveOutput`);
+  if (out) { out.innerHTML = ""; delete out.dataset.sig; }
+  const stats = $(`${mode}StatsRow`);
+  if (stats) { stats.style.display = "none"; stats.innerHTML = ""; }
+  const warn = $(`${mode}RepWarn`);
+  if (warn) { warn.style.display = "none"; warn.innerHTML = ""; }
+  const rej = $(`${mode}RejectRow`);
+  if (rej) rej.textContent = "";
+  const prog = $(`${mode}Progress`);
+  if (prog) prog.style.display = "none";
+  const build = $(`${mode}BuildStatus`);
+  if (build) build.textContent = "";
+  const hand = $(`${mode}Handoff`);
+  if (hand) hand.style.display = "none";
+}
+
+function _distDetachJob(mode, state) {
+  if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+  state.jobId = null;
+  state.rate = null;
+  try { localStorage.removeItem(_distJobStore(mode)); } catch (e) {}
+  _distClearJobPanels(mode);
+  _distSetRunning(mode, false, "");
+  _distSyncNextAction(mode, false, 0);
+}
+
+// Switching to a different corpus: same wipe, then follow the new one.
+function _distAttachJob(mode, state, jobId, poll) {
+  if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+  _distClearJobPanels(mode);
+  state.jobId = jobId;
+  state.rate = null;
+  try { localStorage.setItem(_distJobStore(mode), jobId); } catch (e) {}
+  poll();
+}
+
+function _distJobStore(mode) {
+  if (mode === "interview") return INTERVIEW_JOB_STORE;
+  if (mode === "author") return AUTHOR_JOB_STORE;
+  return SYNTH_JOB_STORE;
+}
+
+function _distJobUse(jobId) {
+  const sel = $(DIST_JOB_SELECTS[distState.mode]);
+  if (!sel) return;
+  sel.value = jobId;
+  sel.dispatchEvent(new Event("change"));
+  sel.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function _distJobRename(jobId) {
+  const job = (synthState.jobs || []).find(j => j.job_id === jobId);
+  const next = prompt(`Name for ${jobId}. Blank clears it back to the id.`, (job && job.label) || "");
+  if (next === null) return;
+  _distJobPost(TEACHER_SYNTH_RENAME, { job_id: jobId, label: next.trim() });
+}
+
+function _distJobDelete(jobId) {
+  const job = (synthState.jobs || []).find(j => j.job_id === jobId) || {};
+  const what = `${_distJobName(job)} (${(job.completed || 0).toLocaleString()} records, ${_fmtBytes(job.bytes || 0)})`;
+  if (!confirm(`Delete ${what}? This removes veritate_mri/data/synth_jobs/${jobId}/ from disk. Corpora already built from it are not touched.`)) return;
+  _distJobPost(TEACHER_SYNTH_DELETE, { job_id: jobId });
+}
+
+function _distJobPost(url, body) {
+  return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(_synthLoadJobs)
+    .catch(() => {});
+}
+
+
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".dist-mode").forEach(b =>
     b.addEventListener("click", () => _distSetMode(b.getAttribute("data-mode"))));
@@ -15910,6 +16540,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const refresh = $("distRefreshTarget");
   if (refresh) refresh.addEventListener("click", _distFetchTarget);
+  const jobsRefresh = $("distJobsRefresh");
+  if (jobsRefresh) jobsRefresh.addEventListener("click", _synthLoadJobs);
+  // One delegated listener: the list re-renders whenever a job changes, and
+  // per-button handlers would be re-bound on every render.
+  const jobsList = $("distJobsList");
+  if (jobsList) jobsList.addEventListener("click", e => {
+    const btn = e.target.closest("[data-act]");
+    if (btn) DIST_JOB_ACTIONS[btn.dataset.act](btn.dataset.id);
+  });
   ["distGotoSettings", "distGateSettings"].forEach(id => {
     const a = $(id);
     if (a) a.addEventListener("click", _trGotoTeacherSettings);
@@ -15922,6 +16561,51 @@ document.addEventListener("DOMContentLoaded", () => {
   if (go) go.addEventListener("click", () => _distCloseConfirm(true));
   const modal = $("distConfirmModal");
   if (modal) modal.addEventListener("click", e => { if (e.target === modal) _distCloseConfirm(false); });
+
+  // The name box is only meaningful for a corpus being created, so it tracks
+  // its picker. Remember each placeholder before it is ever overwritten.
+  DIST_JOB_PICKERS.forEach(pick => {
+    _distSyncNextAction(pick.mode, false, 0);
+    const sel = $(pick.id);
+    const box = $(pick.name);
+    if (box) {
+      box.dataset.ph = box.placeholder || "";
+      const saved = _distStoredName(pick.mode);
+      if (saved) { box.value = saved; box.dataset.pending = saved; }
+      box.addEventListener("input", () => {
+        if (box.disabled) return;
+        box.dataset.pending = box.value;
+        _distStoreName(pick.mode, box.value.trim());
+      });
+    }
+    if (sel) sel.addEventListener("change", () => {
+      _distSyncNameField(pick);
+      const st = pick.state();
+      // Back to "create a new corpus": the previous job's progress, transcript
+      // and Build step are not about the corpus being configured now.
+      if (!sel.value) _distDetachJob(pick.mode, st);
+      else if (sel.value !== st.jobId) _distAttachJob(pick.mode, st, sel.value, pick.poll);
+    });
+    _distSyncNameField(pick);
+  });
+
+  const vClose = $("distViewClose");
+  if (vClose) vClose.addEventListener("click", _distViewClose);
+  const vModal = $("distViewModal");
+  if (vModal) vModal.addEventListener("click", e => { if (e.target === vModal) _distViewClose(); });
+  const vPrev = $("distViewPrev");
+  if (vPrev) vPrev.addEventListener("click", () => _distViewPage(-1));
+  const vNext = $("distViewNext");
+  if (vNext) vNext.addEventListener("click", () => _distViewPage(1));
+  const vGo = $("distViewGo");
+  if (vGo) vGo.addEventListener("click", _distViewJump);
+  const vJump = $("distViewJump");
+  if (vJump) vJump.addEventListener("keydown", e => { if (e.key === "Enter") _distViewJump(); });
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    const m = $("distViewModal");
+    if (m && !m.classList.contains("hidden")) _distViewClose();
+  });
 });
 
 // Rehydrate on every activation, not just first paint: a refresh mid-run has to
@@ -15941,7 +16625,6 @@ function _distOnTabActivated() {
     _ivLoadPacks();
   }
   _synthLoadJobs().then(() => {
-    _authorFillJobs();
     const savedAuthor = _authorStored();
     if (savedAuthor && (synthState.jobs || []).some(j => j.job_id === savedAuthor)) {
       authorState.jobId = savedAuthor;
@@ -15949,7 +16632,6 @@ function _distOnTabActivated() {
       if (sel) sel.value = savedAuthor;
       _authorPollStart();
     }
-    _ivFillJobs();
     const savedIv = _ivStored();
     if (savedIv && (synthState.jobs || []).some(j => j.job_id === savedIv)) {
       interviewState.jobId = savedIv;
@@ -15982,7 +16664,7 @@ const INTERVIEW_VERTICAL_STORE = "vt:distillation:vertical";
 // an honest ceiling on how many conversations are worth asking for.
 const OPENERS_PER_SEED = 150;
 const INTERVIEW_JOB_STORE = "vt:distillation:interview_job";
-const INTERVIEW_SAMPLE_SHOWN = 4;
+const INTERVIEW_SAMPLE_SHOWN = 6;
 
 const interviewState = { jobId: null, pollTimer: null, rate: null, packs: [], vertical: null, choices: [] };
 
@@ -16157,6 +16839,7 @@ function _ivStart() {
   if (conc > 0) body.max_concurrency = conc;
   const dest = ($("interviewJobSelect") || {}).value || "";
   if (dest) body.job_id = dest;
+  else { const nm = _distNewName("interviewJobSelect"); if (nm) body.label = nm; }
   if (plan) { plan.textContent = "starting..."; plan.style.color = "var(--warm)"; }
   fetch(TEACHER_INTERVIEW_START, { method: "POST", headers: { "Content-Type": "application/json" },
                                    body: JSON.stringify(body) })
@@ -16167,6 +16850,7 @@ function _ivStart() {
         return;
       }
       interviewState.jobId = d.job_id;
+      _distConsumeName("interview");
       interviewState.rate = null;
       _ivStore(d.job_id);
       if (plan) {
@@ -16175,7 +16859,7 @@ function _ivStart() {
         plan.style.color = "var(--warm)";
       }
       _ivPollStart();
-      _synthLoadJobs().then(() => _ivFillJobs());
+      _synthLoadJobs();
     })
     .catch(e => { if (plan) { plan.textContent = _backendErrMsg(e); plan.style.color = "var(--hot)"; } });
 }
@@ -16189,16 +16873,6 @@ function _ivStop() {
                                   body: JSON.stringify({ job_id: interviewState.jobId }) })
         .then(() => _ivPollOnce()).catch(() => {});
     });
-}
-
-function _ivFillJobs() {
-  const sel = $("interviewJobSelect");
-  if (!sel) return;
-  const cur = sel.value || interviewState.jobId || "";
-  sel.innerHTML = '<option value="">&mdash; new corpus &mdash;</option>' +
-    (synthState.jobs || []).map(j =>
-      `<option value="${_trEsc(j.job_id)}">${_trEsc(j.job_id)} (${j.completed || 0} records)</option>`).join("");
-  if (cur && (synthState.jobs || []).some(j => j.job_id === cur)) sel.value = cur;
 }
 
 function _ivPollOnce() {
@@ -16269,14 +16943,18 @@ function _ivRenderStats(s) {
       : "";
   }
   _ivRenderProgress(s);
-  if (plan) {
-    const head = s.aborted ? "ABORTED" : (running ? "interviewing" : "stopped");
-    plan.textContent = `${head}: job ${interviewState.jobId || ""}` +
-      (s.last_error ? ` - last: ${s.last_error}` : "");
-    plan.style.color = s.aborted ? "var(--hot)" : (running ? "var(--warm)" : "var(--dim)");
-  }
-  const stop = $("interviewStopBtn");
-  if (stop) stop.style.display = running ? "" : "none";
+  if (plan) plan.style.display = "none";
+  _distRenderOutcome("interview", s, Number((s.plan || {}).conversations || 0),
+                     "conversations", interviewState.jobId);
+  _distSyncNextAction("interview", running, Number(s.completed || 0));
+  const bar = $("interviewProgress");
+  if (bar) bar.classList.toggle("is-running", running);
+  _distSyncJobRow(interviewState.jobId, s.completed || 0, running);
+  const p = s.plan || {};
+  _distSetRunning("interview", running,
+    `Interviewing into ${_distJobNameById(interviewState.jobId)} - ` +
+    `${(p.conversations || 0).toLocaleString()} conversations, depth ${p.depth || 0}, ` +
+    `${p.max_concurrency || 0} at once.`);
   const build = $("interviewBuildRow");
   if (build) build.style.display = (!running && (s.completed || 0) > 0) ? "block" : "none";
 }
@@ -16325,30 +17003,56 @@ function _ivLoadSamples() {
     .catch(() => {});
 }
 
-// Rendered as a readable transcript with per-reply byte counts, because the
-// thing being judged by eye is exactly whether the replies vary in length.
+// What the teacher just said, newest first. The seed question is called out
+// separately from the replies: pass 1 invents the question and pass 2 answers it
+// for real, and the whole point of watching is seeing both halves land.
+//
+// This used to JSON.parse the `response` string, which is rendered text, not
+// JSON. Every card came out empty and the panel looked broken. The route now
+// sends `turns` directly and that is what is read here.
+const _IV_BYTES = new TextEncoder();
+
 function _ivRenderSamples(samples) {
   const wrap = $("interviewLiveWrap");
   const out = $("interviewLiveOutput");
   const count = $("interviewLiveCount");
   if (!wrap || !out) return;
-  if (!samples.length) { wrap.style.display = "none"; return; }
+  const shown = samples.slice(-INTERVIEW_SAMPLE_SHOWN).reverse();
+  if (!shown.length) { wrap.style.display = "none"; return; }
   wrap.style.display = "block";
-  if (count) count.textContent = `(${samples.length})`;
-  out.innerHTML = samples.slice(-INTERVIEW_SAMPLE_SHOWN).map(s => {
-    let turns = [];
-    try {
-      const rec = typeof s.record === "object" ? s.record : JSON.parse(s.response || "{}");
-      turns = (rec && rec.turns) || [];
-    } catch (e) { turns = []; }
-    if (!turns.length) return "";
-    return `<div class="dist-convo">` + turns.map(t => {
-      const n = new TextEncoder().encode(t.text || "").length;
-      const who = t.role === "assistant" ? "teacher" : "person";
-      return `<span class="dist-convo-turn${t.role === "assistant" ? " asst" : ""}">` +
-             `<b>${who}</b> <span class="dist-convo-len">${n} B</span> ${_trEsc(t.text || "")}</span>`;
-    }).join("") + `</div>`;
+  const html = shown.map((s, i) => _ivConvoCard(s, i)).join("");
+  // Re-rendering identical markup every two seconds would restart the entrance
+  // animation on every card and strobe the panel.
+  if (out.dataset.sig === html.length + ":" + (shown[0].id || "")) return;
+  out.dataset.sig = html.length + ":" + (shown[0].id || "");
+  out.innerHTML = html;
+  if (count) count.textContent = `last ${shown.length}`;
+}
+
+function _ivConvoCard(s, idx) {
+  const turns = Array.isArray(s.turns) ? s.turns : [];
+  if (!turns.length) return "";
+  const seed = turns[0] || {};
+  const rest = turns.slice(1);
+  const bytes = turns.reduce((a, t) => a + _IV_BYTES.encode(t.text || "").length, 0);
+  const replies = turns.filter(t => t.role === "assistant").length;
+  const chips = [s.genre, s.voice].filter(Boolean)
+    .map(t => `<span class="dist-convo-chip">${_trEsc(t)}</span>`).join("");
+  const body = rest.map(t => {
+    const n = _IV_BYTES.encode(t.text || "").length;
+    const asst = t.role === "assistant";
+    return `<div class="dist-convo-turn${asst ? " asst" : ""}">` +
+           `<span class="dist-convo-who">${asst ? "teacher" : "person"}` +
+           `<span class="dist-convo-len">${n} B</span></span>` +
+           `<span class="dist-convo-text">${_trEsc(t.text || "")}</span></div>`;
   }).join("");
+  return `<div class="dist-convo${idx === 0 ? " fresh" : ""}">`
+    + `<div class="dist-convo-head">${chips}`
+    + `<span class="dist-convo-facts">${replies} ${replies === 1 ? "reply" : "replies"}`
+    + ` &middot; ${bytes.toLocaleString()} B</span></div>`
+    + `<div class="dist-convo-seed"><span class="dist-convo-seed-tag">seed</span>`
+    + `<span class="dist-convo-text">${_trEsc(seed.text || "")}</span></div>`
+    + body + `</div>`;
 }
 
 function _ivBuild() {

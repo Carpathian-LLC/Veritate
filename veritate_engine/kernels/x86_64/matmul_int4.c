@@ -33,6 +33,7 @@ static inline int8_t sign_ext_4(int8_t nib) {
 // are <=8 in magnitude vs <=127. exporter writes the calibrated scale directly.
 // ------------------------------------------------------------------------------------
 
+VERITATE_BASELINE_CODEGEN
 void prep_b_int4(const int8_t* b, int32_t n, int32_t k, prepped_b_int4_t* out) {
     out->n          = n;
     out->k          = k;

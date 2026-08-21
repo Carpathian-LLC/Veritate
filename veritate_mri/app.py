@@ -142,6 +142,7 @@ from routes import (
     corpus_routes,
     engine_routes,
     extensions_routes,
+    grow_routes,
     hallucination_routes,
     hybrid_routes,
     lifecycle_routes,
@@ -184,6 +185,7 @@ hybrid_routes.register(app)
 rag_routes.register(app)
 extensions_routes.register(app)
 hallucination_routes.register(app)
+grow_routes.register(app)
 
 from extensions import registry as extensions_registry
 
