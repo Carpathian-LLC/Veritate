@@ -490,3 +490,41 @@ def test_the_streaming_client_reports_the_first_token_once(monkeypatch):
                      on_first_token=lambda: marks.append(1))
     assert out == "first second"
     assert len(marks) == 1
+
+
+def test_a_deep_run_is_not_rejected_by_the_genres_turn_bound(client, monkeypatch):
+    """`conversation` caps at 8 turns and a conversation of D replies is 2D turns,
+    so every complete conversation past depth 4 was thrown away as "turn count out
+    of range" after paying for all 2D-1 calls. The requested depth is the shape."""
+    started = {}
+    monkeypatch.setattr(teacher_routes.settings_mod, "get",
+                        lambda: {"teacher_provider": "openai", "teacher_model": "m"})
+    monkeypatch.setattr(teacher_routes.interview_mod, "InterviewJob",
+                        lambda *a, **kw: started.setdefault("job", _Recorded(*a, **kw)))
+    monkeypatch.setattr(teacher_routes.threading, "Thread", _NoThread)
+    r = client.post("/teacher/interview/start",
+                    json={"genres": ["conversation"], "conversations": 4, "depth": 5,
+                          "vertical": "conversation"})
+    assert r.status_code == 200
+    spec = started["job"].spec
+    assert authoring.genre_by_id(spec, "conversation")["max_turns"] >= 10
+
+
+class _Recorded:
+    def __init__(self, job_id, output_dir, spec, *a, **kw):
+        self.spec = spec
+        self.job_id = job_id
+
+    def run(self):
+        return None
+
+
+class _NoThread:
+    def __init__(self, *a, **kw):
+        pass
+
+    def start(self):
+        return None
+
+    def is_alive(self):
+        return False

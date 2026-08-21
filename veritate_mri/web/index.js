@@ -17049,7 +17049,10 @@ function _ivRenderErrors(d) {
   const rows = (d.errors || []).slice().reverse();
   if (!rows.length) { wrap.style.display = "none"; return; }
   wrap.style.display = "block";
-  if (count) count.textContent = `${(d.total || rows.length).toLocaleString()} total`;
+  // errors.jsonl is appended to by every run into this corpus, so this total is
+  // the corpus's, not this run's. Saying "total" made it look like it disagreed
+  // with the rejected count beside it.
+  if (count) count.textContent = `${(d.total || rows.length).toLocaleString()} in this corpus`;
   const html = rows.map(r =>
     `<div class="dist-err-row"><span class="dist-err-id">${_trEsc(r.id || "?")}</span>` +
     `<span class="dist-err-when">${_distAgo(r.ts)}</span>` +

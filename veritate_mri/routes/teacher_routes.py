@@ -79,6 +79,10 @@ ERRORS_SHOWN_MAX = 100
 # limits are how much of it a person can read back.
 BANNED_PHRASE_MAX = 500
 BANNED_PHRASE_CHARS = 80
+# One reply plus the question that earned it. A conversation of `depth` replies is
+# that many turns, which is what the genre's turn bound has to allow.
+TURNS_PER_REPLY = 2
+TURNS_MAX_KEY = "max_turns"
 TEACHER_PKG = "teacher"
 SEEDS_DIRNAME = "seeds"
 SEEDS_DIR = os.path.join(paths_mod.DATA_ROOT, SEEDS_DIRNAME)
@@ -418,6 +422,7 @@ def _read_state_counts(output_dir):
     error_summary = {}
     aborted = False
     authoring = {}
+    call_stats = {}
     state_path = os.path.join(output_dir, STATE_FILE)
     if os.path.isfile(state_path):
         try:
@@ -432,6 +437,7 @@ def _read_state_counts(output_dir):
             aborted = bool(st.get("aborted", False))
             shortfall = st.get("opener_shortfall", {}) or {}
             authoring = st.get("authoring", {}) or {}
+            call_stats = st.get("call_stats", {}) or {}
         except (OSError, ValueError):
             pass
     return {
@@ -445,6 +451,7 @@ def _read_state_counts(output_dir):
         "error_summary": error_summary,
         "aborted": aborted,
         "authoring": authoring,
+        "call_stats": call_stats,
         "opener_shortfall": shortfall,
         "plan": _read_plan(output_dir),
         "output_path": samples,
@@ -1106,6 +1113,15 @@ def register(app):
         if floor is not None:
             spec["gates"]["ngram_distinct_floor"] = float(floor)
 
+        # A conversation of `depth` replies is 2*depth turns. The genre bounds are
+        # written for a corpus of scripted dialogue -- `conversation` caps at 8 --
+        # so every complete conversation past depth 4 was rejected as "turn count
+        # out of range" after paying for all 2*depth-1 calls. The depth the user
+        # asked for IS the shape they want; widen the bound for this run only.
+        for gid in genre_ids:
+            genre = authoring_mod.genre_by_id(spec, gid)
+            genre[TURNS_MAX_KEY] = max(int(genre.get(TURNS_MAX_KEY) or 0), TURNS_PER_REPLY * depth)
+
         # Seeds decide what the corpus is about. A vertical with no pack on disk
         # is refused here rather than silently falling back to the genre's own
         # thin `situations` list, which would produce a corpus the user did not ask for.
@@ -1407,6 +1423,7 @@ def register(app):
             "error_summary": counts["error_summary"],
             "aborted": counts["aborted"],
             "authoring": counts["authoring"],
+            "call_stats": counts["call_stats"],
             "opener_shortfall": counts["opener_shortfall"],
             "plan": counts["plan"],
             "output_path": counts["output_path"],
