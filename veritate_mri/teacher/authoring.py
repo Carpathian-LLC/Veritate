@@ -64,6 +64,11 @@ _WORD_RE = re.compile(r"[^a-z0-9 ]+")
 _SPACE_RE = re.compile(r"\s+")
 _BAN_PREFIX = r"(?<![a-z0-9])(?:"
 _BAN_SUFFIX = r")(?![a-z0-9])"
+_BAN_NEVER = r"(?!)"
+# Which banned phrases the teacher actually keeps saying is the only part of the
+# list worth reading during a run: it is what says which entry to keep, drop, or
+# add. Counted per phrase, reported top-first.
+BANNED_HITS_TOP = 12
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -147,6 +152,10 @@ def first_user_text(record, schema):
 
 
 def compile_ban_re(phrases):
+    """An empty list bans nothing. An empty alternation would match the empty
+    string at every position and reject every record ever written."""
+    if not phrases:
+        return re.compile(_BAN_NEVER)
     return re.compile(_BAN_PREFIX + "|".join(re.escape(p) for p in phrases) + _BAN_SUFFIX)
 
 
@@ -233,6 +242,7 @@ class RecordGate:
         self.simhashes = set()
         self.user_turns = set()
         self.rejects = Counter()
+        self.banned_hits = Counter()
         self.per_genre = Counter()
         self.records = 0
         self.bytes = 0
@@ -269,6 +279,7 @@ class RecordGate:
             "ngram_floor": self.ngram_floor,
             "ngram_below_floor": self.ratio < self.ngram_floor,
             "rejects": dict(self.rejects.most_common()),
+            "banned_hits": dict(self.banned_hits.most_common(BANNED_HITS_TOP)),
             "per_genre": dict(self.per_genre),
         }
 
@@ -320,7 +331,9 @@ class RecordGate:
             self._rewrite(rec, schema_name)
             self.rewritten += 1
             txt = record_text(rec, schema_name)
-        if self.ban_re.search(assistant_text(rec, schema_name).lower()):
+        hit = self.ban_re.search(assistant_text(rec, schema_name).lower())
+        if hit:
+            self.banned_hits[hit.group(0)] += 1
             return REJECT_BANNED
         norm = normalize(txt)
         digest = hashlib.sha1(norm.encode("utf-8")).hexdigest()

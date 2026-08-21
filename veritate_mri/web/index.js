@@ -10569,25 +10569,37 @@ function _trStore(flow) { try { localStorage.setItem(TRAIN_FLOW_STORE, flow); } 
 function _trStored() { try { return localStorage.getItem(TRAIN_FLOW_STORE); } catch (e) { return null; } }
 
 // Reusable are-you-sure dialog. Resolves true on confirm, false on cancel.
-function confirmDialog(message, okLabel) {
+// `altLabel` is optional. Given one, the dialog grows a third button and
+// resolves the string "alt" when it is pressed -- for a harsher variant of the
+// same decision (Stop / Force stop) that should not be a separate control
+// sitting on the page waiting to be hit by accident.
+function confirmDialog(message, okLabel, altLabel) {
   return new Promise((resolve) => {
     const modal = $("confirmModal");
     const ok = $("confirmModalOk");
     const no = $("confirmModalCancel");
+    const alt = $("confirmModalAlt");
     if (!modal || !ok || !no) { resolve(window.confirm(message)); return; }
     const msgEl = $("confirmModalMsg");
     if (msgEl) msgEl.textContent = message || "Are you sure?";
     ok.textContent = okLabel || "Confirm";
+    if (alt) {
+      alt.style.display = altLabel ? "" : "none";
+      alt.textContent = altLabel || "";
+    }
     const close = (val) => {
       modal.classList.add("hidden");
       ok.removeEventListener("click", onOk);
       no.removeEventListener("click", onNo);
+      if (alt) { alt.removeEventListener("click", onAlt); alt.style.display = "none"; }
       resolve(val);
     };
     const onOk = () => close(true);
     const onNo = () => close(false);
+    const onAlt = () => close("alt");
     ok.addEventListener("click", onOk);
     no.addEventListener("click", onNo);
+    if (alt && altLabel) alt.addEventListener("click", onAlt);
     modal.classList.remove("hidden");
   });
 }
@@ -16460,8 +16472,14 @@ function _distClearJobPanels(mode) {
     const el = $(`${mode}${part}`);
     if (el) el.style.display = "none";
   });
-  const out = $(`${mode}LiveOutput`);
-  if (out) { out.innerHTML = ""; delete out.dataset.sig; }
+  ["LiveOutput", "ErrOutput", "CallsOutput"].forEach(part => {
+    const el = $(`${mode}${part}`);
+    if (el) { el.innerHTML = ""; delete el.dataset.sig; }
+  });
+  ["ErrWrap", "CallsWrap", "GateWrap"].forEach(part => {
+    const el = $(`${mode}${part}`);
+    if (el) el.style.display = "none";
+  });
   const stats = $(`${mode}StatsRow`);
   if (stats) { stats.style.display = "none"; stats.innerHTML = ""; }
   const warn = $(`${mode}RepWarn`);
@@ -16621,7 +16639,7 @@ function _distOnTabActivated() {
     if (!authorState.spec) _authorLoadSpec();
     if (!synthState.seeds.length) _synthLoadSeeds();
     fetch(TEACHER_AUTHOR_SPEC).then(r => r.json())
-      .then(d => { if (d && d.genres) _ivRenderGenres(d); }).catch(() => {});
+      .then(d => { if (d && d.genres) { _ivRenderGenres(d); _ivFillBanned(d); } }).catch(() => {});
     _ivLoadPacks();
   }
   _synthLoadJobs().then(() => {
@@ -16666,7 +16684,8 @@ const OPENERS_PER_SEED = 150;
 const INTERVIEW_JOB_STORE = "vt:distillation:interview_job";
 const INTERVIEW_SAMPLE_SHOWN = 6;
 
-const interviewState = { jobId: null, pollTimer: null, rate: null, packs: [], vertical: null, choices: [] };
+const interviewState = { jobId: null, pollTimer: null, tickTimer: null, calls: null, rate: null,
+                         packs: [], vertical: null, choices: [] };
 
 function _ivStore(id) { try { localStorage.setItem(INTERVIEW_JOB_STORE, id); } catch (e) {} }
 function _ivStored() { try { return localStorage.getItem(INTERVIEW_JOB_STORE); } catch (e) { return null; } }
@@ -16817,7 +16836,9 @@ function _ivCost() {
 }
 
 function _ivStart() {
-  const plan = $("interviewPlanLine");
+  // Start-time errors belong beside the Start button, in the launch bar, not in
+  // a line inside the progress window that does not exist until a run does.
+  const plan = $("interviewCostLine");
   const genres = _ivSelectedGenres();
   if (!genres.length) {
     if (plan) { plan.textContent = "pick at least one genre"; plan.style.color = "var(--hot)"; }
@@ -16864,13 +16885,21 @@ function _ivStart() {
     .catch(e => { if (plan) { plan.textContent = _backendErrMsg(e); plan.style.color = "var(--hot)"; } });
 }
 
+const TEACHER_SYNTH_KILL = "/teacher/synth/kill";
+
 function _ivStop() {
   if (!interviewState.jobId) return;
-  confirmDialog("Stop interviewing? Conversations finished so far are kept and the run can resume.", "Stop")
+  // One decision, two strengths, both in the dialog. Force stop abandons calls
+  // already in flight, so it takes a deliberate click through this warning
+  // rather than sitting on the page next to Stop waiting to be hit by accident.
+  confirmDialog("Stop interviewing? Conversations finished so far are kept and the run can resume. " +
+                "Force stop also abandons calls already in flight, for a teacher that has stopped responding.",
+                "Stop", "Force stop")
     .then(ok => {
       if (!ok) return;
-      fetch(TEACHER_SYNTH_STOP, { method: "POST", headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ job_id: interviewState.jobId }) })
+      const url = ok === "alt" ? TEACHER_SYNTH_KILL : TEACHER_SYNTH_STOP;
+      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                   body: JSON.stringify({ job_id: interviewState.jobId }) })
         .then(() => _ivPollOnce()).catch(() => {});
     });
 }
@@ -16878,6 +16907,8 @@ function _ivStop() {
 function _ivPollOnce() {
   if (!interviewState.jobId) return;
   _ivLoadSamples();
+  _ivLoadErrors();
+  _ivLoadCalls();
   fetch(`${TEACHER_SYNTH_STATUS}?job_id=${encodeURIComponent(interviewState.jobId)}`)
     .then(r => r.json())
     .then(s => {
@@ -16886,6 +16917,8 @@ function _ivPollOnce() {
       if (!s.running && interviewState.pollTimer) {
         clearInterval(interviewState.pollTimer);
         interviewState.pollTimer = null;
+        clearInterval(interviewState.tickTimer);
+        interviewState.tickTimer = null;
       }
     })
     .catch(() => {});
@@ -16893,7 +16926,9 @@ function _ivPollOnce() {
 
 function _ivPollStart() {
   if (interviewState.pollTimer) clearInterval(interviewState.pollTimer);
+  if (interviewState.tickTimer) clearInterval(interviewState.tickTimer);
   interviewState.pollTimer = setInterval(_ivPollOnce, TEACHER_POLL_MS);
+  interviewState.tickTimer = setInterval(_ivCallsTick, IV_CALL_TICK_MS);
   _ivPollOnce();
 }
 
@@ -16901,17 +16936,21 @@ function _ivRenderStats(s) {
   const a = s.authoring || {};
   const row = $("interviewStatsRow");
   const warn = $("interviewRepWarn");
-  const rej = $("interviewRejectRow");
-  const plan = $("interviewPlanLine");
   if (!row) return;
   const running = !!s.running;
   const ratio = a.ngram_ratio === undefined ? 1 : a.ngram_ratio;
+  // call_stats is the durable half of the live feed: the feed itself dies with
+  // the job, these numbers are in state.json and still read after a restart.
+  const c = s.call_stats || {};
   row.style.display = "flex";
   row.innerHTML = [
     ["conversations kept", (s.completed || 0).toLocaleString()],
     ["text written", ((a.bytes || 0) / AUTHOR_MB).toFixed(2) + " MB"],
     ["wording variety", (ratio * 100).toFixed(1) + "%"],
     ["rejected", (s.calls_failed || 0).toLocaleString()],
+    ["teacher calls", (c.calls || 0).toLocaleString()],
+    ["calls that failed", (c.failed || 0).toLocaleString()],
+    ["kept short after a failure", (c.salvaged || 0).toLocaleString()],
   ].map(p => `<span class="author-stat"><b>${_trEsc(String(p[1]))}</b> <span>${p[0]}</span></span>`).join("");
 
   if (warn) {
@@ -16935,15 +16974,8 @@ function _ivRenderStats(s) {
         `The teacher is reusing phrasings. Widen the situations for the affected genre before training on this.`;
     } else { warn.style.display = "none"; }
   }
-  if (rej) {
-    const r = a.rejects || {};
-    const keys = Object.keys(r);
-    rej.textContent = keys.length
-      ? "rejected: " + keys.slice(0, AUTHOR_REJECT_SHOWN).map(k => `${k} x${r[k]}`).join(", ")
-      : "";
-  }
+  _ivRenderGateHits(a);
   _ivRenderProgress(s);
-  if (plan) plan.style.display = "none";
   _distRenderOutcome("interview", s, Number((s.plan || {}).conversations || 0),
                      "conversations", interviewState.jobId);
   _distSyncNextAction("interview", running, Number(s.completed || 0));
@@ -16993,6 +17025,197 @@ function _ivEta(s, done, total) {
   if (secs < 90) return `~${Math.round(secs)}s left`;
   if (secs < 5400) return `~${Math.round(secs / 60)}m left`;
   return `~${(secs / 3600).toFixed(1)}h left`;
+}
+
+const TEACHER_SYNTH_ERRORS = "/teacher/synth/errors";
+const INTERVIEW_ERRORS_SHOWN = 8;
+
+// Failed calls, with the teacher's own words. A 401, a rate limit or a refusal
+// all read as "12 failed" before this: the reasons were written to errors.jsonl
+// on every run and never shown anywhere.
+function _ivLoadErrors() {
+  if (!interviewState.jobId) return;
+  fetch(`${TEACHER_SYNTH_ERRORS}?job_id=${encodeURIComponent(interviewState.jobId)}&limit=${INTERVIEW_ERRORS_SHOWN}`)
+    .then(r => r.json())
+    .then(d => { if (d && !d.error) _ivRenderErrors(d); })
+    .catch(() => {});
+}
+
+function _ivRenderErrors(d) {
+  const wrap = $("interviewErrWrap");
+  const out = $("interviewErrOutput");
+  const count = $("interviewErrCount");
+  if (!wrap || !out) return;
+  const rows = (d.errors || []).slice().reverse();
+  if (!rows.length) { wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+  if (count) count.textContent = `${(d.total || rows.length).toLocaleString()} total`;
+  const html = rows.map(r =>
+    `<div class="dist-err-row"><span class="dist-err-id">${_trEsc(r.id || "?")}</span>` +
+    `<span class="dist-err-when">${_distAgo(r.ts)}</span>` +
+    `<span class="dist-err-text">${_trEsc(r.error || "")}</span></div>`).join("");
+  if (out.dataset.sig === html.length + ":" + (rows[0].id || "")) return;
+  out.dataset.sig = html.length + ":" + (rows[0].id || "");
+  out.innerHTML = html;
+}
+
+// errors.jsonl stamps unix seconds; the panel wants "how long ago".
+function _distAgo(ts) {
+  if (!ts) return "";
+  const secs = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
+}
+
+const TEACHER_SYNTH_CALLS = "/teacher/synth/calls";
+const IV_CALL_TICK_MS = 200;
+// The latency bar is relative to the slowest call on screen. The floor stops a
+// panel of uniformly fast calls from drawing every bar at full width.
+const IV_CALL_BAR_FLOOR_MS = 1500;
+
+// The live call feed: every request this run makes to the teacher, what went
+// out, what came back, and how long the reply took. In-flight calls sit on top
+// with a clock that keeps counting between polls, so the panel shows the run
+// working rather than only what it finished.
+function _ivLoadCalls() {
+  if (!interviewState.jobId) return;
+  fetch(`${TEACHER_SYNTH_CALLS}?job_id=${encodeURIComponent(interviewState.jobId)}`)
+    .then(r => r.json())
+    .then(d => { if (d && !d.error) _ivRenderCalls(d); })
+    .catch(() => {});
+}
+
+function _ivRenderCalls(d) {
+  const wrap = $("interviewCallsWrap");
+  const out = $("interviewCallsOutput");
+  const line = $("interviewCallsStats");
+  if (!wrap || !out) return;
+  const live = d.inflight || [];
+  const done = d.calls || [];
+  if (!live.length && !done.length) { wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+  const st = d.stats || {};
+  if (line) {
+    line.textContent = [live.length ? `${live.length} in flight` : "idle",
+                        `${(st.calls || 0).toLocaleString()} calls`,
+                        `median ${_ivMs(st.p50_ms)}`, `slowest 5% ${_ivMs(st.p95_ms)}`,
+                        `${st.per_min || 0}/min`,
+                        `${_fmtBytes(st.reply_bytes || 0)} back`,
+                        `${(st.failed || 0).toLocaleString()} failed`,
+                        `${(st.salvaged || 0).toLocaleString()} salvaged`].join(" \u00b7 ");
+  }
+  const slowest = Math.max(IV_CALL_BAR_FLOOR_MS,
+                           ...done.map(c => c.ms || 0), ...live.map(c => c.elapsed_ms || 0));
+  const sig = live.map(c => c.seq).join(",") + "|" + (done.length ? done[0].seq : "");
+  if (out.dataset.sig !== sig) {
+    out.innerHTML = live.map(c => _ivCallRow(c, true, slowest))
+                        .concat(done.map(c => _ivCallRow(c, false, slowest))).join("");
+    out.dataset.sig = sig;
+  }
+  interviewState.calls = { at: Date.now(), slowest: slowest };
+  _ivCallsTick();
+}
+
+function _ivCallRow(c, live, slowest) {
+  const ms = live ? (c.elapsed_ms || 0) : (c.ms || 0);
+  // Three states, one row shape: waiting on a reply, the reply, or how it died.
+  // A failed call keeps its latency, which is how a 60 s socket timeout reads as
+  // a timeout instead of as a silence.
+  let reply = `<span class="dist-call-tag">got</span>` +
+              `<span class="dist-call-bytes">${_fmtBytes(c.got_bytes || 0)}</span>` +
+              `<span class="dist-call-text">${_trEsc(c.got || "")}</span>`;
+  if (live) {
+    reply = `<span class="dist-call-tag">got</span><span class="dist-call-bytes"></span>` +
+            `<span class="dist-call-waiting">waiting for the reply&hellip;</span>`;
+  } else if (c.error) {
+    reply = `<span class="dist-call-tag">failed</span><span class="dist-call-bytes"></span>` +
+            `<span class="dist-err-text">${_trEsc(c.error)}</span>`;
+  }
+  return `<div class="dist-call${live ? " is-live" : ""}${c.error ? " is-failed" : ""}" data-elapsed="${ms}">` +
+    `<span class="dist-call-dot"></span>` +
+    `<span class="dist-call-head"><span class="dist-call-kind">${_trEsc(c.kind || "call")}</span>` +
+    `<span class="dist-call-id">${_trEsc(c.id || "")}</span></span>` +
+    `<span class="dist-call-ms">${_ivMs(ms)}</span>` +
+    `<div class="dist-call-bar"><i style="width:${_ivBarPct(ms, slowest)}"></i></div>` +
+    `<div class="dist-call-io"><span class="dist-call-tag">sent</span>` +
+    `<span class="dist-call-bytes">${_fmtBytes(c.sent_bytes || 0)}</span>` +
+    `<span class="dist-call-text">${_trEsc(c.sent || "")}</span>${reply}</div></div>`;
+}
+
+// Only the open calls move between polls, and only their clock and bar. Redrawing
+// the panel at tick speed would restart every entrance animation five times a second.
+function _ivCallsTick() {
+  const out = $("interviewCallsOutput");
+  const base = interviewState.calls;
+  if (!out || !base) return;
+  const drift = Date.now() - base.at;
+  out.querySelectorAll(".dist-call.is-live").forEach(row => {
+    const ms = Number(row.dataset.elapsed || 0) + drift;
+    const clock = row.querySelector(".dist-call-ms");
+    if (clock) clock.textContent = _ivMs(ms);
+    const bar = row.querySelector(".dist-call-bar i");
+    if (bar) bar.style.width = _ivBarPct(ms, base.slowest);
+  });
+}
+
+function _ivBarPct(ms, slowest) {
+  return Math.min(100, (Number(ms) || 0) / Math.max(1, slowest) * 100).toFixed(1) + "%";
+}
+
+function _ivMs(ms) {
+  const n = Number(ms) || 0;
+  return n < 1000 ? `${Math.round(n)}ms` : `${(n / 1000).toFixed(2)}s`;
+}
+
+// Which banned phrases the teacher keeps saying. The count is the whole point:
+// one hit is noise, forty means the list is costing the run real conversations.
+function _ivRenderGateHits(a) {
+  const wrap = $("interviewGateWrap");
+  const hits = $("interviewGateHits");
+  const count = $("interviewGateCount");
+  if (!wrap || !hits) return;
+  const rows = Object.entries(a.banned_hits || {});
+  if (!rows.length) { wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+  const blocked = (a.rejects || {})["banned phrase"] || 0;
+  if (count) count.textContent = `${blocked.toLocaleString()} conversations thrown away`;
+  hits.innerHTML = rows.map(([phrase, n]) =>
+    `<span class="dist-outcome-err">${_trEsc(phrase)} <b>${n.toLocaleString()}</b></span>`).join("");
+}
+
+const TEACHER_BANNED = "/teacher/authoring/banned";
+
+function _ivFillBanned(spec) {
+  const box = $("interviewBannedList");
+  const phrases = ((spec || {}).gates || {}).banned_phrases || [];
+  if (box) box.value = phrases.join("\n");
+  _ivBannedCount(phrases.length);
+}
+
+function _ivBannedCount(n) {
+  const stat = $("interviewBannedStatus");
+  if (stat) { stat.textContent = `${n} phrases in the list`; stat.style.color = "var(--dim)"; }
+}
+
+function _ivSaveBanned() {
+  const box = $("interviewBannedList");
+  const stat = $("interviewBannedStatus");
+  if (!box) return;
+  const phrases = box.value.split("\n").map(p => p.trim()).filter(Boolean);
+  fetch(TEACHER_BANNED, { method: "POST", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ phrases: phrases }) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d || d.error) {
+        if (stat) { stat.textContent = (d && d.error) || "save failed"; stat.style.color = "var(--hot)"; }
+        return;
+      }
+      box.value = (d.phrases || []).join("\n");
+      _ivBannedCount((d.phrases || []).length);
+    })
+    .catch(e => { if (stat) { stat.textContent = _backendErrMsg(e); stat.style.color = "var(--hot)"; } });
 }
 
 function _ivLoadSamples() {
@@ -17096,6 +17319,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (stop) stop.addEventListener("click", _ivStop);
   const build = $("interviewBuildBtn");
   if (build) build.addEventListener("click", _ivBuild);
+  const banned = $("interviewBannedSave");
+  if (banned) banned.addEventListener("click", _ivSaveBanned);
   ["interviewCount", "interviewDepth"].forEach(id => {
     const el = $(id);
     if (el) el.addEventListener("input", _ivCost);

@@ -172,6 +172,24 @@ def _err_body(e):
         return ""
 
 
+def _http_fatal(status, detail):
+    """The exception to raise now, or None when the status is worth retrying."""
+    if status in _AUTH_STATUS:
+        return TeacherAuthError(f"auth failed: {status} {detail}".rstrip())
+    if status not in RETRY_STATUS:
+        return TeacherError(f"http error: {status} {detail}".rstrip())
+    return None
+
+
+def _exhausted(status, detail, err):
+    """The exception for a request that ran out of retries."""
+    if status == _HTTP_RATE_LIMIT:
+        return TeacherRateLimitError(f"rate limit exhausted {detail}".rstrip())
+    if status is not None and _HTTP_SERVER_ERR_MIN <= status < _HTTP_SERVER_ERR_MAX:
+        return TeacherUnavailableError(f"upstream unavailable: {status} {detail}".rstrip())
+    return TeacherError(f"request failed: status={status} err={err} {detail}".rstrip())
+
+
 class Client:
     def __init__(self, provider_id, model=None, base_url=None, api_key=None,
                  timeout_s=DEFAULT_TIMEOUT_S, max_retries=DEFAULT_MAX_RETRIES):
@@ -213,10 +231,9 @@ class Client:
             except urllib.error.HTTPError as e:
                 last_status = e.code
                 last_detail = _err_body(e)
-                if e.code in _AUTH_STATUS:
-                    raise TeacherAuthError(f"auth failed: {e.code} {last_detail}".rstrip()) from e
-                if e.code not in RETRY_STATUS:
-                    raise TeacherError(f"http error: {e.code} {last_detail}".rstrip()) from e
+                fatal = _http_fatal(e.code, last_detail)
+                if fatal is not None:
+                    raise fatal from e
                 last_err = e
             except urllib.error.URLError as e:
                 last_err = e
@@ -231,30 +248,40 @@ class Client:
             if wait is None:
                 wait = _backoff(attempt)
             time.sleep(wait)
-        if last_status == _HTTP_RATE_LIMIT:
-            raise TeacherRateLimitError(f"rate limit exhausted {last_detail}".rstrip())
-        if last_status is not None and _HTTP_SERVER_ERR_MIN <= last_status < _HTTP_SERVER_ERR_MAX:
-            raise TeacherUnavailableError(f"upstream unavailable: {last_status} {last_detail}".rstrip())
-        raise TeacherError(f"request failed: status={last_status} err={last_err} {last_detail}".rstrip())
+        raise _exhausted(last_status, last_detail, last_err)
 
     def _complete_stream(self, url, payload, headers, cancel_check):
         # Retry transients (cold-load empty stream, connection blips) the same way
         # the non-streaming path does. A set cancel flag aborts without retrying.
+        # HTTPError is caught ahead of URLError/OSError, which it subclasses: without
+        # that clause a 401 was retried to exhaustion and surfaced as urllib's own
+        # text, so a bad key read as a teacher that had stopped answering.
         body = json.dumps({**payload, _SSE_STREAM_KEY: True}).encode("utf-8")
+        last_status = None
+        last_detail = ""
         last_err = None
         for attempt in range(self.max_retries + 1):
             if cancel_check():
                 raise TeacherCancelled("cancelled")
+            wait = None
             try:
                 return self._stream_once(url, body, headers, cancel_check)
             except TeacherCancelled:
                 raise
+            except urllib.error.HTTPError as e:
+                last_status = e.code
+                last_detail = _err_body(e)
+                fatal = _http_fatal(e.code, last_detail)
+                if fatal is not None:
+                    raise fatal from e
+                wait = _parse_retry_after(e.headers.get(_RETRY_AFTER_HEADER) if e.headers else None)
+                last_err = e
             except (TeacherError, urllib.error.URLError, OSError) as e:
                 last_err = e
             if attempt >= self.max_retries or cancel_check():
                 break
-            time.sleep(_backoff(attempt))
-        raise last_err if last_err is not None else TeacherError("empty stream response")
+            time.sleep(wait if wait is not None else _backoff(attempt))
+        raise _exhausted(last_status, last_detail, last_err)
 
     def _stream_once(self, url, body, headers, cancel_check):
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")

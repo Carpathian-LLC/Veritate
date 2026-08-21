@@ -54,6 +54,7 @@ LOG_SOURCE = "teacher"
 JOB_ID_LEN = 12
 TEACHER_API_KEY_ENV = "VERITATE_TEACHER_API_KEY"
 SAMPLES_FILE = "samples.jsonl"
+ERRORS_FILE = "errors.jsonl"
 STATE_FILE = "state.json"
 PLAN_FILE = "plan.json"
 JOB_META_FILE = "meta.json"
@@ -68,6 +69,16 @@ SAMPLES_PREVIEW_MAX = 100
 BROWSE_PAGE_DEFAULT = 25
 BROWSE_PAGE_MAX = 100
 BROWSE_TEXT_MAX = 8000
+# Every job writes a line per failed call to errors.jsonl and nothing has ever
+# read it back. A run that dies could only say "12 failed"; the reasons were on
+# disk the whole time.
+ERRORS_SHOWN_DEFAULT = 12
+ERRORS_SHOWN_MAX = 100
+# The gate's banned-phrase list is user-owned data. Bounded here rather than in
+# the gate: a phrase is escaped before it ever reaches a regex, so the only real
+# limits are how much of it a person can read back.
+BANNED_PHRASE_MAX = 500
+BANNED_PHRASE_CHARS = 80
 TEACHER_PKG = "teacher"
 SEEDS_DIRNAME = "seeds"
 SEEDS_DIR = os.path.join(paths_mod.DATA_ROOT, SEEDS_DIRNAME)
@@ -936,6 +947,31 @@ def register(app):
             return authoring_mod.load_spec()
         return authoring_mod.load_spec()
 
+    @app.route("/teacher/authoring/banned", methods=["POST"])
+    def teacher_authoring_banned_route():
+        """Replace the gate's banned-phrase list.
+
+        Matched whole-word and case-insensitively against assistant text, so the
+        list is stored lower case and deduplicated. An empty list is allowed and
+        means nothing is banned. Takes effect on the next run: a running gate
+        compiled its list when it started."""
+        body = request.get_json(silent=True) or {}
+        raw = body.get("phrases")
+        if not isinstance(raw, list):
+            return {"error": "phrases must be a list"}, 400
+        phrases = []
+        for item in raw:
+            phrase = str(item).strip().lower()[:BANNED_PHRASE_CHARS]
+            if phrase and phrase not in phrases:
+                phrases.append(phrase)
+        if len(phrases) > BANNED_PHRASE_MAX:
+            return {"error": f"at most {BANNED_PHRASE_MAX} phrases"}, 400
+        spec = authoring_mod.load_spec()
+        spec["gates"]["banned_phrases"] = phrases
+        authoring_mod.save_spec(spec)
+        logmod.info(LOG_SOURCE, f"banned phrase list saved: {len(phrases)} phrases")
+        return {"phrases": phrases}
+
     @app.route("/teacher/authoring/import", methods=["POST"])
     def teacher_authoring_import_route():
         body = request.get_json(silent=True) or {}
@@ -1219,6 +1255,30 @@ def register(app):
         logmod.info(LOG_SOURCE, f"synth stop requested: job={job_id}")
         return {"job_id": job_id, "stopping": True}
 
+    @app.route("/teacher/synth/kill", methods=["POST"])
+    def teacher_synth_kill_route():
+        """Abandon a run now, including calls already in flight.
+
+        `/stop` drops the queue but waits for in-flight conversations so their
+        records are written; that is bounded by one conversation and is what you
+        normally want. This is for a teacher that has gone unresponsive, where
+        every in-flight call is sitting on its 60 s socket timeout. Records
+        already on disk are kept either way."""
+        body = request.get_json(silent=True) or {}
+        job_id = body.get("job_id") or ""
+        with _JOBS_LOCK:
+            entry = _JOBS.get(job_id)
+        if entry is None:
+            return {"error": "unknown job"}, 404
+        job = entry["job"]
+        killer = getattr(job, "kill", None)
+        if callable(killer):
+            killer()
+        else:
+            job.stop()          # older job types have no hard kill
+        logmod.warn(LOG_SOURCE, f"synth HARD KILL requested: job={job_id}")
+        return {"job_id": job_id, "killed": True, "hard": callable(killer)}
+
     @app.route("/teacher/synth/samples", methods=["GET"])
     def teacher_synth_samples_route():
         job_id = request.args.get("job_id") or ""
@@ -1262,6 +1322,63 @@ def register(app):
                 "offset": offset, "limit": limit,
                 "total": _count_lines(os.path.join(target, SAMPLES_FILE)),
                 "rows": _browse_samples(target, offset, limit)}
+
+    @app.route("/teacher/synth/errors", methods=["GET"])
+    def teacher_synth_errors_route():
+        """The most recent failed calls, with the teacher's own error text.
+
+        `error_summary` in the status payload says which reasons are most common;
+        this says what actually happened, call by call, so a 401 or a rate limit
+        is readable the moment it starts instead of after the run dies."""
+        job_id = (request.args.get("job_id") or "").strip()
+        if not job_id:
+            return {"error": "job_id required"}, 400
+        target = _job_dir(job_id)
+        if target is None:
+            return {"error": "unknown job"}, 404
+        try:
+            limit = int(request.args.get("limit") or ERRORS_SHOWN_DEFAULT)
+        except ValueError:
+            limit = ERRORS_SHOWN_DEFAULT
+        limit = max(1, min(limit, ERRORS_SHOWN_MAX))
+        path = os.path.join(target, ERRORS_FILE)
+        rows = []
+        total = 0
+        if os.path.isfile(path):
+            tail = collections.deque(maxlen=limit)
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    total += 1
+                    tail.append(line)
+            for line in tail:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                rows.append({"id": str(row.get("id", "")),
+                             "error": str(row.get("error", ""))[:BROWSE_TEXT_MAX],
+                             "ts": row.get("ts")})
+        return {"job_id": job_id, "total": total, "errors": rows}
+
+    @app.route("/teacher/synth/calls", methods=["GET"])
+    def teacher_synth_calls_route():
+        """The live teacher call feed: what went out, what came back, how long.
+
+        In-memory on the job, so it answers for the running job only. A finished
+        run has samples.jsonl and errors.jsonl; a running one is the only thing
+        that needs watching call by call."""
+        job_id = (request.args.get("job_id") or "").strip()
+        if not job_id:
+            return {"error": "job_id required"}, 400
+        with _JOBS_LOCK:
+            entry = _JOBS.get(job_id)
+        feed = getattr(entry["job"], "feed", None) if entry else None
+        if feed is None:
+            return {"job_id": job_id, "calls": [], "inflight": [], "stats": {}}
+        return {"job_id": job_id, **feed.snapshot()}
 
     @app.route("/teacher/synth/status", methods=["GET"])
     def teacher_synth_status_route():

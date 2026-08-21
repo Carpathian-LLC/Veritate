@@ -38,6 +38,7 @@
     <div id="confirmModalMsg" class="confirm-msg">Are you sure?</div>
     <div class="confirm-actions">
       <button id="confirmModalCancel" type="button" class="confirm-cancel">Cancel</button>
+      <button id="confirmModalAlt" type="button" class="confirm-alt" style="display:none"></button>
       <button id="confirmModalOk" type="button" class="confirm-ok">Confirm</button>
     </div>
   </div>
@@ -1475,10 +1476,19 @@
           </div>
         </div>
 
+        <details id="interviewBannedFold" class="dist-step dist-config dist-fold">
+          <summary>banned phrases the gate rejects</summary>
+          <div class="dist-step-sub">One phrase per line. Matched whole-word and case-insensitively against the teacher's replies: a conversation containing any of them is thrown away, and the run pays for it either way. Shared by every distillation mode, and read when a run starts, so an edit applies to the next one.</div>
+          <textarea id="interviewBannedList" class="dist-banned" rows="10" spellcheck="false"></textarea>
+          <div class="dist-launch">
+            <button id="interviewBannedSave" class="action" type="button">Save list</button>
+            <span id="interviewBannedStatus" class="dist-note dist-launch-note"></span>
+          </div>
+        </details>
+
         <div id="interviewProgressStep" class="dist-step" style="display:none">
           <div class="dist-step-head">progress</div>
           <div id="interviewOutcome" class="dist-outcome" style="display:none"></div>
-          <div id="interviewPlanLine" class="dist-note"></div>
           <div id="interviewRepWarn" class="author-warn" style="display:none"></div>
           <div id="interviewStatsRow" class="author-stats" style="display:none"></div>
           <div id="interviewProgress" class="dist-progress" style="display:none">
@@ -1489,7 +1499,29 @@
               <span id="interviewProgressRight"></span>
             </div>
           </div>
-          <div id="interviewRejectRow" class="dist-note dist-line dist-wrap"></div>
+          <div id="interviewGateWrap" class="dist-live-wrap" style="display:none">
+            <div class="dist-live-head">
+              <span class="dist-live-title">blocked by the gate</span>
+              <span id="interviewGateCount" class="dist-live-count"></span>
+            </div>
+            <div id="interviewGateHits" class="dist-outcome-errs"></div>
+          </div>
+
+          <div id="interviewCallsWrap" class="dist-live-wrap" style="display:none">
+            <div class="dist-live-head">
+              <span class="dist-live-title">teacher calls</span>
+              <span id="interviewCallsStats" class="dist-live-count"></span>
+            </div>
+            <div id="interviewCallsOutput" class="dist-live dist-calls"></div>
+          </div>
+
+          <div id="interviewErrWrap" class="dist-live-wrap" style="display:none">
+            <div class="dist-live-head is-bad">
+              <span class="dist-live-title">failed calls</span>
+              <span id="interviewErrCount" class="dist-live-count"></span>
+            </div>
+            <div id="interviewErrOutput" class="dist-live"></div>
+          </div>
 
           <div id="interviewLiveWrap" class="dist-live-wrap" style="display:none">
             <div class="dist-live-head">

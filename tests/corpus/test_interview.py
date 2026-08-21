@@ -189,7 +189,7 @@ def test_a_reply_that_does_not_open_with_filler_is_untouched():
     assert interview.strip_filler_opener(text) == text
 
 
-def test_openers_are_deduplicated_and_a_dry_pool_stops_early():
+def test_openers_are_deduplicated_and_a_dry_pool_stops_early(tmp_path):
     """The opener pool is bounded by the genre's `situations` list. Without dedup
     a large request re-generates the same questions, pays for the conversations,
     and RecordGate rejects them as near-duplicates afterwards."""
@@ -203,13 +203,12 @@ def test_openers_are_deduplicated_and_a_dry_pool_stops_early():
             return "How do I start a garden?\nWhy is my bread flat?\nWhich laptop should I buy?"
 
     job = interview_job.InterviewJob(
-        "j", "/tmp/nonexistent-interview", {"genres": [], "gates": {}}, [], 100, 2,
+        "j", str(tmp_path), {"genres": [], "gates": {}}, [], 100, 2,
         "ollama", gate=object())
     teacher = Repeater()
     genre = {"id": "conversation", "situations": ["gardening", "cooking"]}
-    out = job._openers_for(teacher, genre, 100)
+    out = job._openers_for(teacher, genre, 100, [])
 
     assert len(out) == 3, "duplicates must not be kept"
     assert len(set(out)) == 3
     assert teacher.calls <= 6, "must give up once the pool is dry, not keep paying"
-    assert job._opener_shortfall["conversation"] == 97

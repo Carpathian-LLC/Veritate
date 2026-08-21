@@ -27,12 +27,31 @@
 
 import random
 import re
+import time
+
+from .client import TeacherError
 
 # ------------------------------------------------------------------------------------
 # Constants
 
 ROLE_USER = "user"
 ROLE_ASSISTANT = "assistant"
+
+# Every teacher call in this mode goes through ask(), which reports both edges of
+# the call to an optional watcher: the dashboard's live call feed is built from
+# these and nothing else has to be instrumented.
+PHASE_START = "start"
+PHASE_DONE = "done"
+PHASE_FAIL = "fail"
+PHASE_SALVAGE = "salvage"
+CALL_ANSWER = "answer"
+CALL_FOLLOWUP = "follow-up"
+
+# A conversation is worth 2*depth-1 teacher calls and every one of them is paid
+# for the moment it returns. A failure on the last call used to discard all of
+# them; the exchanges already complete are kept instead, which is also what makes
+# Stop keep the work that was in flight when it was pressed.
+MIN_SALVAGE_TURNS = 2
 
 # The blend. Weights are the share of assistant turns drawn from each register.
 # `max_bytes` is a ceiling applied by whole-sentence trimming, not a target --
@@ -164,41 +183,79 @@ def clean_reply(text, max_bytes):
     return out.strip()
 
 
-def _ask(client, messages, system, temperature, max_tokens, cancel_check=None):
-    return client.complete(messages, temperature=temperature, max_tokens=max_tokens,
-                           system=system, cancel_check=cancel_check)
+def ask(client, messages, system, temperature, max_tokens, cancel_check=None,
+        watch=None, kind=""):
+    """One teacher call. `watch` is told what went out, what came back and how
+    long the reply took -- the only chokepoint every interview call passes."""
+    if watch:
+        watch(PHASE_START, kind, messages[-1]["content"], 0.0)
+    started = time.perf_counter()
+    try:
+        out = client.complete(messages, temperature=temperature, max_tokens=max_tokens,
+                              system=system, cancel_check=cancel_check)
+    except Exception as e:
+        # Reported and re-raised, never swallowed: a call that died after 60 s on
+        # a socket timeout is the single most useful row in the panel, and the
+        # caller still decides what the failure means.
+        if watch:
+            watch(PHASE_FAIL, kind, f"{type(e).__name__}: {e}",
+                  (time.perf_counter() - started) * 1000.0)
+        raise
+    if watch:
+        watch(PHASE_DONE, kind, out or "", (time.perf_counter() - started) * 1000.0)
+    return out
 
 
-def next_user_turn(client, turns, temperature, cancel_check=None):
+def salvage(watch, turns):
+    """Report that a conversation is being kept short rather than thrown away."""
+    if watch and len(turns) >= MIN_SALVAGE_TURNS:
+        watch(PHASE_SALVAGE, "", "", 0.0)
+
+
+def next_user_turn(client, turns, temperature, cancel_check=None, watch=None):
     """Pass 1 on a live conversation: write only what the person says next."""
     transcript = "\n".join(
         f"{'PERSON' if t['role'] == ROLE_USER else 'THEM'}: {t['text']}" for t in turns)
-    reply = _ask(client, [{"role": ROLE_USER, "content": transcript + "\n\nPERSON:"}],
-                 FOLLOWUP_SYSTEM, temperature, 200, cancel_check)
+    reply = ask(client, [{"role": ROLE_USER, "content": transcript + "\n\nPERSON:"}],
+                FOLLOWUP_SYSTEM, temperature, 200, cancel_check, watch, CALL_FOLLOWUP)
     line = (reply or "").strip().split("\n")[0].strip()
     line = re.sub(r'^(?:PERSON|USER)\s*:\s*', "", line, flags=re.I).strip().strip('"')
     return line
 
 
-def build_conversation(client, opener, depth, seed=0, temperature=0.9, cancel_check=None):
+def build_conversation(client, opener, depth, seed=0, temperature=0.9, cancel_check=None,
+                       watch=None):
     """One conversation: ask the opener, keep the real reply, follow up, repeat.
 
     `depth` counts assistant turns. Returns the turn list, or None if the very
-    first answer came back empty -- a conversation with no reply is not a record."""
+    first answer came back empty -- a conversation with no reply is not a record.
+
+    A teacher failure part way through ends the conversation at its last complete
+    exchange instead of raising. Stop is one of those failures (the client raises
+    TeacherCancelled from its cancel check), so pressing Stop keeps the turns that
+    were already generated rather than paying for them and discarding them."""
     rng = random.Random(seed)
     turns = [{"role": ROLE_USER, "text": opener}]
     for i in range(depth):
         reg = pick_register(rng)
         history = [{"role": t["role"], "content": t["text"]} for t in turns]
-        raw = _ask(client, history, BASE_SYSTEM + " " + reg["instruction"],
-                   temperature, 1600, cancel_check)
+        try:
+            raw = ask(client, history, BASE_SYSTEM + " " + reg["instruction"],
+                      temperature, 1600, cancel_check, watch, CALL_ANSWER)
+        except TeacherError:
+            salvage(watch, turns)
+            break
         reply = clean_reply(raw, reg["max_bytes"])
         if len(reply.encode("utf-8")) < MIN_KEEP_BYTES:
             break
         turns.append({"role": ROLE_ASSISTANT, "text": reply})
         if i == depth - 1:
             break
-        nxt = next_user_turn(client, turns, temperature, cancel_check)
+        try:
+            nxt = next_user_turn(client, turns, temperature, cancel_check, watch)
+        except TeacherError:
+            salvage(watch, turns)
+            break
         if not nxt or len(nxt.encode("utf-8")) < 3:
             break
         turns.append({"role": ROLE_USER, "text": nxt})

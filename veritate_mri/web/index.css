@@ -1185,6 +1185,10 @@
      like every other divider on the tab. No fill, no tint: the accent is a state,
      not a decoration. `.is-next` is set by the poller on whichever button is the
      next natural thing to press, so at most one button on screen is lit. */
+  /* the harsher of two actions in a confirm dialog: dangerous on hover only */
+  .confirm-alt { border-color: var(--line); color: var(--dim); }
+  .confirm-alt:hover { border-color: var(--hot); color: var(--hot); background: rgba(255,93,93,0.10); }
+
   .dist-launch { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
                  margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
   .dist-launch-note { flex: 1 1 220px; margin: 0; font-size: 10.5px; }
@@ -1194,6 +1198,9 @@
   .dist-go.is-next { border-color: var(--accent); color: var(--accent); }
   .dist-go.is-next:hover { background: rgba(106,166,255,0.12); color: var(--accent); }
   .dist-stop { background: var(--hot); border-color: var(--hot); color: #000; font-weight: 600; padding: 7px 16px; }
+  /* Without this it inherits the global button:hover (#232a3a) and a red button
+     turns near-black under the cursor. Hover lightens the red instead. */
+  .dist-stop:hover { background: #ff8080; border-color: #ff8080; color: #000; }
 
   /* Running state: a run's settings are already fixed on the server, so the form
      that set them is noise. Collapse every configuration block to one line that
@@ -1219,6 +1226,50 @@
   .dist-live-head { display: flex; align-items: center; gap: 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; font-weight: 600; color: var(--accent); }
   .dist-live-title { color: var(--accent); }
   .dist-live-count { color: var(--dim); letter-spacing: 0; text-transform: none; font-weight: 400; margin-left: auto; }
+  .dist-live-head.is-bad, .dist-live-head.is-bad .dist-live-title { color: var(--hot); }
+
+  /* the gate's ban list, edited as plain lines because that is what it is */
+  .dist-banned { width: 100%; margin-top: 10px; font-size: 11.5px; line-height: 1.6; min-height: 180px; }
+
+  /* Live teacher calls. One row per request: what kind of call it is, which
+     conversation it belongs to, what was sent, what came back, and how long the
+     reply took. In-flight rows sit on top with a counting clock, so the panel
+     shows work happening rather than only work finished. The latency bar is
+     scaled to the slowest call on screen -- relative, because absolute teacher
+     latency spans a hundred milliseconds to a minute across providers. */
+  .dist-calls { max-height: 420px; }
+  .dist-call { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 0 8px;
+               align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .dist-call:last-child { border-bottom: 0; }
+  .dist-call-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line); align-self: center; }
+  .dist-call.is-live .dist-call-dot { background: var(--warm); animation: distPulse 1.4s ease-in-out infinite; }
+  .dist-call-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .dist-call-kind { font-size: 9.5px; text-transform: uppercase; letter-spacing: .09em;
+                    font-weight: 600; color: var(--soft); flex: none; }
+  .dist-call-id { font-size: 10px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dist-call-ms { font-size: 11px; color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
+  .dist-call-bar { grid-column: 2 / 4; height: 2px; margin: 5px 0 6px; background: var(--line); border-radius: 1px; }
+  .dist-call-bar i { display: block; height: 100%; background: var(--dim); border-radius: 1px; }
+  .dist-call.is-live .dist-call-bar i { background: var(--warm); }
+  /* a dead call keeps its row and its latency: how long it took to fail is the
+     difference between a timeout and a refusal */
+  .dist-call.is-failed .dist-call-dot { background: var(--hot); }
+  .dist-call.is-failed .dist-call-bar i { background: var(--hot); }
+  .dist-call-io { grid-column: 2 / 4; display: grid; grid-template-columns: auto auto minmax(0, 1fr);
+                  gap: 3px 8px; align-items: baseline; }
+  .dist-call-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+  .dist-call-bytes { font-size: 9.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .dist-call-text { font-size: 11px; color: var(--soft); line-height: 1.5; overflow: hidden;
+                    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .dist-call-waiting { font-size: 11px; color: var(--dim); line-height: 1.5; }
+
+  /* failed calls: id, when, and the teacher's own error text */
+  .dist-err-row { display: grid; grid-template-columns: auto auto 1fr; gap: 4px 10px; align-items: baseline;
+                  padding: 5px 0; border-bottom: 1px solid var(--line); }
+  .dist-err-row:last-child { border-bottom: 0; }
+  .dist-err-id { font-family: ui-monospace, monospace; font-size: 10px; color: var(--dim); }
+  .dist-err-when { font-size: 10px; color: var(--dim); }
+  .dist-err-text { font-size: 11px; color: var(--hot); line-height: 1.5; word-break: break-word; }
   @keyframes distPulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 
   /* one conversation per card: what the seed asked, then what came back */

@@ -1363,3 +1363,17 @@ target_seq + seq selector (1x/2x/4x), seq-only growth supported. 34 tests
 green (4 new tool + 3 new route), trainer regression 56 green, ruff clean.
 export.py verified: grown-seq models export to v13 unchanged (header carries
 seq+slots). wren2 can now be grown to 400m shape AND seq 4096 in one call.
+
+2026-08-21 ~04:15 — wren2 data plan DELIVERED (agent): +21.5 GB new clean
+prose built (pg19 9.7G Apache/PD books; fineweb_edu2 8.6G ODC-By sample-100BT
+run through the repo's own filter chain, 79,687 docs rejected; gutenberg_pd
+3.3G with a hard died<=1928 PD gate, 30,826 unverifiable books rejected).
+Rejected on principle: slimpajama (8.7% code windows + license provenance),
+wikitext/enwik8 (share-alike), veritate_v1 (4GB on disk vs 17MB catalog entry
+— provenance flag for the user), soda (short-reply decay risk). Final mix
+validated via mix_planner (sum 1.0, max 2 epochs): fineweb_edu2 .32, pg19
+.26, gutenberg_pd .15, owt .14, mixed_chat .046, formal .06 combined, skills
+.024 = 9.44 GB effective, exactly 20 B/param at 472M. Catalog entries added
+(fineweb_edu2, gutenberg_pd; pg19 repointed). Known tension: dialogue capped
+~7% by mixed_chat size — more chat share must come from generated depth
+(IDEA 7), not transcript weight.

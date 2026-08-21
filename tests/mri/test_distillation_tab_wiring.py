@@ -46,10 +46,13 @@ REQUIRED_IDS = (
     "authorProgressLeft", "authorProgressMid", "authorProgressRight",
     "interviewPanel", "interviewGenreList", "interviewJobSelect", "interviewCount",
     "interviewDepth", "interviewConcurrency", "interviewStartBtn", "interviewStopBtn",
-    "interviewCostLine", "interviewPlanLine", "interviewStatsRow", "interviewProgress",
+    "interviewCostLine", "interviewStatsRow", "interviewProgress",
     "interviewProgressFill", "interviewProgressLeft", "interviewProgressMid",
     "interviewProgressRight", "interviewBuildRow", "interviewStem", "interviewLabel",
     "interviewBuildBtn", "interviewBuildStatus", "interviewLiveWrap", "interviewLiveOutput",
+    "interviewCallsWrap", "interviewCallsOutput", "interviewCallsStats",
+    "interviewGateWrap", "interviewGateHits", "interviewGateCount",
+    "interviewBannedFold", "interviewBannedList", "interviewBannedSave", "interviewBannedStatus",
     "interviewVertical", "interviewVerticalNote", "interviewTopicList",
     "interviewTopicAll", "interviewTopicNone",
     "distJobsList", "distJobsSummary", "distJobsRefresh",
@@ -224,6 +227,61 @@ def test_interview_reuses_the_shared_status_and_build_endpoints():
     assert "TEACHER_SYNTH_STATUS" in JS
     assert "TEACHER_AUTHOR_BUILD" in JS
     assert JS.count("TEACHER_INTERVIEW_START") >= 1
+
+
+def test_every_poll_refreshes_the_live_call_feed():
+    """A run's only visible sign of life used to be a progress bar. The feed is
+    what says which call is open, what was sent, and how long it has been
+    waiting, so it has to move with the poller."""
+    body = JS[JS.index("function _ivPollOnce"):]
+    body = body[:body.index("\nfunction ")]
+    assert "_ivLoadCalls();" in body
+    assert "TEACHER_SYNTH_CALLS" in JS
+
+
+def test_open_calls_tick_faster_than_the_poller():
+    """A two-second poll makes a clock that jumps two seconds at a time. The tick
+    updates only the in-flight rows, so nothing else is redrawn."""
+    body = JS[JS.index("function _ivCallsTick"):]
+    body = body[:body.index("\nfunction ")]
+    assert ".dist-call.is-live" in body
+    assert "innerHTML" not in body
+    assert "interviewState.tickTimer = setInterval(_ivCallsTick, IV_CALL_TICK_MS)" in JS
+
+
+def test_a_failed_call_keeps_its_row_and_its_latency():
+    """How long a call took to fail is what separates a timeout from a refusal,
+    so a dead call is a row in the feed, not a gap in it."""
+    body = JS[JS.index("function _ivCallRow"):]
+    body = body[:body.index("\n// Only the open calls")]
+    assert "c.error" in body
+    assert "is-failed" in body
+    assert ".dist-call.is-failed" in CSS
+
+
+def test_the_durable_call_counters_come_from_the_status_payload():
+    """The live feed dies with the job. Calls made, calls failed and conversations
+    kept short have to survive a restart, so they are read from state.json."""
+    body = JS[JS.index("function _ivRenderStats"):]
+    body = body[:body.index("\n  if (warn)")]
+    assert "s.call_stats" in body
+    assert "c.salvaged" in body
+
+
+def test_the_gate_says_which_banned_phrase_it_blocked():
+    """A count of rejects does not say which entry in the list to change."""
+    body = JS[JS.index("function _ivRenderGateHits"):]
+    body = body[:body.index("\nconst ")]
+    assert "a.banned_hits" in body
+    assert "_ivRenderGateHits(a)" in JS
+
+
+def test_the_ban_list_is_editable_and_saved_whole():
+    """The list is data the run depends on, so it is edited here rather than by
+    hand in corpus_spec.json."""
+    assert '"/teacher/authoring/banned"' in JS
+    assert 'addEventListener("click", _ivSaveBanned)' in JS
+    assert 'id="interviewBannedList"' in _mode_panel("interview")
 
 
 def test_only_dialogue_genres_are_offered_for_interviewing():
