@@ -125,6 +125,7 @@ class CallFeed:
         self._lock = threading.Lock()
         self._recent = collections.deque(maxlen=CALL_FEED_MAX)
         self._latency = collections.deque(maxlen=LATENCY_WINDOW)
+        self._first = collections.deque(maxlen=LATENCY_WINDOW)
         self._inflight = {}
         self._seq = 0
         self._calls = 0
@@ -143,12 +144,19 @@ class CallFeed:
             if phase == interview.PHASE_SALVAGE:
                 self._salvaged += 1
                 return
+            if phase == interview.PHASE_FIRST:
+                # A retry can stream, die, and stream again: the first mark wins,
+                # because it is measured from the request that is still open.
+                call = self._inflight.get(tid)
+                if call is not None and call.get("wait_ms") is None:
+                    call["wait_ms"] = round(ms)
+                return
             if phase == interview.PHASE_START:
                 self._seq += 1
                 self._inflight[tid] = {
                     "seq": self._seq, "id": cid, "kind": kind,
                     "sent": clip(text), "sent_bytes": len(text.encode("utf-8")),
-                    "started": time.time(),
+                    "started": time.time(), "wait_ms": None,
                 }
                 return
             call = self._inflight.pop(tid, None)
@@ -168,6 +176,8 @@ class CallFeed:
             call["ms"] = round(ms)
             self._recent.append(call)
             self._latency.append(ms)
+            if call["wait_ms"] is not None:
+                self._first.append(call["wait_ms"])
             self._calls += 1
             self._reply_bytes += call["got_bytes"]
 
@@ -185,6 +195,7 @@ class CallFeed:
             inflight = [dict(c, elapsed_ms=round((now - c["started"]) * 1000))
                         for c in sorted(self._inflight.values(), key=lambda c: c["seq"])]
             ordered = sorted(self._latency)
+            first = sorted(self._first)
             calls, failed, salvaged = self._calls, self._failed, self._salvaged
             reply_bytes = self._reply_bytes
             elapsed = max(1.0, now - self._started)
@@ -200,6 +211,7 @@ class CallFeed:
                 "per_min": round(calls * 60.0 / elapsed, 1),
                 "p50_ms": percentile(ordered, PCT_MID),
                 "p95_ms": percentile(ordered, PCT_TAIL),
+                "p50_first_ms": percentile(first, PCT_MID),
             },
         }
 

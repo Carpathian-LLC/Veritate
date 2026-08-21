@@ -41,6 +41,7 @@ ROLE_ASSISTANT = "assistant"
 # the call to an optional watcher: the dashboard's live call feed is built from
 # these and nothing else has to be instrumented.
 PHASE_START = "start"
+PHASE_FIRST = "first"
 PHASE_DONE = "done"
 PHASE_FAIL = "fail"
 PHASE_SALVAGE = "salvage"
@@ -185,14 +186,24 @@ def clean_reply(text, max_bytes):
 
 def ask(client, messages, system, temperature, max_tokens, cancel_check=None,
         watch=None, kind=""):
-    """One teacher call. `watch` is told what went out, what came back and how
-    long the reply took -- the only chokepoint every interview call passes."""
+    """One teacher call. `watch` is told what went out, when the first word of the
+    reply arrived, what came back and how long it all took -- the only chokepoint
+    every interview call passes.
+
+    The first-token mark is what separates SENDING (the request is out, nothing has
+    come back) from RECEIVING (the reply is arriving). Providers that cannot stream
+    never report it, and such a call reads as sending for its whole life."""
     if watch:
         watch(PHASE_START, kind, messages[-1]["content"], 0.0)
     started = time.perf_counter()
+
+    def first_token():
+        watch(PHASE_FIRST, kind, "", (time.perf_counter() - started) * 1000.0)
+
     try:
         out = client.complete(messages, temperature=temperature, max_tokens=max_tokens,
-                              system=system, cancel_check=cancel_check)
+                              system=system, cancel_check=cancel_check,
+                              on_first_token=first_token if watch else None)
     except Exception as e:
         # Reported and re-raised, never swallowed: a call that died after 60 s on
         # a socket timeout is the single most useful row in the panel, and the

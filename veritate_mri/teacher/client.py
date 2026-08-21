@@ -201,7 +201,8 @@ class Client:
         self.max_retries = max_retries
 
     def complete(self, messages, temperature=DEFAULT_TEMPERATURE,
-                 max_tokens=DEFAULT_MAX_TOKENS, system=None, cancel_check=None):
+                 max_tokens=DEFAULT_MAX_TOKENS, system=None, cancel_check=None,
+                 on_first_token=None):
         if not self.model:
             raise TeacherError("no model set")
         url = self.base_url + self.provider["chat_path"]
@@ -213,7 +214,7 @@ class Client:
         # on the provider's declared streaming support, not on its URL shape.
         if cancel_check is not None and self.provider.get(_PROVIDER_SUPPORTS_STREAM,
                                                           DEFAULT_SUPPORTS_STREAM):
-            return self._complete_stream(url, payload, headers, cancel_check)
+            return self._complete_stream(url, payload, headers, cancel_check, on_first_token)
         data = json.dumps(payload).encode("utf-8")
         last_status = None
         last_err = None
@@ -250,7 +251,7 @@ class Client:
             time.sleep(wait)
         raise _exhausted(last_status, last_detail, last_err)
 
-    def _complete_stream(self, url, payload, headers, cancel_check):
+    def _complete_stream(self, url, payload, headers, cancel_check, on_first_token=None):
         # Retry transients (cold-load empty stream, connection blips) the same way
         # the non-streaming path does. A set cancel flag aborts without retrying.
         # HTTPError is caught ahead of URLError/OSError, which it subclasses: without
@@ -265,7 +266,7 @@ class Client:
                 raise TeacherCancelled("cancelled")
             wait = None
             try:
-                return self._stream_once(url, body, headers, cancel_check)
+                return self._stream_once(url, body, headers, cancel_check, on_first_token)
             except TeacherCancelled:
                 raise
             except urllib.error.HTTPError as e:
@@ -283,7 +284,7 @@ class Client:
             time.sleep(wait if wait is not None else _backoff(attempt))
         raise _exhausted(last_status, last_detail, last_err)
 
-    def _stream_once(self, url, body, headers, cancel_check):
+    def _stream_once(self, url, body, headers, cancel_check, on_first_token=None):
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         parts = []
         with urllib.request.urlopen(req, timeout=self.timeout_s, context=_SSL_CTX) as resp:
@@ -302,6 +303,11 @@ class Client:
                 except (ValueError, KeyError, IndexError, TypeError):
                     continue
                 if delta:
+                    # First content token. The split between waiting for a reply
+                    # and reading one is the difference between a teacher that is
+                    # busy and a teacher that is slow, and only the stream knows it.
+                    if on_first_token is not None and not parts:
+                        on_first_token()
                     parts.append(delta)
         if not parts:
             raise TeacherError("empty stream response")

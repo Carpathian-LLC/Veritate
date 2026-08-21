@@ -36,8 +36,10 @@ class StubClient:
         self.asks = []
 
     def complete(self, messages, temperature=None, max_tokens=None, system=None,
-                 cancel_check=None):
+                 cancel_check=None, on_first_token=None):
         self.asks.append({"messages": messages, "system": system})
+        if on_first_token is not None:
+            on_first_token()
         return self.replies.pop(0) if self.replies else ""
 
 

@@ -54,6 +54,16 @@ class StubClient:
         return self.reply
 
 
+class StreamingClient(StubClient):
+    """A teacher that streams: the first token lands before the full reply does."""
+
+    def complete(self, messages, **kwargs):
+        first = kwargs.get("on_first_token")
+        if first is not None:
+            first()
+        return super().complete(messages, **kwargs)
+
+
 class FlakyClient(StubClient):
     """Answers `ok` calls, then raises `error` on every call after that."""
 
@@ -399,3 +409,84 @@ def test_a_pool_that_comes_up_short_is_reported_against_what_was_asked(tmp_path)
     job._client = lambda: FlakyClient(ok=0)
     job.run()
     assert job._opener_shortfall == {"conversation": 2}
+
+
+def test_the_feed_splits_waiting_for_a_reply_from_reading_one():
+    """A teacher that is busy and a teacher that is slow are the same number in a
+    single total. The first-token mark is the only thing that tells them apart."""
+    feed = CallFeed()
+    interview.ask(StreamingClient(), [{"role": "user", "content": "why does dough rise?"}],
+                  "system", 0.9, 100, None, feed.watcher(CONVERSATION), interview.CALL_ANSWER)
+    call = feed.snapshot()["calls"][0]
+    assert call["wait_ms"] is not None
+    assert call["wait_ms"] <= call["ms"]
+
+
+def test_a_provider_that_cannot_stream_never_claims_a_first_word():
+    """No stream, no first-token signal. Reporting one would be invented data."""
+    feed = CallFeed()
+    interview.ask(StubClient(), [{"role": "user", "content": "q"}], "system", 0.9, 100,
+                  None, feed.watcher(CONVERSATION), interview.CALL_ANSWER)
+    assert feed.snapshot()["calls"][0]["wait_ms"] is None
+
+
+def test_an_open_call_says_when_the_reply_started_arriving():
+    """Sending and receiving are different states and the panel shows which."""
+    feed = CallFeed()
+    watch = feed.watcher(CONVERSATION)
+    watch(interview.PHASE_START, interview.CALL_ANSWER, "q", 0.0)
+    assert feed.snapshot()["inflight"][0]["wait_ms"] is None
+    watch(interview.PHASE_FIRST, interview.CALL_ANSWER, "", 120.4)
+    assert feed.snapshot()["inflight"][0]["wait_ms"] == 120
+
+
+def test_a_retry_that_streams_twice_keeps_the_first_mark():
+    """The mark is measured from the request that is still open, not from the
+    last attempt, or a retried call would look faster than it was."""
+    feed = CallFeed()
+    watch = feed.watcher(CONVERSATION)
+    watch(interview.PHASE_START, interview.CALL_ANSWER, "q", 0.0)
+    watch(interview.PHASE_FIRST, interview.CALL_ANSWER, "", 100.0)
+    watch(interview.PHASE_FIRST, interview.CALL_ANSWER, "", 8000.0)
+    assert feed.snapshot()["inflight"][0]["wait_ms"] == 100
+
+
+def test_the_first_word_median_is_reported_separately():
+    """Time to the first word is the number that says whether to raise concurrency."""
+    feed = CallFeed()
+    for ms in (100.0, 300.0, 500.0):
+        watch = feed.watcher(CONVERSATION)
+        watch(interview.PHASE_START, interview.CALL_ANSWER, "q", 0.0)
+        watch(interview.PHASE_FIRST, interview.CALL_ANSWER, "", ms)
+        watch(interview.PHASE_DONE, interview.CALL_ANSWER, "reply", ms * 4)
+    assert feed.snapshot()["stats"]["p50_first_ms"] == 300
+
+
+def test_the_streaming_client_reports_the_first_token_once(monkeypatch):
+    """The signal comes off the wire, so this is what the whole split rests on."""
+    import io as _io
+    import urllib.request as _req
+
+    from teacher import client as client_mod
+
+    lines = [b'data: {"choices":[{"delta":{"content":"first"}}]}\n',
+             b'data: {"choices":[{"delta":{"content":" second"}}]}\n',
+             b"data: [DONE]\n"]
+
+    class FakeResponse(_io.IOBase):
+        def __iter__(self):
+            return iter(lines)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(_req, "urlopen", lambda *a, **kw: FakeResponse())
+    marks = []
+    c = client_mod.Client("openai", model="m", base_url="https://teacher.invalid", api_key="k")
+    out = c.complete([{"role": "user", "content": "q"}], cancel_check=lambda: False,
+                     on_first_token=lambda: marks.append(1))
+    assert out == "first second"
+    assert len(marks) == 1

@@ -249,6 +249,41 @@ def test_open_calls_tick_faster_than_the_poller():
     assert "interviewState.tickTimer = setInterval(_ivCallsTick, IV_CALL_TICK_MS)" in JS
 
 
+def test_the_clock_counts_from_the_call_not_from_the_last_poll():
+    """The row is only rebuilt when the set of calls changes. A clock measured
+    from the last poll walked BACKWARDS every time a poll landed without one."""
+    body = JS[JS.index("function _ivCallsTick"):]
+    body = body[:body.index("\nfunction ")]
+    assert "row.dataset.started" in body
+    assert "base.at" not in body
+
+
+def test_the_bar_reads_against_the_typical_call_on_a_log_scale():
+    """Scaling to the slowest call on screen pinned every open call at 100% the
+    moment it became the slowest, which says nothing about how slow it is."""
+    body = JS[JS.index("function _ivBarWidth"):]
+    body = body[:body.index("\nfunction ")]
+    assert "Math.log10" in body
+    assert "st.p50_ms" in JS[JS.index("function _ivRenderCalls"):]
+
+
+def test_the_feed_shows_open_calls_plus_a_short_tail():
+    """It is a monitor of what is happening now, not a scrollback: the run's
+    history is samples.jsonl and the failed-calls panel."""
+    body = JS[JS.index("function _ivRenderCalls"):]
+    body = body[:body.index("\nfunction ")]
+    assert "done.slice(0, IV_CALLS_DONE_SHOWN)" in body
+    assert "overflow-y: auto" in CSS[CSS.index(".dist-live {"):CSS.index(".dist-live {") + 400]
+
+
+def test_a_call_shows_which_direction_it_is_in():
+    """Sending and receiving are different states and they cost different things."""
+    body = JS[JS.index("function _ivCallRow"):]
+    body = body[:body.index("\n// Two segments")]
+    assert "&rarr; sent" in body and "&larr; got" in body
+    assert "to first word" in body
+
+
 def test_a_failed_call_keeps_its_row_and_its_latency():
     """How long a call took to fail is what separates a timeout from a refusal,
     so a dead call is a row in the feed, not a gap in it."""

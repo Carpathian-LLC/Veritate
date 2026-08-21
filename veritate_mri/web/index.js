@@ -17071,9 +17071,19 @@ function _distAgo(ts) {
 
 const TEACHER_SYNTH_CALLS = "/teacher/synth/calls";
 const IV_CALL_TICK_MS = 200;
-// The latency bar is relative to the slowest call on screen. The floor stops a
-// panel of uniformly fast calls from drawing every bar at full width.
-const IV_CALL_BAR_FLOOR_MS = 1500;
+// The latency bar reads against the run's own median call, not against the
+// slowest one on screen: pinning to the slowest left every open call sitting at
+// 100% the moment it became the slowest, which says nothing. A typical call sits
+// at half the track and it takes a full decade above typical to fill it, so the
+// scale is logarithmic -- teacher latency spans milliseconds to a minute and a
+// linear track spends all its resolution on the outlier.
+const IV_CALL_BAR_REF_FLOOR_MS = 800;
+const IV_CALL_BAR_DECADE = 10;
+const IV_CALL_BAR_MIN_PCT = 2;
+// The feed is for what is happening NOW. Open calls are all shown; finished ones
+// are a short tail for context, not a scrollback -- the run's full history is
+// samples.jsonl and the failed-calls panel.
+const IV_CALLS_DONE_SHOWN = 8;
 
 // The live call feed: every request this run makes to the teacher, what went
 // out, what came back, and how long the reply took. In-flight calls sit on top
@@ -17101,47 +17111,69 @@ function _ivRenderCalls(d) {
     line.textContent = [live.length ? `${live.length} in flight` : "idle",
                         `${(st.calls || 0).toLocaleString()} calls`,
                         `median ${_ivMs(st.p50_ms)}`, `slowest 5% ${_ivMs(st.p95_ms)}`,
+                        `first word ${_ivMs(st.p50_first_ms)}`,
                         `${st.per_min || 0}/min`,
                         `${_fmtBytes(st.reply_bytes || 0)} back`,
                         `${(st.failed || 0).toLocaleString()} failed`,
                         `${(st.salvaged || 0).toLocaleString()} salvaged`].join(" \u00b7 ");
   }
-  const slowest = Math.max(IV_CALL_BAR_FLOOR_MS,
-                           ...done.map(c => c.ms || 0), ...live.map(c => c.elapsed_ms || 0));
-  const sig = live.map(c => c.seq).join(",") + "|" + (done.length ? done[0].seq : "");
+  const tail = done.slice(0, IV_CALLS_DONE_SHOWN);
+  const ref = Math.max(IV_CALL_BAR_REF_FLOOR_MS, st.p50_ms || 0);
+  // The sending -> receiving flip changes the row, so it belongs in the signature:
+  // without it the row keeps saying "sending" until some other call finishes.
+  const sig = live.map(c => `${c.seq}:${c.wait_ms == null ? 0 : 1}`).join(",") +
+              "|" + (tail.length ? tail[0].seq : "");
   if (out.dataset.sig !== sig) {
-    out.innerHTML = live.map(c => _ivCallRow(c, true, slowest))
-                        .concat(done.map(c => _ivCallRow(c, false, slowest))).join("");
+    out.innerHTML = live.map(c => _ivCallRow(c, true, ref))
+                        .concat(tail.map(c => _ivCallRow(c, false, ref))).join("");
     out.dataset.sig = sig;
   }
-  interviewState.calls = { at: Date.now(), slowest: slowest };
+  interviewState.calls = { ref: ref };
   _ivCallsTick();
 }
 
-function _ivCallRow(c, live, slowest) {
+function _ivCallRow(c, live, ref) {
   const ms = live ? (c.elapsed_ms || 0) : (c.ms || 0);
+  const wait = c.wait_ms == null ? 0 : c.wait_ms;
   // Three states, one row shape: waiting on a reply, the reply, or how it died.
   // A failed call keeps its latency, which is how a 60 s socket timeout reads as
   // a timeout instead of as a silence.
-  let reply = `<span class="dist-call-tag">got</span>` +
+  let reply = `<span class="dist-call-tag">&larr; got</span>` +
               `<span class="dist-call-bytes">${_fmtBytes(c.got_bytes || 0)}</span>` +
               `<span class="dist-call-text">${_trEsc(c.got || "")}</span>`;
   if (live) {
-    reply = `<span class="dist-call-tag">got</span><span class="dist-call-bytes"></span>` +
-            `<span class="dist-call-waiting">waiting for the reply&hellip;</span>`;
+    reply = `<span class="dist-call-tag">&larr; got</span><span class="dist-call-bytes"></span>` +
+            `<span class="dist-call-waiting">${wait ? "reply is arriving&hellip;" : "nothing back yet&hellip;"}</span>`;
   } else if (c.error) {
-    reply = `<span class="dist-call-tag">failed</span><span class="dist-call-bytes"></span>` +
+    reply = `<span class="dist-call-tag">&times; failed</span><span class="dist-call-bytes"></span>` +
             `<span class="dist-err-text">${_trEsc(c.error)}</span>`;
   }
-  return `<div class="dist-call${live ? " is-live" : ""}${c.error ? " is-failed" : ""}" data-elapsed="${ms}">` +
+  // Split, not just a total: time spent waiting for the first word separates a
+  // teacher that is busy from one that is slow, and only the stream knows it.
+  const split = wait
+    ? `<span class="dist-call-split">${_ivMs(wait)} to first word</span>`
+    : `<span class="dist-call-split">${live ? "sending" : ""}</span>`;
+  return `<div class="dist-call${live ? " is-live" : ""}${c.error ? " is-failed" : ""}"` +
+    ` data-started="${Date.now() - ms}" data-wait="${wait}">` +
     `<span class="dist-call-dot"></span>` +
     `<span class="dist-call-head"><span class="dist-call-kind">${_trEsc(c.kind || "call")}</span>` +
-    `<span class="dist-call-id">${_trEsc(c.id || "")}</span></span>` +
+    `<span class="dist-call-id">${_trEsc(c.id || "")}</span>${split}</span>` +
     `<span class="dist-call-ms">${_ivMs(ms)}</span>` +
-    `<div class="dist-call-bar"><i style="width:${_ivBarPct(ms, slowest)}"></i></div>` +
-    `<div class="dist-call-io"><span class="dist-call-tag">sent</span>` +
+    _ivCallBar(wait, ms, ref) +
+    `<div class="dist-call-io"><span class="dist-call-tag">&rarr; sent</span>` +
     `<span class="dist-call-bytes">${_fmtBytes(c.sent_bytes || 0)}</span>` +
     `<span class="dist-call-text">${_trEsc(c.sent || "")}</span>${reply}</div></div>`;
+}
+
+// Two segments on one track: the wait for the first word, then the reply
+// arriving. Same colour, different weight -- the divider is the information.
+// The track length is log-scaled off the total, then split between the two by
+// their real share, so the divider stays honest at any scale.
+function _ivCallBar(wait, ms, ref) {
+  const total = _ivBarWidth(ms, ref);
+  const held = wait ? total * (wait / Math.max(1, ms)) : total;
+  return `<div class="dist-call-bar"><i class="wait" style="width:${held.toFixed(1)}%"></i>` +
+         `<i class="recv" style="width:${(total - held).toFixed(1)}%"></i></div>`;
 }
 
 // Only the open calls move between polls, and only their clock and bar. Redrawing
@@ -17150,18 +17182,28 @@ function _ivCallsTick() {
   const out = $("interviewCallsOutput");
   const base = interviewState.calls;
   if (!out || !base) return;
-  const drift = Date.now() - base.at;
+  const now = Date.now();
   out.querySelectorAll(".dist-call.is-live").forEach(row => {
-    const ms = Number(row.dataset.elapsed || 0) + drift;
+    const ms = now - Number(row.dataset.started || now);
+    const wait = Number(row.dataset.wait || 0);
     const clock = row.querySelector(".dist-call-ms");
     if (clock) clock.textContent = _ivMs(ms);
-    const bar = row.querySelector(".dist-call-bar i");
-    if (bar) bar.style.width = _ivBarPct(ms, base.slowest);
+    const total = _ivBarWidth(ms, base.ref);
+    const share = wait ? total * (wait / Math.max(1, ms)) : total;
+    const held = row.querySelector(".dist-call-bar .wait");
+    if (held) held.style.width = share.toFixed(1) + "%";
+    const recv = row.querySelector(".dist-call-bar .recv");
+    if (recv) recv.style.width = (total - share).toFixed(1) + "%";
   });
 }
 
-function _ivBarPct(ms, slowest) {
-  return Math.min(100, (Number(ms) || 0) / Math.max(1, slowest) * 100).toFixed(1) + "%";
+// Half the track at the median call, full track a decade above it. A call has to
+// be genuinely pathological to peg, which is when pegging is the right reading.
+function _ivBarWidth(ms, ref) {
+  const x = (Number(ms) || 0) / Math.max(1, ref);
+  if (x <= 0) return IV_CALL_BAR_MIN_PCT;
+  const pct = 50 * (1 + Math.log10(x) / Math.log10(IV_CALL_BAR_DECADE));
+  return Math.max(IV_CALL_BAR_MIN_PCT, Math.min(100, pct));
 }
 
 function _ivMs(ms) {
