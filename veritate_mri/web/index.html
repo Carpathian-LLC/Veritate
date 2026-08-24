@@ -178,21 +178,6 @@
         </div>
       </div>
 
-      <!-- sleep review: the model's consolidation life, directly below the chat.
-           Live status plus the recent history of sleeps (training/sleep.py). -->
-      <div id="sleepPanel" class="sleep-panel" style="display:none">
-        <div class="sleep-head">
-          <span class="sleep-title">sleep</span>
-          <span id="sleepStateChip" class="stat gen-chip"></span>
-          <span id="sleepMeta" class="stat gen-chip"></span>
-          <span style="margin-left:auto"></span>
-          <button id="sleepNowBtn" style="display:none" title="Skip the idle timer and consolidate now (still requires enough new exchanges)">sleep now</button>
-          <button id="sleepWakeBtn" style="display:none" title="Stop the run; the model keeps everything up to its last sleep checkpoint">wake</button>
-        </div>
-        <div id="sleepActivity" class="sleep-activity" style="display:none"></div>
-        <div id="sleepHistory" class="sleep-history"></div>
-      </div>
-
       <details id="advancedWrap">
       <summary>advanced <span>- engine, sampling, decode, RAG, tools, addons</span></summary>
       <div class="controls adv-row">
@@ -374,6 +359,30 @@
        <b>PyTorch</b> runs the model in Python with full activation capture (slower; every MRI panel is live).
        <b>Veritate</b> is the project's own assembly-tuned inference runtime (fast; bytes only, and the only backend that can answer while you type).
        Pick the runtime under <i>advanced &rarr; engine</i>; pick which trained weights to run under <i>model</i>.</p>
+  </div>
+
+  <!-- sleep review: its own panel between the prompt and letter timing. One row
+       per enrolled model plus the global history of sleeps (training/sleep.py). -->
+  <div class="grid r1" id="sleepPanelWrap" style="display:none">
+    <div class="panel">
+      <h2>sleep <em>while idle, enrolled models take turns consolidating their own conversations into their weights.</em></h2>
+      <div class="body">
+        <div id="sleepPanel" class="sleep-panel">
+          <div class="sleep-head">
+            <span id="sleepStateChip" class="stat gen-chip"></span>
+            <span id="sleepMeta" class="stat gen-chip"></span>
+            <span style="margin-left:auto"></span>
+            <label class="sleep-ctl" title="Master switch: while on, enrolled models consolidate their own conversations into their weights whenever the box is idle"><input type="checkbox" id="sleepEnabledToggle"> enabled</label>
+            <select id="sleepEnrollSel" title="Enroll a model: it sleeps on its own conversations when idle. Any model with a checkpoint can sleep.">
+              <option value="">enroll model…</option>
+            </select>
+          </div>
+          <div id="sleepModels" class="sleep-models"></div>
+          <div id="sleepActivity" class="sleep-activity" style="display:none"></div>
+          <div id="sleepHistory" class="sleep-history"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="grid r1">

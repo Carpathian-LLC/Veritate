@@ -90,11 +90,18 @@
   .gen-chip-warm a { color: var(--accent); text-decoration: underline; }
   .gen-chip-hot { color: var(--hot); border: 1px solid var(--hot); border-radius: 3px; padding: 2px 8px; }
 
-  /* sleep review box, directly below the chat composer */
-  .sleep-panel { margin-top: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; background: #0a0c12; }
+  /* sleep review box: its own panel between prompt and letter timing */
+  .sleep-panel { margin: 0; }
   .sleep-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .sleep-title { color: var(--accent); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; }
-  .sleep-head button { padding: 3px 10px; font-size: 11px; }
+  .sleep-models { margin-top: 6px; font-size: 11px; }
+  .sleep-models:empty { display: none; }
+  .sleep-ctl { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dim); margin: 0; cursor: pointer; }
+  .sleep-head select { background: #0a0c12; border: 1px solid var(--line); color: var(--text); padding: 3px 6px; font-size: 11px; border-radius: 3px; max-width: 200px; }
+  .sleep-models .sm-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; border-top: 1px dotted var(--line); }
+  .sleep-models .sm-row:first-child { border-top: 0; }
+  .sleep-models .sm-name { flex: 0 0 auto; color: var(--text); }
+  .sleep-models .sm-meta { color: var(--dim); }
+  .sleep-models button { margin-left: auto; padding: 2px 8px; font-size: 11px; }
   .sleep-activity { margin-top: 6px; font-size: 11px; color: var(--dim); letter-spacing: 1px; white-space: nowrap; overflow-x: auto; }
   .sleep-activity b { color: var(--accent); font-weight: 400; }
   .sleep-history { margin-top: 6px; font-size: 11px; color: var(--dim); max-height: 140px; overflow-y: auto; }

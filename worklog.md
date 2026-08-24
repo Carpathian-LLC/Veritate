@@ -1377,3 +1377,58 @@ validated via mix_planner (sum 1.0, max 2 epochs): fineweb_edu2 .32, pg19
 (fineweb_edu2, gutenberg_pd; pg19 repointed). Known tension: dialogue capped
 ~7% by mixed_chat size — more chat share must come from generated depth
 (IDEA 7), not transcript weight.
+
+2026-08-21 — WREN2 LAUNCHED. Sequence executed: grow route (wren1_3@3000 ->
+wren2: 270.8M -> 598.1M, 24L/1280/5120/20h, seq 4096) -> sanity gate PASSED
+(wren2@0 val: mixed_chat 0.82396 and hansard 1.05923 BIT-EXACT vs source;
+veritate_chat 2.07588 vs 2.07114 = +0.23%, the documented slot-overflow
+domain — windows whose boundary count exceeded the old 256-slot cap were
+slot-truncated in the source and gain real capacity after seq growth) ->
+launch via /trainers/run: 72,000 steps x 131,072 B/step = 9.44 GB effective,
+mix fineweb_edu2:.32,pg19:.26,gutenberg_pd:.15,owt:.14,mixed_chat:.046,
+chrg:.03,skills:.024,hansard:.02,scotus:.01, loss_mask off, lr 3e-4 wsd
+(warmup 500, fresh optimizer), ckpt/eval every 250, act_ckpt OFF (speed
+directive — watching mem plan), batch 16 x seq 4096 x n_chunks 2.
+M2 VERDICT (same hour): raw-transcript arm FALSIFIED at matched dose —
+wren1_6@300 exam 0/50 fwd 1/50 rev vs m1's 6/50+6/50; veritate_chat val
+degraded +5.5% (2.18502). Tell-in-chat requires the extraction pre-pass
+(chat -> facts -> fact_sft templates); sleep-as-shipped consolidating raw
+experience does NOT acquire facts at E4 doses. Full entry to failures.md.
+Fixed en route: scratchpad val_bpb.py hardcoded the 200m shape (now reads
+config shape). Note: grown ckpt embedded args carry stale size:'200m'
+string (cosmetic; loader is weight-driven — flag for next grow.py touch).
+
+2026-08-21 ~11:45 — WREN2 TRAINING LIVE. Root-caused the two silent launch
+deaths via macOS crash reports: SIGSEGV in torch MPS tiled_bmm (attention
+bmm over 2^31 elements at bs16 x seq4096 x 20 heads triggers the tiled
+Metal path, which segfaults). Probe confirmed: bs4@4096 (same element count
+as bs16@2048) trained 30 clean steps, loss 2.67->2.25. Decision: main run at
+seq 2048 / bs 16 (proven-safe element count, 2x throughput of bs4@4096);
+wren2 regrown at target_seq 2048 (probe-polluted 4096 seed deleted —
+zero real training lost, deterministic regrowth); late-phase plan = grow
+2048->4096 (bit-exact pos extension) + short bs4 extension at campaign end.
+Run: 144,000 steps x 65,536 B/step = 9.44 GB, mix per data plan, lr 3e-4
+wsd, warmup 500, loss_mask off, ckpt/eval every 250. First rows: loss
+1.99->1.73 by step 40, grad 14->2.0, ~6,300 B/s -> ETA ~17 days. Armed:
+rolling ckpt prune (keep seed + 5000-milestones + newest 8), persistent
+health monitor (death/crash-reports/5000-step milestones). Trainer bug
+never seen before because no prior run exceeded 2^31 attention elements
+(bs48@1024 = 1.0G). MPS tiled-bmm threshold recorded in handoff for the
+next big-shape launch.
+
+2026-08-23 — Memory product chain, items 1+2 SHIPPED (agents):
+(1) EXTRACTOR tools/extract_facts.py: pattern-based chat->facts, precision-
+first (negation/question/hearsay/hypothetical rejection, revision handling,
+dedupe). Closed-loop acceptance on the m2 corpus: precision 1.000, recall
+1.000 (50/50), zero facts from distractors; 35 tests green. v2 roadmap
+documented (first-person facts = biggest gap). build_experience_corpus
+gained optional build_fact_bins()/--facts lane (default off).
+(2) PER-MODEL SLEEP training/sleep.py: sleep_models enrollment (auto-
+migration from sleep_model), own-conversations-only via per-model filtered
+log views (recorder bug root-caused+fixed in backends_routes: was logging
+bin/ckpt basename, now the model dir; old ambiguous records train nobody),
+turn-taking on the one trainer (fullest queue first), per-model state/
+cooldown/finals/history, model param on routes, per-model panel rows.
+25 sleep tests green; tests/training 215, tests/mri 733 green.
+Item 3 (cardinal weak-machine tuning A/B) launching next. Sleep tab-vs-
+panel question open with user. wren2 unaffected throughout.

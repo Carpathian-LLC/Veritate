@@ -13,8 +13,13 @@
 #   normal dashboard launch with corpus "experience:0.75,<base>:0.25" — the
 #   corpus mixer IS the rehearsal, and it draws only from the model's own past
 #   (self-contained rule).
+# - optional extraction mode (--facts, default off): additionally mines declarative
+#   facts from the same window (tools/extract_facts.py) and renders them through
+#   build_fact_sft into {stem}_fact_sft_{train,val}.bin plus an auditable
+#   {stem}_facts.json — raw-transcript sleep alone does not bind facts (failures.md
+#   2026-08-21 m2); the sleep controller chooses the bin mix at launch.
 # - usage: python -m tools.build_experience_corpus [--days N] [--min-reply 8]
-#          [--val-frac 0.05] [--stem experience]
+#          [--val-frac 0.05] [--stem experience] [--facts] [--model NAME]
 # veritate_mri/tools/build_experience_corpus.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -95,16 +100,40 @@ def build(stem="experience", days=None, min_reply=MIN_REPLY_DEFAULT,
     return n, train_b, val_b
 
 
+def build_fact_bins(stem="experience", days=None, model=None, out_dir=None, per_fact=20, seed=0):
+    """Extraction mode: mine declarative facts from the window and render them as
+    fact-SFT bins ({stem}_fact_sft_{train,val}.bin) next to the raw bins, with the
+    extracted facts persisted to {stem}_facts.json for audit. Returns
+    (n_facts, train_b, val_b); (0, 0, 0) writes nothing."""
+    from tools import build_fact_sft, extract_facts
+    out_dir = out_dir or CORPUS_ROOT
+    facts, _rejections = extract_facts.extract(extract_facts.load_records(days=days), model=model)
+    if not facts:
+        return 0, 0, 0
+    os.makedirs(out_dir, exist_ok=True)
+    facts_path = os.path.join(out_dir, f"{stem}_facts.json")
+    with open(facts_path, "w") as f:
+        json.dump(facts, f, indent=1)
+    _nf, _ne, tb, vb = build_fact_sft.build(facts_path, stem=f"{stem}_fact_sft",
+                                            per_fact=per_fact, seed=seed, out_dir=out_dir)
+    return len(facts), tb, vb
+
+
 def main():
     ap = argparse.ArgumentParser(description="Build consolidation bins from the experience log.")
     ap.add_argument("--stem", default="experience")
     ap.add_argument("--days", type=int, default=None, help="only the N most recent days")
     ap.add_argument("--min-reply", type=int, default=MIN_REPLY_DEFAULT)
     ap.add_argument("--val-frac", type=float, default=VAL_FRAC_DEFAULT)
+    ap.add_argument("--facts", action="store_true", help="also extract facts and emit fact-SFT bins")
+    ap.add_argument("--model", default=None, help="fact extraction: only records served by this model")
     args = ap.parse_args()
     n, tb, vb = build(stem=args.stem, days=args.days,
                       min_reply=args.min_reply, val_frac=args.val_frac)
     print(f"{n} exchanges -> {args.stem}_train.bin {tb}B / {args.stem}_val.bin {vb}B")
+    if args.facts:
+        nf, ftb, fvb = build_fact_bins(stem=args.stem, days=args.days, model=args.model)
+        print(f"{nf} facts -> {args.stem}_fact_sft_train.bin {ftb}B / val {fvb}B")
     if n == 0:
         print("nothing to sleep on: the experience log is empty for the window")
         return 1

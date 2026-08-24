@@ -85,17 +85,24 @@ DEFAULTS = {
     "hud_enabled": False,
     "hud_position": "top",
     "hud_detailed": False,
-    # Sleep consolidation (training/sleep.py). Off until enabled and a model is
-    # named. Idle = no serving exchange for sleep_idle_min minutes and no trainer
-    # running. Dose scales with new exchanges since the last sleep
+    # Sleep consolidation (training/sleep.py). Off until enabled and at least one
+    # model is enrolled in sleep_models. Enrolled models take turns: each idle
+    # window (no serving exchange for sleep_idle_min minutes, no trainer running)
+    # the model with the most pending own-exchanges sleeps; each model
+    # consolidates only exchanges its own serving produced. Dose scales with that
+    # model's new exchanges since its last sleep
     # (steps = exchanges * sleep_steps_per_exchange, clamped to
     # [sleep_min_steps, sleep_max_steps]); fewer than sleep_min_exchanges new
     # exchanges skips the night. Sleep runs checkpoint every sleep_ckpt_every
     # steps so an early wake keeps most of the consolidation; intermediates are
     # deleted when the run ends and older sleep finals are thinned to
-    # sleep_keep_finals. Controls live on the Generation tab.
+    # sleep_keep_finals per model. Controls live on the Generation tab.
     "sleep_enabled": False,
-    "sleep_model": "",
+    "sleep_models": [],
+    # Reserved: route the sleep corpus through the experience builder's fact
+    # extraction pass instead of raw exchanges. Read by nothing until the
+    # extraction mode lands in tools/build_experience_corpus.py.
+    "sleep_use_extraction": False,
     "sleep_idle_min": 20,
     "sleep_days": 3,
     "sleep_min_exchanges": 8,
@@ -224,7 +231,12 @@ def _ensure_settings():
         cur = {}
     missing = {k: v for k, v in DEFAULTS.items() if k not in cur}
     legacy = [k for k in PUBLIC_AI_DEFAULTS if k in cur]
-    if missing or legacy:
+    # user-data compat: installs from before per-model sleep hold a single
+    # "sleep_model" string; carry that enrollment into sleep_models unchanged
+    old_sleeper = cur.pop("sleep_model", None) if "sleep_model" in cur else None
+    if "sleep_models" not in cur and isinstance(old_sleeper, str) and old_sleeper.strip():
+        missing["sleep_models"] = [old_sleeper.strip()]
+    if missing or legacy or old_sleeper is not None:
         for k in legacy:
             cur.pop(k, None)
         cur = {**cur, **missing}
@@ -340,14 +352,15 @@ def _validate(patch):
     for bkey in ("read_ahead_enabled", "api_read_ahead_enabled", "api_generate_ahead_enabled"):
         if bkey in patch:
             patch[bkey] = bool(patch[bkey])
-    if "warm_models" in patch:
-        v = patch["warm_models"]
-        if v is None:
-            patch["warm_models"] = []
-        elif not isinstance(v, list):
-            raise ValueError("warm_models must be a list")
-        else:
-            patch["warm_models"] = [s.strip() for s in v if isinstance(s, str) and s.strip()]
+    for lkey in ("warm_models", "sleep_models"):
+        if lkey in patch:
+            v = patch[lkey]
+            if v is None:
+                patch[lkey] = []
+            elif not isinstance(v, list):
+                raise ValueError(f"{lkey} must be a list")
+            else:
+                patch[lkey] = [s.strip() for s in v if isinstance(s, str) and s.strip()]
     for skey in ("teacher_provider", "teacher_model", "teacher_base_url", "teacher_api_key"):
         if skey in patch:
             v = patch[skey]

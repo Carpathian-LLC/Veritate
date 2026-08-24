@@ -4,24 +4,33 @@
 # Legal Notice: Distribution Not Authorized.
 # ------------------------------------------------------------------------------------
 # Notes:
-# - sleep controller (IDEA 20 T3): when the box is idle, consolidate the model's
-#   own recorded exchanges (data/experience/) into its weights with a short
-#   low-LR run, launched through the one trainer via trainer_runner. Disabled
-#   until `sleep_enabled` is on and `sleep_model` names a model.
+# - sleep controller (IDEA 20 T3): when the box is idle, an enrolled model
+#   consolidates its OWN recorded exchanges (data/experience/) into its weights
+#   with a short low-LR run, launched through the one trainer via trainer_runner.
+#   Disabled until `sleep_enabled` is on and `sleep_models` enrolls at least one
+#   model. Enrolled models take turns on the one trainer: each idle window the
+#   model with the most pending own-exchanges above sleep_min_exchanges sleeps;
+#   the next model waits for finalize().
+# - own-conversations-only: experience records are attributed to a model dir via
+#   _resolve() (exact dir name, or a uniquely-owned artifact basename for old
+#   records); records owned by nobody are consolidated by nobody. The corpus
+#   build feeds the builder a per-model filtered view of the log.
 # - dose scales with use: steps = clamp(sleep_min_steps,
 #   exchanges * sleep_steps_per_exchange, sleep_max_steps). No new exchanges
-#   since the last sleep -> no run. Idle signal is the experience log mtime;
-#   a running trainer always blocks sleep.
+#   since the model's last sleep -> no run. Idle signal is the experience log
+#   mtime (box-wide: serving is one engine); a running trainer always blocks.
 # - sleep runs checkpoint every `sleep_ckpt_every` steps so waking early still
 #   keeps most of the consolidation. When a sleep run ends (completed or woken),
 #   intermediate sleep checkpoints are deleted and only the run's final survives;
-#   older sleep finals are thinned to `sleep_keep_finals`. Checkpoints not
-#   created by sleep are never touched.
+#   older sleep finals are thinned to `sleep_keep_finals` per model. Checkpoints
+#   not created by sleep are never touched.
 # - recipe is read from the model's own config.json training_args and only the
 #   sleep levers are overridden, so the controller is size- and shape-agnostic.
-# - status() feeds the Generation-tab sleep panel: state, countdown to sleep,
-#   pending exchanges, and (while sleeping) step / eta / last checkpoint.
-# - wake() is explicit (button / route). tick() is the watcher entry point,
+# - per-model state (last sleep, in-flight run, finals, cooldown) lives keyed by
+#   model in data/sleep/state.json; history events carry the model name.
+# - status() feeds the Generation-tab sleep panel: one row per enrolled model
+#   (state, pending, last slept, next eligibility) plus the global run/history.
+# - wake(model) is explicit (button / route). tick() is the watcher entry point,
 #   called every WATCH_EVERY_S from the app daemon thread.
 # veritate_mri/training/sleep.py
 # ------------------------------------------------------------------------------------
@@ -32,6 +41,7 @@ import json
 import os
 import threading
 import time
+from bisect import bisect_right
 
 from readers.paths import EXPERIENCE_ROOT, MODELS_ROOT, SLEEP_ROOT
 from runtime import logs as logmod
@@ -45,6 +55,8 @@ from training import trainer_runner
 WATCH_EVERY_S = 60
 STATE_PATH = os.path.join(SLEEP_ROOT, "state.json")
 HISTORY_PATH = os.path.join(SLEEP_ROOT, "history.jsonl")
+# per-model filtered view of the experience log fed to the corpus builder
+FILTER_ROOT = os.path.join(SLEEP_ROOT, "filtered")
 PLUGIN_ID = "native/trainer"
 # sleep levers forced onto the model's own recipe; everything else resumes as trained
 SLEEP_OVERRIDES = {
@@ -67,15 +79,35 @@ _LOCK = threading.Lock()
 # Functions
 
 
+def enrolled(cfg):
+    """Models opted into sleep, in settings order."""
+    return [m.strip() for m in (cfg.get("sleep_models") or [])
+            if isinstance(m, str) and m.strip()]
+
+
 def _load_state():
-    if not os.path.isfile(STATE_PATH):
-        return {}
-    try:
-        with open(STATE_PATH, encoding="utf-8") as f:
-            st = json.load(f)
-        return st if isinstance(st, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    """data/sleep/state.json in the per-model shape {"models": {name: {...}}}."""
+    st = {}
+    if os.path.isfile(STATE_PATH):
+        try:
+            with open(STATE_PATH, encoding="utf-8") as f:
+                st = json.load(f)
+            if not isinstance(st, dict):
+                st = {}
+        except (OSError, ValueError):
+            st = {}
+    if isinstance(st.get("models"), dict):
+        return st
+    # user-data compat: state written by the single-sleeper controller was flat;
+    # move its bookkeeping (last_sleep_ts, finals, cooldown, in-flight run) under
+    # the model it belonged to so past sleeps stay attributed
+    owner = (st.get("run") or {}).get("model")
+    if not owner:
+        names = enrolled(settings_mod.get())
+        owner = names[0] if len(names) == 1 else None
+    ms = {k: st[k] for k in ("sleeping", "run", "last_sleep_ts",
+                             "finals", "cooldown_until") if k in st}
+    return {"models": {owner: ms}} if owner and ms else {"models": {}}
 
 
 def _save_state(st):
@@ -84,6 +116,11 @@ def _save_state(st):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(st, f, indent=1)
     os.replace(tmp, STATE_PATH)
+
+
+def _sleeper(st):
+    """Name of the model whose sleep run is in flight, or None."""
+    return next((n for n, ms in st["models"].items() if ms.get("sleeping")), None)
 
 
 def _log_event(kind, **fields):
@@ -162,25 +199,123 @@ def _idle_s():
     return time.time() - max(os.path.getmtime(f) for f in files)
 
 
-def _pending_exchanges(since_ts):
-    """Exchanges recorded after the last sleep: line count of experience files
-    modified since. Approximate on the boundary file; sleep-or-not decisions
-    re-count exactly at corpus build time."""
-    n = 0
-    for f in _experience_files():
-        if os.path.getmtime(f) <= since_ts:
-            continue
+def _model_dirs():
+    try:
+        return sorted(d for d in os.listdir(MODELS_ROOT)
+                      if os.path.isdir(os.path.join(MODELS_ROOT, d)))
+    except OSError:
+        return []
+
+
+def _owner_map(dirs):
+    """Artifact basename -> owning models. user-data compat: experience records
+    from before 2026-08-23 name the serving artifact ("veritate.bin" from the C
+    engine, "step_N.pt" from pytorch) rather than the model dir; a basename only
+    one model owns still attributes, one that several share attributes to
+    nobody."""
+    owners = {}
+    for m in dirs:
+        arts = (glob.glob(os.path.join(MODELS_ROOT, m, "*.bin"))
+                + glob.glob(os.path.join(MODELS_ROOT, m, "checkpoints", "step_*.pt")))
+        for path in arts:
+            owners.setdefault(os.path.basename(path), set()).add(m)
+    return owners
+
+
+def _resolve(rec_model, dirs, owners):
+    """Model dir a record's model field belongs to; "" = owned by nobody."""
+    if not rec_model:
+        return ""
+    if rec_model in dirs:
+        return rec_model
+    own = owners.get(rec_model)
+    return next(iter(own)) if own and len(own) == 1 else ""
+
+
+_EXP_CACHE = {"key": None, "by_model": None}
+
+
+def _exchange_ts():
+    """Sorted exchange timestamps per resolved model over the whole experience
+    log; unresolvable records land under "". Cached on file mtimes + the model
+    list, like activity()."""
+    files = _experience_files()
+    dirs = _model_dirs()
+    key = (tuple((f, os.path.getmtime(f)) for f in files), tuple(dirs))
+    if _EXP_CACHE["key"] == key:
+        return _EXP_CACHE["by_model"]
+    owners = _owner_map(dirs)
+    by_model = {}
+    for f in files:
         try:
-            with open(f, "rb") as fh:
-                n += sum(1 for _ in fh)
+            with open(f, encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        rec = json.loads(line)
+                        ts = float(rec.get("ts") or 0)
+                        m = str(rec.get("model") or "")
+                    except (ValueError, AttributeError):
+                        continue
+                    by_model.setdefault(_resolve(m, dirs, owners), []).append(ts)
         except OSError:
             continue
-    return n
+    for v in by_model.values():
+        v.sort()
+    _EXP_CACHE.update(key=key, by_model=by_model)
+    return by_model
+
+
+def _pending(model, since_ts):
+    """Exchanges the model itself served after its last sleep."""
+    ts = _exchange_ts().get(model) or []
+    return len(ts) - bisect_right(ts, since_ts)
+
+
+def _build_own_corpus(model, cfg):
+    """Build the consolidation bins from the model's own exchanges only: write a
+    per-model filtered view of the experience log and run the corpus builder
+    over it. The builder reads a module-global root and has no source or model
+    parameter yet; repointing that root at the filtered view is the seam — when
+    the builder grows a filter/extraction mode, this function (plus the reserved
+    sleep_use_extraction setting) is the one place to switch."""
+    import tools.build_experience_corpus as bec
+    files = _experience_files()
+    days = int(cfg["sleep_days"])
+    if days:
+        files = files[-days:]
+    dirs = _model_dirs()
+    owners = _owner_map(dirs)
+    os.makedirs(FILTER_ROOT, exist_ok=True)
+    for stale in glob.glob(os.path.join(FILTER_ROOT, "*.jsonl")):
+        os.remove(stale)
+    for path in files:
+        kept = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        m = str(json.loads(line).get("model") or "")
+                    except (ValueError, AttributeError):
+                        continue
+                    if _resolve(m, dirs, owners) == model:
+                        kept.append(line if line.endswith("\n") else line + "\n")
+        except OSError:
+            continue
+        if kept:
+            with open(os.path.join(FILTER_ROOT, os.path.basename(path)),
+                      "w", encoding="utf-8") as out:
+                out.writelines(kept)
+    prev = bec.EXPERIENCE_ROOT
+    bec.EXPERIENCE_ROOT = FILTER_ROOT
+    try:
+        return bec.build(days=None)
+    finally:
+        bec.EXPERIENCE_ROOT = prev
 
 
 def dose_steps(exchanges, cfg):
-    """Usage-scaled sleep length: more conversation since the last sleep means a
-    longer consolidation, clamped to [sleep_min_steps, sleep_max_steps]."""
+    """Usage-scaled sleep length: more conversation since the model's last sleep
+    means a longer consolidation, clamped to [sleep_min_steps, sleep_max_steps]."""
     raw = exchanges * int(cfg["sleep_steps_per_exchange"])
     return max(int(cfg["sleep_min_steps"]), min(raw, int(cfg["sleep_max_steps"])))
 
@@ -278,54 +413,106 @@ def prune(model, start_step, end_step, keep_finals, finals):
 
 
 def status():
-    """Sleep panel payload for the Generation tab."""
+    """Sleep panel payload for the Generation tab: one row per enrolled model
+    plus the global run / history / activity ledger."""
     cfg = settings_mod.get()
     st = _load_state()
-    run = trainer_runner.state() or {}
-    sleeping = bool(st.get("sleeping")) and run.get("status") == "running"
+    run_state = trainer_runner.state() or {}
+    sleeper = _sleeper(st)
+    sleeping = sleeper is not None and run_state.get("status") == "running"
+    idle = _idle_s()
+    now = time.time()
     out = {
         "enabled": bool(cfg.get("sleep_enabled")),
-        "model": cfg.get("sleep_model") or "",
         "state": "sleeping" if sleeping else "awake",
-        "last_sleep_ts": st.get("last_sleep_ts"),
-        "finals": st.get("finals") or [],
+        "idle_s": None if idle is None else round(idle, 1),
+        "models": [],
         "history": history(),
         "activity_by_hour": activity(),
         "activity_days": 7,
     }
-    idle = _idle_s()
-    out["idle_s"] = None if idle is None else round(idle, 1)
-    out["pending_exchanges"] = _pending_exchanges(float(st.get("last_sleep_ts") or 0))
+    idle_left = None
+    if out["enabled"] and idle is not None:
+        idle_left = max(0.0, int(cfg["sleep_idle_min"]) * 60 - idle)
+    for name in enrolled(cfg):
+        ms = st["models"].get(name) or {}
+        row = {
+            "name": name,
+            "state": "sleeping" if (sleeping and name == sleeper) else "awake",
+            "pending_exchanges": _pending(name, float(ms.get("last_sleep_ts") or 0)),
+            "last_sleep_ts": ms.get("last_sleep_ts"),
+            "finals": ms.get("finals") or [],
+        }
+        cool = float(ms.get("cooldown_until") or 0)
+        if cool > now:
+            row["cooldown_s"] = round(cool - now, 1)
+        if row["state"] == "awake" and not sleeping and idle_left is not None:
+            row["sleeps_in_s"] = round(max(idle_left, cool - now if cool > now else 0.0), 1)
+        out["models"].append(row)
     if sleeping:
-        model = (st.get("run") or {}).get("model") or out["model"]
-        total = (st.get("run") or {}).get("steps")
-        step, elapsed = _train_progress(model)
-        start = (st.get("run") or {}).get("start_step") or 0
+        run = (st["models"].get(sleeper) or {}).get("run") or {}
+        total = run.get("steps")
+        step, elapsed = _train_progress(sleeper)
+        start = run.get("start_step") or 0
         sps = elapsed / (step - start) if (step and elapsed and step > start) else None
         ck = max(1, int(cfg["sleep_ckpt_every"]))
         last_ck = (step // ck) * ck if step else start
         out["run"] = {
-            "model": model, "step": step, "total_steps": total,
+            "model": sleeper, "step": step, "total_steps": total,
             "eta_s": round((total - step) * sps, 1) if (total and step is not None and sps) else None,
             "last_ckpt_step": last_ck if last_ck > start else start,
         }
-    elif out["enabled"] and idle is not None:
-        out["sleeps_in_s"] = max(0.0, round(int(cfg["sleep_idle_min"]) * 60 - idle, 1))
-    cool = float(st.get("cooldown_until") or 0)
-    if cool > time.time():
-        out["cooldown_s"] = round(cool - time.time(), 1)
     return out
 
 
-def maybe_sleep(force_idle=False):
-    """Gate chain, then launch. Returns a short reason string for logs/tests.
-    force_idle (the /sleep/now route) skips only the idle-time gate."""
+def _launch(st, model, cfg):
+    """Build the model's own corpus and launch its sleep run. Returns
+    (launched, reason); the caller holds _LOCK."""
+    n, tb, vb = _build_own_corpus(model, cfg)
+    if n < int(cfg["sleep_min_exchanges"]):
+        return False, f"too little new experience ({n} exchanges)"
+    steps = dose_steps(n, cfg)
+    start_step = _model_step(model)
+    if start_step is None:
+        return False, f"model {model} has no checkpoint to resume"
+    args = launch_args(model, start_step + steps, cfg)
+    if args is None:
+        return False, f"model {model} has no training_args recipe"
+    # the trainer draws seq*n_chunks+2 contiguous bytes per sample; a bin
+    # smaller than one draw crashes the child (cardinal: val split of a
+    # small night was 183 B vs a 4098 B window) — gate it here instead
+    window = int(args.get("seq") or 1024) * int(args.get("n_chunks") or 1) + 2
+    if tb < window or vb < window:
+        return False, f"experience bins too small for draw window ({tb}/{vb} B < {window} B)"
+    res = trainer_runner.start(PLUGIN_ID, args)
+    if not (isinstance(res, dict) and res.get("ok", True)):
+        return False, f"launch failed: {res}"
+    ms = st["models"].setdefault(model, {})
+    ms.update({"sleeping": True,
+               "run": {"model": model, "start_step": start_step,
+                       "steps": start_step + steps, "started_ts": time.time()}})
+    _save_state(st)
+    _log_event("sleep", model=model, exchanges=n, bytes=tb, steps=steps,
+               start_step=start_step, target_step=start_step + steps)
+    logmod.ok("sleep", f"{model} sleeping: {n} exchanges ({tb}B) -> {steps} steps")
+    return True, f"sleeping: {model} {steps} steps over {n} exchanges"
+
+
+def maybe_sleep(force_idle=False, model=None):
+    """Gate chain, then launch one sleeper. Returns a short reason string for
+    logs/tests. force_idle (the /sleep/now route) skips only the idle-time
+    gate. model pins the sleeper (route parameter); otherwise the enrolled
+    model with the most pending own-exchanges above the minimum goes first."""
     cfg = settings_mod.get()
     if not cfg.get("sleep_enabled"):
         return "disabled"
-    model = (cfg.get("sleep_model") or "").strip()
-    if not model:
-        return "no sleep_model configured"
+    names = enrolled(cfg)
+    if not names:
+        return "no models enrolled in sleep_models"
+    if model is not None:
+        if model not in names:
+            return f"{model} is not enrolled in sleep_models"
+        names = [model]
     if trainer_runner.is_running():
         return "trainer busy"
     idle = _idle_s()
@@ -335,97 +522,85 @@ def maybe_sleep(force_idle=False):
         return f"awake: last exchange {idle / 60:.1f} min ago"
     with _LOCK:
         st = _load_state()
-        if st.get("sleeping"):
-            return "already sleeping"
-        cool = float(st.get("cooldown_until") or 0)
-        if time.time() < cool:
-            return f"cooling down after a failed sleep ({(cool - time.time()) / 60:.0f} min left)"
-        from tools.build_experience_corpus import build
-        n, tb, vb = build(days=int(cfg["sleep_days"]))
-        if n < int(cfg["sleep_min_exchanges"]):
-            return f"too little new experience ({n} exchanges)"
-        steps = dose_steps(n, cfg)
-        start_step = _model_step(model)
-        if start_step is None:
-            return f"model {model} has no checkpoint to resume"
-        args = launch_args(model, start_step + steps, cfg)
-        if args is None:
-            return f"model {model} has no training_args recipe"
-        # the trainer draws seq*n_chunks+2 contiguous bytes per sample; a bin
-        # smaller than one draw crashes the child (cardinal: val split of a
-        # small night was 183 B vs a 4098 B window) — gate it here instead
-        window = int(args.get("seq") or 1024) * int(args.get("n_chunks") or 1) + 2
-        if tb < window or vb < window:
-            return f"experience bins too small for draw window ({tb}/{vb} B < {window} B)"
-        res = trainer_runner.start(PLUGIN_ID, args)
-        ok = isinstance(res, dict) and res.get("ok", True)
-        if not ok:
-            return f"launch failed: {res}"
-        st.update({"sleeping": True,
-                   "run": {"model": model, "start_step": start_step,
-                           "steps": start_step + steps, "started_ts": time.time()}})
-        _save_state(st)
-        _log_event("sleep", model=model, exchanges=n, bytes=tb, steps=steps,
-                   start_step=start_step, target_step=start_step + steps)
-        logmod.ok("sleep", f"{model} sleeping: {n} exchanges ({tb}B) -> {steps} steps")
-        return f"sleeping: {steps} steps over {n} exchanges"
+        asleep = _sleeper(st)
+        if asleep:
+            return f"already sleeping: {asleep}"
+        now = time.time()
+        ranked = []
+        for name in names:
+            ms = st["models"].get(name) or {}
+            cool = float(ms.get("cooldown_until") or 0)
+            if now < cool:
+                if model is not None:
+                    return (f"cooling down after a failed sleep "
+                            f"({(cool - now) / 60:.0f} min left)")
+                continue
+            ranked.append((_pending(name, float(ms.get("last_sleep_ts") or 0)), name))
+        ranked.sort(reverse=True)
+        if model is None:
+            ranked = [(p, n) for p, n in ranked if p >= int(cfg["sleep_min_exchanges"])]
+        if not ranked:
+            return "no enrolled model has enough new experience"
+        reason = ""
+        for _, name in ranked:
+            launched, reason = _launch(st, name, cfg)
+            if launched:
+                break
+        return reason
 
 
-def wake():
-    """Stop an in-flight sleep run. Serving resumes from the newest sleep
-    checkpoint; finalize() reconciles checkpoints on the next tick."""
+def wake(model):
+    """Stop the model's in-flight sleep run. Serving resumes from the newest
+    sleep checkpoint; finalize() reconciles checkpoints on the next tick."""
     with _LOCK:
         st = _load_state()
-        if not st.get("sleeping"):
-            return {"ok": True, "state": "awake", "note": "was not sleeping"}
+        if not (st["models"].get(model) or {}).get("sleeping"):
+            return {"ok": True, "state": "awake", "model": model, "note": "was not sleeping"}
         trainer_runner.stop()
-        _log_event("wake", model=(st.get("run") or {}).get("model"))
-        logmod.ok("sleep", f"woken by user: {(st.get('run') or {}).get('model')}")
-        return {"ok": True, "state": "waking"}
+        _log_event("wake", model=model)
+        logmod.ok("sleep", f"woken by user: {model}")
+        return {"ok": True, "state": "waking", "model": model}
 
 
 def finalize():
     """Reconcile after a sleep run ends: record the sleep, prune checkpoints."""
     with _LOCK:
         st = _load_state()
-        run = st.get("run") or {}
-        model = run.get("model")
-        if not model:
-            st.pop("sleeping", None)
-            _save_state(st)
-            return
-        end_step = _model_step(model) or run.get("start_step") or 0
         cfg = settings_mod.get()
-        finals = st.get("finals") or []
-        start = run.get("start_step") or 0
-        if end_step > start:
-            finals = prune(model, start, end_step, cfg["sleep_keep_finals"], finals)
-            st["last_sleep_ts"] = time.time()
-            st.pop("cooldown_until", None)
-        else:
-            # gained nothing: the launch failed or was stopped before the first
-            # checkpoint. Without a cooldown the watcher retries every 60 s
-            # forever (cardinal: 3 failed launches in 11 minutes)
-            st["cooldown_until"] = time.time() + FAIL_COOLDOWN_S
-        st.update({"sleeping": False, "finals": finals, "run": {}})
+        for model, ms in st["models"].items():
+            if not ms.get("sleeping"):
+                continue
+            run = ms.get("run") or {}
+            start = run.get("start_step") or 0
+            end_step = _model_step(model) or start
+            finals = ms.get("finals") or []
+            if end_step > start:
+                finals = prune(model, start, end_step, cfg["sleep_keep_finals"], finals)
+                ms["last_sleep_ts"] = time.time()
+                ms.pop("cooldown_until", None)
+            else:
+                # gained nothing: the launch failed or was stopped before the
+                # first checkpoint. Without a cooldown the watcher retries every
+                # 60 s forever (cardinal: 3 failed launches in 11 minutes)
+                ms["cooldown_until"] = time.time() + FAIL_COOLDOWN_S
+            ms.update({"sleeping": False, "finals": finals, "run": {}})
+            if end_step > start:
+                _log_event("awake", model=model, end_step=end_step,
+                           steps_gained=end_step - start, finals=finals)
+                logmod.ok("sleep", f"{model} awake at step {end_step}")
+            else:
+                _log_event("failed", model=model, end_step=end_step,
+                           cooldown_s=FAIL_COOLDOWN_S)
+                logmod.error("sleep", f"{model} sleep gained no steps; cooling down "
+                                      f"{FAIL_COOLDOWN_S // 60} min")
         _save_state(st)
-        if end_step > start:
-            _log_event("awake", model=model, end_step=end_step,
-                       steps_gained=end_step - start, finals=finals)
-            logmod.ok("sleep", f"{model} awake at step {end_step}")
-        else:
-            _log_event("failed", model=model, end_step=end_step,
-                       cooldown_s=FAIL_COOLDOWN_S)
-            logmod.error("sleep", f"{model} sleep gained no steps; cooling down "
-                                  f"{FAIL_COOLDOWN_S // 60} min")
 
 
 def tick():
     """One watcher pass; safe to call every WATCH_EVERY_S."""
     st = _load_state()
-    if st.get("sleeping"):
-        run = trainer_runner.state() or {}
-        if run.get("status") != "running":
+    if _sleeper(st):
+        if (trainer_runner.state() or {}).get("status") != "running":
             finalize()
         return "sleeping"
     return maybe_sleep()

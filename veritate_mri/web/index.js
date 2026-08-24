@@ -1919,30 +1919,93 @@ function _sleepEvLine(ev) {
   return ev.event;
 }
 
+function _sleepModelMeta(m, sleeping, run) {
+  if (m.state === "sleeping" && run)
+    return `sleeping · step ${run.step ?? "…"}/${run.total_steps}`
+      + (run.eta_s ? ` · wakes in ~${_fmtMin(run.eta_s)}` : "")
+      + ` · waking now keeps up to step ${run.last_ckpt_step}`;
+  return (m.cooldown_s != null ? `cooling down ${_fmtMin(m.cooldown_s)} (last sleep failed) · `
+      : !sleeping && m.sleeps_in_s != null ? `sleeps in ${_fmtMin(m.sleeps_in_s)} · ` : "")
+    + `${m.pending_exchanges} new exchange${m.pending_exchanges === 1 ? "" : "s"}`
+    + (m.last_sleep_ts ? ` · last slept ${_fmtEvTime(m.last_sleep_ts)}` : " · never slept");
+}
+
+let _sleepEnrolled = [];
+
+let _sleepModelNames = [];
+
+function _syncSleepControls(d) {
+  const toggle = $("sleepEnabledToggle"), sel = $("sleepEnrollSel");
+  if (!toggle || !sel) return;
+  toggle.checked = !!d.enabled;
+  _sleepEnrolled = (d.models || []).map(m => m.name);
+  // enrollable = model DIR names from discovery (never engine file paths)
+  const have = new Set(_sleepEnrolled);
+  const opts = _sleepModelNames.filter(v => v && !have.has(v));
+  sel.innerHTML = "<option value=\"\">enroll model…</option>"
+    + opts.map(v => `<option>${v}</option>`).join("");
+  sel.style.display = d.enabled ? "" : "none";
+}
+
+function _loadSleepModelNames() {
+  fetch("/train/discovery").then(r => r.ok ? r.json() : null).then(d => {
+    if (d && Array.isArray(d.models))
+      _sleepModelNames = d.models.map(m => m.name).filter(Boolean).sort();
+  }).catch(() => {});
+}
+_loadSleepModelNames();
+setInterval(_loadSleepModelNames, 60000);
+
 function _renderSleepPanel(d) {
-  const panel = $("sleepPanel");
+  const panel = $("sleepPanelWrap") || $("sleepPanel");
   if (!panel) return;
   panel.style.display = "";
+  _syncSleepControls(d);
   const state = $("sleepStateChip"), meta = $("sleepMeta");
-  const now = $("sleepNowBtn"), wake = $("sleepWakeBtn");
+  const rows = $("sleepModels");
+  const models = d.models || [];
+  const sleeping = d.state === "sleeping" && d.run;
   if (!d.enabled) {
     state.textContent = "disabled";
-    meta.textContent = "enable sleep_enabled + sleep_model in settings to let the model consolidate its chats while idle";
-    now.style.display = "none"; wake.style.display = "none";
-  } else if (d.state === "sleeping" && d.run) {
-    const { step, total_steps, eta_s, last_ckpt_step } = d.run;
-    state.textContent = `${d.model} · sleeping`;
-    meta.textContent = `step ${step ?? "…"}/${total_steps}`
-      + (eta_s ? ` · wakes in ~${_fmtMin(eta_s)}` : "")
-      + ` · waking now keeps up to step ${last_ckpt_step}`;
-    now.style.display = "none"; wake.style.display = "";
+    meta.textContent = "flip the switch, then enroll models — they consolidate their chats into their weights while idle";
+  } else if (!models.length) {
+    state.textContent = "no models enrolled";
+    meta.textContent = "pick a model under enroll — any model with a checkpoint can sleep";
   } else {
-    state.textContent = `${d.model} · awake`;
-    meta.textContent = (d.cooldown_s != null ? `cooling down ${_fmtMin(d.cooldown_s)} (last sleep failed) · `
-        : d.sleeps_in_s != null ? `sleeps in ${_fmtMin(d.sleeps_in_s)} · ` : "")
-      + `${d.pending_exchanges} new exchange${d.pending_exchanges === 1 ? "" : "s"}`
-      + (d.last_sleep_ts ? ` · last slept ${_fmtEvTime(d.last_sleep_ts)}` : " · never slept");
-    now.style.display = ""; wake.style.display = "none";
+    state.textContent = sleeping ? `${d.run.model} · sleeping` : `${models.length} enrolled · awake`;
+    meta.textContent = "";
+  }
+  // one compact row per enrolled model: state, pending, last slept, next
+  // eligibility, and its own sleep-now / wake button
+  rows.innerHTML = "";
+  if (d.enabled) for (const m of models) {
+    const row = document.createElement("div");
+    row.className = "sm-row";
+    const name = document.createElement("span");
+    name.className = "sm-name";
+    name.textContent = m.name;
+    const info = document.createElement("span");
+    info.className = "sm-meta";
+    info.textContent = _sleepModelMeta(m, sleeping, m.state === "sleeping" ? d.run : null);
+    const btn = document.createElement("button");
+    btn.dataset.model = m.name;
+    if (m.state === "sleeping") {
+      btn.dataset.action = "/sleep/wake";
+      btn.textContent = "wake";
+      btn.title = "Stop the run; the model keeps everything up to its last sleep checkpoint";
+    } else {
+      btn.dataset.action = "/sleep/now";
+      btn.textContent = "sleep now";
+      btn.title = "Skip the idle timer and consolidate now (still requires enough new exchanges)";
+      btn.disabled = !!sleeping;
+    }
+    const rm = document.createElement("button");
+    rm.dataset.unenroll = m.name;
+    rm.textContent = "unenroll";
+    rm.title = "Remove this model from sleep; its checkpoints and history are untouched";
+    rm.disabled = m.state === "sleeping";
+    row.append(name, info, btn, rm);
+    rows.appendChild(row);
   }
   // usage ledger: exchanges per hour of day, so the sleep cycle can be
   // judged against when the model is actually talked to
@@ -1966,36 +2029,69 @@ function _renderSleepPanel(d) {
   hist.querySelectorAll(".ev span").forEach((el, i) => { el.textContent = _sleepEvLine(evs[i]); });
 }
 
+let _sleepingModel = null;
+
 function pollSleep() {
   if (document.hidden) return;
   fetch("/sleep").then(r => r.ok ? r.json() : null).then(d => {
     const chip = $("sleepChip"), wake = $("sleepWake");
     if (!chip || !d) return;
     _renderSleepPanel(d);
-    if (!d.enabled) { chip.style.display = "none"; wake.style.display = "none"; return; }
+    const models = d.models || [];
+    _sleepingModel = (d.state === "sleeping" && d.run) ? d.run.model : null;
+    if (!d.enabled || !models.length) { chip.style.display = "none"; wake.style.display = "none"; return; }
     chip.style.display = "";
     if (d.state === "sleeping" && d.run) {
-      const { step, total_steps, eta_s, last_ckpt_step } = d.run;
-      chip.textContent = `${d.model} sleeping ${step ?? "…"}/${total_steps}`
+      const { model, step, total_steps, eta_s, last_ckpt_step } = d.run;
+      chip.textContent = (models.length > 1 ? `${models.length} models enrolled · ` : "")
+        + `${model} sleeping ${step ?? "…"}/${total_steps}`
         + (eta_s ? ` · wakes in ~${_fmtMin(eta_s)}` : "");
       chip.title = `consolidating its own experience into weights; waking now keeps `
         + `everything up to checkpoint ${last_ckpt_step}`;
       wake.style.display = "";
     } else {
       wake.style.display = "none";
-      chip.textContent = d.sleeps_in_s != null
-        ? `${d.model} sleeps in ${_fmtMin(d.sleeps_in_s)} · ${d.pending_exchanges} new`
-        : `${d.model} awake · ${d.pending_exchanges} new`;
-      chip.title = "sleep consolidation is enabled; the model trains on new exchanges when idle";
+      const pending = models.reduce((s, m) => s + (m.pending_exchanges || 0), 0);
+      if (models.length === 1) {
+        const m = models[0];
+        chip.textContent = m.sleeps_in_s != null
+          ? `${m.name} sleeps in ${_fmtMin(m.sleeps_in_s)} · ${pending} new`
+          : `${m.name} awake · ${pending} new`;
+      } else {
+        chip.textContent = `${models.length} models enrolled · ${pending} new`;
+      }
+      chip.title = "sleep consolidation is enabled; enrolled models take turns training on their own new exchanges when idle";
     }
   }).catch(() => {});
 }
 setInterval(pollSleep, 15000);
 pollSleep();
-function _sleepPost(path) { fetch(path, { method: "POST" }).then(() => pollSleep()).catch(() => {}); }
-$("sleepWake")?.addEventListener("click", () => _sleepPost("/sleep/wake"));
-$("sleepWakeBtn")?.addEventListener("click", () => _sleepPost("/sleep/wake"));
-$("sleepNowBtn")?.addEventListener("click", () => _sleepPost("/sleep/now"));
+function _sleepPost(path, model) {
+  fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(model ? { model } : {}) })
+    .then(() => pollSleep()).catch(() => {});
+}
+$("sleepWake")?.addEventListener("click", () => _sleepPost("/sleep/wake", _sleepingModel));
+$("sleepModels")?.addEventListener("click", ev => {
+  const un = ev.target.closest("button[data-unenroll]");
+  if (un) return _sleepSettings({ sleep_models: _sleepEnrolled.filter(n => n !== un.dataset.unenroll) });
+  const btn = ev.target.closest("button[data-action]");
+  if (btn) _sleepPost(btn.dataset.action, btn.dataset.model);
+});
+function _sleepSettings(patch) {
+  fetch("/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+                       body: JSON.stringify(patch) })
+    .then(() => pollSleep()).catch(() => {});
+}
+$("sleepEnabledToggle")?.addEventListener("change", ev => {
+  _sleepSettings({ sleep_enabled: !!ev.target.checked });
+});
+$("sleepEnrollSel")?.addEventListener("change", ev => {
+  const name = ev.target.value;
+  ev.target.value = "";
+  if (name && !_sleepEnrolled.includes(name))
+    _sleepSettings({ sleep_models: _sleepEnrolled.concat([name]) });
+});
 
 function resetRagPanel() {
   const wrap = $("ragPanel"); if (!wrap) return;

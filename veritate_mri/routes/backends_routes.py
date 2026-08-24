@@ -1189,9 +1189,11 @@ def register(app):
                                             no_repeat_ngram=no_repeat_ngram, trace=want_trace,
                                             prefetched=prefetched)
                     stop_seq = _chat_stop_seq(prompt)
+                    # record the model DIR name (the bin path's parent), not the
+                    # bin filename: sleep attributes exchanges to model dirs
                     wrapped = experience.record_events(
                         _stop_on_bytes(base, stop_seq),
-                        model=os.path.basename(str(cfg.get("C_MODEL") or "c-engine")),
+                        model=os.path.basename(os.path.dirname(str(cfg.get("C_MODEL") or ""))),
                         prompt=prompt, meta={"backend": "c"})
                     for ev in wrapped:
                         yield f"data: {json.dumps(ev)}\n\n"
@@ -1350,7 +1352,7 @@ def register(app):
                     # included, it is what the model actually experienced.
                     wrapped = experience.record_events(
                         _stop_on_bytes(gen, stop_seq),
-                        model=getattr(brain, "checkpoint", ""),
+                        model=cfg.get("BRAIN_MODEL") or "",
                         prompt=effective_prompt,
                         meta={"backend": "pytorch",
                               **({"fast": fast_mode} if fast_mode else {}),
