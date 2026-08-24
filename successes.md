@@ -12,6 +12,33 @@ Measured on cardinal (i7-9700T, 7 threads): `x*2` on a 320-vector 20.3 us; a 320
 **Preemptive sleep: background training costs a served request nothing (2.5x throughput, ~200x first byte)**
 cardinal-01 (i7-9700T, 8c no-HT, BIOS-locked 800 MHz, 23 GB), wren1_3 fp16 through the C engine, greedy, 64 B replies. Sleep consolidation unyielding: **44.6-54.6 ms/byte, first byte 2,856-2,978 ms** (the trainer child holds 7 of 8 cores). Same run with `sleep_preempt`: **17.9-18.2 ms/byte, first byte 12-23 ms**, matching the idle-box baseline of 18.3 ms/byte / 13 ms. Confirmed at the OS level, not inferred: sampling the child's state during a request gives `RNl RNl TNl TNl ... TNl`. SIGSTOP preserves process state, so no step work is lost and only wall time stretches. This is what makes "sleep whenever" true: consolidation no longer needs an idle window, it needs only to get out of the way. (2026-08-23)
 
+**Muon's Newton-Schulz was the serial phase in CPU training: fp32 orthogonalization is 226-376x faster and uses every core**
+`torch.optim.Muon` casts the momentum update to bf16 before Newton-Schulz (`torch/optim/_muon.py:55`), and
+the vendored fallback mirrored it. On a CPU with no bf16 acceleration that `addmm` has no fast path.
+Measured on cardinal (i7-9700T, 7 threads, 2026-08-24): one 1024x1024 weight **94.5 s at 107% CPU** in bf16
+against **0.251 s at 699%** in fp32; 4096x1024 **175.3 s** against **0.775 s**. Profiling one weight puts
+**99.1% of the time in `aten::addmm`** (~20 s a call) while `aten::mm` on the same shape costs 0.34 s, so
+the fast path is dtype-specific, not shape-specific. wren1_3 has **112** 2-D weights, so one optimizer step
+took hours; it now costs **50.8 s at 700%**. Newton-Schulz takes its dtype from `hardware.bf16_supported`,
+and a device that cannot accelerate bf16 gets the vendored Muon so the dtype is ours to set. This is what
+IDEA 23's "45% of one core" was.
+
+**Forward and backward on the hybrid trunk already parallelize: 696% CPU, 69.5% in `aten::mm`**
+Same box, 270M hybrid, batch 1 x 4 chunks, activation checkpointing on: a forward+backward step is
+**33.3 s wall / 232 s CPU = 696% utilization**, with `aten::mm` at 69.5% of self time (1,676 calls) and
+flash attention at 9.1%. Kills the leading IDEA 23 suspect: the GLA recurrent trunk in eager PyTorch is
+NOT op-count-bound at training batch sizes, whatever it is at decode batch 1. Rank the optimizer, not the
+trunk, when CPU training looks serial. (2026-08-24)
+
+**Sleep sizes its step to the experience on hand, not to the model's pretrain recipe**
+A sleep step draws `batch x seq x n_chunks` bytes. wren1_3's recipe is batch 48, so a night of 17.8 kB of
+own conversation was reread 11 times per step and one step cost 27 wall minutes on cardinal -- five sleep
+attempts, zero completed steps, every run recorded `end_step: 0`. The batch is now
+`min(recipe_batch, train_bytes // draw_window)`: 17,810 B / 4,098 B picks **batch 4**, and the first
+completed sleep step on that box ran in **166 s at 675-736% CPU** (99 tok/s, loss 0.6030). The dose grows
+with the log on its own, so a box that talks more sleeps on bigger steps without anyone tuning it.
+(2026-08-24)
+
 **The CPU bf16 downgrade in `resolve_precision` is load-bearing: raw bf16 on AVX2 is 424x slower than fp32**
 Measured on cardinal (i7-9700T, AVX2 only -- no `avx512_bf16`, no `amx_bf16`; torch reports capability
 `AVX2`), 768x768 matmul, 7 threads: fp32 **6.4 ms, 141.68 GFLOP/s** vs bf16 **2,714.3 ms, 0.33 GFLOP/s**.

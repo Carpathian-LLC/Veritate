@@ -312,6 +312,15 @@ def _fit_batch(base, cfg, train_bytes):
                       int(train_bytes) // _draw_window(base)))
 
 
+def _fit_eval_iters(base, batch, val_bytes):
+    """Sleep eval passes sized to the val bin. Each pass draws batch * (seq *
+    n_chunks) bytes, so a recipe's count re-measures a night's val split dozens
+    of times for one number: cardinal 2026-08-24 spent 475 s, three times a
+    training step, reading 5.4 kB sixty-four times. Never below one pass."""
+    window = _draw_window(base) * max(1, int(batch))
+    return max(1, min(int(base.get("eval_iters") or 1), int(val_bytes) // window))
+
+
 def _build_own_corpus(model, cfg, min_val_bytes=0):
     """Build the consolidation bins from the model's own exchanges only: write a
     per-model filtered view of the experience log and run the corpus builder
@@ -376,7 +385,7 @@ def _model_step(model):
     return max(steps) if steps else None
 
 
-def launch_args(model, steps, cfg, train_bytes):
+def launch_args(model, steps, cfg, train_bytes, val_bytes):
     """Sleep recipe = the model's own training_args with only the sleep levers
     overridden. Returns None when the model has no readable recipe."""
     base = _recipe(model)
@@ -397,6 +406,7 @@ def launch_args(model, steps, cfg, train_bytes):
         "_nice": int(cfg.get("sleep_nice", 10)),
     })
     args["batch_size"] = _fit_batch(base, cfg, train_bytes)
+    args["eval_iters"] = _fit_eval_iters(base, args["batch_size"], val_bytes)
     return args
 
 
@@ -526,7 +536,7 @@ def _launch(st, model, cfg):
         return False, (f"experience bins too small for draw window ({tb}/{vb} B < {window} B): "
                        f"{model} needs about {2 * window} B of its own conversation")
     steps = dose_steps(n, cfg)
-    args = launch_args(model, start_step + steps, cfg, tb)
+    args = launch_args(model, start_step + steps, cfg, tb, vb)
     res = trainer_runner.start(PLUGIN_ID, args)
     if not (isinstance(res, dict) and res.get("ok", True)):
         return False, f"launch failed: {res}"

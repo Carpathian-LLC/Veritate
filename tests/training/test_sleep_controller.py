@@ -113,13 +113,13 @@ def test_launch_args_reuses_recipe_with_sleep_levers(tmp_path, monkeypatch):
     the sleep levers (constant low LR, no warmup, dose steps, dense ckpts)."""
     _model(tmp_path)
     monkeypatch.setattr(sleep, "MODELS_ROOT", str(tmp_path / "models"))
-    args = sleep.launch_args("toy", 3120, CFG, BIG_LOG)
+    args = sleep.launch_args("toy", 3120, CFG, BIG_LOG, BIG_LOG)
     assert args["resume"] == "toy" and args["name"] == "toy"
     assert args["total_steps"] == 3120 and args["ckpt_every"] == 25
     assert args["base_lr"] == args["min_lr"] == 5e-06 and args["warmup_steps"] == 0
     assert args["corpus"] == CFG["sleep_corpus"]
     assert args["trunk"] == "hybrid" and args["seq"] == 1024  # recipe preserved
-    assert sleep.launch_args("missing", 100, CFG, BIG_LOG) is None
+    assert sleep.launch_args("missing", 100, CFG, BIG_LOG, BIG_LOG) is None
 
 
 def test_launch_args_strips_save_bookkeeping(tmp_path, monkeypatch):
@@ -131,7 +131,7 @@ def test_launch_args_strips_save_bookkeeping(tmp_path, monkeypatch):
           "output_dir": "/somewhere/models/toy"}
     _model(tmp_path, training_args=ta)
     monkeypatch.setattr(sleep, "MODELS_ROOT", str(tmp_path / "models"))
-    args = sleep.launch_args("toy", 3015, CFG, BIG_LOG)
+    args = sleep.launch_args("toy", 3015, CFG, BIG_LOG, BIG_LOG)
     for k in sleep.SAVE_BOOKKEEPING:
         assert k not in args
     assert args["trunk"] == "hybrid"  # real recipe keys survive
@@ -513,7 +513,7 @@ def test_launch_args_carry_cpu_budget_and_nice(tmp_path, monkeypatch):
     _roots(tmp_path, monkeypatch)
     _model(tmp_path)
     monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 7)
-    args = sleep.launch_args("toy", 10, {**CFG, "sleep_nice": 10}, BIG_LOG)
+    args = sleep.launch_args("toy", 10, {**CFG, "sleep_nice": 10}, BIG_LOG, BIG_LOG)
     assert args["_cpu_budget"] == 7
     assert args["_nice"] == 10
 
@@ -525,9 +525,9 @@ def test_sleep_batch_is_sized_to_the_experience_on_hand(tmp_path, monkeypatch):
     _model(tmp_path, training_args=_HYBRID_RECIPE)
     monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
     cfg = {**CFG, "sleep_batch_size": 0}
-    assert sleep.launch_args("toy", 10, cfg, 17345)["batch_size"] == 4     # 4 draws of 4098 B
-    assert sleep.launch_args("toy", 10, cfg, 4098)["batch_size"] == 1
-    assert sleep.launch_args("toy", 10, cfg, 0)["batch_size"] == 1
+    assert sleep.launch_args("toy", 10, cfg, 17345, BIG_LOG)["batch_size"] == 4     # 4 draws of 4098 B
+    assert sleep.launch_args("toy", 10, cfg, 4098, BIG_LOG)["batch_size"] == 1
+    assert sleep.launch_args("toy", 10, cfg, 0, BIG_LOG)["batch_size"] == 1
 
 
 def test_sleep_batch_never_exceeds_the_models_own_recipe(tmp_path, monkeypatch):
@@ -535,7 +535,18 @@ def test_sleep_batch_never_exceeds_the_models_own_recipe(tmp_path, monkeypatch):
     _roots(tmp_path, monkeypatch)
     _model(tmp_path, training_args=_HYBRID_RECIPE)
     monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
-    assert sleep.launch_args("toy", 10, {**CFG, "sleep_batch_size": 0}, 10**9)["batch_size"] == 48
+    assert sleep.launch_args("toy", 10, {**CFG, "sleep_batch_size": 0}, 10**9, BIG_LOG)["batch_size"] == 48
+
+
+def test_sleep_eval_iters_are_sized_to_the_val_bin(tmp_path, monkeypatch):
+    """A night's val split holds one draw; measuring it sixteen times costs three
+    training steps on a weak box and reports the same number."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args={**_HYBRID_RECIPE, "eval_iters": 16})
+    monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
+    cfg = {**CFG, "sleep_batch_size": 0}
+    assert sleep.launch_args("toy", 10, cfg, 17345, 5391)["eval_iters"] == 1
+    assert sleep.launch_args("toy", 10, cfg, 17345, 10 ** 6)["eval_iters"] == 16
 
 
 def test_explicit_sleep_batch_size_wins_over_the_fit(tmp_path, monkeypatch):
@@ -543,7 +554,7 @@ def test_explicit_sleep_batch_size_wins_over_the_fit(tmp_path, monkeypatch):
     _roots(tmp_path, monkeypatch)
     _model(tmp_path, training_args=_HYBRID_RECIPE)
     monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
-    assert sleep.launch_args("toy", 10, {**CFG, "sleep_batch_size": 8}, 4098)["batch_size"] == 8
+    assert sleep.launch_args("toy", 10, {**CFG, "sleep_batch_size": 8}, 4098, BIG_LOG)["batch_size"] == 8
 
 
 def test_run_modifiers_never_reach_the_trainer_argv():
@@ -562,7 +573,7 @@ def test_sleep_logs_every_step(tmp_path, monkeypatch):
     _model(tmp_path, training_args={"name": "toy", "size": "10m", "seq": 1024,
                                     "batch_size": 48, "log_every": 10})
     monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
-    assert sleep.launch_args("toy", 4, CFG, BIG_LOG)["log_every"] == 1
+    assert sleep.launch_args("toy", 4, CFG, BIG_LOG, BIG_LOG)["log_every"] == 1
 
 
 def test_unpark_resumes_a_child_left_suspended_by_a_previous_process(tmp_path, monkeypatch):
