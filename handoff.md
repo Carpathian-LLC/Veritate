@@ -67,13 +67,36 @@ the trainer logs the dtype it computes in rather than the one requested — the 
 Forward/backward was never implicated: 696% CPU, 69.5% of self time in `aten::mm`. IDEA 23's other
 suspects (8-bit Adam, activation-checkpoint recompute) are falsified with it.
 
-**Cardinal state at handoff:** sleep ENABLED, `sleep_models: [wren1_3]`, `sleep_idle_min 2`. The box
-is left with the SHORT verification dose (`sleep_min_steps 4`, `sleep_max_steps 4`,
-`sleep_ckpt_every 2`) — restore the real dose (50 / 500 / 25) before leaving it to run overnight.
-`engine_threads 8`, fp16 bin served, `veritate.bin.int8.bak` retained for the quality eval that
-still gates shipping int8. Deploy: `scp` the changed files or
-`git fetch origin dev && git reset --hard origin/dev`, then `bash ~/veritate/dash_watchdog.sh`.
-Watch loops on that box must not match their own command line: use `pgrep -f "[v]eritate_venv/bin/python -u"`.
+4. **The step is also bounded by what the box measured.** The data bound caps at the model's own
+   recipe batch, so a box that talks enough to fill a pretrain batch would go straight back to
+   27-minute steps. `finalize()` records `step_s` and `step_batch` into that model's sleep state
+   (box-local: a model dir travels between machines and its `train.csv` rows carry the throughput of
+   whichever one wrote them) and the next launch scales it to `sleep_step_seconds` (default 300).
+   First sleep on a box has no measurement and takes the data bound alone.
+
+**Verified end to end on cardinal 2026-08-24:** a 4-step run completed naturally (`done.`, steps
+1-6 at 164-166 s each, ~100 tok/s, 616-736% CPU), `finalize` recorded `steps_gained: 4`, prune kept
+`finals: [2, 6]` and deleted the intermediate `step_4.pt` while leaving the non-sleep `step_0.pt`
+alone. The watcher then launched the next sleep BY ITSELF (countdown 120 s -> 0 after ten served
+exchanges, step 6 -> 506, batch 4 off a 21 kB log). Preemption re-verified against the new code
+mid-step: `RNl -> TNl` on request arrival, reply in 1.25 s, `-> RNl` after the quiet window.
+
+**Cardinal state at handoff:** sleep ENABLED, `sleep_models: [wren1_3]`, `sleep_idle_min 2`, real
+dose (50 / 500 / 25), `sleep_step_seconds 300`, `engine_threads 8`, fp16 bin served,
+`veritate.bin.int8.bak` retained for the quality eval that still gates shipping int8. A 500-step
+sleep run is LIVE (step 6 -> 506, ~23 h at 166 s a step, checkpoints every 25 steps ~= 69 min).
+All nine changed files are byte-identical to local `dev`; the checkout is ahead of origin until the
+user pushes. Deploy: `scp` the changed files or `git fetch origin dev && git reset --hard
+origin/dev`, then `bash ~/veritate/dash_watchdog.sh`. Watch loops on that box must not match their
+own command line: use `pgrep -f "[v]eritate_venv/bin/python -u"`.
+
+**OPEN DECISION — the loop does not close without it.** Sleep writes consolidated weights to
+`checkpoints/step_N.pt` and never re-exports `veritate.bin`, so the model the user actually talks to
+on the C engine is unchanged by any amount of sleeping. `training/export.py::export_checkpoint`
+(route `POST /export/<name>`) is the one owner and wiring it into `finalize()` is small. It was NOT
+shipped on purpose: auto-promoting a self-trained checkpoint with no quality gate means a bad
+consolidation silently degrades the served model, and that model then generates the next round of
+its own training data. This needs an eval gate (or an explicit user promote step), not a hook.
 
 ## CARDINAL NIGHT 2026-08-23 (inference + weak-hardware sleep)
 
