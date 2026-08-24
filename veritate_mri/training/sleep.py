@@ -45,6 +45,7 @@ from bisect import bisect_right
 
 from readers.paths import EXPERIENCE_ROOT, MODELS_ROOT, SLEEP_ROOT
 from runtime import logs as logmod
+from runtime import serving
 from runtime import settings as settings_mod
 
 from training import trainer_runner
@@ -53,6 +54,9 @@ from training import trainer_runner
 # Constants
 
 WATCH_EVERY_S = 60
+# while a sleep child sits suspended the watcher polls fast enough that the
+# resume lands close to sleep_resume_s rather than a full watch period later.
+WATCH_PAUSED_S = 2
 STATE_PATH = os.path.join(SLEEP_ROOT, "state.json")
 HISTORY_PATH = os.path.join(SLEEP_ROOT, "history.jsonl")
 # per-model filtered view of the experience log fed to the corpus builder
@@ -369,7 +373,13 @@ def launch_args(model, steps, cfg):
         "eval_every": int(cfg["sleep_ckpt_every"]), "base_lr": lr, "min_lr": lr,
         "description": f"sleep consolidation: {steps} steps over own experience "
                        f"({cfg['sleep_corpus']}), constant lr {lr:g}",
+        # run modifiers, stripped before argv (trainer_runner._build_argv)
+        "_cpu_budget": cpu_budget(cfg),
+        "_nice": int(cfg.get("sleep_nice", 10)),
     })
+    batch = int(cfg.get("sleep_batch_size", 0) or 0)
+    if batch:
+        args["batch_size"] = batch
     return args
 
 
@@ -512,6 +522,84 @@ def _launch(st, model, cfg):
     return True, f"sleeping: {model} {steps} steps over {n} exchanges"
 
 
+_PAUSE = {"suspended": False, "warned": False}
+
+
+def _child_proc():
+    """psutil handle for the running trainer child, or None when there is no
+    child or psutil is unavailable."""
+    pid = trainer_runner.pid()
+    if not pid:
+        return None
+    try:
+        import psutil
+        return psutil.Process(pid)
+    except ImportError:
+        if not _PAUSE["warned"]:
+            logmod.warn("sleep", "psutil missing: sleep cannot yield to serving")
+            _PAUSE["warned"] = True
+        return None
+    except Exception:
+        return None
+
+
+def yield_to_serving():
+    """Suspend the sleep child so an in-flight request owns the box. Idempotent;
+    returns True when a child is suspended as a result of this call or already
+    was. Called from the serving path, so it must never raise."""
+    if _PAUSE["suspended"]:
+        return True
+    if not settings_mod.get().get("sleep_preempt", True):
+        return False
+    if not _sleeper(_load_state()):
+        return False
+    proc = _child_proc()
+    if proc is None:
+        return False
+    try:
+        proc.suspend()
+    except Exception as e:
+        logmod.warn("sleep", f"suspend failed: {type(e).__name__}: {e}")
+        return False
+    _PAUSE["suspended"] = True
+    logmod.info("sleep", "sleep child suspended for a served request")
+    return True
+
+
+def resume_if_quiet():
+    """Resume a suspended sleep child once serving has been quiet for
+    sleep_resume_s. Returns True when the child is running afterwards."""
+    if not _PAUSE["suspended"]:
+        return True
+    idle = serving.idle_s()
+    if idle is None or idle < float(settings_mod.get().get("sleep_resume_s", 5)):
+        return False
+    proc = _child_proc()
+    if proc is None:
+        _PAUSE["suspended"] = False   # child is gone; nothing left to resume
+        return True
+    try:
+        proc.resume()
+    except Exception as e:
+        logmod.warn("sleep", f"resume failed: {type(e).__name__}: {e}")
+        return False
+    _PAUSE["suspended"] = False
+    logmod.info("sleep", f"sleep child resumed after {idle:.1f}s quiet")
+    return True
+
+
+def suspended():
+    """True while the sleep child is parked for serving."""
+    return _PAUSE["suspended"]
+
+
+def cpu_budget(cfg):
+    """Cores the sleep child may use: physical cores less sleep_reserve_cores,
+    floored at 1 so the run still progresses on a 1-2 core box."""
+    from routes._common import auto_thread_count
+    return max(1, auto_thread_count() - max(0, int(cfg.get("sleep_reserve_cores", 1))))
+
+
 def maybe_sleep(force_idle=False, model=None):
     """Gate chain, then launch one sleeper. Returns a short reason string for
     logs/tests. force_idle (the /sleep/now route) skips only the idle-time
@@ -615,15 +703,20 @@ def tick():
     st = _load_state()
     if _sleeper(st):
         if (trainer_runner.state() or {}).get("status") != "running":
+            _PAUSE["suspended"] = False
             finalize()
-        return "sleeping"
+            return "finalized"
+        resume_if_quiet()
+        return "suspended" if suspended() else "sleeping"
     return maybe_sleep()
 
 
 def watcher():
-    """Daemon loop for app startup."""
+    """Daemon loop for app startup. Polls fast while a child sits suspended so a
+    parked run resumes near sleep_resume_s instead of a watch period later."""
+    serving.on_began(yield_to_serving)
     while True:
-        time.sleep(WATCH_EVERY_S)
+        time.sleep(WATCH_PAUSED_S if suspended() else WATCH_EVERY_S)
         try:
             tick()
         except Exception as e:

@@ -13187,6 +13187,7 @@ const CORPUS_TOPICS = [
   { id: "knowledge",   label: "Knowledge",        blurb: "raw text for base knowledge" },
   { id: "market",      label: "Market data",      blurb: "OHLCV byte streams for the Market LLM" },
   { id: "special_sft", label: "Special SFT",      blurb: "abstention, chit-chat, and other targeted SFT layers" },
+  { id: "memory",      label: "Memory",           blurb: "fact recall the model keeps after one telling" },
 ];
 
 const CORPUS_MODE_TOPIC = { chat: "chat", agent: "agent", autocomplete: "code" };

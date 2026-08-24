@@ -112,6 +112,21 @@ DEFAULTS = {
     "sleep_ckpt_every": 25,
     "sleep_keep_finals": 3,
     "sleep_lr": 5e-06,
+    # Weak-hardware levers. A sleep child sized for the training box takes every
+    # core; on an 8-core 800 MHz CPU that costs a served request 2.5-3x
+    # throughput and ~200x first-byte latency. sleep_preempt suspends the child
+    # for the duration of each request and resumes it after sleep_resume_s of
+    # quiet, so consolidation runs in the gaps instead of needing a long idle
+    # window. sleep_reserve_cores keeps cores off the child's BLAS budget and
+    # sleep_nice deprioritizes it, covering the window before a suspend lands.
+    # sleep_batch_size overrides the recipe batch (0 = inherit): a shape whose
+    # step outruns the checkpoint interval cannot be interrupted without losing
+    # the work.
+    "sleep_preempt": True,
+    "sleep_resume_s": 5,
+    "sleep_reserve_cores": 1,
+    "sleep_nice": 10,
+    "sleep_batch_size": 0,
     "sleep_corpus": "experience:0.75,mixed_chat:0.25",
     # Advanced: stream reduced (compact) MRI telemetry frames. The engine summarizes
     # each byte's telemetry itself (~33x smaller per-byte frame) instead of shipping

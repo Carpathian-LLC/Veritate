@@ -270,6 +270,17 @@ def is_running():
         return _STATE["status"] == STATUS_RUNNING
 
 
+def pid():
+    """OS pid of the running trainer child, or None. Recovered runs have a pid
+    file but no Popen handle, so both are consulted."""
+    with _LOCK:
+        proc = _PROC
+    if proc is not None and proc.poll() is None:
+        return proc.pid
+    rec = _read_pid_file() or {}
+    return rec.get("pid") or None
+
+
 def _set(**kw):
     with _LOCK:
         _STATE.update(kw)
@@ -332,6 +343,12 @@ def _run(plugin, args):
         _phys = _hw.physical_cores()
     except (ImportError, ValueError):
         _phys = 0
+    # `_cpu_budget` is a dashboard-only run modifier (see _build_argv): a caller
+    # that must leave cores for another workload sets it instead of the default
+    # whole-box budget. The sleep controller uses it to keep serving responsive.
+    _asked = (args or {}).get("_cpu_budget")
+    if _asked:
+        _phys = max(1, min(int(_asked), _phys or int(_asked)))
     if _phys:
         _budget = str(min(_phys, _BLAS_THREAD_CAP))
         env.setdefault("OMP_NUM_THREADS",       _budget)
@@ -357,6 +374,16 @@ def _run(plugin, args):
         except Exception: pass
         _set(status=STATUS_FAILED, finished_at=time.time(), exit_code=None)
         return
+    # Deprioritize on request so a background run yields CPU to foreground work
+    # even before a suspend lands. psutil maps niceness to Windows priority
+    # classes; without it the run simply keeps default priority.
+    _nice = (args or {}).get("_nice")
+    if _nice:
+        try:
+            import psutil
+            psutil.Process(proc.pid).nice(int(_nice))
+        except Exception as e:
+            logmod.warn("plugin", f"nice({_nice}) failed: {type(e).__name__}: {e}")
     with _LOCK:
         _PROC = proc
     _write_pid_file(plugin["id"], proc.pid, args, plugin["path"])

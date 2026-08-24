@@ -419,3 +419,109 @@ def test_settings_migrate_sleep_model_to_enrollment(tmp_path, monkeypatch):
     assert cfg["sleep_models"] == ["quill"]
     on_disk = json.loads(live.read_text())
     assert on_disk["sleep_models"] == ["quill"] and "sleep_model" not in on_disk
+
+
+class _FakeChild:
+    """Stand-in for the trainer child: records suspend/resume calls."""
+
+    def __init__(self):
+        self.calls = []
+
+    def suspend(self):
+        self.calls.append("suspend")
+
+    def resume(self):
+        self.calls.append("resume")
+
+
+def _sleeping_state(tmp_path, monkeypatch, child):
+    _roots(tmp_path, monkeypatch)
+    st = {"models": {"toy": {"sleeping": True, "run": {"model": "toy", "steps": 10}}}}
+    monkeypatch.setattr(sleep, "_load_state", lambda: st)
+    monkeypatch.setattr(sleep, "_child_proc", lambda: child)
+    monkeypatch.setattr(sleep, "_PAUSE", {"suspended": False, "warned": False})
+    return st
+
+
+def test_yield_to_serving_suspends_the_sleep_child(tmp_path, monkeypatch):
+    """A served request parks the in-flight sleep run."""
+    child = _FakeChild()
+    _sleeping_state(tmp_path, monkeypatch, child)
+    monkeypatch.setattr(sleep.settings_mod, "get", lambda: {**CFG, "sleep_preempt": True})
+    assert sleep.yield_to_serving() is True
+    assert child.calls == ["suspend"]
+    assert sleep.suspended() is True
+
+
+def test_yield_to_serving_is_idempotent(tmp_path, monkeypatch):
+    """Overlapping requests suspend the child once, not once each."""
+    child = _FakeChild()
+    _sleeping_state(tmp_path, monkeypatch, child)
+    monkeypatch.setattr(sleep.settings_mod, "get", lambda: {**CFG, "sleep_preempt": True})
+    sleep.yield_to_serving()
+    sleep.yield_to_serving()
+    assert child.calls == ["suspend"]
+
+
+def test_preempt_off_leaves_the_child_running(tmp_path, monkeypatch):
+    """sleep_preempt False keeps the pre-preemption behavior."""
+    child = _FakeChild()
+    _sleeping_state(tmp_path, monkeypatch, child)
+    monkeypatch.setattr(sleep.settings_mod, "get", lambda: {**CFG, "sleep_preempt": False})
+    assert sleep.yield_to_serving() is False
+    assert child.calls == []
+
+
+def test_resume_waits_for_the_quiet_window(tmp_path, monkeypatch):
+    """A suspended child stays parked until serving has been quiet long enough."""
+    child = _FakeChild()
+    _sleeping_state(tmp_path, monkeypatch, child)
+    monkeypatch.setattr(sleep.settings_mod, "get",
+                        lambda: {**CFG, "sleep_preempt": True, "sleep_resume_s": 5})
+    sleep.yield_to_serving()
+    monkeypatch.setattr(sleep.serving, "idle_s", lambda: 1.0)
+    assert sleep.resume_if_quiet() is False
+    assert sleep.suspended() is True
+    monkeypatch.setattr(sleep.serving, "idle_s", lambda: 9.0)
+    assert sleep.resume_if_quiet() is True
+    assert child.calls == ["suspend", "resume"]
+
+
+def test_resume_holds_while_a_request_is_still_streaming(tmp_path, monkeypatch):
+    """idle_s None (a live stream) must not resume the child."""
+    child = _FakeChild()
+    _sleeping_state(tmp_path, monkeypatch, child)
+    monkeypatch.setattr(sleep.settings_mod, "get",
+                        lambda: {**CFG, "sleep_preempt": True, "sleep_resume_s": 5})
+    sleep.yield_to_serving()
+    monkeypatch.setattr(sleep.serving, "idle_s", lambda: None)
+    assert sleep.resume_if_quiet() is False
+    assert child.calls == ["suspend"]
+
+
+def test_launch_args_carry_cpu_budget_and_nice(tmp_path, monkeypatch):
+    """The sleep recipe reserves cores and deprioritizes its child."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 7)
+    args = sleep.launch_args("toy", 10, {**CFG, "sleep_nice": 10})
+    assert args["_cpu_budget"] == 7
+    assert args["_nice"] == 10
+
+
+def test_sleep_batch_size_overrides_the_recipe(tmp_path, monkeypatch):
+    """A weak box shrinks the step so it fits between interruptions."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
+    assert sleep.launch_args("toy", 10, {**CFG, "sleep_batch_size": 0})["batch_size"] == 48
+    assert sleep.launch_args("toy", 10, {**CFG, "sleep_batch_size": 4})["batch_size"] == 4
+
+
+def test_run_modifiers_never_reach_the_trainer_argv():
+    """Underscore run modifiers are stripped before argv."""
+    from training import trainer_runner
+    argv = trainer_runner._build_argv({"path": "t.py"},
+                                      {"name": "toy", "_cpu_budget": 7, "_nice": 10})
+    assert "--_cpu_budget" not in argv and "7" not in argv
+    assert "--name" in argv and "toy" in argv

@@ -23,6 +23,7 @@ import time
 
 from readers.paths import EXPERIENCE_ROOT
 from runtime import logs as logmod
+from runtime import serving
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -84,6 +85,7 @@ def record_events(gen, model, prompt, meta=None):
     record when the stream ends — including client disconnects, so partial
     replies still count as experience."""
     out = bytearray()
+    serving.began()
     try:
         for ev in gen:
             if isinstance(ev, dict) and ev.get("kind") in ("token", "fast_byte"):
@@ -92,5 +94,6 @@ def record_events(gen, model, prompt, meta=None):
                     out.append(b & 0xff)
             yield ev
     finally:
+        serving.ended()
         append_exchange(model, prompt.encode("utf-8") if isinstance(prompt, str) else prompt,
                         bytes(out), meta=meta)

@@ -28,7 +28,7 @@ CATALOG_PATH = os.path.join(
 
 # Must stay in sync with CORPUS_FAMILIES / CORPUS_TOPICS in veritate_mri/web/index.js.
 ALLOWED_FAMILIES = {"carpathian", "public"}
-ALLOWED_TOPICS = {"chat", "agent", "mcp", "code", "knowledge", "market", "special_sft"}
+ALLOWED_TOPICS = {"chat", "agent", "mcp", "code", "knowledge", "market", "special_sft", "memory"}
 CARPATHIAN_TOPICS = ("chat", "agent", "mcp", "code", "market", "special_sft")
 PUBLIC_TOPIC = "knowledge"
 BANNED_CURATION_WORDS = ("Claude", "Claude-authored", "Claude-curated")
