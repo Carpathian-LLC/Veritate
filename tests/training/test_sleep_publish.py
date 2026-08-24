@@ -146,7 +146,8 @@ def test_every_setting_the_controller_reads_exists_in_defaults():
 
     from runtime import settings as settings_mod
 
-    src = open(sleep.__file__, encoding="utf-8").read()
+    with open(sleep.__file__, encoding="utf-8") as f:
+        src = f.read()
     read = set(re.findall(r"""cfg\[["'](sleep_\w+)["']\]""", src))
     read |= set(re.findall(r"""cfg\.get\(["'](sleep_\w+)["']\)""", src))
     assert read, "found no settings reads to check"
