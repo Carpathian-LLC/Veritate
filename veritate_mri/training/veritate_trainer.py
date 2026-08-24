@@ -787,7 +787,9 @@ def build_optimizer(params, args, device, plan=None, state_dir=None, model=None)
         print("optimizer=muon requested but unavailable on this platform; using AdamW", flush=True)
         want_muon = False
     if want_muon:
-        print("optimizer: Muon (2D hidden weights) + AdamW (emb/norms/1D)", flush=True)
+        print("optimizer: Muon (2D hidden weights) + AdamW (emb/norms/1D), "
+              "orthogonalizing in "
+              + str(optim_helpers.ns_dtype(device)).split(".")[-1], flush=True)
         return optim_helpers.build_muon(model, args, device)
     if _MEM_PAGING and plan is not None and plan.tier in mem_executor.OFFLOAD_TIERS:
         print("optimizer state paged to NVMe (" + plan.tier + "); resident optimizer "
@@ -1088,7 +1090,11 @@ def run(plugin_id, here):
         slm_ref = slm_helpers.load_reference(paths.model_dir(_slm_name), device)
         print(f"SLM: selective loss ON, reference={_slm_name}, keep_frac={getattr(args, 'slm_keep', 0.6)}", flush=True)
     n_params = sum(p.numel() for p in veritate_model.parameters())
-    print("device: " + device + "  precision: " + args.precision, flush=True)
+    # print what the run actually computes in, not what was asked for: a device
+    # without bf16 acceleration silently trains fp32, and the requested string
+    # sent an investigation after the wrong dtype (2026-08-24)
+    print("device: " + device + "  precision: "
+          + (args.precision if amp_dtype is not None else "fp32 (autocast off)"), flush=True)
     print("params: " + str(n_params), flush=True)
     print("shape:  hidden=" + str(shape["hidden"]) + " layers=" + str(shape["layers"])
           + " ffn=" + str(shape["ffn"]) + " heads=" + str(shape["heads"])
