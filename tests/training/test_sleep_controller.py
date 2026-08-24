@@ -562,3 +562,17 @@ def test_unpark_leaves_a_running_child_alone(tmp_path, monkeypatch):
     monkeypatch.setattr(sleep, "_child_proc", lambda: child)
     assert sleep.unpark_orphan() is False
     assert child.calls == []
+
+
+def test_yield_does_not_touch_disk_when_sleep_is_off(tmp_path, monkeypatch):
+    """The hot path runs on every generation; a box that never sleeps must not
+    pay a state read for it."""
+    child = _FakeChild()
+    _sleeping_state(tmp_path, monkeypatch, child)
+    reads = []
+    monkeypatch.setattr(sleep, "_load_state", lambda: reads.append(1) or {})
+    monkeypatch.setattr(sleep.settings_mod, "get",
+                        lambda: {**CFG, "sleep_enabled": False, "sleep_preempt": True})
+    assert sleep.yield_to_serving() is False
+    assert reads == []
+    assert child.calls == []

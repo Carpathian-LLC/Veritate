@@ -555,7 +555,10 @@ def yield_to_serving():
     was. Called from the serving path, so it must never raise."""
     if _PAUSE["suspended"]:
         return True
-    if not settings_mod.get().get("sleep_preempt", True):
+    # Gate on the master switch before touching disk: this runs on every
+    # generation, and an install that never sleeps must not pay a state read for it.
+    cfg = settings_mod.get()
+    if not (cfg.get("sleep_enabled") and cfg.get("sleep_preempt", True)):
         return False
     if not _sleeper(_load_state()):
         return False
