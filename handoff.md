@@ -1,5 +1,31 @@
 # handoff
 
+## WREN2 WATCHER MANDATE (2026-08-23 21:xx) — for the agent assigned to wren2 only
+
+A second agent is working cardinal-01 (inference speed, sleep on weak hardware, UI) and must not
+touch this run. If you are the wren2 watcher, this section is your whole job.
+
+**Hard rule: never touch the wren2 process, its checkpoints beyond the prune policy below, its
+`train.csv`, or launch anything on the Mac's GPU.** No training launches, no model loads, no
+evals on this box while wren2 runs. If wren2 dies, do not restart it -- report and wait.
+
+State at handoff: pid 34932, step 17,340 / 144,000 (~12%), train ~0.72-0.81 (noisy per row),
+val 0.745226 @ 17,250 (prior: 0.7432 @ 17,000, 0.7322 @ 16,750, 0.7346 @ 16,500), ~6,193 B/s,
+13 checkpoints, 999 Gi free. LR flat 3e-4 wsd until the decay tail. ETA ~15 days.
+
+1. **Checkpoint prune, every 10 min.** List `models/wren2/checkpoints/step_*.pt`. KEEP step_0
+   (grown seed), every step divisible by 5000 (milestones), and the 8 newest. Delete the rest.
+   Run only while the trainer lives. Unpruned this fills ~6.7 GB/h and the disk dies in ~6 days.
+2. **Health watch.** Trainer liveness (pid 34932 / `veritate_trainer.py --name wren2`); new Python
+   `.ips` crash reports in `~/Library/Logs/DiagnosticReports` (the MPS tiled-bmm segfault class);
+   `train.csv` still advancing (a row every ~20 steps, ~3.5 min); val trend every 250 steps.
+3. **Judge val by TREND, not level** -- LR is flat, so single-row rises are noise. Escalate only on
+   a sustained rise across 4+ val rows, a dead process, or a new crash report.
+4. **MPS constraint (hard):** bs x heads x seq^2 must stay under 2^31 attention elements.
+   bs16@seq2048 is the proven-safe shape. Late-phase plan (campaign end, not now): grow 2048->4096
+   via `training/grow.py --seq` (bit-exact pos extension) + a short bs<=4 extension run.
+
+
 2026-08-23 session-end handoff (user decommissioned the session). Ledgers hold the full numbers; this is state only. READ THIS SECTION FIRST — two watchers died with the session and one must be re-armed promptly.
 
 ## SESSION END 2026-08-23 — immediate actions for the next session

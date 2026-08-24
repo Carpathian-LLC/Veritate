@@ -67,7 +67,7 @@ def _stub_local(monkeypatch, text=ANSWER):
     monkeypatch.setattr(H, "_ensure_pytorch", lambda cfg, name: None)
     monkeypatch.setattr(H, "_ensure_c", lambda cfg, name: None)
     monkeypatch.setattr(H, "_local_events",
-                        lambda cfg, backend, prompt, mri=False, gen=None: (_mri_events(text), None))
+                        lambda cfg, backend, prompt, mri=False, gen=None: _mri_events(text))
 
 
 def _chunks(resp):

@@ -173,7 +173,8 @@ def test_maybe_sleep_idle_gate_respects_recent_activity(tmp_path, monkeypatch):
     exp = tmp_path / "exp"
     exp.mkdir()
     (exp / "20260820.jsonl").write_text(_rec("toy") + "\n" + _rec("toy") + "\n")
-    _model(tmp_path)
+    d = _model(tmp_path)
+    (d / "checkpoints" / "step_3000.pt").write_bytes(b"x")
     monkeypatch.setattr(sleep.trainer_runner, "is_running", lambda: False)
     monkeypatch.setattr(sleep.settings_mod, "get", lambda: CFG)
     assert sleep.maybe_sleep().startswith("awake:")

@@ -271,7 +271,25 @@ def _pending(model, since_ts):
     return len(ts) - bisect_right(ts, since_ts)
 
 
-def _build_own_corpus(model, cfg):
+def _recipe(model):
+    """The model's own training_args, the recipe a sleep run inherits. None when
+    there is nothing readable to inherit."""
+    cfg_path = os.path.join(MODELS_ROOT, model, "config.json")
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            base = json.load(f).get("training_args") or {}
+    except (OSError, ValueError):
+        return None
+    return base or None
+
+
+def _draw_window(base):
+    """Contiguous bytes the trainer draws per sample under this recipe. A bin
+    smaller than one draw crashes the child, so both bins must clear it."""
+    return int(base.get("seq") or 1024) * int(base.get("n_chunks") or 1) + 2
+
+
+def _build_own_corpus(model, cfg, min_val_bytes=0):
     """Build the consolidation bins from the model's own exchanges only: write a
     per-model filtered view of the experience log and run the corpus builder
     over it. The builder reads a module-global root and has no source or model
@@ -308,7 +326,7 @@ def _build_own_corpus(model, cfg):
     prev = bec.EXPERIENCE_ROOT
     bec.EXPERIENCE_ROOT = FILTER_ROOT
     try:
-        return bec.build(days=None)
+        return bec.build(days=None, min_val_bytes=min_val_bytes)
     finally:
         bec.EXPERIENCE_ROOT = prev
 
@@ -338,13 +356,8 @@ def _model_step(model):
 def launch_args(model, steps, cfg):
     """Sleep recipe = the model's own training_args with only the sleep levers
     overridden. Returns None when the model has no readable recipe."""
-    cfg_path = os.path.join(MODELS_ROOT, model, "config.json")
-    try:
-        with open(cfg_path, encoding="utf-8") as f:
-            base = json.load(f).get("training_args") or {}
-    except (OSError, ValueError):
-        return None
-    if not base:
+    base = _recipe(model)
+    if base is None:
         return None
     args = {k: v for k, v in base.items()
             if k not in SLEEP_OVERRIDES and k not in SAVE_BOOKKEEPING}
@@ -468,22 +481,23 @@ def status():
 def _launch(st, model, cfg):
     """Build the model's own corpus and launch its sleep run. Returns
     (launched, reason); the caller holds _LOCK."""
-    n, tb, vb = _build_own_corpus(model, cfg)
-    if n < int(cfg["sleep_min_exchanges"]):
-        return False, f"too little new experience ({n} exchanges)"
-    steps = dose_steps(n, cfg)
     start_step = _model_step(model)
     if start_step is None:
         return False, f"model {model} has no checkpoint to resume"
-    args = launch_args(model, start_step + steps, cfg)
-    if args is None:
+    base = _recipe(model)
+    if base is None:
         return False, f"model {model} has no training_args recipe"
-    # the trainer draws seq*n_chunks+2 contiguous bytes per sample; a bin
-    # smaller than one draw crashes the child (cardinal: val split of a
-    # small night was 183 B vs a 4098 B window) — gate it here instead
-    window = int(args.get("seq") or 1024) * int(args.get("n_chunks") or 1) + 2
+    # both bins must clear one draw; build to that floor before gating on it, or
+    # the val split starves on a small night (cardinal: 183 B val vs 4098 B draw)
+    window = _draw_window(base)
+    n, tb, vb = _build_own_corpus(model, cfg, min_val_bytes=window)
+    if n < int(cfg["sleep_min_exchanges"]):
+        return False, f"too little new experience ({n} exchanges)"
     if tb < window or vb < window:
-        return False, f"experience bins too small for draw window ({tb}/{vb} B < {window} B)"
+        return False, (f"experience bins too small for draw window ({tb}/{vb} B < {window} B): "
+                       f"{model} needs about {2 * window} B of its own conversation")
+    steps = dose_steps(n, cfg)
+    args = launch_args(model, start_step + steps, cfg)
     res = trainer_runner.start(PLUGIN_ID, args)
     if not (isinstance(res, dict) and res.get("ok", True)):
         return False, f"launch failed: {res}"

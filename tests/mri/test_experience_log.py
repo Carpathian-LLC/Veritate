@@ -87,3 +87,21 @@ def test_append_never_raises_on_unwritable_root(exp_root, monkeypatch):
     monkeypatch.setattr(experience, "EXPERIENCE_ROOT",
                         str(exp_root / "\x00bad"))  # NUL: makedirs must fail
     assert experience.append_exchange("m", b"p", b"out") is False
+
+
+def test_v1_local_path_records_the_exchange(exp_root):
+    """An OpenAI-route local completion lands in the log under the model dir name."""
+    from routes import hybrid_routes as H
+
+    class _Brain:
+        def stream_fast(self, prompt, **kw):
+            for b in b"hi":
+                yield {"kind": "fast_byte", "byte": b}
+
+    cfg = {"BRAIN": _Brain(), "BRAIN_MODEL": "wren1_3"}
+    prompt = "<|im_start|>user\nq<|im_end|>\n<|im_start|>assistant\n"
+    list(H._local_events(cfg, "pytorch", prompt))
+    (rec,) = _records(exp_root)
+    assert rec["model"] == "wren1_3"
+    assert rec["meta"] == {"backend": "pytorch", "route": "v1"}
+    assert base64.b64decode(rec["output_b64"]) == b"hi"

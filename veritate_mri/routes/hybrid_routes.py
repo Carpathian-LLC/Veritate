@@ -319,20 +319,24 @@ def _gen_params_in(body):
 
 
 def _local_events(cfg, backend, prompt, mri=False, gen=None):
-    """Per-token generation event stream plus turn-stop markers for a local model.
-    Shared by the buffered (_generate_local) and true-token chat paths. mri selects
-    the full-telemetry path (C trace=True / Brain.stream) whose per-byte frames the
-    /generate MRI view consumes; default off keeps the fast path (C trace=False
-    coarse fast_byte / Brain.stream_fast lookahead), byte-for-byte as before.
-    gen carries per-request overrides (see _gen_params_in); an empty gen reproduces
-    the values the box hardcoded before overrides existed."""
+    """Per-token generation event stream for a local model, truncated at the turn-stop
+    sequence and appended to the experience log. Shared by the buffered
+    (_generate_local) and true-token chat paths, so every /v1 exchange a local model
+    serves becomes sleep-consolidatable experience and moves the controller's idle
+    clock, exactly as /generate does. mri selects the full-telemetry path (C
+    trace=True / Brain.stream) whose per-byte frames the /generate MRI view consumes;
+    default off keeps the fast path (C trace=False coarse fast_byte /
+    Brain.stream_fast lookahead), byte-for-byte as before. gen carries per-request
+    overrides (see _gen_params_in); an empty gen reproduces the values the box
+    hardcoded before overrides existed."""
+    from inference import experience
     from inference.decode import (
         NO_REPEAT_NGRAM_DEFAULT,
         REP_PENALTY_DEFAULT,
         REP_WINDOW_DEFAULT,
     )
 
-    from .backends_routes import BYTE_VOCAB, MAX_NEW_CAP, _chat_stop_seq
+    from .backends_routes import BYTE_VOCAB, MAX_NEW_CAP, _chat_stop_seq, _stop_on_bytes
     g = gen or {}
     temperature = g.get("temperature", TEMPERATURE_DEFAULT)
     top_k = min(g.get("top_k", TOP_K_DEFAULT), BYTE_VOCAB)
@@ -349,7 +353,13 @@ def _local_events(cfg, backend, prompt, mri=False, gen=None):
     else:
         events = cfg["BRAIN"].stream_fast(prompt, mode="lookahead", temperature=temperature,
                                           top_k_sample=top_k, max_new=max_new, **rep)
-    return events, _chat_stop_seq(prompt)
+    # record the model DIR name, not the serving artifact: sleep attributes
+    # exchanges to model dirs
+    model_dir = (os.path.basename(os.path.dirname(str(cfg.get("C_MODEL") or "")))
+                 if backend == "c" else (cfg.get("BRAIN_MODEL") or ""))
+    return experience.record_events(_stop_on_bytes(events, _chat_stop_seq(prompt)),
+                                    model=model_dir, prompt=prompt,
+                                    meta={"backend": backend, "route": "v1"})
 
 
 def _pytorch_mri_events(brain, prompt, rep, temperature=TEMPERATURE_DEFAULT,
@@ -367,10 +377,7 @@ def _pytorch_mri_events(brain, prompt, rep, temperature=TEMPERATURE_DEFAULT,
 
 def _generate_local(cfg, backend, prompt):
     from inference.decode import abstention
-
-    from .backends_routes import _stop_on_bytes
-    events, stop_seq = _local_events(cfg, backend, prompt)
-    text = _trim(collect(_stop_on_bytes(events, stop_seq)))
+    text = _trim(collect(_local_events(cfg, backend, prompt)))
     return abstention.wrap_response_text(text)
 
 
@@ -379,15 +386,14 @@ def _generate_local_mri(cfg, model, backend, messages, system, gen=None):
     consumes (the meta frame, one token frame per byte, then the turn-stop frame).
     Returns (answer, frames). Text is byte-identical to _generate_local under greedy;
     the flag selects telemetry, never sampling (see _pytorch_mri_events)."""
-    from .backends_routes import _stop_on_bytes
     if backend == "c":
         _ensure_c(cfg, model)
     else:
         _ensure_pytorch(cfg, model)
-    events, stop_seq = _local_events(cfg, backend, _render_local(messages, system),
-                                     mri=True, gen=gen)
+    events = _local_events(cfg, backend, _render_local(messages, system),
+                           mri=True, gen=gen)
     frames, out = [], bytearray()
-    for ev in _stop_on_bytes(events, stop_seq):
+    for ev in events:
         frames.append(ev)
         kind = ev.get("kind")
         if kind in ("token", "fast_byte"):
@@ -631,8 +637,8 @@ def _openai_stream(complete, conv, system, model):
 
 
 def _local_stream_items(events, emit_frames=False):
-    """Yield ('text', delta) segments from a local generation stream (already wrapped
-    in _stop_on_bytes) and, when emit_frames is set, ('frame', ev) for each raw event
+    """Yield ('text', delta) segments from a local generation stream (already
+    stop-truncated by _local_events) and, when emit_frames is set, ('frame', ev) for each raw event
     as it arrives so MRI telemetry interleaves with the text. Single owner of the
     byte->text incremental UTF-8 decode plus the STOP_HOLD-char holdback that cuts a
     forming stop marker before any of it streams; a trailing flush emits the tail."""
@@ -718,7 +724,6 @@ def _openai_stream_local(cfg, model, backend, conv, system, mri=False, gen_param
 
     The overrides are `gen_params`, not `gen`: the SSE body below is `def gen()`,
     which would shadow a parameter of that name and hand _local_events a function."""
-    from .backends_routes import _stop_on_bytes
 
     def gen():
         created, cid = int(time.time()), _chatcmpl_id()
@@ -730,10 +735,10 @@ def _openai_stream_local(cfg, model, backend, conv, system, mri=False, gen_param
                 _ensure_c(cfg, model)
             else:
                 _ensure_pytorch(cfg, model)
-            events, stop_seq = _local_events(cfg, backend, _render_local(conv, system),
-                                             mri=mri, gen=gen_params)
+            events = _local_events(cfg, backend, _render_local(conv, system),
+                                   mri=mri, gen=gen_params)
             yield _chunk_frame(cid, created, model, {"role": "assistant"}, None)
-            for tag, val in _local_stream_items(_stop_on_bytes(events, stop_seq), emit_frames=mri):
+            for tag, val in _local_stream_items(events, emit_frames=mri):
                 if tag == "frame":
                     yield _mri_chunk_frame(cid, created, model, val)
                 else:

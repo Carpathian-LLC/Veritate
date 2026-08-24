@@ -76,20 +76,25 @@ def load_exchanges(days=None, min_reply=MIN_REPLY_DEFAULT):
 
 
 def build(stem="experience", days=None, min_reply=MIN_REPLY_DEFAULT,
-          val_frac=VAL_FRAC_DEFAULT, out_dir=None):
+          val_frac=VAL_FRAC_DEFAULT, out_dir=None, min_val_bytes=0):
     """Write {stem}_train.bin / {stem}_val.bin. Returns (n_exchanges, train_b, val_b).
-    Every val_frac-th exchange goes to val, so val stays a sample of the same
-    days rather than only the newest."""
+    The split runs on BYTES, not exchange count: val takes a blob whenever it holds
+    less than val_frac of what has been written, so it stays a sample spread across
+    the same days rather than only the newest. min_val_bytes raises a floor under
+    val, filled from the oldest exchanges first -- a caller whose trainer draws a
+    fixed contiguous window needs val to reach that window before the first blob
+    would land there under val_frac alone."""
     out_dir = out_dir or CORPUS_ROOT
     os.makedirs(out_dir, exist_ok=True)
-    every = max(2, round(1 / val_frac)) if val_frac > 0 else 0
     n = train_b = val_b = 0
     tp = os.path.join(out_dir, f"{stem}_train.bin")
     vp = os.path.join(out_dir, f"{stem}_val.bin")
     with open(tp + ".tmp", "wb") as ft, open(vp + ".tmp", "wb") as fv:
         for blob in load_exchanges(days=days, min_reply=min_reply):
             n += 1
-            if every and n % every == 0:
+            to_val = val_frac > 0 and (val_b < min_val_bytes
+                                       or val_b < val_frac * (train_b + val_b))
+            if to_val:
                 fv.write(blob)
                 val_b += len(blob)
             else:

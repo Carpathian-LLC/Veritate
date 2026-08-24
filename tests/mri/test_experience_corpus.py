@@ -80,3 +80,14 @@ def test_days_window(roots):
     bec.build(out_dir=str(out), days=1, val_frac=0.0)
     data = (out / "experience_train.bin").read_bytes()
     assert b"new day reply" in data and b"old day reply" not in data
+
+
+def test_min_val_bytes_floors_the_val_bin(roots):
+    """A night too small for the val_frac stride still fills val to the draw window."""
+    exp, out = roots
+    lines = [_rec(f"P{i}".encode(), (f"reply number {i} " + "x" * 90).encode())
+             for i in range(10)]
+    (exp / "20260819.jsonl").write_text("\n".join(lines) + "\n")
+    n, tb, vb = bec.build(out_dir=str(out), val_frac=0.05, min_val_bytes=300)
+    assert n == 10 and tb > 0
+    assert vb >= 300
