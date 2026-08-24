@@ -182,3 +182,24 @@ The `no_repeat_ngram=16` ban erases looping at zero accuracy cost (successes.md 
 3. DPO pairs (banned vs bare-greedy reply to the same prompt) once a preference trainer exists. Heaviest; last.
 Falsifier: bare-greedy loop rate on the 30-prompt ladder drops 0.20 -> <0.05 without grounded/identity/median regression. Kill a mechanism if it buys less than half the gap; if all three fail, the behavior is not learnable at this scale and the decoder keeps the job permanently.
 Boundary: the guard stays shipped regardless -- serving defaults and measurement stay separate (grading is always bare-greedy).
+
+
+## engine decode
+
+**IDEA 22 — calibrate the engine's thread count per step class, not once on the cheap class (2026-08-23)**
+`hybrid.c::hybrid_calibrate` climbs a 1,2,4,..cap ladder while each rung beats the previous by
+`HYBRID_CALIB_KNEE` (13%), and times **non-boundary** decode steps only. But decode is bimodal:
+boundary steps run the GLA global-block stack, cost ~5x, and are ~54% of decode time
+(successes.md 2026-08-23). One pick timed on the cheap class then governs the expensive one.
+Measured on cardinal: 4 threads 16.58 ms/byte vs 8 threads 14.85, a 10.4% gain the knee rejects,
+and the pick is unstable across models on one box (`wren1_0` cached 8, `wren1_3` cached 4) because
+each rung is compared only against its immediate predecessor and run-to-run noise straddles the
+threshold. Mechanisms, cheapest first: (1) compare each rung against the best-so-far rather than
+the previous, which removes the instability without changing the knee; (2) time both step classes
+during calibration and cache two picks, switching per step (`is_boundary` is already computed at
+the top of `hybrid_step`); (3) make `HYBRID_CALIB_KNEE` an env-overridable tunable (rule 19 -- it
+is a hardcoded tunable today). Falsifier: (2) must beat the single-pick baseline by >5% end-to-end
+on at least two boxes with different core counts; if the two classes want the same worker count
+everywhere, only (1) and (3) are worth keeping. Needs an engine rebuild per arch, so it carries
+rule-25 bitwise-parity obligations; row-split parity holds at every worker count, so output cannot
+change. Workaround shipped meanwhile: the `engine_threads` setting pins the count.
