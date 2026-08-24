@@ -96,8 +96,9 @@ decode. int8 is 1.46x on identical weights and is the first lever (successes.md)
    `sleep_min_exchanges` 5, `sleep_idle_min` 1). Reset before treating any run as real.
 5. Browser cache: after any UI deploy tell the user to hard refresh.
 6. **The real weak-box bottleneck is IDEA 23 (ideas.md): CPU training runs single-threaded.**
-   Sampled 1 running thread of 13 with a 7-core budget, no contention, fp32, not suspended. One core
-   of eight is an 8x ceiling on every weak-box consolidation. Next step is a `torch.profiler` pass
+   CPU time grew at 45% of one core over 5 min with a 7-core budget, no contention, fp32, not
+   suspended; three consecutive samples showed 1 running thread of 13. Utilization is low and
+   variable (168-306% at other moments), so this is a sustained serial PHASE, not a serial run. Next step is a `torch.profiler` pass
    over two steps grouped by op -- a profile, not a guess. This is the last thing between preemptive
    sleep and a model that measurably improves overnight on commodity hardware.
 7. A full sleep cycle was NOT observed completing on cardinal: a batch-4 step did not finish in ~20

@@ -206,8 +206,12 @@ change. Workaround shipped meanwhile: the `engine_threads` setting pins the coun
 
 
 **IDEA 23 — why does CPU training run single-threaded? (2026-08-23, open)**
-On cardinal a sleep step (200M hybrid, batch 4, seq 1024 x 4 chunks, fp32) sampled **1 running thread
-of 13** with `OMP_NUM_THREADS=7` and no contention, and had not finished one step in ~20 wall minutes.
+On cardinal a sleep step (200M hybrid, batch 4, seq 1024 x 4 chunks, fp32) never used the cores it was
+given: `OMP_NUM_THREADS=7`, no contention, yet CPU time grew at **45% of ONE core** over a 5-minute
+window, with three consecutive samples showing **1 running thread of 13**. Utilization is low and
+VARIABLE, not uniformly serial -- the same run showed 168-306% at other moments and a batch-1 bench
+arm sat at ~180% -- so the honest claim is a sustained serial phase, not a serial run. One step had
+not finished in ~20 wall minutes.
 Ruled out: bf16 emulation (`resolve_precision` already returns None on CPU, so the run was fp32 --
 verified on the box); contention (nothing else was running); the preemption suspend (`api suspended:
 False`, state sampled `RNl` throughout). Remaining suspects, in order: (1) the recurrent GLA trunk in
