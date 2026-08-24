@@ -81,10 +81,17 @@ alone. The watcher then launched the next sleep BY ITSELF (countdown 120 s -> 0 
 exchanges, step 6 -> 506, batch 4 off a 21 kB log). Preemption re-verified against the new code
 mid-step: `RNl -> TNl` on request arrival, reply in 1.25 s, `-> RNl` after the quiet window.
 
+**Publish verified on cardinal 2026-08-24:** a 2-step run finished (`done.`), finalize pruned to
+`finals: [6, 8]`, re-exported `veritate.bin` (md5 `35b040bd` -> `6f4fc7fb`, same 541,020,992 B so the
+fp16 dtype was preserved), left no stray `.part`, recorded `served: true`, and the reloaded engine
+answered the next request in 1.69 s off the new weights. `step_s: 181.0` / `step_batch: 4` are now in
+sleep state, so the next launch takes the box bound and a time-bounded checkpoint interval
+(`min(25, 1800/181) = 9` steps ~= 27 min).
+
 **Cardinal state at handoff:** sleep ENABLED, `sleep_models: [wren1_3]`, `sleep_idle_min 2`, real
-dose (50 / 500 / 25), `sleep_step_seconds 300`, `engine_threads 8`, fp16 bin served,
-`veritate.bin.int8.bak` retained for the quality eval that still gates shipping int8. A 500-step
-sleep run is LIVE (step 6 -> 506, ~23 h at 166 s a step, checkpoints every 25 steps ~= 69 min).
+dose (50 / 500 / 25), `sleep_step_seconds 300`, `sleep_ckpt_seconds 1800`, `engine_threads 8`, fp16 bin served,
+`veritate.bin.int8.bak` retained for the quality eval that still gates shipping int8. Sleep is armed and idle at step 8; the watcher launches on its
+own once 8 new exchanges land and the box has been quiet 2 minutes.
 All nine changed files are byte-identical to local `dev`; the checkout is ahead of origin until the
 user pushes. Deploy: `scp` the changed files or `git fetch origin dev && git reset --hard
 origin/dev`, then `bash ~/veritate/dash_watchdog.sh`. Watch loops on that box must not match their
