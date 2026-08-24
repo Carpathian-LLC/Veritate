@@ -303,19 +303,31 @@ def _draw_window(base):
     return int(base.get("seq") or 1024) * int(base.get("n_chunks") or 1) + 2
 
 
-def _fit_batch(base, cfg, train_bytes):
-    """Sleep batch sized to the experience the model actually has. One step draws
-    batch * (seq * n_chunks) bytes, and a pretrain recipe's batch is set against a
-    corpus thousands of times larger than a night of conversation: inheriting it
-    re-reads the whole log dozens of times per step and stretches one step past
-    any idle window (cardinal 2026-08-24: batch 48 over 17 kB is 27 min a step,
-    against 3 min at the 4 the log can actually fill). An explicit
-    sleep_batch_size still wins."""
+def _fit_batch(base, cfg, train_bytes, ms=None):
+    """Sleep batch sized to two bounds, whichever is tighter.
+
+    The DATA bound: one step draws batch * (seq * n_chunks) bytes, and a pretrain
+    recipe's batch is set against a corpus thousands of times larger than a night
+    of conversation, so inheriting it re-reads the whole log dozens of times a
+    step (cardinal 2026-08-24: batch 48 over 17 kB is 27 min a step against 3 min
+    at the 4 the log can fill).
+
+    The BOX bound: the model's last sleep on this machine measured what a step of
+    a known batch cost, so the next one scales that to sleep_step_seconds. A box
+    that talks enough for the data bound to reach the recipe's batch would
+    otherwise go straight back to 27-minute steps. First sleep has no measurement
+    and takes the data bound alone, which is the conservative direction.
+
+    An explicit sleep_batch_size overrides both."""
     asked = int(cfg.get("sleep_batch_size", 0) or 0)
     if asked:
         return asked
-    return max(1, min(int(base.get("batch_size") or 1),
-                      int(train_bytes) // _draw_window(base)))
+    fit = min(int(base.get("batch_size") or 1), int(train_bytes) // _draw_window(base))
+    step_s = float((ms or {}).get("step_s") or 0)
+    prev = int((ms or {}).get("step_batch") or 0)
+    if step_s > 0 and prev > 0:
+        fit = min(fit, int(prev * float(cfg["sleep_step_seconds"]) / step_s))
+    return max(1, fit)
 
 
 def _fit_eval_iters(base, batch, val_bytes):
@@ -391,7 +403,7 @@ def _model_step(model):
     return max(steps) if steps else None
 
 
-def launch_args(model, steps, cfg, train_bytes, val_bytes):
+def launch_args(model, steps, cfg, train_bytes, val_bytes, ms=None):
     """Sleep recipe = the model's own training_args with only the sleep levers
     overridden. Returns None when the model has no readable recipe."""
     base = _recipe(model)
@@ -411,7 +423,7 @@ def launch_args(model, steps, cfg, train_bytes, val_bytes):
         "_cpu_budget": cpu_budget(cfg),
         "_nice": int(cfg.get("sleep_nice", 10)),
     })
-    args["batch_size"] = _fit_batch(base, cfg, train_bytes)
+    args["batch_size"] = _fit_batch(base, cfg, train_bytes, ms)
     args["eval_iters"] = _fit_eval_iters(base, args["batch_size"], val_bytes)
     return args
 
@@ -542,14 +554,16 @@ def _launch(st, model, cfg):
         return False, (f"experience bins too small for draw window ({tb}/{vb} B < {window} B): "
                        f"{model} needs about {2 * window} B of its own conversation")
     steps = dose_steps(n, cfg)
-    args = launch_args(model, start_step + steps, cfg, tb, vb)
+    args = launch_args(model, start_step + steps, cfg, tb, vb,
+                       st["models"].get(model))
     res = trainer_runner.start(PLUGIN_ID, args)
     if not (isinstance(res, dict) and res.get("ok", True)):
         return False, f"launch failed: {res}"
     ms = st["models"].setdefault(model, {})
     ms.update({"sleeping": True,
                "run": {"model": model, "start_step": start_step,
-                       "steps": start_step + steps, "started_ts": time.time()}})
+                       "steps": start_step + steps, "batch": args["batch_size"],
+                       "started_ts": time.time()}})
     _save_state(st)
     _log_event("sleep", model=model, exchanges=n, bytes=tb, steps=steps,
                start_step=start_step, target_step=start_step + steps)
@@ -736,6 +750,15 @@ def finalize():
                 finals = prune(model, start, end_step, cfg["sleep_keep_finals"], finals)
                 ms["last_sleep_ts"] = time.time()
                 ms.pop("cooldown_until", None)
+                _, elapsed = _train_progress(model)
+                if elapsed:
+                    # what a step of run["batch"] actually cost on THIS box; the
+                    # next launch sizes its step from it. Kept in sleep state, not
+                    # read back off train.csv, because a model dir travels between
+                    # machines and its rows carry the throughput of whichever one
+                    # wrote them.
+                    ms["step_s"] = round(elapsed / (end_step - start), 1)
+                    ms["step_batch"] = run.get("batch")
             else:
                 # gained nothing: the launch failed or was stopped before the
                 # first checkpoint. Without a cooldown the watcher retries every

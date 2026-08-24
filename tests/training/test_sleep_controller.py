@@ -30,7 +30,7 @@ CFG = {
     "sleep_days": 3, "sleep_min_exchanges": 8, "sleep_steps_per_exchange": 10,
     "sleep_min_steps": 50, "sleep_max_steps": 500, "sleep_ckpt_every": 25,
     "sleep_keep_finals": 3, "sleep_lr": 5e-06,
-    "sleep_corpus": "experience:0.75,mixed_chat:0.25",
+    "sleep_corpus": "experience:0.75,mixed_chat:0.25", "sleep_step_seconds": 300,
 }
 # enough own-experience bytes to fill the recipe's batch, so tests that are not
 # about batch sizing get the recipe's own value
@@ -385,6 +385,23 @@ def test_turn_taking_fuller_queue_sleeps_first(tmp_path, monkeypatch):
     assert launched == ["toy", "quill"]
 
 
+def test_finalize_records_what_a_step_cost_on_this_box(tmp_path, monkeypatch):
+    """The next launch sizes its step from this measurement, so it has to carry the
+    batch that produced it. A model dir travels between machines, which is why it
+    lives in sleep state rather than being read back off train.csv."""
+    _armed(tmp_path, monkeypatch, models=("toy",), pending=(20,))
+    monkeypatch.setattr(sleep.trainer_runner, "start", lambda pid, args: {"ok": True})
+    monkeypatch.setattr(sleep, "_fit_batch", lambda *a: 4)
+    assert sleep.maybe_sleep().startswith("sleeping: toy")
+    d = tmp_path / "models" / "toy"
+    (d / "checkpoints" / "step_3004.pt").write_bytes(b"x")
+    (d / "train.csv").write_text("step,split,loss,lr,grad_norm,tok_per_s,wall_s,seed\n"
+                                 "3004,train,0.5,5e-06,1.0,99.0,664.0,0\n")
+    sleep.finalize()
+    ms = sleep._load_state()["models"]["toy"]
+    assert ms["step_s"] == 166.0 and ms["step_batch"] == 4
+
+
 def test_cooldown_is_per_model(tmp_path, monkeypatch):
     """A failed sleep cools down only the model that failed; another enrolled
     model still sleeps in the same window."""
@@ -547,6 +564,35 @@ def test_sleep_eval_iters_are_sized_to_the_val_bin(tmp_path, monkeypatch):
     cfg = {**CFG, "sleep_batch_size": 0}
     assert sleep.launch_args("toy", 10, cfg, 17345, 5391)["eval_iters"] == 1
     assert sleep.launch_args("toy", 10, cfg, 17345, 10 ** 6)["eval_iters"] == 16
+
+
+def test_sleep_batch_falls_back_to_what_the_box_measured(tmp_path, monkeypatch):
+    """Once the log can fill the recipe's batch, only the last run's measured cost
+    keeps a weak box off 27-minute steps."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args=_HYBRID_RECIPE)
+    cfg = {**CFG, "sleep_batch_size": 0}
+    measured = {"step_batch": 4, "step_s": 166.0}          # cardinal, 2026-08-24
+    assert sleep.launch_args("toy", 10, cfg, 10 ** 9, BIG_LOG)["batch_size"] == 48
+    assert sleep.launch_args("toy", 10, cfg, 10 ** 9, BIG_LOG, measured)["batch_size"] == 7
+
+
+def test_a_fast_box_is_not_held_below_its_own_recipe(tmp_path, monkeypatch):
+    """The measurement is a ceiling, never a floor: it must not inflate the batch."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args=_HYBRID_RECIPE)
+    cfg = {**CFG, "sleep_batch_size": 0}
+    fast = {"step_batch": 8, "step_s": 2.0}
+    assert sleep.launch_args("toy", 10, cfg, 10 ** 9, BIG_LOG, fast)["batch_size"] == 48
+
+
+def test_first_sleep_has_no_measurement_and_takes_the_data_bound(tmp_path, monkeypatch):
+    """A model that has never slept here must not be sized off a missing number."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args=_HYBRID_RECIPE)
+    cfg = {**CFG, "sleep_batch_size": 0}
+    for ms in ({}, {"step_batch": 4}, {"step_s": 166.0}, {"step_batch": 0, "step_s": 0}):
+        assert sleep.launch_args("toy", 10, cfg, 17345, BIG_LOG, ms)["batch_size"] == 4
 
 
 def test_explicit_sleep_batch_size_wins_over_the_fit(tmp_path, monkeypatch):

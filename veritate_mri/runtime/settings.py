@@ -124,7 +124,10 @@ DEFAULTS = {
     # window. sleep_reserve_cores keeps cores off the child's BLAS budget and
     # sleep_nice deprioritizes it, covering the window before a suspend lands.
     # sleep_batch_size pins the sleep step's batch; 0 sizes it to the experience
-    # the model has, since a night of conversation cannot fill a pretrain batch.
+    # the model has (a night of conversation cannot fill a pretrain batch) and to
+    # what the box measured on that model's last sleep, targeting a step of
+    # sleep_step_seconds. A long step is not wrong, but it delays the checkpoint
+    # that makes waking early cheap and hides progress from the panel.
     # Engine worker count for threaded matvec. 0 = the engine calibrates per box
     # and model. Its ladder stops at a diminishing-returns knee timed on
     # non-boundary decode steps only, which on a bandwidth-limited box can stop a
@@ -135,6 +138,7 @@ DEFAULTS = {
     "sleep_reserve_cores": 1,
     "sleep_nice": 10,
     "sleep_batch_size": 0,
+    "sleep_step_seconds": 300,
     "sleep_corpus": "experience:0.75,mixed_chat:0.25",
     # Advanced: stream reduced (compact) MRI telemetry frames. The engine summarizes
     # each byte's telemetry itself (~33x smaller per-byte frame) instead of shipping
