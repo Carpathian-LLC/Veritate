@@ -576,6 +576,15 @@ def test_sleep_logs_every_step(tmp_path, monkeypatch):
     assert sleep.launch_args("toy", 4, CFG, BIG_LOG, BIG_LOG)["log_every"] == 1
 
 
+def test_sleep_skips_the_checkpoint_dump_suite(tmp_path, monkeypatch):
+    """Sleep intermediates are deleted when the run ends, so generating text to
+    trend them costs a weak box a whole step for nothing."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args={**_HYBRID_RECIPE, "hooks": "full"})
+    monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
+    assert sleep.launch_args("toy", 4, CFG, BIG_LOG, BIG_LOG)["hooks"] == "off"
+
+
 def test_unpark_resumes_a_child_left_suspended_by_a_previous_process(tmp_path, monkeypatch):
     """Module state resets on restart, so a child stopped by the previous process
     would sit parked forever holding its memory."""

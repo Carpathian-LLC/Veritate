@@ -72,6 +72,12 @@ SLEEP_OVERRIDES = {
     # that, and an inherited interval writes no train.csv row at all, so the run
     # looks like nothing happened. Sleep is short by construction: log every step.
     "log_every": 1,
+    # the checkpoint dump suite generates text in eager PyTorch to trend a
+    # research run across many checkpoints. A sleep run's trend is its own val
+    # loss, and every checkpoint but the last is deleted when the run ends, so
+    # the suite is measuring artifacts it is about to throw away. It costs ~137 s
+    # per checkpoint on a Mac Studio and stalled a whole sleep step on cardinal.
+    "hooks": "off",
 }
 # save() stamps bookkeeping into training_args that are not trainer flags; the
 # trainer's unknown-flag gate refuses a launch that forwards them (measured on
