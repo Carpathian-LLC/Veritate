@@ -100,8 +100,12 @@
   .sleep-models .sm-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; border-top: 1px dotted var(--line); }
   .sleep-models .sm-row:first-child { border-top: 0; }
   .sleep-models .sm-name { flex: 0 0 auto; color: var(--text); }
-  .sleep-models .sm-meta { color: var(--dim); }
-  .sleep-models button { margin-left: auto; padding: 2px 8px; font-size: 11px; }
+  /* long status text truncates instead of shoving the row's buttons off the panel */
+  .sleep-models .sm-meta { color: var(--dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sleep-models button { padding: 2px 8px; font-size: 11px; flex: 0 0 auto; }
+  /* only the first button takes the free space: two auto margins would split it
+     between them and drift the pair apart instead of grouping them right */
+  .sleep-models .sm-row button:first-of-type { margin-left: auto; }
   .sleep-activity { margin-top: 6px; font-size: 11px; color: var(--dim); letter-spacing: 1px; white-space: nowrap; overflow-x: auto; }
   .sleep-activity b { color: var(--accent); font-weight: 400; }
   .sleep-history { margin-top: 6px; font-size: 11px; color: var(--dim); max-height: 140px; overflow-y: auto; }
