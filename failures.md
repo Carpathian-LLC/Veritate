@@ -28,6 +28,21 @@ Retry / replacement: **two-pass generation**. Pass 1 authors the USER turns only
 
 Kept as measured fact, since the lever is real and shipped: batch size does matter within the script-writing task (10 -> 3 records per call bought +23 B; `records_per_call` is now 3 for `conversation`).
 
+
+**int8 PTQ is NOT greedy-byte-identical at 200M (2026-08-23)**
+Claimed in the cardinal optimization track and used to justify int8 as a free serving win. Measured
+properly on cardinal, fp16 and int8 exported from the SAME checkpoint (wren1_3 step_0, v13 hybrid),
+5 prompts, greedy (temp 0, top_k 1), 120 B: **1 of 5 replies identical**; the rest diverge at bytes
+11, 14, 43, 114. Divergence that starts mid-reply rather than at byte 0 is the signature of
+same-weights-different-precision -- greedy decoding amplifies a single flipped argmax into a
+different continuation. Kill-line for the old claim: any prompt whose greedy reply differs. **The
+1.72x speed win is real and unaffected** (17.5 -> 10.2 ms/byte end to end, int8 + 8 engine workers);
+what is falsified is that it is free. Shipping int8 now requires a quality eval, not just a parity
+check. Trap that produced the original claim: comparing an int8 export against a stored fp16 bin
+exported from DIFFERENT weights (cardinal's stored wren1_3 bin md5 35b040bd is not an export of its
+own step_0.pt, which exports to 6c1856ec) -- always re-export both arms from one checkpoint.
+
+
 ## training throughput levers
 
 **Net2Net growth-at-flatten has no trigger on real text: the 3.6x was a saturating-corpus artifact**
