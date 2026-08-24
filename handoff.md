@@ -39,6 +39,42 @@ val 0.745226 @ 17,250 (prior: 0.7432 @ 17,000, 0.7322 @ 16,750, 0.7346 @ 16,500)
 7. **Standing dates/gates**: retention quizzes for wren1_5@700 on 2026-08-27 and 2026-09-19 (`python -m tools.e4_retention_quiz wren1_5 700`, facts in veritate_mri/data/eval/e4_facts.json; acquisition reference fwd 45/50 rev 49/50). E4 campaign is CLOSED (successes.md). Checkpoint thinning of wren1_5 (keep 0+700) still a user call. publications/ holds three E4 drafts awaiting user review.
 8. **Session-bound artifacts that did NOT survive**: scratchpad scripts (val_bpb.py with the config-aware shape fix, ladder.py, e4_qa_probe.py, launch payload JSONs, watcher scripts). The repo-tracked equivalents that matter (retention quiz, extractor, grow tool) are safe. If a new session needs val/ladder probes, rebuild from the ledger descriptions or the originals referenced in worklog.
 
+## CARDINAL 2026-08-24 — IDEA 23 resolved, sleep completes steps on the box
+
+Sleep now completes steps on cardinal. Before today every run recorded `steps_gained: 0`; the first
+successful cycle recorded `end_step: 2, steps_gained: 2, finals: [2]` with loss 0.6030 -> 0.5868 and
+`pending_exchanges` reset. Three causes, all shipped fixed and tested:
+
+1. **Muon orthogonalizes in bf16.** `torch.optim.Muon` casts the momentum update to bf16
+   (`torch/optim/_muon.py:55`) and the vendored copy mirrored it. On a CPU with no bf16 acceleration
+   that `addmm` has no fast path: 94.5 s (1024x1024) and 175.3 s (4096x1024) per weight at ~107% CPU
+   against 0.251 s / 0.775 s at ~700% in fp32; 99.1% of profiled time in `aten::addmm` while
+   `aten::mm` on the same shape is 0.34 s. 112 2-D weights, so one optimizer step was hours. Now
+   50.8 s at 700%. Newton-Schulz takes its dtype from `hardware.bf16_supported`; a device that cannot
+   accelerate bf16 gets the vendored Muon. **The dtype is an instance attribute, never a param-group
+   default** — in `defaults` it serializes into `state_dict()` and resuming a pre-change checkpoint
+   raised KeyError on the first step.
+2. **Sleep inherited `batch_size: 48`** from the pretrain recipe and drew 196 kB a step from a
+   17.8 kB log. Now `min(recipe_batch, train_bytes // draw_window)` -> batch 4, step 166 s.
+   `eval_iters` is fitted the same way (was spending 475 s remeasuring 5.4 kB sixty-four times).
+3. **`save()` ran the full checkpoint dump suite** on checkpoints sleep deletes at finalize. It held
+   seven cores for >10 min between two steps. `SLEEP_OVERRIDES` now sets `hooks: off`.
+
+Also: `sleep_idle_min` default 20 -> 2 min (preemption is what the long gate was protecting), and
+the trainer logs the dtype it computes in rather than the one requested — the old
+`precision: bf16` line on a CPU run sent this investigation after the wrong dtype for hours.
+
+Forward/backward was never implicated: 696% CPU, 69.5% of self time in `aten::mm`. IDEA 23's other
+suspects (8-bit Adam, activation-checkpoint recompute) are falsified with it.
+
+**Cardinal state at handoff:** sleep ENABLED, `sleep_models: [wren1_3]`, `sleep_idle_min 2`. The box
+is left with the SHORT verification dose (`sleep_min_steps 4`, `sleep_max_steps 4`,
+`sleep_ckpt_every 2`) — restore the real dose (50 / 500 / 25) before leaving it to run overnight.
+`engine_threads 8`, fp16 bin served, `veritate.bin.int8.bak` retained for the quality eval that
+still gates shipping int8. Deploy: `scp` the changed files or
+`git fetch origin dev && git reset --hard origin/dev`, then `bash ~/veritate/dash_watchdog.sh`.
+Watch loops on that box must not match their own command line: use `pgrep -f "[v]eritate_venv/bin/python -u"`.
+
 ## CARDINAL NIGHT 2026-08-23 (inference + weak-hardware sleep)
 
 Cardinal is now a real git checkout of `dev` (`~/Veritate`, was an untracked copy; `git init` +
