@@ -113,3 +113,25 @@ def test_a_ramp_that_completes_is_not_flagged_time_capped(monkeypatch):
     res = bench.run(_Tiny(), "cpu", seq=8, vocab=256, batch_ramp=(1, 2), budget_s=10.0)
     assert res["time_capped"] is False
     assert [r["batch"] for r in res["ramp"]] == [1, 2]
+
+
+def test_a_single_rung_slower_than_the_budget_is_cut_short(monkeypatch):
+    """On a slow box the FIRST rung can outlast the whole budget; one timed step
+    is still a usable measurement, an unbounded rung is not."""
+    clock = _Clock()
+    monkeypatch.setattr(bench.time, "monotonic", clock.monotonic)
+    steps = []
+
+    def fake_step(model, opt, batch, *a, **kw):
+        steps.append(batch)
+        clock.t += 100.0                 # one step alone passes the budget
+
+    monkeypatch.setattr(bench, "_step", fake_step)
+    monkeypatch.setattr(bench, "_device_high_water", lambda device: 1024)
+    monkeypatch.setattr(bench, "_reset_high_water", lambda device: None)
+    res = bench.run(_Tiny(), "cpu", seq=8, vocab=256, batch_ramp=(1, 2, 4), budget_s=150.0)
+    assert res["time_capped"] is True
+    assert [r["batch"] for r in res["ramp"]] == [1]
+    # WARMUP_STEPS warmups, then the timed loop stops after its first step
+    assert steps == [1] * (bench.WARMUP_STEPS + 1)
+    assert res["ramp"][0]["tok_per_s"] > 0

@@ -448,6 +448,8 @@ def status():
     out = {
         "enabled": bool(cfg.get("sleep_enabled")),
         "state": "sleeping" if sleeping else "awake",
+        # a sleeping model parked mid-run because a request is being served
+        "suspended": bool(sleeping and suspended()),
         "idle_s": None if idle is None else round(idle, 1),
         "models": [],
         "history": history(),

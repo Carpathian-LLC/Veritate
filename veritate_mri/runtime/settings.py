@@ -122,6 +122,11 @@ DEFAULTS = {
     # sleep_batch_size overrides the recipe batch (0 = inherit): a shape whose
     # step outruns the checkpoint interval cannot be interrupted without losing
     # the work.
+    # Engine worker count for threaded matvec. 0 = the engine calibrates per box
+    # and model. Its ladder stops at a diminishing-returns knee timed on
+    # non-boundary decode steps only, which on a bandwidth-limited box can stop a
+    # rung short of the best pick; set a positive value to pin it.
+    "engine_threads": 0,
     "sleep_preempt": True,
     "sleep_resume_s": 5,
     "sleep_reserve_cores": 1,

@@ -76,3 +76,16 @@ def test_a_raising_hook_never_breaks_serving():
     serving.on_began(boom)
     serving.began()          # must not raise
     assert serving.active()
+
+
+def test_engine_threads_setting_pins_the_worker_count(monkeypatch):
+    """0 leaves the engine to calibrate; a positive value pins it."""
+    from inference.backends import c_engine
+    from runtime import settings as settings_mod
+
+    monkeypatch.setattr(settings_mod, "get", lambda: {"engine_threads": 0})
+    assert c_engine.engine_threads() == 0
+    monkeypatch.setattr(settings_mod, "get", lambda: {"engine_threads": 8})
+    assert c_engine.engine_threads() == 8
+    monkeypatch.setattr(settings_mod, "get", lambda: {"engine_threads": "bad"})
+    assert c_engine.engine_threads() == 0

@@ -85,6 +85,15 @@ PREFILL_BATCH_DEFAULT = 1
 PREFILL_BATCH_BY_ARCH = {("linux", "x86_64"): 32}
 
 
+def engine_threads():
+    """Pinned engine worker count, or 0 to let the engine calibrate."""
+    from runtime import settings as settings_mod
+    try:
+        return max(0, int(settings_mod.get().get("engine_threads", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def prefill_batch():
     """Batched-prefill width for this box, or the sequential default when this
     arch has no measurement of its own."""
@@ -309,6 +318,16 @@ class CTracedSubprocess:
                            os.path.join(os.path.dirname(self.model_path), STATE_CACHE_DIRNAME))
         # Batched prefill off the TTFB path; setdefault so a parent env value wins.
         env.setdefault("VERITATE_PREFILL_BATCH", str(prefill_batch()))
+        # Worker count for the engine's threaded matvec. 0 lets the engine calibrate
+        # per (box, model shape). Its ladder stops at a diminishing-returns knee timed
+        # on NON-boundary decode steps, so on a bandwidth-limited box it can stop a
+        # rung early and leave cores idle: cardinal-01 (i7-9700T, 8c @ 800 MHz)
+        # calibrates to 4 workers where 8 is 10.4% faster end to end, and the pick is
+        # unstable across models on one box because the knee test is noise-sensitive.
+        # setdefault so a parent env value still wins.
+        threads = engine_threads()
+        if threads:
+            env.setdefault("VERITATE_HYBRID_THREADS", str(threads))
         # VERITATE_ADDONS=<csv> is inherited from the parent env automatically
         # via os.environ.copy(). set it before starting the MRI server to
         # enable engine-side addons. per-request addon selection from the

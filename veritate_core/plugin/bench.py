@@ -158,22 +158,31 @@ def _step(model, opt, batch, seq, vocab, device, amp_dtype=None,
 
 
 def _measure_batch(model, opt, batch, seq, vocab, device, amp_dtype=None,
-                   n_chunks=1, bptt_window=1):
+                   n_chunks=1, bptt_window=1, deadline=None):
     """Run warmup + timed steps at one batch size. Returns (mem_bytes, tok_per_s).
     Tokens counted per step are batch * seq * n_chunks, which is what the
-    trainer actually consumes per step."""
+    trainer actually consumes per step. `deadline` (a time.monotonic value) cuts
+    the timed loop short after any completed step: on a slow box a single rung can
+    outlast the whole ramp budget, and one timed step is a usable measurement
+    while an unbounded rung is not."""
     import torch
     for _ in range(WARMUP_STEPS):
         _step(model, opt, batch, seq, vocab, device, amp_dtype, n_chunks, bptt_window)
+        if deadline is not None and time.monotonic() >= deadline:
+            break
     _reset_high_water(device)
     start = time.perf_counter()
+    done = 0
     for _ in range(TIMED_STEPS):
         _step(model, opt, batch, seq, vocab, device, amp_dtype, n_chunks, bptt_window)
+        done += 1
+        if deadline is not None and time.monotonic() >= deadline:
+            break
     if device in ("mps", "cuda"):
         getattr(torch, device).synchronize()
     elapsed = time.perf_counter() - start
     step_tokens = batch * seq * max(1, int(n_chunks))
-    tok_per_s = (step_tokens * TIMED_STEPS) / elapsed if elapsed > 0 else 0.0
+    tok_per_s = (step_tokens * done) / elapsed if elapsed > 0 else 0.0
     return _device_high_water(device), tok_per_s
 
 
@@ -279,9 +288,10 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
                      f"({ceiling_label} found)")
                 break
         t_rung = time.monotonic()
+        rung_deadline = (t_start + budget_s) if budget_s else None
         try:
             mem, tok_per_s = _measure_batch(model, opt, batch, seq, vocab, device, amp_dtype,
-                                            n_chunks, bptt_window)
+                                            n_chunks, bptt_window, deadline=rung_deadline)
         except RuntimeError as exc:
             _free(device)
             if oom_recovery.is_oom_error(exc):
@@ -301,6 +311,11 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
         ramp.append({"batch": batch, "mem_gb": mem / GB, "tok_per_s": tok_per_s})
         emit(f"batch {batch}: {mem / GB:.1f} GB, {tok_per_s:,.0f} tok/s ({last_secs:.0f}s)")
         last_mem = mem
+        if rung_deadline is not None and time.monotonic() >= rung_deadline:
+            emit(f"ramp budget {budget_s:.0f}s spent inside batch {batch}; stopping here")
+            time_capped = True
+            _free(device)
+            break
         _free(device)
 
     if hasattr(opt, "close"):

@@ -1939,13 +1939,16 @@ function _renderSleepPanel(d) {
   const models = d.models || [];
   const sleeping = d.state === "sleeping" && d.run;
   if (!d.enabled) {
-    state.textContent = "disabled";
-    meta.textContent = "enable sleep in Settings, then check the models that should learn while idle";
+    state.textContent = "off";
+    meta.textContent = "turn sleep on in Settings, then pick which models learn in the background";
   } else if (!models.length) {
-    state.textContent = "no models enrolled";
-    meta.textContent = "check models under Settings, Sleeping models; any model with a checkpoint can sleep";
+    state.textContent = "no models picked";
+    meta.textContent = "pick models under Settings → Sleeping models; any model with a checkpoint can sleep";
+  } else if (sleeping) {
+    state.textContent = d.suspended ? `${d.run.model} · paused for you` : `${d.run.model} · learning`;
+    meta.textContent = d.suspended ? "it resumes a few seconds after you stop typing" : "";
   } else {
-    state.textContent = sleeping ? `${d.run.model} · sleeping` : `${models.length} enrolled · awake`;
+    state.textContent = models.length > 1 ? `${models.length} models · resting` : "resting";
     meta.textContent = "";
   }
   // transient feedback from the last sleep-now / wake click (server's reason)
@@ -2077,6 +2080,12 @@ function _renderSleepSettings() {
   const host = $("sleepModelsList"), chk = $("sleepEnabledChk");
   if (!host || !settingsState.current) return;
   chk.checked = !!settingsState.current.sleep_enabled;
+  const pre = $("sleepPreemptChk");
+  if (pre) pre.checked = settingsState.current.sleep_preempt !== false;
+  const res = $("sleepReserveCores");
+  if (res) res.value = settingsState.current.sleep_reserve_cores ?? 1;
+  const eng = $("engineThreads");
+  if (eng) eng.value = settingsState.current.engine_threads ?? 0;
   fetch("/train/discovery").then(r => r.ok ? r.json() : null).then(d => {
     const models = ((d && d.models) || []).map(m => m.name).filter(Boolean).sort();
     const enrolled = settingsState.current.sleep_models || [];
@@ -2105,6 +2114,16 @@ function _onSleepEnrollToggle() {
 $("sleepEnabledChk")?.addEventListener("change", ev => {
   _saveSettings({ sleep_enabled: !!ev.target.checked });
   setTimeout(() => { _renderSleepSettings(); pollSleep(); }, 400);
+});
+$("sleepPreemptChk")?.addEventListener("change", ev => {
+  _saveSettings({ sleep_preempt: !!ev.target.checked });
+  setTimeout(pollSleep, 400);
+});
+$("sleepReserveCores")?.addEventListener("change", ev => {
+  _saveSettings({ sleep_reserve_cores: Math.max(0, parseInt(ev.target.value, 10) || 0) });
+});
+$("engineThreads")?.addEventListener("change", ev => {
+  _saveSettings({ engine_threads: Math.max(0, parseInt(ev.target.value, 10) || 0) });
 });
 
 function resetRagPanel() {
