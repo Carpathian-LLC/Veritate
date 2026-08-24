@@ -37,7 +37,7 @@ class _Tiny(torch.nn.Module):
 def test_probe_muon_builds_a_stepping_optimizer():
     """Guards the probe-args shim: build_muon reads trainer arg names off it."""
     m = _Tiny()
-    opt = bench._probe_muon(m)
+    opt = bench._probe_muon(m, "cpu")
     out = m.b(m.a(torch.randn(2, HIDDEN))).sum()
     out.backward()
     opt.step()

@@ -297,6 +297,21 @@ def _draw_window(base):
     return int(base.get("seq") or 1024) * int(base.get("n_chunks") or 1) + 2
 
 
+def _fit_batch(base, cfg, train_bytes):
+    """Sleep batch sized to the experience the model actually has. One step draws
+    batch * (seq * n_chunks) bytes, and a pretrain recipe's batch is set against a
+    corpus thousands of times larger than a night of conversation: inheriting it
+    re-reads the whole log dozens of times per step and stretches one step past
+    any idle window (cardinal 2026-08-24: batch 48 over 17 kB is 27 min a step,
+    against 3 min at the 4 the log can actually fill). An explicit
+    sleep_batch_size still wins."""
+    asked = int(cfg.get("sleep_batch_size", 0) or 0)
+    if asked:
+        return asked
+    return max(1, min(int(base.get("batch_size") or 1),
+                      int(train_bytes) // _draw_window(base)))
+
+
 def _build_own_corpus(model, cfg, min_val_bytes=0):
     """Build the consolidation bins from the model's own exchanges only: write a
     per-model filtered view of the experience log and run the corpus builder
@@ -361,7 +376,7 @@ def _model_step(model):
     return max(steps) if steps else None
 
 
-def launch_args(model, steps, cfg):
+def launch_args(model, steps, cfg, train_bytes):
     """Sleep recipe = the model's own training_args with only the sleep levers
     overridden. Returns None when the model has no readable recipe."""
     base = _recipe(model)
@@ -381,9 +396,7 @@ def launch_args(model, steps, cfg):
         "_cpu_budget": cpu_budget(cfg),
         "_nice": int(cfg.get("sleep_nice", 10)),
     })
-    batch = int(cfg.get("sleep_batch_size", 0) or 0)
-    if batch:
-        args["batch_size"] = batch
+    args["batch_size"] = _fit_batch(base, cfg, train_bytes)
     return args
 
 
@@ -513,7 +526,7 @@ def _launch(st, model, cfg):
         return False, (f"experience bins too small for draw window ({tb}/{vb} B < {window} B): "
                        f"{model} needs about {2 * window} B of its own conversation")
     steps = dose_steps(n, cfg)
-    args = launch_args(model, start_step + steps, cfg)
+    args = launch_args(model, start_step + steps, cfg, tb)
     res = trainer_runner.start(PLUGIN_ID, args)
     if not (isinstance(res, dict) and res.get("ok", True)):
         return False, f"launch failed: {res}"

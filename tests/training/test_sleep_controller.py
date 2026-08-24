@@ -32,6 +32,15 @@ CFG = {
     "sleep_keep_finals": 3, "sleep_lr": 5e-06,
     "sleep_corpus": "experience:0.75,mixed_chat:0.25",
 }
+# enough own-experience bytes to fill the recipe's batch, so tests that are not
+# about batch sizing get the recipe's own value
+BIG_LOG = 10 ** 9
+# wren1_3's shape: one sample draws seq * n_chunks + 2 = 4098 B
+_HYBRID_RECIPE = {
+    "name": "toy", "size": "200m", "trunk": "hybrid", "total_steps": 3000,
+    "base_lr": 2e-05, "min_lr": 2e-06, "warmup_steps": 100, "corpus": "hansard:1.0",
+    "ckpt_every": 200, "eval_every": 200, "seq": 1024, "n_chunks": 4, "batch_size": 48,
+}
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -104,13 +113,13 @@ def test_launch_args_reuses_recipe_with_sleep_levers(tmp_path, monkeypatch):
     the sleep levers (constant low LR, no warmup, dose steps, dense ckpts)."""
     _model(tmp_path)
     monkeypatch.setattr(sleep, "MODELS_ROOT", str(tmp_path / "models"))
-    args = sleep.launch_args("toy", 3120, CFG)
+    args = sleep.launch_args("toy", 3120, CFG, BIG_LOG)
     assert args["resume"] == "toy" and args["name"] == "toy"
     assert args["total_steps"] == 3120 and args["ckpt_every"] == 25
     assert args["base_lr"] == args["min_lr"] == 5e-06 and args["warmup_steps"] == 0
     assert args["corpus"] == CFG["sleep_corpus"]
     assert args["trunk"] == "hybrid" and args["seq"] == 1024  # recipe preserved
-    assert sleep.launch_args("missing", 100, CFG) is None
+    assert sleep.launch_args("missing", 100, CFG, BIG_LOG) is None
 
 
 def test_launch_args_strips_save_bookkeeping(tmp_path, monkeypatch):
@@ -122,7 +131,7 @@ def test_launch_args_strips_save_bookkeeping(tmp_path, monkeypatch):
           "output_dir": "/somewhere/models/toy"}
     _model(tmp_path, training_args=ta)
     monkeypatch.setattr(sleep, "MODELS_ROOT", str(tmp_path / "models"))
-    args = sleep.launch_args("toy", 3015, CFG)
+    args = sleep.launch_args("toy", 3015, CFG, BIG_LOG)
     for k in sleep.SAVE_BOOKKEEPING:
         assert k not in args
     assert args["trunk"] == "hybrid"  # real recipe keys survive
@@ -504,18 +513,37 @@ def test_launch_args_carry_cpu_budget_and_nice(tmp_path, monkeypatch):
     _roots(tmp_path, monkeypatch)
     _model(tmp_path)
     monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 7)
-    args = sleep.launch_args("toy", 10, {**CFG, "sleep_nice": 10})
+    args = sleep.launch_args("toy", 10, {**CFG, "sleep_nice": 10}, BIG_LOG)
     assert args["_cpu_budget"] == 7
     assert args["_nice"] == 10
 
 
-def test_sleep_batch_size_overrides_the_recipe(tmp_path, monkeypatch):
-    """A weak box shrinks the step so it fits between interruptions."""
+def test_sleep_batch_is_sized_to_the_experience_on_hand(tmp_path, monkeypatch):
+    """A night of conversation cannot fill a pretrain batch; drawing one re-reads
+    the log dozens of times per step and no step ever finishes on a weak box."""
     _roots(tmp_path, monkeypatch)
-    _model(tmp_path)
+    _model(tmp_path, training_args=_HYBRID_RECIPE)
     monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
-    assert sleep.launch_args("toy", 10, {**CFG, "sleep_batch_size": 0})["batch_size"] == 48
-    assert sleep.launch_args("toy", 10, {**CFG, "sleep_batch_size": 4})["batch_size"] == 4
+    cfg = {**CFG, "sleep_batch_size": 0}
+    assert sleep.launch_args("toy", 10, cfg, 17345)["batch_size"] == 4     # 4 draws of 4098 B
+    assert sleep.launch_args("toy", 10, cfg, 4098)["batch_size"] == 1
+    assert sleep.launch_args("toy", 10, cfg, 0)["batch_size"] == 1
+
+
+def test_sleep_batch_never_exceeds_the_models_own_recipe(tmp_path, monkeypatch):
+    """A large log must not push the step past the batch the model was trained at."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args=_HYBRID_RECIPE)
+    monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
+    assert sleep.launch_args("toy", 10, {**CFG, "sleep_batch_size": 0}, 10**9)["batch_size"] == 48
+
+
+def test_explicit_sleep_batch_size_wins_over_the_fit(tmp_path, monkeypatch):
+    """The setting is the escape hatch when a box wants a step of its own size."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args=_HYBRID_RECIPE)
+    monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
+    assert sleep.launch_args("toy", 10, {**CFG, "sleep_batch_size": 8}, 4098)["batch_size"] == 8
 
 
 def test_run_modifiers_never_reach_the_trainer_argv():
@@ -534,7 +562,7 @@ def test_sleep_logs_every_step(tmp_path, monkeypatch):
     _model(tmp_path, training_args={"name": "toy", "size": "10m", "seq": 1024,
                                     "batch_size": 48, "log_every": 10})
     monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
-    assert sleep.launch_args("toy", 4, CFG)["log_every"] == 1
+    assert sleep.launch_args("toy", 4, CFG, BIG_LOG)["log_every"] == 1
 
 
 def test_unpark_resumes_a_child_left_suspended_by_a_previous_process(tmp_path, monkeypatch):

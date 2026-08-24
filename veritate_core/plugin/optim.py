@@ -13,6 +13,11 @@
 #   otherwise a vendored fallback with identical math (so training never crashes on an
 #   older torch). 8-bit AdamW uses bitsandbytes when it is importable AND on CUDA,
 #   otherwise falls back to torch AdamW. Both fallbacks are silent-safe and logged.
+# - Newton-Schulz orthogonalization runs in the device's working dtype. torch's own
+#   Muon hardcodes bf16, and on a device without bf16 acceleration that addmm drops
+#   to a serial reference path: one 1024x4096 weight costs 203.9 s on one core
+#   against 0.775 s across seven in fp32 (i7-9700T, 2026-08-24). Such a device gets
+#   the vendored copy, which takes its dtype from hardware.bf16_supported.
 # veritate_core/plugin/optim.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -20,6 +25,8 @@
 import math
 
 import torch
+
+from veritate_core.plugin import hardware
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -42,9 +49,9 @@ EMB_NAME_TAG = "emb"
 # torch versions.
 
 
-def _zeropower_via_newtonschulz(grad, ns_coefficients, ns_steps, eps):
+def _zeropower_via_newtonschulz(grad, ns_coefficients, ns_steps, eps, dtype):
     a, b, c = ns_coefficients
-    ortho_grad = grad.bfloat16()
+    ortho_grad = grad.to(dtype)
     transposed = grad.size(0) > grad.size(1)
     if transposed:
         ortho_grad = ortho_grad.T
@@ -74,11 +81,12 @@ class _VendoredMuon(torch.optim.Optimizer):
 
     def __init__(self, params, lr=1e-3, weight_decay=0.1, momentum=MUON_MOMENTUM,
                  nesterov=MUON_NESTEROV, ns_coefficients=MUON_NS_COEFFICIENTS,
-                 eps=MUON_EPS, ns_steps=MUON_NS_STEPS, adjust_lr_fn=None):
+                 eps=MUON_EPS, ns_steps=MUON_NS_STEPS, adjust_lr_fn=None,
+                 ns_dtype=torch.bfloat16):
         defaults = {
             "lr": lr, "weight_decay": weight_decay, "momentum": momentum, "nesterov": nesterov,
             "ns_coefficients": ns_coefficients, "eps": eps, "ns_steps": ns_steps,
-            "adjust_lr_fn": adjust_lr_fn}
+            "adjust_lr_fn": adjust_lr_fn, "ns_dtype": ns_dtype}
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -96,6 +104,7 @@ class _VendoredMuon(torch.optim.Optimizer):
             eps = group["eps"]
             ns_steps = group["ns_steps"]
             adjust_lr_fn = group["adjust_lr_fn"]
+            ns_dtype = group["ns_dtype"]
             for p in group["params"]:
                 if p.grad is None:
                     continue
@@ -107,7 +116,7 @@ class _VendoredMuon(torch.optim.Optimizer):
                 buf.lerp_(grad, 1 - momentum)
                 update = grad.lerp(buf, momentum) if nesterov else buf
                 update = _zeropower_via_newtonschulz(
-                    update, ns_coefficients, ns_steps, eps)
+                    update, ns_coefficients, ns_steps, eps, ns_dtype)
                 adjusted_lr = _adjust_lr(lr, adjust_lr_fn, p.shape)
                 p.mul_(1 - lr * weight_decay)
                 p.add_(update, alpha=-adjusted_lr)
@@ -143,14 +152,24 @@ class MuonAdamW:
         self.adamw.load_state_dict(state["adamw"])
 
 
-def _muon_cls():
-    """Native torch.optim.Muon when present, else the vendored fallback."""
+def ns_dtype(device):
+    """Newton-Schulz working dtype: bf16 where the device accelerates it, fp32
+    where it does not."""
+    return torch.bfloat16 if hardware.bf16_supported(device) else torch.float32
+
+
+def _muon(params, args, device):
+    """torch.optim.Muon where its hardcoded bf16 orthogonalization is accelerated;
+    the vendored copy in the device's working dtype everywhere else."""
+    kwargs = {"lr": args.base_lr, "weight_decay": args.weight_decay,
+              "momentum": MUON_MOMENTUM, "adjust_lr_fn": MUON_ADJUST_LR}
     native = getattr(torch.optim, "Muon", None)
-    if native is not None:
-        return native, "torch.optim.Muon"
-    from runtime import logs as logmod
-    logmod.warn("optim", "torch.optim.Muon unavailable; using vendored Muon fallback")
-    return _VendoredMuon, "vendored"
+    if native is not None and hardware.bf16_supported(device):
+        return native(params, **kwargs)
+    if native is None:
+        from runtime import logs as logmod
+        logmod.warn("optim", "torch.optim.Muon unavailable; using vendored Muon fallback")
+    return _VendoredMuon(params, ns_dtype=ns_dtype(device), **kwargs)
 
 
 def _build_adamw(params, args):
@@ -175,15 +194,10 @@ def _build_adamw(params, args):
     return torch.optim.AdamW(params, **kwargs)
 
 
-def build_muon(model, args):
+def build_muon(model, args, device):
     hidden, rest = [], []
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
         (hidden if p.ndim == 2 and EMB_NAME_TAG not in name else rest).append(p)
-    muon_cls, _ = _muon_cls()
-    muon = muon_cls(
-        hidden, lr=args.base_lr, weight_decay=args.weight_decay,
-        momentum=MUON_MOMENTUM, adjust_lr_fn=MUON_ADJUST_LR)
-    adamw = _build_adamw(rest, args)
-    return MuonAdamW(muon, adamw)
+    return MuonAdamW(_muon(hidden, args, device), _build_adamw(rest, args))

@@ -117,9 +117,9 @@ class _ProbeArgs:
     use_8bit_adam = False
 
 
-def _probe_muon(model):
+def _probe_muon(model, device):
     from . import optim
-    return optim.build_muon(model, _ProbeArgs())
+    return optim.build_muon(model, _ProbeArgs(), device)
 
 
 def _step(model, opt, batch, seq, vocab, device, amp_dtype=None,
@@ -224,7 +224,7 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
                                           betas=PROBE_BETAS, eps=PROBE_EPS, weight_decay=PROBE_WD)
         emit(f"optimizer paged to NVMe (tier {plan.tier}); step time is disk-bound")
     elif str(optimizer or "").lower() == PROBE_MUON:
-        opt = _probe_muon(model)
+        opt = _probe_muon(model, device)
         emit(f"optimizer: {PROBE_MUON} (matches the run; Newton-Schulz is not free)")
     else:
         opt = torch.optim.AdamW(model.parameters(), lr=PROBE_LR)

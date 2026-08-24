@@ -119,9 +119,8 @@ DEFAULTS = {
     # quiet, so consolidation runs in the gaps instead of needing a long idle
     # window. sleep_reserve_cores keeps cores off the child's BLAS budget and
     # sleep_nice deprioritizes it, covering the window before a suspend lands.
-    # sleep_batch_size overrides the recipe batch (0 = inherit): a shape whose
-    # step outruns the checkpoint interval cannot be interrupted without losing
-    # the work.
+    # sleep_batch_size pins the sleep step's batch; 0 sizes it to the experience
+    # the model has, since a night of conversation cannot fill a pretrain batch.
     # Engine worker count for threaded matvec. 0 = the engine calibrates per box
     # and model. Its ladder stops at a diminishing-returns knee timed on
     # non-boundary decode steps only, which on a bandwidth-limited box can stop a

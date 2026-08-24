@@ -788,7 +788,7 @@ def build_optimizer(params, args, device, plan=None, state_dir=None, model=None)
         want_muon = False
     if want_muon:
         print("optimizer: Muon (2D hidden weights) + AdamW (emb/norms/1D)", flush=True)
-        return optim_helpers.build_muon(model, args)
+        return optim_helpers.build_muon(model, args, device)
     if _MEM_PAGING and plan is not None and plan.tier in mem_executor.OFFLOAD_TIERS:
         print("optimizer state paged to NVMe (" + plan.tier + "); resident optimizer "
               "memory ~0, step time is disk-bound", flush=True)
