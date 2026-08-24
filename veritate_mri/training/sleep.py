@@ -331,6 +331,20 @@ def _fit_batch(base, cfg, train_bytes, ms=None):
     return max(1, fit)
 
 
+def _fit_ckpt_every(cfg, ms):
+    """Checkpoints per sleep run, in steps, bounded by wall clock. sleep_ckpt_every
+    is a step count, and a step is seconds on a training box and minutes on a weak
+    one: cardinal 2026-08-24 waking at step 12 lost everything past step 6 because
+    25 steps is 69 minutes there. Once a model has slept here, the interval is
+    whatever fits sleep_ckpt_seconds, capped by the setting so a fast box is
+    unaffected."""
+    every = max(1, int(cfg["sleep_ckpt_every"]))
+    step_s = float((ms or {}).get("step_s") or 0)
+    if step_s <= 0:
+        return every
+    return max(1, min(every, int(float(cfg["sleep_ckpt_seconds"]) / step_s)))
+
+
 def _fit_eval_iters(base, batch, val_bytes):
     """Sleep eval passes sized to the val bin. Each pass draws batch * (seq *
     n_chunks) bytes, so a recipe's count re-measures a night's val split dozens
@@ -416,8 +430,8 @@ def launch_args(model, steps, cfg, train_bytes, val_bytes, ms=None):
     lr = float(cfg["sleep_lr"])
     args.update({
         "name": model, "resume": model, "corpus": cfg["sleep_corpus"],
-        "total_steps": int(steps), "ckpt_every": int(cfg["sleep_ckpt_every"]),
-        "eval_every": int(cfg["sleep_ckpt_every"]), "base_lr": lr, "min_lr": lr,
+        "total_steps": int(steps), "ckpt_every": _fit_ckpt_every(cfg, ms),
+        "eval_every": _fit_ckpt_every(cfg, ms), "base_lr": lr, "min_lr": lr,
         "description": f"sleep consolidation: {steps} steps over own experience "
                        f"({cfg['sleep_corpus']}), constant lr {lr:g}",
         # run modifiers, stripped before argv (trainer_runner._build_argv)
@@ -804,10 +818,14 @@ def finalize():
                     ms["step_s"] = round(elapsed / (end_step - start), 1)
                     ms["step_batch"] = run.get("batch")
             else:
-                # gained nothing: the launch failed or was stopped before the
-                # first checkpoint. Without a cooldown the watcher retries every
-                # 60 s forever (cardinal: 3 failed launches in 11 minutes)
-                ms["cooldown_until"] = time.time() + FAIL_COOLDOWN_S
+                # no checkpoint survived. The cooldown exists to stop the watcher
+                # retry-storming a launch that cannot work (cardinal: 3 failed
+                # launches in 11 minutes); a run that trained and was woken
+                # between checkpoints is not that, and must not be punished for it
+                logged, _ = _train_progress(model)
+                lost = max(0, (logged or start) - start)
+                if not lost:
+                    ms["cooldown_until"] = time.time() + FAIL_COOLDOWN_S
             ms.update({"sleeping": False, "finals": finals, "run": {}})
             if end_step > start:
                 published = None
@@ -822,6 +840,10 @@ def finalize():
                            steps_gained=end_step - start, finals=finals,
                            served=bool(published))
                 logmod.ok("sleep", f"{model} awake at step {end_step}")
+            elif lost:
+                _log_event("lost", model=model, end_step=end_step, steps_lost=lost)
+                logmod.warn("sleep", f"{model} woken between checkpoints: {lost} steps "
+                                     f"trained but not saved")
             else:
                 _log_event("failed", model=model, end_step=end_step,
                            cooldown_s=FAIL_COOLDOWN_S)

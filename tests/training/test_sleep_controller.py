@@ -31,6 +31,7 @@ CFG = {
     "sleep_min_steps": 50, "sleep_max_steps": 500, "sleep_ckpt_every": 25,
     "sleep_keep_finals": 3, "sleep_lr": 5e-06,
     "sleep_corpus": "experience:0.75,mixed_chat:0.25", "sleep_step_seconds": 300,
+    "sleep_ckpt_seconds": 1800,
 }
 # enough own-experience bytes to fill the recipe's batch, so tests that are not
 # about batch sizing get the recipe's own value
@@ -625,6 +626,42 @@ def test_first_sleep_has_no_measurement_and_takes_the_data_bound(tmp_path, monke
     cfg = {**CFG, "sleep_batch_size": 0}
     for ms in ({}, {"step_batch": 4}, {"step_s": 166.0}, {"step_batch": 0, "step_s": 0}):
         assert sleep.launch_args("toy", 10, cfg, 17345, BIG_LOG, ms)["batch_size"] == 4
+
+
+def test_checkpoint_interval_is_bounded_by_wall_clock_on_a_slow_box(tmp_path, monkeypatch):
+    """25 steps is minutes on a training box and 69 of them on cardinal; a wake in
+    that window throws all of it away."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args=_HYBRID_RECIPE)
+    cfg = {**CFG, "sleep_ckpt_every": 25, "sleep_ckpt_seconds": 1800}
+    slow = {"step_batch": 4, "step_s": 166.0}
+    assert sleep.launch_args("toy", 50, cfg, BIG_LOG, BIG_LOG, slow)["ckpt_every"] == 10
+    assert sleep.launch_args("toy", 50, cfg, BIG_LOG, BIG_LOG)["ckpt_every"] == 25
+
+
+def test_a_fast_box_keeps_its_configured_checkpoint_interval(tmp_path, monkeypatch):
+    """The step count stays the ceiling; the time budget only ever tightens it."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args=_HYBRID_RECIPE)
+    cfg = {**CFG, "sleep_ckpt_every": 25, "sleep_ckpt_seconds": 1800}
+    fast = {"step_batch": 8, "step_s": 2.0}
+    assert sleep.launch_args("toy", 50, cfg, BIG_LOG, BIG_LOG, fast)["ckpt_every"] == 25
+
+
+def test_a_run_woken_between_checkpoints_is_not_a_failure(tmp_path, monkeypatch):
+    """It trained; the steps just did not survive. A cooldown here punishes a run
+    that was working and blocks the next one for an hour."""
+    _armed(tmp_path, monkeypatch, models=("toy",), pending=(20,))
+    monkeypatch.setattr(sleep.trainer_runner, "start", lambda pid, args: {"ok": True})
+    assert sleep.maybe_sleep().startswith("sleeping: toy")
+    (tmp_path / "models" / "toy" / "train.csv").write_text(
+        "step,split,loss,lr,grad_norm,tok_per_s,wall_s,seed\n"
+        "3006,train,0.5,5e-06,1.0,99.0,996.0,0\n")
+    sleep.finalize()                      # no new checkpoint, but train.csv moved
+    ms = sleep._load_state()["models"]["toy"]
+    assert ms.get("cooldown_until") is None
+    ev = sleep.history()[0]
+    assert ev["event"] == "lost" and ev["steps_lost"] == 6
 
 
 def test_explicit_sleep_batch_size_wins_over_the_fit(tmp_path, monkeypatch):

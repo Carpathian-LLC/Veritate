@@ -1914,6 +1914,8 @@ function _sleepEvLine(ev) {
   if (ev.event === "wake") return `${ev.model || "model"} woken by user`;
   if (ev.event === "awake")
     return `${ev.model} awake at step ${ev.end_step} (+${ev.steps_gained} steps consolidated)`;
+  if (ev.event === "lost")
+    return `${ev.model} woken between saves — ${ev.steps_lost} steps trained but not kept`;
   if (ev.event === "failed")
     return `${ev.model} sleep failed (no steps gained) — cooling down ${Math.round((ev.cooldown_s || 0) / 60)}m`;
   return ev.event;

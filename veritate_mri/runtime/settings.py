@@ -114,6 +114,7 @@ DEFAULTS = {
     "sleep_min_steps": 50,
     "sleep_max_steps": 500,
     "sleep_ckpt_every": 25,
+    "sleep_ckpt_seconds": 1800,
     "sleep_keep_finals": 3,
     "sleep_lr": 5e-06,
     # Weak-hardware levers. A sleep child sized for the training box takes every
@@ -128,6 +129,9 @@ DEFAULTS = {
     # what the box measured on that model's last sleep, targeting a step of
     # sleep_step_seconds. A long step is not wrong, but it delays the checkpoint
     # that makes waking early cheap and hides progress from the panel.
+    # sleep_ckpt_every is a step count and a step is seconds on a training box and
+    # minutes on a weak one, so sleep_ckpt_seconds caps how much wall clock a wake
+    # can throw away. The step count stays the ceiling: a fast box is unaffected.
     # Engine worker count for threaded matvec. 0 = the engine calibrates per box
     # and model. Its ladder stops at a diminishing-returns knee timed on
     # non-boundary decode steps only, which on a bandwidth-limited box can stop a
