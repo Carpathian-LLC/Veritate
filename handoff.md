@@ -90,13 +90,38 @@ user pushes. Deploy: `scp` the changed files or `git fetch origin dev && git res
 origin/dev`, then `bash ~/veritate/dash_watchdog.sh`. Watch loops on that box must not match their
 own command line: use `pgrep -f "[v]eritate_venv/bin/python -u"`.
 
-**OPEN DECISION — the loop does not close without it.** Sleep writes consolidated weights to
-`checkpoints/step_N.pt` and never re-exports `veritate.bin`, so the model the user actually talks to
-on the C engine is unchanged by any amount of sleeping. `training/export.py::export_checkpoint`
-(route `POST /export/<name>`) is the one owner and wiring it into `finalize()` is small. It was NOT
-shipped on purpose: auto-promoting a self-trained checkpoint with no quality gate means a bad
-consolidation silently degrades the served model, and that model then generates the next round of
-its own training data. This needs an eval gate (or an explicit user promote step), not a hook.
+**The 800 MHz clamp, re-checked 2026-08-24.** Root-caused 2026-07-13 (worklog) as the Dell
+power-adapter/BIOS clamp. New evidence today narrows it: `intel_pstate` logs "Turbo disabled by BIOS
+or unavailable on processor" when the BIOS actually disables turbo, and that line is **absent** from
+this box's kernel log (only "HWP enabled" + "Disabling energy efficiency optimization"). RAPL is
+healthy (PL1 35 W / PL2 60 W, correct for a 35 W T-series part), package 27-43 C, `num_pstates 36`,
+`turbo_pct 98` — so the hardware exposes the full range and essentially all of it sits behind a turbo
+switch that reads 1. `no_turbo` is a normal root-writable file; an unprivileged write gets a plain
+permission error, not the driver's -EPERM. sudo needs a password, so this was NOT tested.
+
+    sudo sh -c 'echo 0 > /sys/devices/system/cpu/intel_pstate/no_turbo'
+    cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq   # 800000 -> higher if it took
+    # revert: sudo sh -c 'echo 1 > .../no_turbo'
+
+If `cpuinfo_max_freq` rises, the clamp was turbo-off and everything on this box gets 2-3x (PL1 35 W
+still caps sustained all-core clocks, so expect ~1.6-2.2 GHz under load, not the 3.8 GHz turbo peak).
+If the write is refused or the frequency does not move, it is the power-adapter clamp and no software
+change reaches it: check the brick and the BIOS Performance page. Either way it dwarfs every software
+lever left (int8 is 1.72x and gated on a quality eval).
+
+**Sleep now publishes (shipped 2026-08-24 on user instruction).** `finalize()` re-exports the newest
+checkpoint over the model's `veritate.bin` and respawns the engine holding the pre-sleep weights.
+Every bin writer in `export.py` goes through `_atomic_bin` (sibling temp, fsync, `os.replace`) —
+they used to `open(path, "wb")`, truncating the served artifact before the first tensor landed. Only
+a model that already serves a bin is published; the dtype follows the bin in place; a failed publish
+leaves the previous weights serving and does not fail the sleep.
+
+**STANDING RISK, accepted by the user, not mitigated in code:** there is no quality gate on the
+promotion. A bad consolidation degrades the served model, and that model then generates the next
+round of its own training data. Nothing currently detects that. The sleep run's own val loss is
+recorded per run in `train.csv` and is the obvious signal to gate on; wren1_3's has been flat-to-up
+(1.2995 -> 1.3151 -> 1.3127) over the runs so far, which is noise at 6 steps and lr 5e-6 but is not
+evidence of improvement either. Watch it.
 
 ## CARDINAL NIGHT 2026-08-23 (inference + weak-hardware sleep)
 

@@ -2,7 +2,7 @@
 
 *Sam Malkasian, Carpathian LLC — 2026-08-23*
 
-Result: on a deliberately weak box — an Intel i7-9700T, 8 cores, no hyperthreading, BIOS-locked to 800 MHz — a 270M byte-level model can train on its own conversations while it serves them, with **no measurable cost to the people talking to it**. Unyielding background consolidation costs a served request 2.5–3× throughput and roughly 200× first-byte latency. Suspending the training child for the duration of each request removes that cost entirely: serving under an active training run measures the same as serving on an idle box. Caveats up front: one box, one model scale, one architecture family, greedy decode, single-seed timings; the quality side of the loop (does the model actually get better) was validated separately in the E4 campaign and is not re-established here.
+Result: on a deliberately weak box — an Intel i7-9700T, 8 cores, no hyperthreading, firmware-clamped to 800 MHz — a 270M byte-level model can train on its own conversations while it serves them, with **no measurable cost to the people talking to it**. Unyielding background consolidation costs a served request 2.5–3× throughput and roughly 200× first-byte latency. Suspending the training child for the duration of each request removes that cost entirely: serving under an active training run measures the same as serving on an idle box. Caveats up front: one box, one model scale, one architecture family, greedy decode, single-seed timings; the quality side of the loop (does the model actually get better) was validated separately in the E4 campaign and is not re-established here.
 
 ## The problem
 

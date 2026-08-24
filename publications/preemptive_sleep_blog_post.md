@@ -2,7 +2,7 @@
 
 *Sam Malkasian, Carpathian LLC — 2026-08-23*
 
-We have a machine in the corner that exists to be humiliated. It is an Intel i7-9700T: eight cores, no hyperthreading, and a BIOS that locks it to 800 MHz — 40% of the clock it was sold with. Nothing about it is fast. That is the point. If a feature works there, it works on whatever is under your desk.
+We have a machine in the corner that exists to be humiliated. It is an Intel i7-9700T: eight cores, no hyperthreading, and firmware that clamps it to 800 MHz — 40% of the clock it was sold with. Nothing about it is fast. That is the point. If a feature works there, it works on whatever is under your desk.
 
 The feature we wanted was simple to say and annoying to build: **the model should learn from its conversations without anyone noticing.**
 
