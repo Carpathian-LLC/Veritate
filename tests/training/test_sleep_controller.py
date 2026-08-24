@@ -525,3 +525,13 @@ def test_run_modifiers_never_reach_the_trainer_argv():
                                       {"name": "toy", "_cpu_budget": 7, "_nice": 10})
     assert "--_cpu_budget" not in argv and "7" not in argv
     assert "--name" in argv and "toy" in argv
+
+
+def test_sleep_logs_every_step(tmp_path, monkeypatch):
+    """A short dose must still write train.csv rows; an inherited log_every of 10
+    leaves a 4-step sleep looking like nothing happened."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args={"name": "toy", "size": "10m", "seq": 1024,
+                                    "batch_size": 48, "log_every": 10})
+    monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
+    assert sleep.launch_args("toy", 4, CFG)["log_every"] == 1

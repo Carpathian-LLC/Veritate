@@ -23,7 +23,7 @@ for _p in (_MRI_ROOT, os.path.join(_MRI_ROOT, "inference", "backends")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from c_engine import FRAME_PAYLOAD_BYTES, CTracedSubprocess  # noqa: E402
+from c_engine import CTracedSubprocess  # noqa: E402
 from readers import paths  # noqa: E402
 
 # ------------------------------------------------------------------------------------
@@ -88,6 +88,7 @@ def run_trace(exe, model, prompt, temperature, top_k, max_new, warmup):
         t1 = time.perf_counter_ns()
 
         trace = list(sub.last_trace)
+        payload_bytes = sub._frame_payload_bytes
         total_wall_ms = sub.last_total_wall_ms
         total_bytes = sub.last_total_bytes
         outer_wall_ms = (t1 - t0) / 1e6
@@ -96,6 +97,7 @@ def run_trace(exe, model, prompt, temperature, top_k, max_new, warmup):
 
     return {
         "trace": trace,
+        "payload_bytes": payload_bytes,
         "total_wall_ms": total_wall_ms,
         "outer_wall_ms": outer_wall_ms,
         "total_bytes": total_bytes,
@@ -126,8 +128,8 @@ def render_markdown(result, agg, exe, model, prompt):
     lines.append(f"- model: `{model}`")
     lines.append(f"- prompt: `{prompt!r}`")
     lines.append(f"- frames: {agg['frames']}  (token_count={result['token_count']})")
-    lines.append(f"- frame size: {agg['frame_size_bytes']:,} bytes  (4 marker + 12 header + {FRAME_PAYLOAD_BYTES:,} "
-                 f"payload)")
+    lines.append(f"- frame size: {agg['frame_size_bytes']:,} bytes  (4 marker + 12 header + "
+                 f"{result['payload_bytes']:,} payload)")
     lines.append(f"- total stream wall: {result['total_wall_ms']:.2f} ms")
     lines.append(f"- outer wall (incl. close): {result['outer_wall_ms']:.2f} ms")
     lines.append(f"- total bytes streamed: {result['total_bytes']:,}")
@@ -189,7 +191,7 @@ def render_markdown(result, agg, exe, model, prompt):
                  f"(or a flat memcpy "
                  f"into a pre-allocated buffer) saves ~{max(0.0, parse_p50 - 0.02):.3f} ms p50.")
     lines.append(f"3. **read full frame in one syscall**, current `_read_exact` loops "
-                 f"{1 + (FRAME_PAYLOAD_BYTES // 65536) + 1} times "
+                 f"{1 + (result['payload_bytes'] // 65536) + 1} times "
                  f"on a 64 KB pipe buffer. Increasing the engine's stdout buffer via `setvbuf` + a single big `read()` "
                  f"saves ~0.1-0.3 ms p50 from per-chunk overhead.")
     lines.append("")

@@ -68,6 +68,10 @@ SLEEP_OVERRIDES = {
     "wsd_decay_kind": "sqrt", "loss_mask": "assistant", "resume": None,
     "name": None, "corpus": None, "total_steps": None, "ckpt_every": None,
     "eval_every": None, "base_lr": None, "min_lr": None, "description": None,
+    # a pretrain recipe logs every 10-20 steps; a sleep dose can be shorter than
+    # that, and an inherited interval writes no train.csv row at all, so the run
+    # looks like nothing happened. Sleep is short by construction: log every step.
+    "log_every": 1,
 }
 # save() stamps bookkeeping into training_args that are not trainer flags; the
 # trainer's unknown-flag gate refuses a launch that forwards them (measured on
