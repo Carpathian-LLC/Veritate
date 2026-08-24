@@ -203,3 +203,20 @@ on at least two boxes with different core counts; if the two classes want the sa
 everywhere, only (1) and (3) are worth keeping. Needs an engine rebuild per arch, so it carries
 rule-25 bitwise-parity obligations; row-split parity holds at every worker count, so output cannot
 change. Workaround shipped meanwhile: the `engine_threads` setting pins the count.
+
+
+**IDEA 23 — why does CPU training run single-threaded? (2026-08-23, open)**
+On cardinal a sleep step (200M hybrid, batch 4, seq 1024 x 4 chunks, fp32) sampled **1 running thread
+of 13** with `OMP_NUM_THREADS=7` and no contention, and had not finished one step in ~20 wall minutes.
+Ruled out: bf16 emulation (`resolve_precision` already returns None on CPU, so the run was fp32 --
+verified on the box); contention (nothing else was running); the preemption suspend (`api suspended:
+False`, state sampled `RNl` throughout). Remaining suspects, in order: (1) the recurrent GLA trunk in
+eager PyTorch is op-count-bound, matching the batch-1 decode finding at the top of this ledger -- many
+small sequential ops that torch will not parallelize; (2) `--use_8bit_adam` on CPU, where bitsandbytes
+has no tuned kernel; (3) Muon's Newton-Schulz on many small 2D weights; (4) activation-checkpoint
+recompute serializing the graph. Next step is a profile, not a guess: `torch.profiler` over two steps,
+grouped by op, on the box. The payoff is large -- one core of eight is a 8x ceiling on every weak-box
+consolidation -- and it is the last thing standing between preemptive sleep and a model that measurably
+improves overnight on commodity hardware. Falsifier for (1): if the profile shows time concentrated in
+many small recurrent ops rather than in a few GEMMs, batching or fusing the recurrent step is the fix
+and the optimizer is exonerated.

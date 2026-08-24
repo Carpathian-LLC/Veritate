@@ -77,6 +77,12 @@ engine p50, 18.3 ms/byte end to end. The gap is NOT the Python layer (0.02 ms/by
 boundary steps: word-initial bytes run the GLA global-block stack and cost 50 ms vs 10 ms, 54% of
 decode. int8 is 1.46x on identical weights and is the first lever (successes.md).
 
+**Two dead ends, recorded so nobody re-runs them:**
+- bf16 emulation is NOT why CPU sleep is slow. Raw bf16 matmul on this AVX2-only box really is 424x
+  slower than fp32 (0.33 vs 141.68 GFLOP/s, successes.md), but `hardware.resolve_precision("bf16",
+  "cpu")` already returns None, verified on the box -- every CPU run is fp32 already.
+- The engine/serving stack is not the bottleneck either: 0.02 ms/byte, 0.1% of decode.
+
 **OPEN / next session:**
 1. `perf_trace.py` is BROKEN: imports `FRAME_PAYLOAD_BYTES`, which is now per-instance
    (`sub._frame_payload_bytes`). Not fixed -- I used a scratchpad probe instead.
@@ -89,6 +95,14 @@ decode. int8 is 1.46x on identical weights and is the first lever (successes.md)
 4. Cardinal settings are currently a TEST shape (`sleep_max_steps` 4, `sleep_batch_size` 4,
    `sleep_min_exchanges` 5, `sleep_idle_min` 1). Reset before treating any run as real.
 5. Browser cache: after any UI deploy tell the user to hard refresh.
+6. **The real weak-box bottleneck is IDEA 23 (ideas.md): CPU training runs single-threaded.**
+   Sampled 1 running thread of 13 with a 7-core budget, no contention, fp32, not suspended. One core
+   of eight is an 8x ceiling on every weak-box consolidation. Next step is a `torch.profiler` pass
+   over two steps grouped by op -- a profile, not a guess. This is the last thing between preemptive
+   sleep and a model that measurably improves overnight on commodity hardware.
+7. A full sleep cycle was NOT observed completing on cardinal: a batch-4 step did not finish in ~20
+   wall min, so the run was woken deliberately. The lifecycle either side of the step IS validated
+   (launch -> suspend -> resume -> wake -> finalize -> history -> cooldown, all verified on the box).
 
 ## active (2026-08-19)
 
