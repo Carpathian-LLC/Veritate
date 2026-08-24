@@ -1432,3 +1432,13 @@ cooldown/finals/history, model param on routes, per-model panel rows.
 25 sleep tests green; tests/training 215, tests/mri 733 green.
 Item 3 (cardinal weak-machine tuning A/B) launching next. Sleep tab-vs-
 panel question open with user. wren2 unaffected throughout.
+
+2026-08-23 — SESSION END (user decommissioned; handoff.md top section is the
+authoritative state). Final day: sleep settings UI moved to Settings (Models
+row, warm+sleeping side-by-side boxes, multi-enroll verified via API), sleep-
+now/wake click feedback added, updater auto-wakes sleepers, cardinal
+benchmark cancelled by user mid-arms (numbers lost, rerun cheap), stray
+cardinal trainer killed clean, user pushed + updated cardinal. wren2 at
+step 17,160/144,000, val 0.7432 falling, healthy. CRITICAL for next session:
+re-arm the wren2 checkpoint prune watcher (policy in handoff item 1) — it
+died with the session and the disk fills in ~6 days without it.

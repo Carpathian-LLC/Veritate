@@ -1948,6 +1948,14 @@ function _renderSleepPanel(d) {
     state.textContent = sleeping ? `${d.run.model} · sleeping` : `${models.length} enrolled · awake`;
     meta.textContent = "";
   }
+  // transient feedback from the last sleep-now / wake click (server's reason)
+  if (_sleepFlash && Date.now() < _sleepFlash.until) {
+    meta.textContent = _sleepFlash.msg;
+    meta.style.color = _sleepFlash.good ? "var(--good)" : "var(--warm)";
+  } else {
+    meta.style.color = "";
+    _sleepFlash = null;
+  }
   // one compact row per enrolled model: state, pending, last slept, next
   // eligibility, and its own sleep-now / wake button
   rows.innerHTML = "";
@@ -2039,10 +2047,22 @@ function pollSleep() {
 }
 setInterval(pollSleep, 15000);
 pollSleep();
+let _sleepFlash = null;
+
 function _sleepPost(path, model) {
   fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(model ? { model } : {}) })
-    .then(() => pollSleep()).catch(() => {});
+    .then(r => r.json())
+    .then(res => {
+      // surface the controller's verdict: "sleeping: 120 steps over 12
+      // exchanges" is success; anything else explains why nothing started
+      let msg = (res && (res.result || res.error)) || (res && res.state === "waking" ? "waking" : "");
+      const good = /^(sleeping|waking)/.test(msg);
+      if (msg === "trainer busy") msg = "trainer busy: a training run is using this machine";
+      if (msg) _sleepFlash = { msg: `${model ? model + ": " : ""}${msg}`, good, until: Date.now() + 6000 };
+      pollSleep();
+    })
+    .catch(() => { _sleepFlash = { msg: "request failed", good: false, until: Date.now() + 6000 }; pollSleep(); });
 }
 $("sleepWake")?.addEventListener("click", () => _sleepPost("/sleep/wake", _sleepingModel));
 $("sleepModels")?.addEventListener("click", ev => {
