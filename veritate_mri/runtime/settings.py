@@ -97,13 +97,17 @@ DEFAULTS = {
     # steps so an early wake keeps most of the consolidation; intermediates are
     # deleted when the run ends and older sleep finals are thinned to
     # sleep_keep_finals per model. Controls live on the Generation tab.
+    # sleep_idle_min is short because sleep_preempt makes it safe: a suspended
+    # child costs a served request nothing, so the gate only has to keep a run
+    # from starting between two messages of one exchange. Turning preemption off
+    # makes this gate serving's only protection; raise it to tens of minutes.
     "sleep_enabled": False,
     "sleep_models": [],
     # Reserved: route the sleep corpus through the experience builder's fact
     # extraction pass instead of raw exchanges. Read by nothing until the
     # extraction mode lands in tools/build_experience_corpus.py.
     "sleep_use_extraction": False,
-    "sleep_idle_min": 20,
+    "sleep_idle_min": 2,
     "sleep_days": 3,
     "sleep_min_exchanges": 8,
     "sleep_steps_per_exchange": 10,
