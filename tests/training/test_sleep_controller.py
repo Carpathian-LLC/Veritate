@@ -737,6 +737,27 @@ def test_a_run_woken_between_checkpoints_is_not_a_failure(tmp_path, monkeypatch)
     assert ev["event"] == "lost" and ev["steps_lost"] == 6
 
 
+def test_the_recipe_batch_cap_does_not_ratchet_down(tmp_path, monkeypatch):
+    """The trainer stamps its launch args into config.json at every checkpoint, so a
+    sleep run's reduced batch becomes the recipe's. Read naively the cap only ever
+    falls, and a box that gets faster can never use it."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path, training_args={**_HYBRID_RECIPE, "batch_size": 4})   # sleep overwrote 48
+    cfg = {**CFG, "sleep_batch_size": 0}
+    remembered = {"recipe_batch": 48}
+    assert sleep.launch_args("toy", 10, cfg, 10 ** 9, BIG_LOG)["batch_size"] == 4
+    assert sleep.launch_args("toy", 10, cfg, 10 ** 9, BIG_LOG, remembered)["batch_size"] == 48
+
+
+def test_launch_remembers_the_recipe_batch_before_the_run_overwrites_it(tmp_path, monkeypatch):
+    """It has to be captured at launch: once the first checkpoint lands, config.json
+    carries the sleep batch and the original is gone."""
+    _armed(tmp_path, monkeypatch, models=("toy",), pending=(20,))
+    monkeypatch.setattr(sleep.trainer_runner, "start", lambda pid, args: {"ok": True})
+    assert sleep.maybe_sleep().startswith("sleeping: toy")
+    assert sleep._load_state()["models"]["toy"]["recipe_batch"] == 48
+
+
 def test_explicit_sleep_batch_size_wins_over_the_fit(tmp_path, monkeypatch):
     """The setting is the escape hatch when a box wants a step of its own size."""
     _roots(tmp_path, monkeypatch)

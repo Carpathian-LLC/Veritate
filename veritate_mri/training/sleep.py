@@ -304,6 +304,16 @@ def _draw_window(base):
     return int(base.get("seq") or 1024) * int(base.get("n_chunks") or 1) + 2
 
 
+def _recipe_batch(base, ms):
+    """Largest batch this model's recipe has ever declared. The trainer stamps its
+    launch args back into config.json at every checkpoint, so a sleep run's reduced
+    batch BECOMES the recipe's batch. Read naively, the cap ratchets down to whatever
+    the weakest box last used and never recovers when the box gets faster: cardinal
+    2026-08-24 went from 800 MHz to 2 GHz and stayed pinned at the 4 its clamped
+    sleeps had written back over the original 48."""
+    return max(int(base.get("batch_size") or 1), int((ms or {}).get("recipe_batch") or 0))
+
+
 def _fit_batch(base, cfg, train_bytes, ms=None):
     """Sleep batch sized to two bounds, whichever is tighter.
 
@@ -323,7 +333,7 @@ def _fit_batch(base, cfg, train_bytes, ms=None):
     asked = int(cfg.get("sleep_batch_size", 0) or 0)
     if asked:
         return asked
-    fit = min(int(base.get("batch_size") or 1), int(train_bytes) // _draw_window(base))
+    fit = min(_recipe_batch(base, ms), int(train_bytes) // _draw_window(base))
     step_s = float((ms or {}).get("step_s") or 0)
     prev = int((ms or {}).get("step_batch") or 0)
     if step_s > 0 and prev > 0:
@@ -609,12 +619,13 @@ def _launch(st, model, cfg):
         return False, (f"experience bins too small for draw window ({tb}/{vb} B < {window} B): "
                        f"{model} needs about {2 * window} B of its own conversation")
     steps = dose_steps(n, cfg)
-    args = launch_args(model, start_step + steps, cfg, tb, vb,
-                       st["models"].get(model))
+    ms = st["models"].setdefault(model, {})
+    # capture the recipe batch BEFORE the run stamps its own over it
+    ms["recipe_batch"] = _recipe_batch(base, ms)
+    args = launch_args(model, start_step + steps, cfg, tb, vb, ms)
     res = trainer_runner.start(PLUGIN_ID, args)
     if not (isinstance(res, dict) and res.get("ok", True)):
         return False, f"launch failed: {res}"
-    ms = st["models"].setdefault(model, {})
     ms.update({"sleeping": True,
                "run": {"model": model, "start_step": start_step,
                        "steps": start_step + steps, "batch": args["batch_size"],
