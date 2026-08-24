@@ -576,3 +576,34 @@ def test_yield_does_not_touch_disk_when_sleep_is_off(tmp_path, monkeypatch):
     assert sleep.yield_to_serving() is False
     assert reads == []
     assert child.calls == []
+
+
+def test_status_reports_a_parked_run_as_suspended(tmp_path, monkeypatch):
+    """The panel must distinguish a run that is training from one parked for a
+    request, or a paused run reads as healthy progress."""
+    _roots(tmp_path, monkeypatch)
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    (exp / "20260820.jsonl").write_text(_rec("toy") + "\n")
+    _model(tmp_path)
+    st = {"models": {"toy": {"sleeping": True, "run": {"model": "toy", "steps": 10}}}}
+    monkeypatch.setattr(sleep, "_load_state", lambda: st)
+    monkeypatch.setattr(sleep.settings_mod, "get", lambda: CFG)
+    monkeypatch.setattr(sleep.trainer_runner, "state", lambda: {"status": "running"})
+    monkeypatch.setattr(sleep, "_train_progress", lambda m: (5, 10.0))
+
+    monkeypatch.setattr(sleep, "_PAUSE", {"suspended": False, "warned": False})
+    assert sleep.status()["suspended"] is False
+    monkeypatch.setattr(sleep, "_PAUSE", {"suspended": True, "warned": False})
+    assert sleep.status()["suspended"] is True
+
+
+def test_status_is_never_suspended_while_awake(tmp_path, monkeypatch):
+    """suspended is a property of an in-flight run, not a stale flag."""
+    _roots(tmp_path, monkeypatch)
+    (tmp_path / "exp").mkdir()
+    _model(tmp_path)
+    monkeypatch.setattr(sleep.settings_mod, "get", lambda: CFG)
+    monkeypatch.setattr(sleep.trainer_runner, "state", dict)
+    monkeypatch.setattr(sleep, "_PAUSE", {"suspended": True, "warned": False})
+    assert sleep.status()["suspended"] is False
