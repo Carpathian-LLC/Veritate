@@ -60,13 +60,34 @@ Isolating the contention cost required attributing every millisecond of decode, 
 
 **Thread auto-calibration can stop a rung early and look like a hardware cap.** The engine sizes its worker pool by climbing a 1, 2, 4, … ladder while each rung beats the previous by at least 13%, timing *non-boundary* steps only. On this box 4 threads measure 16.58 ms/byte and 8 threads measure 14.85 — a 10.4% gain the knee rejects. The visible symptom was a box that never used more than half its cores while generating, which reads as a hardware limit and is not one. The pick is also unstable: two models on the same box cached 8 and 4 respectively, because the test compares only against the immediately previous rung and run-to-run noise straddles the threshold. A knee measured per step class, rather than one fixed constant timed on the cheap class, is the open follow-up.
 
+## The part that made it actually run
+
+Preemption made background consolidation invisible to the user. It did not, on its own, make it *happen*. On the same box, five sleep runs launched and every one of them recorded `steps_gained: 0`. The trainer was alive, unsuspended, holding seven cores, and finishing nothing. Three separate causes, each of which measured as "working."
+
+**Muon orthogonalizes in bf16, and a CPU without bf16 acceleration has no fast path for it.** `torch.optim.Muon` casts the momentum update to bf16 before the Newton-Schulz iteration (`torch/optim/_muon.py:55`); our vendored fallback mirrored it, so both implementations hit the same wall. On this box, orthogonalizing one weight:
+
+| shape | bf16 | fp32 | CPU utilization |
+|---|---|---|---|
+| 1024×1024 | 94.5 s | 0.251 s | 107% → 699% |
+| 4096×1024 | 175.3 s | 0.775 s | 108% → 700% |
+
+Profiling a single weight puts **99.1% of the time in `aten::addmm`**, roughly 20 s a call, while `aten::mm` on the same shape and dtype costs 0.34 s. The missing fast path is specific to that operator in that dtype, not to the shape and not to bf16 generally. The model has **112** two-dimensional weights, so one optimizer step cost hours. It now costs **50.8 s at 700% CPU**: a 226–376× change that came from asking the device what dtype it can actually do, rather than taking the framework's default. Forward and backward were never implicated. Measured on the same box they already run at **696% utilization** with 69.5% of self time in `aten::mm`.
+
+The general lesson is narrower and more useful than "check your dtypes." A framework default chosen for the hardware the algorithm was published on will silently pick the emulated path on hardware it was not. It does not warn, it does not fall back, and it does not look like a dtype problem from the outside: it looks like a serial algorithm.
+
+**A sleep step was drawing thirty times the data that existed.** The consolidation recipe is the model's own training recipe with the sleep levers overridden, which meant it inherited `batch_size: 48`. A step draws `batch × seq × n_chunks` bytes, so it asked for 196 kB from a 17.8 kB log: the whole night, eleven times, per step. Sizing the batch to the experience on hand takes the step from 27 wall minutes to **166 s**, and it scales on its own as a model accumulates more conversation.
+
+**The checkpoint was running a research evaluation suite.** Every checkpoint generates text through a probe battery to trend a training run across many checkpoints. Sleep checkpoints are deleted when the run ends, all but the last, so the suite was generating text in eager PyTorch, at batch 1, on an 800 MHz core, to evaluate artifacts it was about to throw away. It held seven cores for over ten minutes between two sleep steps.
+
+None of the three is exotic. All three are the same mistake: a default calibrated for the machine the feature was developed on, carried onto a machine where the ratio it assumed no longer holds. That is the actual tax on making software run on weak hardware, and it is not paid in algorithms.
+
 ## Why this matters beyond one box
 
 The standard framing for continual learning is a scheduling problem: find the idle window, take the GPU, give it back. That framing fails on the hardware most models will actually run on, because the window never reliably arrives.
 
 Preemption replaces the scheduling problem with a priority problem. The model does not need an idle box; it needs to be interruptible within milliseconds and to lose nothing when interrupted. Both fall out of the OS for free, and the result is that consolidation can run *continuously* — in the gaps between keystrokes, during a long read, overnight — instead of waiting for a window a single-user machine rarely provides.
 
-The honest limits: this is one 8-core CPU box at a locked clock, one model family, and it measures latency rather than learning. It says background consolidation can be made free to the user. It does not say the consolidation is good, and a preempted run on a busy box still takes far longer in wall time than the same run on an idle one — the CPU time is conserved, not reduced.
+The honest limits: this is one 8-core CPU box at a locked clock, one model family, and it measures latency and throughput rather than learning. Loss falls over the steps we ran (0.6030 → 0.5868 across two consolidation steps) but two steps is not a quality result, and whether the model is better afterward is a separate measurement on a separate page. A preempted run on a busy box also still takes far longer in wall time than the same run on an idle one — the CPU time is conserved, not reduced.
 
 ## Reproducing
 

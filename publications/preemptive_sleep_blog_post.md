@@ -60,12 +60,38 @@ This also killed an optimization we were about to do. Seeing 18 ms/byte end-to-e
 
 One more, in the same vein. The engine sizes its own thread pool by testing 1, 2, 4, 8 workers and stopping when the next rung stops helping "enough." On this box 8 workers were 10.4% faster than 4 — just under the threshold, so it picked 4. The visible symptom was a machine that never used more than half its cores while generating, which looks exactly like a hardware limit and is not one.
 
+## Then it turned out the training wasn't running either
+
+Preemption made the training invisible. It did not make it *finish*. Five consolidation runs launched on that machine and every one of them ended having completed **zero** training steps. The process was alive. It was not suspended. It was holding seven of eight cores at full tilt. It was accomplishing nothing.
+
+Three causes, and the interesting thing is that none of them is clever.
+
+**The optimizer was doing its arithmetic in a format the chip can't do.** Our optimizer, Muon, includes a step that "orthogonalizes" the update — a small iterative calculation on every 2-D weight, every step. PyTorch's implementation converts to bfloat16 first, because on the GPUs the algorithm was designed for, bfloat16 is free. This chip has no bfloat16 hardware, and for that particular operation PyTorch has no fast fallback: it drops to a plain, single-threaded loop.
+
+The measurement, orthogonalizing one weight matrix:
+
+| | bfloat16 | float32 |
+|---|---|---|
+| 1024×1024 | 94.5 s | 0.251 s |
+| 4096×1024 | 175.3 s | 0.775 s |
+| CPU used | 1 core | 7 cores |
+
+The model has 112 such weights. One optimizer step was taking **hours**. Asking the machine what format it can actually do, instead of accepting the default, took it to **50.8 seconds** using all seven cores. The forward and backward passes — the part everyone assumes is the bottleneck — had been running fine at 696% CPU the whole time.
+
+This is the thing worth taking away. A default that was correct on the hardware a technique was published on becomes an emulated path on hardware it wasn't. Nothing warns you. From the outside it doesn't look like a formatting decision; it looks like your algorithm is inherently serial, and you go looking for parallelism that was never missing.
+
+**A training step was reading thirty times more data than existed.** Consolidation reuses the model's own training recipe, which was written for a corpus of billions of bytes and asks for 196 kB per step. A night of conversation is 17.8 kB. Every step was reading the entire night eleven times over. Sizing the step to the conversation that actually exists took it from **27 minutes to 166 seconds**, and it grows on its own as the model talks more.
+
+**Saving a checkpoint was running a full exam.** Every checkpoint generates text through a battery of probes — grammar, arithmetic, reading comprehension, chat health — so a long training run has a quality trend line. Consolidation checkpoints get deleted when the run ends, all but the last. So the machine was writing essays, one byte at a time, at 800 MHz, to grade work it was about to delete. That alone held seven cores for more than ten minutes between two steps.
+
+None of these is a hard problem. All three are the same problem: a number that was reasonable on the machine the feature was built on, carried onto a machine where the ratio it assumed no longer holds. That is most of what "making it work on weak hardware" turns out to mean.
+
 ## Why we think this matters
 
 Continual learning is usually framed as a scheduling problem: find the idle window, take the hardware, give it back. That framing quietly assumes the window exists. On the hardware most people own, it doesn't.
 
 Preemption replaces the scheduling problem with a priority problem, and the priority problem has a much better answer. The model doesn't need an idle machine. It needs to be interruptible in milliseconds and to lose nothing when interrupted — and the operating system gives you both for free. Consolidation can then run *continuously*: in the gaps between keystrokes, while you read a reply, overnight. It stops waiting for permission.
 
-The honest limits: this is one CPU box at a locked clock, one model family, and it measures latency, not learning. It shows that background training can be made free to the person using the machine. It does not show the training is good — that is a separate result, on a separate page. And a preempted run on a busy machine still takes far longer in wall-clock terms than the same run on an idle one. The CPU time is conserved, not conjured.
+The honest limits: this is one CPU box at a locked clock, one model family, and it measures speed, not learning. Loss does fall over the steps we ran, but a handful of steps is not a quality result, and whether the model is actually better afterward is a separate question we answer separately. And a preempted run on a busy machine still takes far longer in wall-clock terms than the same run on an idle one. The CPU time is conserved, not conjured.
 
 But the machine in the corner now trains itself while someone talks to it, and the person talking cannot tell.
