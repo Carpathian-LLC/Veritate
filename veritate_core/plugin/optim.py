@@ -83,10 +83,14 @@ class _VendoredMuon(torch.optim.Optimizer):
                  nesterov=MUON_NESTEROV, ns_coefficients=MUON_NS_COEFFICIENTS,
                  eps=MUON_EPS, ns_steps=MUON_NS_STEPS, adjust_lr_fn=None,
                  ns_dtype=torch.bfloat16):
+        # a device capability, not optimizer state: kept off param_groups so
+        # load_state_dict on a checkpoint written elsewhere cannot import a dtype
+        # this machine has no fast path for
+        self.ns_dtype = ns_dtype
         defaults = {
             "lr": lr, "weight_decay": weight_decay, "momentum": momentum, "nesterov": nesterov,
             "ns_coefficients": ns_coefficients, "eps": eps, "ns_steps": ns_steps,
-            "adjust_lr_fn": adjust_lr_fn, "ns_dtype": ns_dtype}
+            "adjust_lr_fn": adjust_lr_fn}
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -104,7 +108,6 @@ class _VendoredMuon(torch.optim.Optimizer):
             eps = group["eps"]
             ns_steps = group["ns_steps"]
             adjust_lr_fn = group["adjust_lr_fn"]
-            ns_dtype = group["ns_dtype"]
             for p in group["params"]:
                 if p.grad is None:
                     continue
@@ -116,7 +119,7 @@ class _VendoredMuon(torch.optim.Optimizer):
                 buf.lerp_(grad, 1 - momentum)
                 update = grad.lerp(buf, momentum) if nesterov else buf
                 update = _zeropower_via_newtonschulz(
-                    update, ns_coefficients, ns_steps, eps, ns_dtype)
+                    update, ns_coefficients, ns_steps, eps, self.ns_dtype)
                 adjusted_lr = _adjust_lr(lr, adjust_lr_fn, p.shape)
                 p.mul_(1 - lr * weight_decay)
                 p.add_(update, alpha=-adjusted_lr)

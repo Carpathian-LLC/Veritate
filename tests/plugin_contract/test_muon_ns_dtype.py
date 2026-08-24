@@ -58,7 +58,27 @@ def test_cpu_gets_the_vendored_muon_so_the_dtype_is_ours():
     """torch's Muon hardcodes bf16 and takes no dtype, so CPU cannot use it."""
     muon = optim.build_muon(_Tiny(), _Args(), "cpu").muon
     assert isinstance(muon, optim._VendoredMuon)
-    assert muon.param_groups[0]["ns_dtype"] is torch.float32
+    assert muon.ns_dtype is torch.float32
+
+
+def test_resume_keeps_this_machines_dtype_and_still_steps():
+    """Optimizer state carries the param groups of the box that wrote it, so the
+    dtype must stay off them: restored, it would put the serial bf16 path back on
+    a CPU, and state written before it existed would fault the step outright."""
+    donor = _Tiny()
+    saved = optim._VendoredMuon(_hidden(donor), lr=1e-4,
+                                ns_dtype=torch.bfloat16).state_dict()
+    assert "ns_dtype" not in saved["param_groups"][0]
+    muon = optim.build_muon(_Tiny(), _Args(), "cpu").muon
+    muon.load_state_dict(saved)
+    assert muon.ns_dtype is torch.float32
+    for p in muon.param_groups[0]["params"]:
+        p.grad = torch.randn_like(p)
+    muon.step()                                       # must not raise
+
+
+def _hidden(model):
+    return [p for p in model.parameters() if p.ndim == 2]
 
 
 def test_fp32_orthogonalization_matches_bf16_within_bf16_precision():
