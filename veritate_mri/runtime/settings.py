@@ -116,6 +116,12 @@ DEFAULTS = {
     "sleep_ckpt_every": 25,
     "sleep_ckpt_seconds": 1800,
     "sleep_keep_finals": 3,
+    # Guardrail on the publish step, not a quality optimizer. A consolidation
+    # whose val rises more than this fraction over the run is held back from
+    # serving: the checkpoint survives and can be promoted by hand, but a model
+    # walking the wrong way must not become the source of its own next training
+    # set. Compared within one run only, because each sleep rebuilds its bins.
+    "sleep_val_tolerance": 0.02,
     "sleep_lr": 5e-06,
     # Weak-hardware levers. A sleep child sized for the training box takes every
     # core; on an 8-core 800 MHz CPU that costs a served request 2.5-3x

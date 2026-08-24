@@ -136,3 +136,18 @@ def test_a_completed_export_replaces_the_bin_in_one_step(tmp_path):
         f.write(b"VRTE-new-weights")
     assert served.read_bytes() == b"VRTE-new-weights"
     assert not (tmp_path / "veritate.bin.part").exists()
+
+
+def test_every_setting_the_controller_reads_exists_in_defaults():
+    """A cfg key the controller reads with [] and DEFAULTS does not carry raises
+    KeyError on a real box while every test that builds its own cfg dict passes.
+    That shipped once (sleep_val_tolerance, 2026-08-24)."""
+    import re
+
+    from runtime import settings as settings_mod
+
+    src = open(sleep.__file__, encoding="utf-8").read()
+    read = set(re.findall(r"""cfg\[["'](sleep_\w+)["']\]""", src))
+    read |= set(re.findall(r"""cfg\.get\(["'](sleep_\w+)["']\)""", src))
+    assert read, "found no settings reads to check"
+    assert read <= set(settings_mod.DEFAULTS), sorted(read - set(settings_mod.DEFAULTS))
