@@ -13,7 +13,7 @@ The measurement, on the box above, serving a 64-byte reply:
 | condition | first byte | throughput |
 |---|---|---|
 | idle box | 13 ms | 18.3 ms/byte |
-| consolidating, unyielding | 2,856–2,978 ms | 44.6–54.6 ms/byte |
+| consolidating, unyielding | 2,856–3,113 ms | 44.6–57.7 ms/byte |
 
 The trainer child took 7 of 8 cores. A three-second wait before the first character is not a degraded experience, it is a broken one. The usual answers — nice the trainer, cap its threads, wait for an idle window — are all partial. Niceness and thread caps still leave the model streaming weights through a shared memory bus. Idle windows mean the model only improves on a box nobody is using, which on a single-user machine means it improves rarely and unpredictably.
 
@@ -36,6 +36,8 @@ Serving under an active consolidation run, same box and model:
 | idle box | 13 ms | 18.3 ms/byte |
 | consolidating, preemptive | 12–23 ms | 17.9–18.2 ms/byte |
 
+First-byte figures are steady state. The first request after an idle gap costs more in both conditions (295 ms idle, 143 ms preemptive) as caches warm; the comparison above is like for like.
+
 Verified at the OS level rather than inferred from latency. Sampling the child's process state every 150 ms across a request gives:
 
 ```
@@ -54,7 +56,7 @@ Isolating the contention cost required attributing every millisecond of decode, 
 
 **The serving stack is not the bottleneck, and it is not close.** The instinct on seeing 18.3 ms/byte end-to-end against a 9.9 ms/byte forward pass is to blame the Python, the JSON, the per-byte SSE frame. Engine-direct instrumentation puts the entire Python pipeline — frame read, struct parse, event dict, `json.dumps`, SSE write, socket — at **0.02 ms/byte: 2 ms out of 2,198, or 0.1%**. An A/B against the non-streaming path measures the same 18.6–21.5 ms/byte, confirming it. Coalescing SSE frames, the obvious optimization, would have bought nothing. The gap was entirely the boundary steps above.
 
-**Quantization attacks the boundary step directly, because that step is bandwidth.** Identical weights, 128 greedy bytes: fp16 **15.17 ms/byte** vs int8 **10.42 ms/byte**, a **1.46×** speedup with byte-identical greedy output. The win concentrates exactly where the theory says it should — the boundary step drops 41.34 → 30.13 ms.
+**Quantization attacks the boundary step directly, because that step is bandwidth.** Identical weights, 128 greedy bytes: fp16 **15.17 ms/byte** vs int8 **10.42 ms/byte**, a **1.46×** speedup with identical text across the compared greedy reply. The win concentrates exactly where the theory says it should — the boundary step drops 41.34 → 30.13 ms.
 
 **Thread auto-calibration can stop a rung early and look like a hardware cap.** The engine sizes its worker pool by climbing a 1, 2, 4, … ladder while each rung beats the previous by at least 13%, timing *non-boundary* steps only. On this box 4 threads measure 16.58 ms/byte and 8 threads measure 14.85 — a 10.4% gain the knee rejects. The visible symptom was a box that never used more than half its cores while generating, which reads as a hardware limit and is not one. The pick is also unstable: two models on the same box cached 8 and 4 respectively, because the test compares only against the immediately previous rung and run-to-run noise straddles the threshold. A knee measured per step class, rather than one fixed constant timed on the cheap class, is the open follow-up.
 

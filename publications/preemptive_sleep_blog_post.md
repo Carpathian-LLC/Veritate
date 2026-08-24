@@ -23,7 +23,7 @@ Every time the model begins generating a reply, the trainer gets a `SIGSTOP`. Wh
 | | first character | reading speed |
 |---|---|---|
 | nothing else running | 13 ms | 18.3 ms/byte |
-| training, unyielding | 2,856–2,978 ms | 44.6–54.6 ms/byte |
+| training, unyielding | 2,856–3,113 ms | 44.6–57.7 ms/byte |
 | training, yielding | 12–23 ms | 17.9–18.2 ms/byte |
 
 Talking to a model that is training is now indistinguishable from talking to one that isn't.
@@ -56,7 +56,7 @@ and the expensive ones:
 
 The sentence was "There are many different ways to learn history. One way is to study history through a scholarly perspective." Nineteen percent of the bytes — the word-initial ones — were consuming **54% of the total generation time**.
 
-This also killed an optimization we were about to do. Seeing 18 ms/byte end-to-end against a 10 ms/byte forward pass, the natural suspicion is overhead: the Python, the JSON, the per-byte streaming. We measured it directly: the entire serving stack costs **0.02 ms/byte — two milliseconds out of 2,198, one tenth of one percent.** There was no overhead to remove. The gap was those word-initial bytes, and the way to attack them is quantization, since they are bound by memory bandwidth rather than arithmetic. Switching the same weights from 16-bit to 8-bit made generation **1.46× faster with byte-for-byte identical output.**
+This also killed an optimization we were about to do. Seeing 18 ms/byte end-to-end against a 10 ms/byte forward pass, the natural suspicion is overhead: the Python, the JSON, the per-byte streaming. We measured it directly: the entire serving stack costs **0.02 ms/byte — two milliseconds out of 2,198, one tenth of one percent.** There was no overhead to remove. The gap was those word-initial bytes, and the way to attack them is quantization, since they are bound by memory bandwidth rather than arithmetic. Switching the same weights from 16-bit to 8-bit made generation **1.46× faster, with identical text across the compared greedy reply.**
 
 One more, in the same vein. The engine sizes its own thread pool by testing 1, 2, 4, 8 workers and stopping when the next rung stops helping "enough." On this box 8 workers were 10.4% faster than 4 — just under the threshold, so it picked 4. The visible symptom was a machine that never used more than half its cores while generating, which looks exactly like a hardware limit and is not one.
 
