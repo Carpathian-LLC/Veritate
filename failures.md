@@ -6,9 +6,11 @@ Falsified approaches. Each entry: the measured result that killed it and the ret
 
 **Sleeping on own experience ALONE degrades the model: +0.55% held-out loss in 12 steps**
 cardinal, wren1_3 (270M hybrid), `sleep_corpus: experience:1.0` (no rehearsal), lr 5e-6, batch 4.
-Loss on `mixed_chat_val.bin` -- a fixed corpus the sleep runs never touched -- measured through the
-trainer's own `evaluate()`, 8 iters, seed 1234: **step 0 0.572240, step 10 0.574835 (+0.45%),
-step 12 0.575393 (+0.55%)**. Monotone with dose, in the wrong direction. The model's own experience
+Loss on corpora the sleep runs never touched, measured through the trainer's own `evaluate()`,
+8 iters, seed 1234. On `mixed_chat_val.bin`: **step 0 0.572240, step 10 0.574835 (+0.45%), step 12
+0.575393 (+0.55%)**, monotone with dose. On `veritate_chat_val.bin`, closer to the model's actual
+chat task: **step 0 0.996948, step 12 1.011243 (+1.43%)** -- the damage is nearly 3x larger measured
+against the distribution the model is actually for, which is the number that matters. The model's own experience
 val drifted the same way (+1.8% across five runs), so both the moving and the fixed yardstick agree.
 Kill-line: consolidation with NO rehearsal is self-training on own output and degrades, at least at
 this dose. Retry condition: rehearsal in the mix (`experience:0.75,mixed_chat:0.25` is the platform

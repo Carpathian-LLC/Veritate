@@ -135,6 +135,40 @@ and quality the actual open problem, spending output fidelity on speed is the wr
 pre-existing dense-on-AVX2 limitation (handoff below, 2026-08-20), not a regression. The hybrid path
 is fully green there.
 
+## OVERNIGHT RUN IN FLIGHT — read this first tomorrow (launched 2026-08-24 ~14:40 EDT)
+
+wren1_3 is consolidating on cardinal WITH rehearsal, to test whether that reverses the degradation
+measured today. Launched from step 12, 500 steps, batch 7, `ckpt_every` 22, ~110 s a step, so expect
+roughly 300-400 steps by morning rather than a finish. It preempts for every served request and can
+be woken at any time (`POST /sleep/now` / `/sleep/wake`), keeping everything to the last checkpoint.
+
+    corpus mix:  experience:0.750, mixed_chat:0.250     (rehearsal ON, was experience:1.0)
+    corpus val:  data/corpus/veritate_chat_val.bin      (held out; NOT in the sleep mix)
+
+**The comparison to make.** Baselines already measured on `veritate_chat_val.bin`, 8 iters, seed
+1234, batch 4:
+
+    step  0   0.996948          pre-sleep, the model's best
+    step 12   1.011243  +1.43%  after 12 steps of NO-rehearsal sleep — the control
+
+Re-run the same eval on whatever checkpoints exist and compare against 1.011243. Below it means
+rehearsal is repairing the damage; at or above it means rehearsal is not enough at this dose and the
+next lever is the mix weight or the learning rate, not the mechanism.
+
+    ssh -p 2222 cardinal-01@127.0.0.1
+    cd ~/Veritate && OMP_NUM_THREADS=8 EM=wren1_3 ES=0,12,<new steps> EI=8 EB=4 \
+      EV=data/corpus/veritate_chat_val.bin .veritate_venv/bin/python ~/diag/sleep_eval.py
+
+`~/diag/sleep_eval.py` is a session diagnostic, deliberately OUTSIDE the repo tree (rule 34). It
+builds the model from `config.json`, loads a checkpoint through the trainer's own
+`load_resume_state`, and scores it with the trainer's `evaluate()`/`make_data_loader`, so the number
+is the same quantity `train.csv` records. Roughly 100 s a checkpoint at 2.0 GHz.
+
+**Caveat on what this can and cannot show.** It answers "does consolidation-with-rehearsal stop the
+model degrading". It does NOT show that consolidating experience ADDS anything, because a fall in
+val could come from the rehearsal alone. Separating those needs a probe on the experience
+distribution specifically, which does not exist yet.
+
 ## CARDINAL 2026-08-24 (later) — the 800 MHz clamp is LIFTED
 
 The user changed BIOS settings for performance and the clamp went away. `cpuinfo_max_freq` and
