@@ -255,7 +255,11 @@ def main():
                            "(heartbeat still active)")
     else:
         threading.Thread(target=_pytorch_idle_watcher, name="pytorch-idle-watcher", daemon=True).start()
+        from routes.backends_routes import reload_bin
         from training import sleep as sleep_mod
+        # sleep re-exports a consolidated model over its serving bin; the engine
+        # holds the pre-sleep weights in memory until it is respawned
+        sleep_mod.set_publish_hook(lambda name: reload_bin(app.config, name))
         threading.Thread(target=sleep_mod.watcher, name="sleep-watcher", daemon=True).start()
         sys_metrics.warm()
 

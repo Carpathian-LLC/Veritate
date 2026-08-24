@@ -385,6 +385,38 @@ def test_turn_taking_fuller_queue_sleeps_first(tmp_path, monkeypatch):
     assert launched == ["toy", "quill"]
 
 
+def test_finalize_publishes_the_consolidated_weights(tmp_path, monkeypatch):
+    """Consolidation that never reaches the serving bin leaves the box talking to
+    the pre-sleep model forever."""
+    _armed(tmp_path, monkeypatch, models=("toy",), pending=(20,))
+    monkeypatch.setattr(sleep.trainer_runner, "start", lambda pid, args: {"ok": True})
+    published = []
+    monkeypatch.setattr(sleep, "publish", lambda m: published.append(m) or {"bytes": 1})
+    assert sleep.maybe_sleep().startswith("sleeping: toy")
+    (tmp_path / "models" / "toy" / "checkpoints" / "step_3050.pt").write_bytes(b"x")
+    sleep.finalize()
+    assert published == ["toy"]
+    assert sleep.history()[0]["served"] is True
+
+
+def test_a_failed_publish_does_not_fail_the_sleep(tmp_path, monkeypatch):
+    """The consolidation is already safe on disk; a re-export that dies costs the
+    box only the newest weights in serving, and the run still finalizes."""
+    _armed(tmp_path, monkeypatch, models=("toy",), pending=(20,))
+    monkeypatch.setattr(sleep.trainer_runner, "start", lambda pid, args: {"ok": True})
+
+    def boom(_m):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sleep, "publish", boom)
+    assert sleep.maybe_sleep().startswith("sleeping: toy")
+    (tmp_path / "models" / "toy" / "checkpoints" / "step_3050.pt").write_bytes(b"x")
+    sleep.finalize()
+    ms = sleep._load_state()["models"]["toy"]
+    assert not ms["sleeping"] and ms.get("cooldown_until") is None
+    assert sleep.history()[0]["event"] == "awake" and sleep.history()[0]["served"] is False
+
+
 def test_finalize_records_what_a_step_cost_on_this_box(tmp_path, monkeypatch):
     """The next launch sizes its step from this measurement, so it has to carry the
     batch that produced it. A model dir travels between machines, which is why it

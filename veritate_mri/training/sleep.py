@@ -43,6 +43,7 @@ import threading
 import time
 from bisect import bisect_right
 
+from readers import bin as binr
 from readers.paths import EXPERIENCE_ROOT, MODELS_ROOT, SLEEP_ROOT
 from runtime import logs as logmod
 from runtime import serving
@@ -734,6 +735,49 @@ def wake(model):
         return {"ok": True, "state": "waking", "model": model}
 
 
+_PUBLISH_HOOK = {"fn": None}
+
+
+def set_publish_hook(fn):
+    """Register a callable invoked with a model dir name after sleep replaces
+    that model's serving binary. The engine reads a bin into memory and closes
+    the file, so the swap itself needs no lock, but a live subprocess still
+    holds the pre-sleep weights until something reloads it. app.py registers the
+    reload; without a hook the new weights serve from the next engine start."""
+    _PUBLISH_HOOK["fn"] = fn
+
+
+def publish(model):
+    """Re-export the model's newest checkpoint over its serving binary, so the
+    box talks to what it just consolidated. Without this a sleep run improves a
+    .pt nobody serves.
+
+    Only a model that already serves a bin gets one: a PyTorch-only model must
+    not grow an engine artifact because it slept. The dtype is read back off the
+    bin in place, so an int8 box stays int8. The export writes a sibling temp and
+    renames it into place, so a failed export leaves the previous weights
+    serving and the box never holds a half-written model.
+
+    Returns the export result, or None when there is nothing to publish."""
+    if not binr.exists(model):
+        return None
+    step = _model_step(model)
+    if step is None:
+        return None
+    from training import export as export_mod
+    res = export_mod.export_checkpoint(model, step, dtype=binr.weight_dtype(model))
+    logmod.ok("sleep", f"{model}: serving step {step} ({res['bytes']} B, {res['dtype']})")
+    fn = _PUBLISH_HOOK["fn"]
+    if fn is not None:
+        try:
+            fn(model)
+        except Exception as e:
+            # the new weights are on disk and will serve from the next engine
+            # start; only this reload was lost
+            logmod.warn("sleep", f"{model}: engine reload failed: {type(e).__name__}: {e}")
+    return res
+
+
 def finalize():
     """Reconcile after a sleep run ends: record the sleep, prune checkpoints."""
     with _LOCK:
@@ -766,8 +810,17 @@ def finalize():
                 ms["cooldown_until"] = time.time() + FAIL_COOLDOWN_S
             ms.update({"sleeping": False, "finals": finals, "run": {}})
             if end_step > start:
+                published = None
+                try:
+                    published = publish(model)
+                except Exception as e:
+                    # the consolidation itself is already safe on disk; a failed
+                    # re-export costs the box only the newest weights in serving
+                    logmod.error("sleep", f"{model}: publish failed, still serving the "
+                                          f"previous weights: {type(e).__name__}: {e}")
                 _log_event("awake", model=model, end_step=end_step,
-                           steps_gained=end_step - start, finals=finals)
+                           steps_gained=end_step - start, finals=finals,
+                           served=bool(published))
                 logmod.ok("sleep", f"{model} awake at step {end_step}")
             else:
                 _log_event("failed", model=model, end_step=end_step,

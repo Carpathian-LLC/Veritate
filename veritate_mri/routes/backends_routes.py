@@ -670,6 +670,32 @@ def ensure_c_loaded(cfg, model_override=None):
     threading.Thread(target=worker, name="c-backend-loader", daemon=True).start()
 
 
+def reload_bin(cfg, name):
+    """Respawn whatever C engine is serving `name` so it picks up a replaced
+    veritate.bin. The engine reads a bin into memory and closes the file, so a
+    live subprocess keeps serving the old weights until it is restarted; sleep
+    calls this after re-exporting a consolidated model. Respawns rather than
+    just closing, because the /generate path errors on a missing subprocess
+    instead of loading one. No-op when nothing is serving that model."""
+    model_bin = os.path.abspath(paths.bin_path(name))
+    pool = cfg.get("C_WARM") or {}
+    warm = pool.pop(name, None)
+    if warm is not None:
+        try: warm.close()
+        except Exception: pass
+    sub = cfg.get("C_SUBPROCESS")
+    if sub is None or os.path.abspath(cfg.get("C_MODEL") or "") != model_bin:
+        return False
+    try: sub.close()
+    except Exception: pass
+    cfg["C_SUBPROCESS"] = None
+    exe = cfg.get("C_EXE") or paths.engine_binary_path()
+    if not _spawn_c_subprocess(cfg, exe, model_bin):
+        raise RuntimeError(f"c engine failed to respawn on {model_bin}")
+    logmod.ok("backends", f"c engine reloaded {name} after sleep")
+    return True
+
+
 def _backends_status_payload(cfg):
     cur_exe   = cfg.get("C_EXE")
     cur_model = cfg.get("C_MODEL")

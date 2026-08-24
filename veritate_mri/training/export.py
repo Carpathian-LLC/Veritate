@@ -14,6 +14,7 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
+import contextlib
 import json
 import os
 import struct
@@ -314,7 +315,31 @@ def write_block_ternary(f, sd, layer):
     f.write(ffd.tobytes()); f.write(struct.pack("<i", ffd_g))
 
 
-def export_checkpoint(name, step, dtype=None):
+@contextlib.contextmanager
+def _atomic_bin(out_path):
+    """Write a bin through a sibling temp and rename it into place. A model's
+    veritate.bin is the artifact the box serves from: opening it "wb" truncates
+    it before the first tensor is written, so an export that runs out of memory
+    or disk halfway leaves nothing to serve. os.replace is atomic on POSIX and
+    Windows, so the file at out_path is always either the old bin or the whole
+    new one. Windows additionally refuses to replace a file another process
+    holds open, which is why callers close the engine first."""
+    tmp = out_path + ".part"
+    try:
+        with open(tmp, "wb") as f:
+            yield f
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, out_path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def export_checkpoint(name, step, dtype=None, out_path=None):
     ckpt_path = paths.checkpoint_path(name, step)
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
@@ -327,7 +352,7 @@ def export_checkpoint(name, step, dtype=None):
         return _export_checkpoint_hybrid(name, step, ckpt_path,
                                          str(cfg_ta.get("state_rule")
                                              or cfg.get("state_rule") or "gla"),
-                                         dtype or HYBRID_DTYPE_DEFAULT)
+                                         dtype or HYBRID_DTYPE_DEFAULT, out_path)
     if trunk != "dense":
         raise ValueError(
             f"export not supported: model '{name}' has trunk '{trunk}'. v13 covers "
@@ -380,7 +405,7 @@ def export_checkpoint(name, step, dtype=None):
             f"v12 covers MTP for non-MoE trunks; MoE + MTP needs a follow-up."
         )
     if has_mtp:
-        return _export_checkpoint_mtp(name, step, shape, sd, base_prefix, quant_mode)
+        return _export_checkpoint_mtp(name, step, shape, sd, base_prefix, quant_mode, out_path)
     version = VERITATE_MODEL_VERSION_QAT if is_moe else VERITATE_MODEL_VERSION
 
     tok_w = fetch(sd, base_prefix + "tok_emb.weight")
@@ -394,7 +419,7 @@ def export_checkpoint(name, step, dtype=None):
     if pos_embed.shape != (shape["seq"], shape["hidden"]):
         raise ValueError(f"pos_emb shape {pos_embed.shape} != ({shape['seq']}, {shape['hidden']})")
 
-    out_path = paths.bin_path(name)
+    out_path = out_path or paths.bin_path(name)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     n_out = quantize_layernorm(fetch(sd, base_prefix + "n_out.weight"))
@@ -403,7 +428,7 @@ def export_checkpoint(name, step, dtype=None):
 
     block_prefix = (base_prefix + "blocks") if base_prefix else "blocks"
 
-    with open(out_path, "wb") as f:
+    with _atomic_bin(out_path) as f:
         f.write(struct.pack(
             HEADER_FMT,
             VERITATE_MODEL_MAGIC,
@@ -437,7 +462,7 @@ def export_checkpoint(name, step, dtype=None):
     }
 
 
-def _export_checkpoint_mtp(name, step, shape, sd, base_prefix, quant_mode):
+def _export_checkpoint_mtp(name, step, shape, sd, base_prefix, quant_mode, out_path=None):
     """v12 binary: canonical body + MTP byte-0 head + untied lm_head."""
     tok_w = fetch(sd, base_prefix + "tok_emb.weight")
     pos_w = fetch(sd, base_prefix + "pos_emb.weight")
@@ -469,11 +494,11 @@ def _export_checkpoint_mtp(name, step, shape, sd, base_prefix, quant_mode):
     if lm_head_w.shape != (shape["vocab"], shape["hidden"]):
         raise ValueError(f"lm_head shape {tuple(lm_head_w.shape)} != ({shape['vocab']}, {shape['hidden']})")
 
-    out_path = paths.bin_path(name)
+    out_path = out_path or paths.bin_path(name)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     block_prefix = (base_prefix + "blocks") if base_prefix else "blocks"
 
-    with open(out_path, "wb") as f:
+    with _atomic_bin(out_path) as f:
         f.write(struct.pack(
             HEADER_FMT,
             VERITATE_MODEL_MAGIC,
@@ -548,7 +573,7 @@ def _write_big(f, arr, dtype, np_dtype, shape):
     f.write(np.ascontiguousarray(s.reshape(-1), dtype="<f4").tobytes())
 
 
-def _export_checkpoint_hybrid(name, step, ckpt_path, state_rule, dtype):
+def _export_checkpoint_hybrid(name, step, ckpt_path, state_rule, dtype, out_path=None):
     """v13 binary: hybrid trunk (local attn + recurrent global slots). fp32/fp16/int8
     tensors in PyTorch [out, in] row-major, tied lm_head, baked boundary table.
     Layout spec: documentation.md (engine)."""
@@ -582,9 +607,9 @@ def _export_checkpoint_hybrid(name, step, ckpt_path, state_rule, dtype):
     conv_kernel = int(sd[f"blocks.{n_enc}.attn.conv.weight"].shape[-1])
     boundary = _boundary_table().numpy().astype(np.uint8)
 
-    out_path = paths.bin_path(name)
+    out_path = out_path or paths.bin_path(name)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "wb") as f:
+    with _atomic_bin(out_path) as f:
         f.write(struct.pack(HEADER_FMT, VERITATE_MODEL_MAGIC,
                             VERITATE_MODEL_VERSION_HYBRID, V, H, n_total, F_, NH, S))
         f.write(struct.pack(HYBRID_HEADER_EXT_FMT, HYBRID_DTYPES[dtype],
@@ -686,7 +711,7 @@ def export_checkpoint_ternary(name, step, out_path=None):
         out_path = paths.bin_ternary_path(name)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-    with open(out_path, "wb") as f:
+    with _atomic_bin(out_path) as f:
         f.write(struct.pack(
             HEADER_FMT,
             VERITATE_MODEL_MAGIC,

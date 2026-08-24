@@ -65,6 +65,33 @@ def header(name):
     return (label, int(version))
 
 
+# v13 header extension field 0. Mirrors export.HYBRID_DTYPES; the engine reads
+# the same field to pick its kernel.
+HYBRID_DTYPE_LABELS = {0: "fp32", 1: "fp16", 2: "int8"}
+
+
+def weight_dtype(name):
+    """Weight dtype a v13 hybrid bin was exported at ("fp32"/"fp16"/"int8"), or
+    None for any other version. A re-export has to keep whatever the box is
+    serving: silently moving an int8 box to the fp16 default doubles its bin and
+    changes its decode speed."""
+    p = paths.bin_path(name)
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p, "rb") as f:
+            if f.read(4) != VERITATE_MODEL_MAGIC:
+                return None
+            (version,) = struct.unpack("<I", f.read(4))
+            if int(version) != 13:
+                return None
+            f.seek(struct.calcsize("<4sIIIIIII"))
+            (code,) = struct.unpack("<i", f.read(4))
+    except (OSError, struct.error):
+        return None
+    return HYBRID_DTYPE_LABELS.get(int(code))
+
+
 def act_boost(name):
     """Return act_boost int from a v9+ bin (None for older versions or missing)."""
     p = paths.bin_path(name)
