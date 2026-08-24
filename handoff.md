@@ -90,10 +90,16 @@ decode. int8 is 1.46x on identical weights and is the first lever (successes.md)
    finished in ~5 min. Because a SIGSTOP loses no work, the right weak-box shape is the LARGEST
    batch that fits (amortizes Muon's batch-independent Newton-Schulz cost), i.e. leave
    `sleep_batch_size` at 0. Confirm with the bench ramp now that it terminates.
-3. int8 export of wren1_3 on cardinal (`POST /export/wren1_3 {"dtype":"int8"}`) was NOT run --
-   it overwrites `models/wren1_3/veritate.bin`, so back the fp16 bin up first.
-4. Cardinal settings are currently a TEST shape (`sleep_max_steps` 4, `sleep_batch_size` 4,
-   `sleep_min_exchanges` 5, `sleep_idle_min` 1). Reset before treating any run as real.
+3. **int8 was exported and measured, then REVERTED.** 1.72x end to end (17.5 -> 10.2 ms/byte with
+   8 engine workers), but greedy parity is FALSIFIED (failures.md): fp16 and int8 from the SAME
+   checkpoint agree on 1 of 5 replies. Cardinal is back on its original fp16 bin
+   (md5 35b040bd, verified). Two backups left in `models/wren1_3/`: `veritate.bin.fp16.bak`
+   (identical to what is served) and `veritate.bin.int8.bak` (keep -- it is the artifact a quality
+   eval would grade). Shipping int8 needs that eval, not a parity check.
+   TRAP: cardinal's stored wren1_3 bin is NOT an export of its own step_0.pt (35b040bd vs 6c1856ec).
+   Re-export BOTH arms from one checkpoint before comparing anything.
+4. Cardinal settings are RESET to defaults with sleep OFF. `engine_threads` is pinned to **8**
+   (measured 17.51 -> 15.2-16.2 ms/byte, ~10%, output identical); everything else is stock.
 5. Browser cache: after any UI deploy tell the user to hard refresh.
 6. **The real weak-box bottleneck is IDEA 23 (ideas.md): CPU training runs single-threaded.**
    CPU time grew at 45% of one core over 5 min with a 7-core budget, no contention, fp32, not
