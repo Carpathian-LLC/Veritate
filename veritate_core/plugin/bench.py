@@ -27,6 +27,11 @@ from veritate_core.plugin import mem_executor, mem_planner, oom_recovery
 # Constants
 
 DEFAULT_BATCH_RAMP = (1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256)
+# Wall-clock ceiling for the whole ramp. Without it the ramp is unusable on a slow
+# CPU box: a 200M hybrid at batch 48 costs ~920 s per step on an i7-9700T @ 800 MHz,
+# so five steps at one rung outlast any session. The ramp reports what it measured
+# and flags itself time-capped rather than running to the memory ceiling.
+BENCH_BUDGET_S_DEFAULT = 900.0
 WARMUP_STEPS = 2
 TIMED_STEPS  = 3
 PROBE_LR     = 1e-4
@@ -190,7 +195,8 @@ def plan_result(plan, device, seq):
 
 
 def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=None, plan=None,
-        amp_dtype=None, n_chunks=1, bptt_window=1, optimizer=None):
+        amp_dtype=None, n_chunks=1, bptt_window=1, optimizer=None,
+        budget_s=BENCH_BUDGET_S_DEFAULT):
     """Ramp batch size on `model` until OOM; return the measured memory ceiling and
     throughput. When `plan` is an optimizer-offload tier the probe optimizer is the
     NVMe-paged AdamW, so the measured tok/s reflects the real paged regime, not a
@@ -242,7 +248,22 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
     emit(f"detecting {ceiling_label}...")
     ramp = []
     last_mem = None
+    last_secs = None
+    time_capped = False
+    t_start = time.monotonic()
     for batch in batch_ramp:
+        # Stop BEFORE a rung the time budget cannot pay for. Step time scales with
+        # batch, so project the next rung from the last measured one exactly as the
+        # memory guard below does; checking only after a rung would overshoot by a
+        # whole rung, which on a slow box is longer than the entire budget.
+        if budget_s and last_secs is not None:
+            elapsed = time.monotonic() - t_start
+            projected = last_secs * batch / ramp[-1]["batch"]
+            if elapsed + projected > budget_s:
+                emit(f"batch {batch}: projected ~{projected:.0f}s would pass the "
+                     f"{budget_s:.0f}s ramp budget; stopping at batch {ramp[-1]['batch']}")
+                time_capped = True
+                break
         # Stop BEFORE attempting a rung whose projected footprint exceeds the budget.
         # On unified/cpu memory the over-budget allocation is SIGKILLed (uncatchable),
         # so waiting for a completed rung to cross the line is not enough: a single
@@ -257,6 +278,7 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
                      f"{budget / GB:.0f} GB {kind} budget; stopping at batch {prev_batch} "
                      f"({ceiling_label} found)")
                 break
+        t_rung = time.monotonic()
         try:
             mem, tok_per_s = _measure_batch(model, opt, batch, seq, vocab, device, amp_dtype,
                                             n_chunks, bptt_window)
@@ -275,8 +297,9 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
                      f"stopping at batch {ramp[-1]['batch']} (ceiling found)")
                 break
             raise
+        last_secs = time.monotonic() - t_rung
         ramp.append({"batch": batch, "mem_gb": mem / GB, "tok_per_s": tok_per_s})
-        emit(f"batch {batch}: {mem / GB:.1f} GB, {tok_per_s:,.0f} tok/s")
+        emit(f"batch {batch}: {mem / GB:.1f} GB, {tok_per_s:,.0f} tok/s ({last_secs:.0f}s)")
         last_mem = mem
         _free(device)
 
@@ -301,6 +324,7 @@ def run(model, device, seq, vocab, batch_ramp=DEFAULT_BATCH_RAMP, on_progress=No
         "best_tok_per_s": best["tok_per_s"] if best else 0.0,
         "best_mem_gb": best["mem_gb"] if best else 0.0,
         "ramp": ramp,
+        "time_capped": time_capped,
         **_bucket_gb(plan),
     }
     if top:

@@ -277,6 +277,8 @@ PATCHED_TRUNKS = frozenset({
 def parse_args(manifest):
     ap = argparse.ArgumentParser(description=manifest.get("description", ""))
     ap.add_argument("--bench", action="store_true")
+    ap.add_argument("--bench_budget_s", type=float, default=bench.BENCH_BUDGET_S_DEFAULT,
+                    help="wall-clock ceiling for the batch ramp; a slow box needs one")
     for k in RESERVED_STRING_FLAGS:
         ap.add_argument("--" + k, type=str, default="")
     defaults = manifest.get("defaults", {}) or {}
@@ -1098,13 +1100,13 @@ def run(plugin_id, here):
                                on_progress=lambda s: print("bench: " + s, flush=True),
                                plan=mem_plan, amp_dtype=amp_dtype,
                                n_chunks=args.n_chunks, bptt_window=args.bptt_window,
-                               optimizer=args.optimizer)
+                               optimizer=args.optimizer, budget_s=args.bench_budget_s)
         else:
             result = bench.run(veritate_model, device, args.seq, VOCAB_BYTE_LEVEL,
                                on_progress=lambda s: print("bench: " + s, flush=True),
                                amp_dtype=amp_dtype,
                                n_chunks=args.n_chunks, bptt_window=args.bptt_window,
-                               optimizer=args.optimizer)
+                               optimizer=args.optimizer, budget_s=args.bench_budget_s)
         print("BENCH_RESULT " + json.dumps(result), flush=True)
         return
 

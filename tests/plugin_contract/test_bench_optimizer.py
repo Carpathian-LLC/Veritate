@@ -71,3 +71,45 @@ def test_best_batch_is_the_throughput_peak_not_the_memory_ceiling():
     assert best["batch"] == 32
     assert top["batch"] == 64
     assert best["tok_per_s"] / top["tok_per_s"] > 12
+
+
+class _Clock:
+    """Deterministic stand-in for the ramp's wall clock."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def monotonic(self):
+        return self.t
+
+
+def test_ramp_stops_before_a_rung_the_time_budget_cannot_pay_for(monkeypatch):
+    """A slow box reports what it measured instead of running to the memory ceiling."""
+    clock = _Clock()
+    monkeypatch.setattr(bench.time, "monotonic", clock.monotonic)
+
+    def fake_measure(model, opt, batch, *a, **kw):
+        clock.t += float(batch)          # step time scales with batch
+        return 1024, 100.0 * batch       # tiny footprint: the memory guard never fires
+
+    monkeypatch.setattr(bench, "_measure_batch", fake_measure)
+    res = bench.run(_Tiny(), "cpu", seq=8, vocab=256, batch_ramp=(1, 2, 4, 8, 16), budget_s=10.0)
+    # 1 -> t=1; 2 projected 2 (total 3); 4 projected 4 (total 7); 8 projected 8 -> 15 > 10.
+    assert [r["batch"] for r in res["ramp"]] == [1, 2, 4]
+    assert res["time_capped"] is True
+    assert res["best_batch"] == 4
+
+
+def test_a_ramp_that_completes_is_not_flagged_time_capped(monkeypatch):
+    """The flag distinguishes a measured ceiling from a budget cutoff."""
+    clock = _Clock()
+    monkeypatch.setattr(bench.time, "monotonic", clock.monotonic)
+
+    def fake_measure(model, opt, batch, *a, **kw):
+        clock.t += 0.001
+        return 1024, 100.0 * batch
+
+    monkeypatch.setattr(bench, "_measure_batch", fake_measure)
+    res = bench.run(_Tiny(), "cpu", seq=8, vocab=256, batch_ramp=(1, 2), budget_s=10.0)
+    assert res["time_capped"] is False
+    assert [r["batch"] for r in res["ramp"]] == [1, 2]
