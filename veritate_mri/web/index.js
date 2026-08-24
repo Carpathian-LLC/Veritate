@@ -1980,7 +1980,7 @@ function _renderSleepPanel(d) {
     } else {
       btn.dataset.action = "/sleep/now";
       btn.textContent = "sleep now";
-      btn.title = "Skip the idle timer and consolidate now (still requires enough new exchanges)";
+      btn.title = "Start learning now instead of waiting (still needs enough new conversations)";
       btn.disabled = !!sleeping;
     }
     const rm = document.createElement("button");
@@ -2027,11 +2027,14 @@ function pollSleep() {
     chip.style.display = "";
     if (d.state === "sleeping" && d.run) {
       const { model, step, total_steps, eta_s, last_ckpt_step } = d.run;
-      chip.textContent = (models.length > 1 ? `${models.length} models enrolled · ` : "")
-        + `${model} sleeping ${step ?? "…"}/${total_steps}`
-        + (eta_s ? ` · wakes in ~${_fmtMin(eta_s)}` : "");
-      chip.title = `consolidating its own experience into weights; waking now keeps `
-        + `everything up to checkpoint ${last_ckpt_step}`;
+      const prefix = models.length > 1 ? `${models.length} models · ` : "";
+      chip.textContent = d.suspended
+        ? `${prefix}${model} paused for you`
+        : prefix + `${model} learning ${step ?? "…"}/${total_steps}`
+          + (eta_s ? ` · done in ~${_fmtMin(eta_s)}` : "");
+      chip.title = d.suspended
+        ? "learning stopped so your reply comes first; it picks up where it left off"
+        : `learning from its own conversations; stopping now keeps everything up to step ${last_ckpt_step}`;
       wake.style.display = "";
     } else {
       wake.style.display = "none";
@@ -2042,9 +2045,9 @@ function pollSleep() {
           ? `${m.name} sleeps in ${_fmtMin(m.sleeps_in_s)} · ${pending} new`
           : `${m.name} awake · ${pending} new`;
       } else {
-        chip.textContent = `${models.length} models enrolled · ${pending} new`;
+        chip.textContent = `${models.length} models · ${pending} new`;
       }
-      chip.title = "sleep consolidation is enabled; enrolled models take turns training on their own new exchanges when idle";
+      chip.title = "models take turns learning from their own conversations in the background";
     }
   }).catch(() => {});
 }
