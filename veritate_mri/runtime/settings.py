@@ -122,6 +122,12 @@ DEFAULTS = {
     # walking the wrong way must not become the source of its own next training
     # set. Compared within one run only, because each sleep rebuilds its bins.
     "sleep_val_tolerance": 0.02,
+    # Corpus whose _val.bin every sleep run validates against, pinned so that
+    # successive runs are comparable. Left to the training mix, validation
+    # follows its heaviest member and the experience bins are rebuilt each
+    # launch, so a model degrading across runs would score different data every
+    # time and the drift would be invisible. Must exist on the box.
+    "sleep_yardstick": "mixed_chat",
     "sleep_lr": 5e-06,
     # Weak-hardware levers. A sleep child sized for the training box takes every
     # core; on an 8-core 800 MHz CPU that costs a served request 2.5-3x

@@ -32,6 +32,7 @@ CFG = {
     "sleep_keep_finals": 3, "sleep_lr": 5e-06,
     "sleep_corpus": "experience:0.75,mixed_chat:0.25", "sleep_step_seconds": 300,
     "sleep_ckpt_seconds": 1800, "sleep_val_tolerance": 0.02,
+    "sleep_yardstick": "mixed_chat",
 }
 # enough own-experience bytes to fill the recipe's batch, so tests that are not
 # about batch sizing get the recipe's own value
@@ -397,13 +398,48 @@ def _val(step, loss):
     return f"{step},val,{loss},5e-06,,,{step * 10}.0,0\n"
 
 
+def test_the_yardstick_is_pinned_so_runs_can_be_compared(tmp_path, monkeypatch):
+    """Left to the mix, validation follows its heaviest member and the experience
+    bins are rebuilt each launch, so every run would score different data."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    assert sleep.launch_args("toy", 10, CFG, BIG_LOG, BIG_LOG)["val_bin"] == "mixed_chat"
+
+
+def test_drift_is_measured_from_the_best_the_model_has_ever_been(tmp_path, monkeypatch):
+    """Run to run, self-training degrades a little each round and every round sits
+    inside the tolerance while the total walks up (wren1_3: +1.8% over five runs,
+    no single run above 0.5%). Against the high-water mark it cannot accumulate."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    _csv(tmp_path, _val(3010, 1.3220), _val(3020, 1.3320))
+    prev = {"val": 1.3220, "val_best": 1.2995}
+    assert sleep.regressed("toy", {"val": 1.3220}, 3000, CFG)[0] is False   # vs last run: +0.8%
+    held, base, last = sleep.regressed("toy", prev, 3000, CFG)              # vs best: +2.5%
+    assert held and base == 1.2995 and last == 1.3320
+
+
+def test_only_published_weights_move_the_high_water_mark(tmp_path, monkeypatch):
+    """A held run must not raise the bar it just failed to clear, or one bad
+    consolidation would license the next one."""
+    _armed(tmp_path, monkeypatch, models=("toy",), pending=(20,))
+    monkeypatch.setattr(sleep.trainer_runner, "start", lambda pid, args: {"ok": True})
+    monkeypatch.setattr(sleep, "publish", lambda m: None)
+    assert sleep.maybe_sleep().startswith("sleeping: toy")
+    (tmp_path / "models" / "toy" / "checkpoints" / "step_3050.pt").write_bytes(b"x")
+    _csv(tmp_path, _val(3010, 1.30), _val(3050, 1.90))
+    sleep.finalize()
+    ms = sleep._load_state()["models"]["toy"]
+    assert ms["val"] == 1.90 and ms.get("val_best") is None
+
+
 def test_a_run_that_walked_val_the_wrong_way_is_held_back(tmp_path, monkeypatch):
     """Publishing a self-trained checkpoint feeds the served model its own next
     training set, so a consolidation that got worse must not reach serving."""
     _roots(tmp_path, monkeypatch)
     _model(tmp_path)
     _csv(tmp_path, _val(3010, 1.30), _val(3020, 1.90))
-    held, first, last = sleep.regressed("toy", 3000, CFG)
+    held, first, last = sleep.regressed("toy", {}, 3000, CFG)
     assert held and (first, last) == (1.30, 1.90)
 
 
@@ -413,7 +449,7 @@ def test_noise_inside_the_tolerance_still_publishes(tmp_path, monkeypatch):
     _roots(tmp_path, monkeypatch)
     _model(tmp_path)
     _csv(tmp_path, _val(3010, 1.2995), _val(3020, 1.3157))     # wren1_3, 2026-08-24
-    assert sleep.regressed("toy", 3000, CFG)[0] is False
+    assert sleep.regressed("toy", {}, 3000, CFG)[0] is False
 
 
 def test_an_improving_run_publishes(tmp_path, monkeypatch):
@@ -421,16 +457,16 @@ def test_an_improving_run_publishes(tmp_path, monkeypatch):
     _roots(tmp_path, monkeypatch)
     _model(tmp_path)
     _csv(tmp_path, _val(3010, 1.40), _val(3020, 1.10))
-    assert sleep.regressed("toy", 3000, CFG)[0] is False
+    assert sleep.regressed("toy", {}, 3000, CFG)[0] is False
 
 
-def test_one_val_row_cannot_be_judged_and_is_not_held(tmp_path, monkeypatch):
-    """A short dose logs a single val; holding on no evidence would stall the
-    loop on exactly the boxes it is meant to serve."""
+def test_no_val_row_cannot_be_judged_and_is_not_held(tmp_path, monkeypatch):
+    """Holding on no evidence would stall the loop on exactly the boxes it is
+    meant to serve."""
     _roots(tmp_path, monkeypatch)
     _model(tmp_path)
-    _csv(tmp_path, _val(3010, 1.30))
-    assert sleep.regressed("toy", 3000, CFG) == (False, None, None)
+    _csv(tmp_path)
+    assert sleep.regressed("toy", {}, 3000, CFG) == (False, None, None)
 
 
 def test_the_comparison_ignores_rows_from_earlier_runs(tmp_path, monkeypatch):
@@ -439,7 +475,17 @@ def test_the_comparison_ignores_rows_from_earlier_runs(tmp_path, monkeypatch):
     _roots(tmp_path, monkeypatch)
     _model(tmp_path)
     _csv(tmp_path, _val(2900, 0.50), _val(3010, 1.30), _val(3020, 1.31))
-    assert sleep.regressed("toy", 3000, CFG) == (False, 1.30, 1.31)
+    assert sleep.regressed("toy", {}, 3000, CFG) == (False, 1.30, 1.31)
+
+
+def test_one_val_row_is_still_judged_against_the_best(tmp_path, monkeypatch):
+    """A short dose logs a single val, which is comparable now that the yardstick
+    is pinned; before, one row meant no verdict at all."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    _csv(tmp_path, _val(3010, 1.60))
+    assert sleep.regressed("toy", {"val_best": 1.30}, 3000, CFG)[0] is True
+    assert sleep.regressed("toy", {"val_best": 1.60}, 3000, CFG)[0] is False
 
 
 def test_finalize_holds_a_regressed_run_back_from_serving(tmp_path, monkeypatch):

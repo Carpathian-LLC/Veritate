@@ -445,6 +445,11 @@ def launch_args(model, steps, cfg, train_bytes, val_bytes, ms=None):
         "description": f"sleep consolidation: {steps} steps over own experience "
                        f"({cfg['sleep_corpus']}), constant lr {lr:g}",
         # run modifiers, stripped before argv (trainer_runner._build_argv)
+        # validation is pinned to one fixed corpus so successive runs are
+        # comparable. Left to the mix it follows the heaviest member, and the
+        # experience bins are rebuilt every launch, so each run would score
+        # different data and a model degrading across runs would be invisible.
+        "val_bin": cfg["sleep_yardstick"],
         "_cpu_budget": cpu_budget(cfg),
         "_nice": int(cfg.get("sleep_nice", 10)),
     })
@@ -475,13 +480,9 @@ def _train_progress(model):
 
 
 def _val_trend(model, start_step):
-    """(first, last) val loss this run logged above start_step, or (None, None)
-    when it logged fewer than two.
-
-    Within one run the comparison is sound: every val row is scored on the same
-    bin. ACROSS runs it is not, because each sleep rebuilds its bins from the
-    experience log as it stands at launch, so run N and run N+1 measure different
-    held-out conversation and their numbers are not comparable."""
+    """(first, last) val loss this run logged above start_step. Either is None
+    when the run logged no val row at all; first is the only row when it logged
+    exactly one."""
     path = os.path.join(MODELS_ROOT, model, "train.csv")
     try:
         with open(path, encoding="utf-8") as f:
@@ -497,21 +498,32 @@ def _val_trend(model, start_step):
                 vals.append(float(parts[2]))
         except ValueError:
             continue
-    return (vals[0], vals[-1]) if len(vals) >= 2 else (None, None)
+    return (vals[0], vals[-1]) if vals else (None, None)
 
 
-def regressed(model, start_step, cfg):
-    """(held, first, last): whether this run's consolidation made the model worse
-    on its own held-out conversation by more than sleep_val_tolerance.
+def regressed(model, ms, start_step, cfg):
+    """(held, baseline, last): whether the consolidation made the model worse on
+    the pinned yardstick by more than sleep_val_tolerance.
 
-    The gate is a guardrail against collapse, not a quality optimizer: publishing
-    a self-trained checkpoint feeds the served model its own next training set,
-    so a run that walks val the wrong way must not reach serving. A run that
-    logged fewer than two val rows cannot be judged and is not held."""
+    The baseline is the BEST val this model has ever scored on the yardstick, not
+    the previous run's. Compared run to run, self-training degrades a model a
+    little each round and every round sits inside the tolerance while the total
+    walks steadily up: wren1_3 drifted +1.8% across five runs with no single run
+    above 0.5%. Against the high-water mark the drift cannot accumulate, because
+    the tolerance bounds how far the model is ever allowed to fall from its best.
+
+    Comparing across runs is only sound because sleep_yardstick pins validation
+    to a fixed corpus. With no history the comparison falls back to within this
+    run, and a run that logged no val at all is not held.
+
+    A guardrail against collapse, not a quality optimizer."""
     first, last = _val_trend(model, start_step)
-    if first is None or first <= 0:
-        return False, first, last
-    return last > first * (1.0 + float(cfg["sleep_val_tolerance"])), first, last
+    if last is None:
+        return False, None, None
+    baseline = float((ms or {}).get("val_best") or 0) or first
+    if not baseline or baseline <= 0:
+        return False, baseline, last
+    return last > baseline * (1.0 + float(cfg["sleep_val_tolerance"])), baseline, last
 
 
 def prune(model, start_step, end_step, keep_finals, finals):
@@ -879,8 +891,11 @@ def finalize():
                     ms["cooldown_until"] = time.time() + FAIL_COOLDOWN_S
             ms.update({"sleeping": False, "finals": finals, "run": {}})
             if end_step > start:
-                held, v0, v1 = regressed(model, start, cfg)
+                held, v0, v1 = regressed(model, ms, start, cfg)
                 ms["val"] = v1
+                if v1 and not held:
+                    # high-water mark: only weights the box actually serves set it
+                    ms["val_best"] = min(v1, float(ms.get("val_best") or v1))
                 published = None
                 if held:
                     logmod.warn("sleep", f"{model}: val {v0:.4f} -> {v1:.4f} over its own "

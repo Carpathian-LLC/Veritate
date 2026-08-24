@@ -222,6 +222,10 @@ RESERVED_STR_FLAGS = {
     # flag appeared. Pair `light` with --hooks_full_every to keep dense cheap
     # signal and still get the deep probes periodically.
     "hooks": "full",
+    # Pin validation to one corpus regardless of the training mix. Empty keeps
+    # the default, which follows the heaviest corpus in the mix: a run whose val
+    # bin moves when its mix moves cannot be compared to the run before it.
+    "val_bin": "",
 }
 RESERVED_FLOAT_FLAGS = {
     "l1_lambda": 0.0,
@@ -838,11 +842,23 @@ def chatml_density(train_path):
     return hits / CHATML_PROBE_WINDOWS
 
 
-def resolve_val_path(corpus_mix):
+def resolve_val_path(corpus_mix, override=""):
     """Return (val_path, warning). resolve_and_weight sorts weight-descending, so
     validation follows the HEAVIEST corpus in the mix, not the first one written.
     A mix whose top corpus ships no _val.bin trains blind for its whole duration,
-    which is silent unless it is said out loud."""
+    which is silent unless it is said out loud.
+
+    `override` pins validation to one corpus regardless of the mix. A run whose
+    val bin moves when its mix moves cannot be compared to the run before it,
+    which is what sleep consolidation needs to detect a model degrading over
+    successive runs on its own output."""
+    if override:
+        from readers import corpus as corpus_reader
+        pinned = corpus_reader.resolve_paths(override)[1]
+        if pinned and os.path.isfile(pinned):
+            return pinned, ""
+        return None, (f"WARNING: val_bin '{override}' resolves to no _val.bin on this box, so"
+                      " this run will report NO validation loss. Build it or clear the override.")
     val_path = corpus_mix[0][1] if corpus_mix else None
     if val_path and os.path.isfile(val_path):
         return val_path, ""
@@ -961,7 +977,7 @@ def run(plugin_id, here):
     if not args.bench:
         _corpus_mix = multicorpus.resolve_and_weight(args.corpus, resolve_corpus)
         print("corpus mix:   " + multicorpus.format_mix_summary(_corpus_mix), flush=True)
-        val_path, val_warning = resolve_val_path(_corpus_mix)
+        val_path, val_warning = resolve_val_path(_corpus_mix, getattr(args, "val_bin", "") or "")
         print(("corpus val:   " + val_path) if val_path else val_warning, flush=True)
         require_loss_mask_decision(args, _corpus_mix, sys.argv)
         args.training_kind = detect_training_kind(_corpus_mix)
