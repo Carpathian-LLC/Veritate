@@ -97,6 +97,44 @@ user pushes. Deploy: `scp` the changed files or `git fetch origin dev && git res
 origin/dev`, then `bash ~/veritate/dash_watchdog.sh`. Watch loops on that box must not match their
 own command line: use `pgrep -f "[v]eritate_venv/bin/python -u"`.
 
+## CARDINAL 2026-08-24 (evening) — the five follow-ups, and one hard negative
+
+**Sleep was making the model worse, and now there is a number for it.** wren1_3 on a FIXED corpus it
+never trained on (`mixed_chat_val.bin`, trainer's own `evaluate()`, 8 iters, seed 1234): step 0
+**0.572240**, step 10 **0.574835** (+0.45%), step 12 **0.575393** (+0.55%). Monotone with dose. Its
+own experience val drifted the same way (+1.8% over five runs), so the moving and the fixed yardstick
+agree. Cause: cardinal was running `sleep_corpus: experience:1.0` -- pure self-training, no rehearsal
+-- because the box had NO base corpus on it at all, only the experience bins. failures.md carries the
+kill-line. **This kills the no-rehearsal configuration, not the method:** 12 steps at lr 5e-6 is a
+small dose.
+
+Fixed, all live on the box:
+1. `mixed_chat_{train,val}.bin` (212 MB) shipped to cardinal; `sleep_corpus` set to the platform
+   default `experience:0.75,mixed_chat:0.25`, so consolidation rehearses instead of eating itself.
+2. Validation is pinned to a fixed yardstick. New trainer flag `val_bin` overrides
+   `resolve_val_path`'s heaviest-corpus rule; sleep passes `sleep_yardstick` (default `mixed_chat`).
+   Without it every run scored a freshly rebuilt bin and no two runs were comparable.
+3. The gate's baseline is now the BEST val the model ever recorded (`val_best`, raised only by runs
+   that actually published), not the previous run. Run to run the drift was +0.36%/run against a 2%
+   tolerance -- it would never have fired while the total walked up indefinitely. Against the
+   high-water mark the tolerance bounds total drift instead.
+4. IDEA 22 shipped: both decode step classes are timed and get their own worker count. A boundary
+   step measures **5.9x** a plain one on cardinal (23.144 vs 3.939 ms/byte at 8 workers), confirming
+   the bimodal finding -- but both classes pick 8 there, so the switch is inert and the falsifier
+   (>5% on two boxes) is NOT met. Kept anyway for the best-so-far rung fix, which is what made the
+   pick stable. `engine_threads` set back to 0 so calibration governs.
+5. Turbo (`no_turbo=1`) is STILL the largest single lever left and needs one root command on the box.
+
+**int8 is still parked and should stay parked.** The 1.72x is real, but it measurably changes output
+(1 of 5 greedy replies matched fp16) and there is no engine-side quality eval to clear it -- the
+harness built today loads a `.pt` and cannot score a `.bin`. With the clock lift already worth 2.1x
+and quality the actual open problem, spending output fidelity on speed is the wrong trade today.
+
+**Do not re-derive:** the two failing engine golden tests on cardinal
+(`test_canonical_greedy_matches_golden`, `test_v9_greedy_matches_golden`) are the documented
+pre-existing dense-on-AVX2 limitation (handoff below, 2026-08-20), not a regression. The hybrid path
+is fully green there.
+
 ## CARDINAL 2026-08-24 (later) — the 800 MHz clamp is LIFTED
 
 The user changed BIOS settings for performance and the clamp went away. `cpuinfo_max_freq` and
