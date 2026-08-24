@@ -31,7 +31,7 @@ CFG = {
     "sleep_min_steps": 50, "sleep_max_steps": 500, "sleep_ckpt_every": 25,
     "sleep_keep_finals": 3, "sleep_lr": 5e-06,
     "sleep_corpus": "experience:0.75,mixed_chat:0.25", "sleep_step_seconds": 300,
-    "sleep_ckpt_seconds": 1800,
+    "sleep_ckpt_seconds": 1800, "sleep_val_tolerance": 0.02,
 }
 # enough own-experience bytes to fill the recipe's batch, so tests that are not
 # about batch sizing get the recipe's own value
@@ -384,6 +384,79 @@ def test_turn_taking_fuller_queue_sleeps_first(tmp_path, monkeypatch):
     sleep.finalize()
     assert sleep.maybe_sleep().startswith("sleeping: quill")
     assert launched == ["toy", "quill"]
+
+
+VAL_HEADER = "step,split,loss,lr,grad_norm,tok_per_s,wall_s,seed\n"
+
+
+def _csv(tmp_path, *rows, name="toy"):
+    (tmp_path / "models" / name / "train.csv").write_text(VAL_HEADER + "".join(rows))
+
+
+def _val(step, loss):
+    return f"{step},val,{loss},5e-06,,,{step * 10}.0,0\n"
+
+
+def test_a_run_that_walked_val_the_wrong_way_is_held_back(tmp_path, monkeypatch):
+    """Publishing a self-trained checkpoint feeds the served model its own next
+    training set, so a consolidation that got worse must not reach serving."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    _csv(tmp_path, _val(3010, 1.30), _val(3020, 1.90))
+    held, first, last = sleep.regressed("toy", 3000, CFG)
+    assert held and (first, last) == (1.30, 1.90)
+
+
+def test_noise_inside_the_tolerance_still_publishes(tmp_path, monkeypatch):
+    """The gate is a guardrail against collapse, not a quality optimizer; a run
+    held for every wobble would never promote anything."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    _csv(tmp_path, _val(3010, 1.2995), _val(3020, 1.3157))     # wren1_3, 2026-08-24
+    assert sleep.regressed("toy", 3000, CFG)[0] is False
+
+
+def test_an_improving_run_publishes(tmp_path, monkeypatch):
+    """The whole point of the loop."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    _csv(tmp_path, _val(3010, 1.40), _val(3020, 1.10))
+    assert sleep.regressed("toy", 3000, CFG)[0] is False
+
+
+def test_one_val_row_cannot_be_judged_and_is_not_held(tmp_path, monkeypatch):
+    """A short dose logs a single val; holding on no evidence would stall the
+    loop on exactly the boxes it is meant to serve."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    _csv(tmp_path, _val(3010, 1.30))
+    assert sleep.regressed("toy", 3000, CFG) == (False, None, None)
+
+
+def test_the_comparison_ignores_rows_from_earlier_runs(tmp_path, monkeypatch):
+    """Each sleep rebuilds its bins from the log as it stands, so a val from a
+    previous run scored different held-out conversation and is not comparable."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    _csv(tmp_path, _val(2900, 0.50), _val(3010, 1.30), _val(3020, 1.31))
+    assert sleep.regressed("toy", 3000, CFG) == (False, 1.30, 1.31)
+
+
+def test_finalize_holds_a_regressed_run_back_from_serving(tmp_path, monkeypatch):
+    """The checkpoint still survives and can be promoted by hand; only the
+    automatic promotion is withheld."""
+    _armed(tmp_path, monkeypatch, models=("toy",), pending=(20,))
+    monkeypatch.setattr(sleep.trainer_runner, "start", lambda pid, args: {"ok": True})
+    published = []
+    monkeypatch.setattr(sleep, "publish", lambda m: published.append(m))
+    assert sleep.maybe_sleep().startswith("sleeping: toy")
+    (tmp_path / "models" / "toy" / "checkpoints" / "step_3050.pt").write_bytes(b"x")
+    _csv(tmp_path, _val(3010, 1.30), _val(3050, 1.90))
+    sleep.finalize()
+    assert published == []
+    ev = sleep.history()[0]
+    assert ev["event"] == "awake" and ev["held"] is True and ev["served"] is False
+    assert sleep._load_state()["models"]["toy"]["finals"] == [3050]
 
 
 def test_finalize_publishes_the_consolidated_weights(tmp_path, monkeypatch):

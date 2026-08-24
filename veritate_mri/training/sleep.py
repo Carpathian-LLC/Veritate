@@ -464,6 +464,46 @@ def _train_progress(model):
     return None, None
 
 
+def _val_trend(model, start_step):
+    """(first, last) val loss this run logged above start_step, or (None, None)
+    when it logged fewer than two.
+
+    Within one run the comparison is sound: every val row is scored on the same
+    bin. ACROSS runs it is not, because each sleep rebuilds its bins from the
+    experience log as it stands at launch, so run N and run N+1 measure different
+    held-out conversation and their numbers are not comparable."""
+    path = os.path.join(MODELS_ROOT, model, "train.csv")
+    try:
+        with open(path, encoding="utf-8") as f:
+            rows = [r.split(",") for r in f.read().splitlines() if r]
+    except OSError:
+        return None, None
+    vals = []
+    for parts in rows:
+        if len(parts) < 3 or parts[1] != "val":
+            continue
+        try:
+            if int(parts[0]) > start_step:
+                vals.append(float(parts[2]))
+        except ValueError:
+            continue
+    return (vals[0], vals[-1]) if len(vals) >= 2 else (None, None)
+
+
+def regressed(model, start_step, cfg):
+    """(held, first, last): whether this run's consolidation made the model worse
+    on its own held-out conversation by more than sleep_val_tolerance.
+
+    The gate is a guardrail against collapse, not a quality optimizer: publishing
+    a self-trained checkpoint feeds the served model its own next training set,
+    so a run that walks val the wrong way must not reach serving. A run that
+    logged fewer than two val rows cannot be judged and is not held."""
+    first, last = _val_trend(model, start_step)
+    if first is None or first <= 0:
+        return False, first, last
+    return last > first * (1.0 + float(cfg["sleep_val_tolerance"])), first, last
+
+
 def prune(model, start_step, end_step, keep_finals, finals):
     """Delete intermediate checkpoints a finished sleep run left behind
     (start_step < N < end_step), then thin recorded sleep finals beyond
@@ -828,17 +868,23 @@ def finalize():
                     ms["cooldown_until"] = time.time() + FAIL_COOLDOWN_S
             ms.update({"sleeping": False, "finals": finals, "run": {}})
             if end_step > start:
+                held, v0, v1 = regressed(model, start, cfg)
+                ms["val"] = v1
                 published = None
-                try:
-                    published = publish(model)
-                except Exception as e:
-                    # the consolidation itself is already safe on disk; a failed
-                    # re-export costs the box only the newest weights in serving
-                    logmod.error("sleep", f"{model}: publish failed, still serving the "
-                                          f"previous weights: {type(e).__name__}: {e}")
+                if held:
+                    logmod.warn("sleep", f"{model}: val {v0:.4f} -> {v1:.4f} over its own "
+                                         f"conversation; holding step {end_step} back from serving")
+                else:
+                    try:
+                        published = publish(model)
+                    except Exception as e:
+                        # the consolidation itself is already safe on disk; a failed
+                        # re-export costs the box only the newest weights in serving
+                        logmod.error("sleep", f"{model}: publish failed, still serving the "
+                                              f"previous weights: {type(e).__name__}: {e}")
                 _log_event("awake", model=model, end_step=end_step,
                            steps_gained=end_step - start, finals=finals,
-                           served=bool(published))
+                           served=bool(published), held=held, val_first=v0, val_last=v1)
                 logmod.ok("sleep", f"{model} awake at step {end_step}")
             elif lost:
                 _log_event("lost", model=model, end_step=end_step, steps_lost=lost)

@@ -1912,8 +1912,11 @@ function _sleepEvLine(ev) {
     return `${ev.model} fell asleep — ${ev.exchanges} exchanges → ${ev.steps} steps `
       + `(step ${ev.start_step} → ${ev.target_step})`;
   if (ev.event === "wake") return `${ev.model || "model"} woken by user`;
-  if (ev.event === "awake")
-    return `${ev.model} awake at step ${ev.end_step} (+${ev.steps_gained} steps consolidated)`;
+  if (ev.event === "awake") {
+    const base = `${ev.model} awake at step ${ev.end_step} (+${ev.steps_gained} steps consolidated)`;
+    if (ev.held) return `${base} — held back from serving, it got worse on its own conversation`;
+    return ev.served ? `${base} — now serving` : base;
+  }
   if (ev.event === "lost")
     return `${ev.model} woken between saves — ${ev.steps_lost} steps trained but not kept`;
   if (ev.event === "failed")
