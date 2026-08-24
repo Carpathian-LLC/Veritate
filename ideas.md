@@ -203,3 +203,16 @@ on at least two boxes with different core counts; if the two classes want the sa
 everywhere, only (1) and (3) are worth keeping. Needs an engine rebuild per arch, so it carries
 rule-25 bitwise-parity obligations; row-split parity holds at every worker count, so output cannot
 change. Workaround shipped meanwhile: the `engine_threads` setting pins the count.
+**SHIPPED 2026-08-24, falsifier NOT met for (2).** All three mechanisms are in: calibration times both
+step classes and switches workers for the global-stack loop, rung selection compares against the best
+rung so far instead of its predecessor, and `VERITATE_HYBRID_CALIB_KNEE` / `VERITATE_HYBRID_BOUNDARY_THREADS`
+are env knobs. Parity holds through the mid-step switch (new test drives the classes to different
+counts). Measured on cardinal at 2.0 GHz, 8 cores: plain 10.742/6.261/4.775/**3.939** ms/byte and
+boundary 57.662/34.511/27.320/**23.144** at 1/2/4/8 workers -- a boundary step costs **5.9x** a plain
+one, exactly as predicted, but BOTH classes pick 8, so the per-class switch is inert on this box and
+(2) gains 0%, not the >5% its falsifier demanded. The second box (Mac arm64) was unavailable: wren2
+is mid-pretrain and off limits. (1) is still worth having on its own -- it is what made the pick
+stable -- and the clamp lift independently removed the symptom that motivated (2): at 800 MHz the
+4->8 rung gained 10.4% and the 13% knee rejected it; at 2.0 GHz it gains 17.5% and clears. Retry (2)
+on a box where the two classes actually diverge (more cores, or a shape whose global stack is a
+different fraction of the step).
