@@ -39,6 +39,57 @@ val 0.745226 @ 17,250 (prior: 0.7432 @ 17,000, 0.7322 @ 16,750, 0.7346 @ 16,500)
 7. **Standing dates/gates**: retention quizzes for wren1_5@700 on 2026-08-27 and 2026-09-19 (`python -m tools.e4_retention_quiz wren1_5 700`, facts in veritate_mri/data/eval/e4_facts.json; acquisition reference fwd 45/50 rev 49/50). E4 campaign is CLOSED (successes.md). Checkpoint thinning of wren1_5 (keep 0+700) still a user call. publications/ holds three E4 drafts awaiting user review.
 8. **Session-bound artifacts that did NOT survive**: scratchpad scripts (val_bpb.py with the config-aware shape fix, ladder.py, e4_qa_probe.py, launch payload JSONs, watcher scripts). The repo-tracked equivalents that matter (retention quiz, extractor, grow tool) are safe. If a new session needs val/ladder probes, rebuild from the ledger descriptions or the originals referenced in worklog.
 
+## CARDINAL NIGHT 2026-08-23 (inference + weak-hardware sleep)
+
+Cardinal is now a real git checkout of `dev` (`~/Veritate`, was an untracked copy; `git init` +
+reset, no local edits were lost -- it differed from origin only by the files that session had
+changed). Deploy loop: push dev on the Mac, then on cardinal
+`git fetch origin dev && git reset --hard origin/dev`, restart with
+`setsid nohup .veritate_venv/bin/python veritate.py --skip-build --no-browser --port 8001`.
+Reach it at `ssh -p 2222 cardinal-01@127.0.0.1`, dashboard tunnelled to localhost:8011.
+
+**Answered: the "50% CPU while generating" question.** Not psutil, not `DEFAULT_THREADS` (unset),
+not the BIOS clamp. The ENGINE calibrates its worker count on a 1,2,4,8 ladder and stops when a
+rung improves less than `HYBRID_CALIB_KNEE` (13%); on cardinal 4->8 measures 10.4% so it picks 4
+of 8 cores. Numbers and the instability (wren1_0 cached 8, wren1_3 cached 4) are in successes.md.
+`engine_threads` now pins it (0 = calibrate). The C-side fix (knee per step class, or a
+sustained-load re-check) is NOT done and needs an engine rebuild on each arch.
+
+**The real cause of the lag was sleep, not the engine.** A sleep child took 7 of 8 cores, so a
+served request ran at 44.6-54.6 ms/byte with a 2.9 s first byte. Preemption (below) removes it.
+
+**Shipped tonight** (all on dev, all with tests, repo ruff-clean, 1536 tests green):
+- `runtime/serving.py` beacon + `sleep.yield_to_serving` / `resume_if_quiet`: the sleep child is
+  SIGSTOPped for each request and resumed after `sleep_resume_s`. Serving under an active sleep
+  run measures 17.9-18.2 ms/byte / 12-23 ms first byte, same as an idle box. Verified at the OS
+  level (child state R -> T for the request's duration), not inferred from latency.
+- `sleep_reserve_cores` / `sleep_nice` via `_cpu_budget` / `_nice` run modifiers; `trainer_runner.pid()`.
+- `sleep_batch_size` override; val-bin floor (earlier commit) is what finally let sleep launch here.
+- bench ramp gained a wall-clock budget AND a per-rung deadline; without the latter a first rung
+  slower than the whole budget ran unbounded, which is the normal case on this box.
+- UI: sleep panel copy no longer claims idle-only, redundant enroll chip removed, a parked run
+  reads "paused for you"; Settings gained pause-while-answering, cores-kept-free, engine-workers.
+- Fixed: `memory` corpus topic was in neither the test vocabulary nor the dashboard modal, so
+  `fact_sft` could not be browsed. Repo-wide ruff violations cleared.
+
+**Known-good serving numbers on cardinal** (wren1_3 fp16, greedy, engine-direct): 9.9 ms/byte
+engine p50, 18.3 ms/byte end to end. The gap is NOT the Python layer (0.02 ms/byte, 0.1%) -- it is
+boundary steps: word-initial bytes run the GLA global-block stack and cost 50 ms vs 10 ms, 54% of
+decode. int8 is 1.46x on identical weights and is the first lever (successes.md).
+
+**OPEN / next session:**
+1. `perf_trace.py` is BROKEN: imports `FRAME_PAYLOAD_BYTES`, which is now per-instance
+   (`sub._frame_payload_bytes`). Not fixed -- I used a scratchpad probe instead.
+2. Sleep throughput on this box is the honest limit: a batch-4 step (16,384 tokens) had not
+   finished in ~5 min. Because a SIGSTOP loses no work, the right weak-box shape is the LARGEST
+   batch that fits (amortizes Muon's batch-independent Newton-Schulz cost), i.e. leave
+   `sleep_batch_size` at 0. Confirm with the bench ramp now that it terminates.
+3. int8 export of wren1_3 on cardinal (`POST /export/wren1_3 {"dtype":"int8"}`) was NOT run --
+   it overwrites `models/wren1_3/veritate.bin`, so back the fp16 bin up first.
+4. Cardinal settings are currently a TEST shape (`sleep_max_steps` 4, `sleep_batch_size` 4,
+   `sleep_min_exchanges` 5, `sleep_idle_min` 1). Reset before treating any run as real.
+5. Browser cache: after any UI deploy tell the user to hard refresh.
+
 ## active (2026-08-19)
 
 - **User directive (permanent): persistent memory is THE research focus** — "tell it once and it doesn't forget"; stateless serving with re-injected context is the problem, not a solution. IDEA 20 (ideas.md) holds the full program: three tiers (carried state / serialized state + delta or surprise-gated slow memory / nightly sleep consolidation into weights), experiment ladder E1-E5, literature anchors with arxiv IDs, pre-registered skips.

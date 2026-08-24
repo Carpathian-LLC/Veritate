@@ -7,6 +7,20 @@ Validated results with the evidence that proved them. Entries move here from `id
 **Eager PyTorch cannot rank decode architectures: ~20 us per op at batch=1 regardless of work**
 Measured on cardinal (i7-9700T, 7 threads): `x*2` on a 320-vector 20.3 us; a 320x320 matmul doing 102,400 MACs 38.0 us. 102k multiply-adds cost 17.7 us more than doing nothing, so op COUNT sets batch-1 cost, not FLOPs. Dense FFN wins in PyTorch because it is 3 fat ops; any sparse/gated/conditional design needs more ops and loses regardless of merit. Same product-key-memory algorithm: **4.9x slower in eager PyTorch, 3.90x faster in C** (both arms AVX2 int8). Rank batch-1 architectures in C, never in eager. (2026-08-03)
 
+## serving on weak hardware
+
+**Preemptive sleep: background training costs a served request nothing (2.5x throughput, ~200x first byte)**
+cardinal-01 (i7-9700T, 8c no-HT, BIOS-locked 800 MHz, 23 GB), wren1_3 fp16 through the C engine, greedy, 64 B replies. Sleep consolidation unyielding: **44.6-54.6 ms/byte, first byte 2,856-2,978 ms** (the trainer child holds 7 of 8 cores). Same run with `sleep_preempt`: **17.9-18.2 ms/byte, first byte 12-23 ms**, matching the idle-box baseline of 18.3 ms/byte / 13 ms. Confirmed at the OS level, not inferred: sampling the child's state during a request gives `RNl RNl TNl TNl ... TNl`. SIGSTOP preserves process state, so no step work is lost and only wall time stretches. This is what makes "sleep whenever" true: consolidation no longer needs an idle window, it needs only to get out of the way. (2026-08-23)
+
+**Decode on the hybrid trunk is bimodal: word-initial bytes cost 5x and are half of all decode time**
+The model file carries a 256-entry `boundary[]` table; a step whose input byte is a boundary byte (whitespace/punctuation) runs the GLA recurrent global-block stack that other steps skip, so **every word-initial byte pays a full global-block weight stream**. cardinal, wren1_3 fp16, 128 B greedy: non-boundary p50 **10.07 ms**, boundary p50 **50.11 ms**, 24 of 127 bytes = **54% of decode time**. The fast/slow bytes spell it out: fast `here re any ifferent ays o earn istory.`, slow `a m d w t l h O w i t s h t a s p`. Prefill amortizes this across a chunk; single-byte decode cannot. (2026-08-23)
+
+**int8 is 1.46x on identical weights, and the whole Python serving layer is 0.1% of decode**
+Same weights, cardinal, 128 B greedy: wren1_0 fp16 **15.17 ms/byte** vs wren1_0_int8 **10.42 ms/byte**, byte-identical output; the win lands on the boundary step (41.34 -> 30.13 ms), which is where the bandwidth goes. Serving int8 is the first lever on any bandwidth-limited box. Separately, engine-direct instrumentation puts the entire Python pipeline (frame read, parse, event dict, JSON, SSE, socket) at **0.02 ms/byte, 2 ms of 2,198 (0.1%)**: the transport is not the bottleneck, and coalescing SSE frames would buy nothing. Confirmed by an A/B against the non-streaming `/v1` path, which measures the same 18.6-21.5 ms/byte. (2026-08-23)
+
+**Engine thread calibration stops a rung early on a bandwidth-limited box: 10.4% left on the table**
+`hybrid.c` climbs a 1,2,4,..cap ladder while each rung beats the previous by `HYBRID_CALIB_KNEE` (13%), timing **non-boundary steps only**. cardinal measures 4 threads **16.58 ms/byte** vs 8 threads **14.85 ms/byte** -- a 10.4% gain the knee rejects, which is why the box appeared to cap at "50% CPU". The pick is also unstable on one box (`wren1_0` cached 8, `wren1_3` cached 4) because the test compares only against the immediately previous rung and run-to-run noise straddles the threshold. `engine_threads` pins it; a knee that is measured per step class rather than fixed is the open follow-up. (2026-08-23)
+
 ## architecture and optimizer levers
 
 **Partial torch.compile routes around the hybrid-trunk MPS crash: 1.10x**
