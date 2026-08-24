@@ -599,6 +599,24 @@ def suspended():
     return _PAUSE["suspended"]
 
 
+def unpark_orphan():
+    """Resume a child left suspended by a previous process. Module state resets on
+    restart, so nothing would otherwise know the child is stopped and it would sit
+    parked forever holding its memory. Best effort: no child, or a child already
+    running, is a no-op."""
+    proc = _child_proc()
+    if proc is None:
+        return False
+    try:
+        if proc.status() != "stopped":
+            return False
+        proc.resume()
+    except Exception:
+        return False
+    logmod.ok("sleep", "resumed a sleep child left suspended by a previous run")
+    return True
+
+
 def cpu_budget(cfg):
     """Cores the sleep child may use: physical cores less sleep_reserve_cores,
     floored at 1 so the run still progresses on a 1-2 core box."""
@@ -723,6 +741,7 @@ def watcher():
     watch period, so a loop that picked its interval up front would leave a
     parked run stopped for up to a full period after the box went quiet."""
     serving.on_began(yield_to_serving)
+    unpark_orphan()
     last_tick = 0.0
     while True:
         time.sleep(WATCH_PAUSED_S)

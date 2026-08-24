@@ -535,3 +535,30 @@ def test_sleep_logs_every_step(tmp_path, monkeypatch):
                                     "batch_size": 48, "log_every": 10})
     monkeypatch.setattr(sleep, "cpu_budget", lambda cfg: 4)
     assert sleep.launch_args("toy", 4, CFG)["log_every"] == 1
+
+
+def test_unpark_resumes_a_child_left_suspended_by_a_previous_process(tmp_path, monkeypatch):
+    """Module state resets on restart, so a child stopped by the previous process
+    would sit parked forever holding its memory."""
+    class _Stopped(_FakeChild):
+        def status(self):
+            return "stopped"
+
+    child = _Stopped()
+    _roots(tmp_path, monkeypatch)
+    monkeypatch.setattr(sleep, "_child_proc", lambda: child)
+    assert sleep.unpark_orphan() is True
+    assert child.calls == ["resume"]
+
+
+def test_unpark_leaves_a_running_child_alone(tmp_path, monkeypatch):
+    """A healthy child must not be touched on startup."""
+    class _Running(_FakeChild):
+        def status(self):
+            return "running"
+
+    child = _Running()
+    _roots(tmp_path, monkeypatch)
+    monkeypatch.setattr(sleep, "_child_proc", lambda: child)
+    assert sleep.unpark_orphan() is False
+    assert child.calls == []
