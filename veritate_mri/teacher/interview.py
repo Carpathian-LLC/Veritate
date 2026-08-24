@@ -230,8 +230,7 @@ def next_user_turn(client, turns, temperature, cancel_check=None, watch=None):
     reply = ask(client, [{"role": ROLE_USER, "content": transcript + "\n\nPERSON:"}],
                 FOLLOWUP_SYSTEM, temperature, 200, cancel_check, watch, CALL_FOLLOWUP)
     line = (reply or "").strip().split("\n")[0].strip()
-    line = re.sub(r'^(?:PERSON|USER)\s*:\s*', "", line, flags=re.I).strip().strip('"')
-    return line
+    return re.sub(r'^(?:PERSON|USER)\s*:\s*', "", line, flags=re.I).strip().strip('"')
 
 
 def build_conversation(client, opener, depth, seed=0, temperature=0.9, cancel_check=None,

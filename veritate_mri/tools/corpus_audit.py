@@ -63,7 +63,8 @@ ASSISTANT_SCOPE = "assistant"
 ANY_SCOPE = "any"
 
 ARTIFACT_PATTERNS = (
-    (ASSISTANT_SCOPE, "ai_disclaimer",  rb"(?i)as an ai (language )?model|i am an ai\b|i'm an ai\b|as a language model"),
+    (ASSISTANT_SCOPE, "ai_disclaimer",  rb"(?i)as an ai (language )?model|i am an ai\b|i'm an ai\b"
+                                        rb"|as a language model"),
     (ASSISTANT_SCOPE, "no_personal",    rb"(?i)i (do not|don't) have (personal |the ability |access )"),
     (ASSISTANT_SCOPE, "canned_refusal", rb"(?i)i'm sorry, (but )?(i )?(can(no|')t|am unable)"),
     (ASSISTANT_SCOPE, "filler_opener",  rb"(?i)(^|\n)(sure[!,]|certainly[!,]|of course[!,]|great question)"),

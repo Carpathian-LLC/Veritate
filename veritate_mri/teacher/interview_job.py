@@ -460,7 +460,7 @@ class InterviewJob:
                     cid = conversation_id(g["id"], i)
                     try:
                         rec, why = fut.result()
-                    except Exception as e:                       # noqa: BLE001
+                    except Exception as e:
                         rec, why = None, f"{type(e).__name__}: {e}"
                     with self._lock:
                         if cid in self._remaining:

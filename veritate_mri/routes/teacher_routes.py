@@ -690,7 +690,8 @@ def _target_status(s):
     if not is_local:
         training_active, reason = False, "teacher is a hosted API; nothing on this machine to contend with"
     elif not on_this_box:
-        training_active, reason = None, f"teacher runs on {host or 'another machine'}; its training state is not visible from here"
+        training_active, reason = None, (f"teacher runs on {host or 'another machine'}; "
+                                        "its training state is not visible from here")
     elif run:
         training_active, reason = True, "a training run is using this machine right now"
     else:

@@ -100,7 +100,7 @@ def test_short_replies_fail_the_median_floor():
 def test_generator_artifacts_are_counted_and_named():
     """Artifacts are reported by name so the spec's ban list can be fixed."""
     bad = _turn("user", "Who are you?") + _turn("assistant", "As an AI language model, " + LONG_REPLY)
-    r = audit_bytes((_corpus(10) + bad.encode()))
+    r = audit_bytes(_corpus(10) + bad.encode())
     assert r["artifacts"].get("ai_disclaimer") == 1
 
 
