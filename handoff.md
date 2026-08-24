@@ -97,7 +97,38 @@ user pushes. Deploy: `scp` the changed files or `git fetch origin dev && git res
 origin/dev`, then `bash ~/veritate/dash_watchdog.sh`. Watch loops on that box must not match their
 own command line: use `pgrep -f "[v]eritate_venv/bin/python -u"`.
 
-**The 800 MHz clamp, re-checked 2026-08-24.** Root-caused 2026-07-13 (worklog) as the Dell
+## CARDINAL 2026-08-24 (later) — the 800 MHz clamp is LIFTED
+
+The user changed BIOS settings for performance and the clamp went away. `cpuinfo_max_freq` and
+`base_frequency` 800000 -> **2000000** (the chip's rated base), `turbo_pct` 98 -> **65** (a sane
+value instead of the one that said the whole range sat behind a disabled switch). Measured
+immediately after, same model, same engine, same batch:
+
+| | 800 MHz | 2.0 GHz | |
+|---|---|---|---|
+| decode, 256 B greedy reply | 18.3 ms/byte | **8.7 ms/byte** | 2.10x |
+| sleep step (batch 4) | 166 s | **72-87 s** | ~2.1x |
+| training throughput | 99 tok/s | **227 tok/s** | 2.29x |
+
+`no_turbo` is still 1, so turbo is STILL off and there is more available. The firmware no longer
+reports the range as locked, so `sudo sh -c 'echo 0 > /sys/devices/system/cpu/intel_pstate/no_turbo'`
+may now succeed where it returned EIO before. Untested.
+
+Two bugs this exposed, both fixed:
+- `sleep_val_tolerance` was never added to `settings.DEFAULTS` (the edit silently matched nothing),
+  so `finalize()` would have raised KeyError on the first real publish. Every test that exercises
+  the gate builds its own cfg dict, so nothing caught it. Now pinned by a test that reads the
+  settings keys the controller uses out of its own source and asserts DEFAULTS carries all of them.
+- The recipe batch cap RATCHETED DOWN. The trainer stamps its launch args into `config.json` at
+  every checkpoint, so sleep's reduced batch became the model's recipe batch: wren1_3's 48 had
+  become 4, and the unclamped box would have stayed pinned there forever. The cap is now the
+  largest batch the recipe has ever declared, captured into sleep state at launch. wren1_3's
+  `config.json` was repaired 4 -> 48 by hand on cardinal.
+
+Self-tuning verified after the repair: `step_s` 181.0 -> **79.4**, next batch 4 -> **7**
+(now data-limited, not box-limited), next `ckpt_every` 9 -> **22**.
+
+**The 800 MHz clamp, re-checked earlier 2026-08-24 (superseded by the section above).** Root-caused 2026-07-13 (worklog) as the Dell
 power-adapter/BIOS clamp. New evidence today narrows it: `intel_pstate` logs "Turbo disabled by BIOS
 or unavailable on processor" when the BIOS actually disables turbo, and that line is **absent** from
 this box's kernel log (only "HWP enabled" + "Disabling energy efficiency optimization"). RAPL is
