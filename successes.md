@@ -12,6 +12,15 @@ Measured on cardinal (i7-9700T, 7 threads): `x*2` on a 320-vector 20.3 us; a 320
 **Preemptive sleep: background training costs a served request nothing (2.5x throughput, ~200x first byte)**
 cardinal-01 (i7-9700T, 8c no-HT, BIOS-locked 800 MHz, 23 GB), wren1_3 fp16 through the C engine, greedy, 64 B replies. Sleep consolidation unyielding: **44.6-54.6 ms/byte, first byte 2,856-2,978 ms** (the trainer child holds 7 of 8 cores). Same run with `sleep_preempt`: **17.9-18.2 ms/byte, first byte 12-23 ms**, matching the idle-box baseline of 18.3 ms/byte / 13 ms. Confirmed at the OS level, not inferred: sampling the child's state during a request gives `RNl RNl TNl TNl ... TNl`. SIGSTOP preserves process state, so no step work is lost and only wall time stretches. This is what makes "sleep whenever" true: consolidation no longer needs an idle window, it needs only to get out of the way. (2026-08-23)
 
+**The CPU bf16 downgrade in `resolve_precision` is load-bearing: raw bf16 on AVX2 is 424x slower than fp32**
+Measured on cardinal (i7-9700T, AVX2 only -- no `avx512_bf16`, no `amx_bf16`; torch reports capability
+`AVX2`), 768x768 matmul, 7 threads: fp32 **6.4 ms, 141.68 GFLOP/s** vs bf16 **2,714.3 ms, 0.33 GFLOP/s**.
+Without hardware bf16 torch takes a scalar single-threaded reference path. `hardware.bf16_supported("cpu")`
+already returns False so `resolve_precision("bf16","cpu")` returns None and every CPU run is fp32 -- this
+entry is the number that justifies keeping it. Any future path that reaches autocast without going through
+`resolve_precision` re-opens a 424x regression. Note this is NOT what makes CPU sleep slow: the trainer was
+already running fp32 on this box. (2026-08-23)
+
 **Decode on the hybrid trunk is bimodal: word-initial bytes cost 5x and are half of all decode time**
 The model file carries a 256-entry `boundary[]` table; a step whose input byte is a boundary byte (whitespace/punctuation) runs the GLA recurrent global-block stack that other steps skip, so **every word-initial byte pays a full global-block weight stream**. cardinal, wren1_3 fp16, 128 B greedy: non-boundary p50 **10.07 ms**, boundary p50 **50.11 ms**, 24 of 127 bytes = **54% of decode time**. The fast/slow bytes spell it out: fast `here re any ifferent ays o earn istory.`, slow `a m d w t l h O w i t s h t a s p`. Prefill amortizes this across a chunk; single-byte decode cannot. (2026-08-23)
 
