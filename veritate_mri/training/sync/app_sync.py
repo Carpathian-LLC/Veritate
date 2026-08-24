@@ -810,9 +810,28 @@ def pull_update(reload=False, force=False, ignore_training=False):
         incoming files, not against a snapshot of the last pull: a file already
         matching upstream, or one upstream dropped, is never reported."""
     if not ignore_training and plugin_runner.is_running():
-        msg = "a plugin/trainer is running. stop it first or pass ignore_training=true."
-        logmod.warn("http-updater", msg)
-        return {"ok": False, "error": msg, "training_active": True}
+        # a sleep nap is opportunistic background work — wake it and proceed;
+        # only a real training run gets the hard block (user rule 2026-08-23)
+        woke = False
+        try:
+            from training import sleep as sleep_mod
+            st = sleep_mod._load_state()
+            if sleep_mod._sleeper(st):
+                sleep_mod.wake(sleep_mod._sleeper(st))
+                for _ in range(60):  # finalize keeps the last sleep checkpoint
+                    time.sleep(2)
+                    if not plugin_runner.is_running():
+                        woke = True
+                        break
+                if woke:
+                    sleep_mod.finalize()
+                    logmod.info("http-updater", "woke the sleeping model to update")
+        except Exception as e:
+            logmod.warn("http-updater", f"sleep wake before update failed: {e}")
+        if not woke and plugin_runner.is_running():
+            msg = "a plugin/trainer is running. stop it first or pass ignore_training=true."
+            logmod.warn("http-updater", msg)
+            return {"ok": False, "error": msg, "training_active": True}
 
     branch = _active_branch()
     url = _tarball_url(branch)

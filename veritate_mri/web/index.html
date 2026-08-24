@@ -372,10 +372,7 @@
             <span id="sleepStateChip" class="stat gen-chip"></span>
             <span id="sleepMeta" class="stat gen-chip"></span>
             <span style="margin-left:auto"></span>
-            <label class="sleep-ctl" title="Master switch: while on, enrolled models consolidate their own conversations into their weights whenever the box is idle"><input type="checkbox" id="sleepEnabledToggle"> enabled</label>
-            <select id="sleepEnrollSel" title="Enroll a model: it sleeps on its own conversations when idle. Any model with a checkpoint can sleep.">
-              <option value="">enroll model…</option>
-            </select>
+            <span class="stat gen-chip">enroll models in Settings → Sleep</span>
           </div>
           <div id="sleepModels" class="sleep-models"></div>
           <div id="sleepActivity" class="sleep-activity" style="display:none"></div>
@@ -1922,16 +1919,25 @@
       </div>
 
       <div class="settings-row">
-        <div class="label">Warm models</div>
-        <div class="desc">Keep selected exported models permanently loaded as resident Veritate Engine (C) subprocesses, so switching to them in chat is instant with no spawn or reload. Each pinned model holds its size in memory continuously.</div>
+        <div class="label">Models</div>
+        <div class="desc">Keep models loaded for instant switching, and let idle models learn from their own conversations.</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px;margin-top:8px">
           <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
-            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Always-loaded models</div>
-            <div class="meta" style="font-size:10.5px;color:var(--dim)">Models with an exported .bin. A checked model stays resident and serves warm. RESIDENT = subprocess live now; ACTIVE = currently selected engine.</div>
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Warm models</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">A checked model stays loaded in memory and answers instantly. Needs an exported .bin.</div>
             <div id="warmModelsList" style="display:flex;flex-direction:column;gap:2px;margin-top:4px"></div>
             <div id="warmModelsSummary" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
           </div>
-
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:4px;padding:10px 12px;min-width:0">
+            <div style="font-weight:600;font-size:11.5px;color:var(--text);letter-spacing:.03em">Sleeping models</div>
+            <div class="meta" style="font-size:10.5px;color:var(--dim)">A checked model trains on its own conversations while idle. One sleeps at a time. Status shows in the Generation tab.</div>
+            <label class="inline" style="gap:8px;align-items:center;padding:2px 0;margin-top:2px">
+              <input type="checkbox" id="sleepEnabledChk">
+              <span class="opt-title" style="margin:0;font-size:11.5px">Enable sleep</span>
+              <span class="meta" style="font-size:10.5px;color:var(--dim)">master switch; nothing sleeps while off</span>
+            </label>
+            <div id="sleepModelsList" style="display:flex;flex-direction:column;gap:2px;margin-top:4px"></div>
+            <div id="sleepModelsSummary" class="meta" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
           </div>
         </div>
       </div>

@@ -1930,47 +1930,20 @@ function _sleepModelMeta(m, sleeping, run) {
     + (m.last_sleep_ts ? ` · last slept ${_fmtEvTime(m.last_sleep_ts)}` : " · never slept");
 }
 
-let _sleepEnrolled = [];
-
-let _sleepModelNames = [];
-
-function _syncSleepControls(d) {
-  const toggle = $("sleepEnabledToggle"), sel = $("sleepEnrollSel");
-  if (!toggle || !sel) return;
-  toggle.checked = !!d.enabled;
-  _sleepEnrolled = (d.models || []).map(m => m.name);
-  // enrollable = model DIR names from discovery (never engine file paths)
-  const have = new Set(_sleepEnrolled);
-  const opts = _sleepModelNames.filter(v => v && !have.has(v));
-  sel.innerHTML = "<option value=\"\">enroll model…</option>"
-    + opts.map(v => `<option>${v}</option>`).join("");
-  sel.style.display = d.enabled ? "" : "none";
-}
-
-function _loadSleepModelNames() {
-  fetch("/train/discovery").then(r => r.ok ? r.json() : null).then(d => {
-    if (d && Array.isArray(d.models))
-      _sleepModelNames = d.models.map(m => m.name).filter(Boolean).sort();
-  }).catch(() => {});
-}
-_loadSleepModelNames();
-setInterval(_loadSleepModelNames, 60000);
-
 function _renderSleepPanel(d) {
   const panel = $("sleepPanelWrap") || $("sleepPanel");
   if (!panel) return;
   panel.style.display = "";
-  _syncSleepControls(d);
   const state = $("sleepStateChip"), meta = $("sleepMeta");
   const rows = $("sleepModels");
   const models = d.models || [];
   const sleeping = d.state === "sleeping" && d.run;
   if (!d.enabled) {
     state.textContent = "disabled";
-    meta.textContent = "flip the switch, then enroll models — they consolidate their chats into their weights while idle";
+    meta.textContent = "enable sleep in Settings, then check the models that should learn while idle";
   } else if (!models.length) {
     state.textContent = "no models enrolled";
-    meta.textContent = "pick a model under enroll — any model with a checkpoint can sleep";
+    meta.textContent = "check models under Settings, Sleeping models; any model with a checkpoint can sleep";
   } else {
     state.textContent = sleeping ? `${d.run.model} · sleeping` : `${models.length} enrolled · awake`;
     meta.textContent = "";
@@ -2073,24 +2046,45 @@ function _sleepPost(path, model) {
 }
 $("sleepWake")?.addEventListener("click", () => _sleepPost("/sleep/wake", _sleepingModel));
 $("sleepModels")?.addEventListener("click", ev => {
-  const un = ev.target.closest("button[data-unenroll]");
-  if (un) return _sleepSettings({ sleep_models: _sleepEnrolled.filter(n => n !== un.dataset.unenroll) });
   const btn = ev.target.closest("button[data-action]");
   if (btn) _sleepPost(btn.dataset.action, btn.dataset.model);
 });
-function _sleepSettings(patch) {
-  fetch("/settings", { method: "POST", headers: { "Content-Type": "application/json" },
-                       body: JSON.stringify(patch) })
-    .then(() => pollSleep()).catch(() => {});
+
+// Settings tab → Sleep: master switch + multi-model enrollment checkboxes.
+// Same pattern as warm models: render from settingsState + discovery, save
+// the whole list on every toggle, re-poll the panel so status follows.
+function _renderSleepSettings() {
+  const host = $("sleepModelsList"), chk = $("sleepEnabledChk");
+  if (!host || !settingsState.current) return;
+  chk.checked = !!settingsState.current.sleep_enabled;
+  fetch("/train/discovery").then(r => r.ok ? r.json() : null).then(d => {
+    const models = ((d && d.models) || []).map(m => m.name).filter(Boolean).sort();
+    const enrolled = settingsState.current.sleep_models || [];
+    if (!models.length) {
+      host.innerHTML = '<div class="meta" style="font-size:10.5px;color:var(--dim)">No models with checkpoints yet.</div>';
+      return;
+    }
+    host.innerHTML = models.map(n =>
+      '<label class="inline" style="gap:8px;padding:3px 0;align-items:center">'
+      + '<input type="checkbox" class="sleepChk" data-name="' + n + '"'
+      + (enrolled.indexOf(n) >= 0 ? " checked" : "") + '>'
+      + '<span class="opt-title" style="margin:0;font-size:11.5px">' + n + '</span></label>').join("");
+    host.querySelectorAll(".sleepChk").forEach(c => c.addEventListener("change", _onSleepEnrollToggle));
+    const sum = $("sleepModelsSummary");
+    if (sum) sum.textContent = enrolled.length
+      ? `Enrolled: ${enrolled.join(", ")}. They take turns, fullest backlog first.`
+      : "Nothing enrolled; no model will sleep.";
+  }).catch(() => {});
 }
-$("sleepEnabledToggle")?.addEventListener("change", ev => {
-  _sleepSettings({ sleep_enabled: !!ev.target.checked });
-});
-$("sleepEnrollSel")?.addEventListener("change", ev => {
-  const name = ev.target.value;
-  ev.target.value = "";
-  if (name && !_sleepEnrolled.includes(name))
-    _sleepSettings({ sleep_models: _sleepEnrolled.concat([name]) });
+function _onSleepEnrollToggle() {
+  const names = Array.prototype.slice.call(document.querySelectorAll(".sleepChk"))
+    .filter(c => c.checked).map(c => c.getAttribute("data-name"));
+  _saveSettings({ sleep_models: names });
+  setTimeout(() => { _renderSleepSettings(); pollSleep(); }, 400);
+}
+$("sleepEnabledChk")?.addEventListener("change", ev => {
+  _saveSettings({ sleep_enabled: !!ev.target.checked });
+  setTimeout(() => { _renderSleepSettings(); pollSleep(); }, 400);
 });
 
 function resetRagPanel() {
@@ -12017,6 +12011,7 @@ function _sysPollEnsure() {
 }
 
 function _applySettingsToUI(s) {
+  _renderSleepSettings();
   document.querySelectorAll('input[name="pytorchMode"]').forEach(r => {
     r.checked = (r.value === s.pytorch_load_mode);
     const wrap = r.closest("label.opt");
