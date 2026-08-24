@@ -49,12 +49,14 @@ def _engine():
     return exe
 
 
-def _greedy(exe, bin_path, scalar=False, threads=None):
+def _greedy(exe, bin_path, scalar=False, threads=None, boundary_threads=None):
     env = dict(os.environ, VERITATE_MODEL_PATH=bin_path)
     if scalar:
         env["VERITATE_HYBRID_SCALAR"] = "1"
     if threads is not None:
         env["VERITATE_HYBRID_THREADS"] = str(threads)
+    if boundary_threads is not None:
+        env["VERITATE_HYBRID_BOUNDARY_THREADS"] = str(boundary_threads)
     p = subprocess.run([exe, "chat_greedy", BUDGET], input=PROMPTS,
                        capture_output=True, env=env, timeout=300)
     assert p.returncode == 0, p.stderr.decode(errors="replace")
@@ -112,6 +114,18 @@ def test_hybrid_threaded_matches_single_thread(tmp_path, monkeypatch):
     exe = _engine()
     bin_path = _export_fixture(tmp_path, monkeypatch, MT_SHAPE, MT_NAME, "fp16")
     assert _greedy(exe, bin_path, threads=MT_THREADS) == _greedy(exe, bin_path, threads=1)
+
+
+def test_boundary_class_thread_switch_does_not_change_output(tmp_path, monkeypatch):
+    """Decode is bimodal, so the two step classes get their own worker counts and
+    the count changes partway through a step. Row-split parity has to survive that
+    switch, not just a fixed count."""
+    exe = _engine()
+    monkeypatch.delenv("VERITATE_HYBRID_THREADS", raising=False)
+    bin_path = _export_fixture(tmp_path, monkeypatch, MT_SHAPE, MT_NAME, "fp16")
+    split = _greedy(exe, bin_path, threads=1, boundary_threads=MT_THREADS)
+    assert split == _greedy(exe, bin_path, threads=1)
+    assert split == _greedy(exe, bin_path, threads=MT_THREADS, boundary_threads=1)
 
 
 def test_hybrid_auto_matches_single_thread(tmp_path, monkeypatch):

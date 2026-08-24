@@ -269,7 +269,7 @@ void hybrid_dispatch_init(int32_t dtype) {
 #define HYBRID_CALIB_WARMUP    1
 #define HYBRID_CALIB_REPS      4
 #define HYBRID_CALIB_PASSES    7
-#define HYBRID_CALIB_KNEE      0.13
+#define HYBRID_CALIB_KNEE      0.13   // VERITATE_HYBRID_CALIB_KNEE overrides
 #define HYBRID_CALIB_LADDER_N  8
 #define HYBRID_CALIB_BUDGET_MS 350
 
@@ -305,6 +305,9 @@ static int32_t g_hybrid_nt = 1;
 // correctly and under-threads prefill. Zero means "use the decode count", which
 // keeps every arch on exactly the previous behavior until the override is set.
 static int32_t g_hybrid_nt_prefill = 0;
+// workers for the boundary step class only. 0 keeps one pick for both classes.
+// output is unaffected by either value (row-split parity holds at every count).
+static int32_t g_hybrid_nt_boundary = 0;
 
 static int32_t hybrid_threads(void) { return g_hybrid_nt; }
 
@@ -447,6 +450,29 @@ static int calib_cmp_u64(const void* a, const void* b) {
     return (x > y) - (x < y);
 }
 
+static double calib_knee(void) {
+    const char* s = getenv("VERITATE_HYBRID_CALIB_KNEE");
+    if (s && *s) {
+        double v = atof(s);
+        if (v > 0.0 && v < 1.0) return v;
+    }
+    return HYBRID_CALIB_KNEE;
+}
+
+// pick the widest rung that beats the BEST rung so far by the knee. comparing
+// each rung against its immediate predecessor and stopping at the first that
+// falls short lets one noisy sample discard every wider rung behind it, which is
+// how two models on one box cached different counts (8 and 4).
+static int32_t calib_pick(const uint64_t* med, const int32_t* rungs, int32_t nr) {
+    const double knee = calib_knee();
+    int32_t pick = 0;
+    for (int32_t r = 1; r < nr; r++) {
+        double impr = ((double)med[pick] - (double)med[r]) / (double)med[pick];
+        if (impr >= knee) pick = r;
+    }
+    return rungs[pick];
+}
+
 // median per-step time of a non-boundary decode burst at nt workers. resets
 // state so every rung starts at the same low position (attention cost grows with
 // pos and would bias later rungs). the pos-0 boundary step is absorbed by the
@@ -466,46 +492,55 @@ static uint64_t calib_time_rung(hybrid_t* h, int32_t nt, int32_t byte) {
     return t[HYBRID_CALIB_REPS / 2];
 }
 
-static int32_t hybrid_calibrate(hybrid_t* h) {
+static void hybrid_calibrate(hybrid_t* h, int32_t* out_plain, int32_t* out_boundary) {
     // the full pool is proposable: veritate_pool_run runs the last span on the
     // calling thread, so an n-way split occupies n cores, not n + a spinner.
     int32_t cap = veritate_pool_size();
     if (cap > HYBRID_MT_MAX) cap = HYBRID_MT_MAX;
-    if (cap < 2) return 1;
-    int32_t byte = 0;
-    for (int32_t b = 0; b < 256; b++) if (!h->boundary[b]) { byte = b; break; }
+    *out_plain = 1;
+    *out_boundary = 1;
+    if (cap < 2) return;
+    // decode is bimodal: a boundary byte runs the recurrent global stack that
+    // every other byte skips, costs ~5x, and is ~54% of decode time. one pick
+    // timed on the cheap class then governs the expensive one, so time both.
+    int32_t plain = 0, bound = -1;
+    for (int32_t b = 0; b < 256; b++) if (!h->boundary[b]) { plain = b; break; }
+    for (int32_t b = 0; b < 256; b++) if (h->boundary[b]) { bound = b; break; }
 
     int32_t rungs[HYBRID_CALIB_LADDER_N];
     int32_t nr = calib_ladder(cap, rungs);
-    uint64_t samp[HYBRID_CALIB_LADDER_N][HYBRID_CALIB_PASSES];
+    uint64_t samp[2][HYBRID_CALIB_LADDER_N][HYBRID_CALIB_PASSES];
+    const int32_t nclass = (bound >= 0) ? 2 : 1;
+    const int32_t bytes[2] = { plain, bound };
     const uint64_t start = veritate_now_ns();
     int32_t done = 0;
     for (int32_t p = 0; p < HYBRID_CALIB_PASSES; p++) {
-        for (int32_t i = 0; i < nr; i++) {
-            int32_t r = (p & 1) ? nr - 1 - i : i;
-            samp[r][p] = calib_time_rung(h, rungs[r], byte);
-        }
+        for (int32_t c = 0; c < nclass; c++)
+            for (int32_t i = 0; i < nr; i++) {
+                int32_t r = (p & 1) ? nr - 1 - i : i;
+                samp[c][r][p] = calib_time_rung(h, rungs[r], bytes[c]);
+            }
         done = p + 1;
         if ((veritate_now_ns() - start) / 1000000 >= HYBRID_CALIB_BUDGET_MS) break;
     }
     hybrid_reset(h);
 
-    uint64_t med[HYBRID_CALIB_LADDER_N];
-    for (int32_t r = 0; r < nr; r++) {
-        qsort(samp[r], done, sizeof(uint64_t), calib_cmp_u64);
-        med[r] = samp[r][done / 2];
+    const int log = getenv("VERITATE_HYBRID_CALIB_LOG") != NULL;
+    int32_t picks[2] = { 1, 1 };
+    for (int32_t c = 0; c < nclass; c++) {
+        uint64_t med[HYBRID_CALIB_LADDER_N];
+        for (int32_t r = 0; r < nr; r++) {
+            qsort(samp[c][r], done, sizeof(uint64_t), calib_cmp_u64);
+            med[r] = samp[c][r][done / 2];
+        }
+        picks[c] = calib_pick(med, rungs, nr);
+        if (log)
+            for (int32_t r = 0; r < nr; r++)
+                fprintf(stderr, "  %s rung nt=%2d med=%.3f ms/byte\n",
+                        c ? "boundary" : "plain   ", rungs[r], (double)med[r] / 1e6);
     }
-    if (getenv("VERITATE_HYBRID_CALIB_LOG"))
-        for (int32_t r = 0; r < nr; r++)
-            fprintf(stderr, "  rung nt=%2d med=%.3f ms/byte\n", rungs[r], (double)med[r] / 1e6);
-
-    int32_t pick = 0;
-    for (int32_t r = 1; r < nr; r++) {
-        double impr = ((double)med[r - 1] - (double)med[r]) / (double)med[r - 1];
-        if (impr < HYBRID_CALIB_KNEE) break;
-        pick = r;
-    }
-    return rungs[pick];
+    *out_plain = picks[0];
+    *out_boundary = (nclass == 2) ? picks[1] : picks[0];
 }
 
 // fnv-1a over the shape fields that move the calibrated pick, the core count,
@@ -528,26 +563,30 @@ static int hybrid_tcache_path(char* buf, size_t n) {
     return 1;
 }
 
-static int32_t hybrid_tcache_load(const hybrid_t* h, int32_t cap) {
+static int32_t hybrid_tcache_load(const hybrid_t* h, int32_t cap, int32_t* nt_boundary) {
     char path[HYBRID_TCACHE_PATH_MAX];
     if (!hybrid_tcache_path(path, sizeof(path))) return 0;
     FILE* f = fopen(path, "rb");
     if (!f) return 0;
     unsigned long long sig = 0;
-    int nt = 0;
-    int ok = fscanf(f, "%llu %d", &sig, &nt) == 2;
+    int nt = 0, ntb = 0;
+    // a file written before the boundary pick existed reads short and simply
+    // re-calibrates, which is what a stale cache is supposed to cost
+    int ok = fscanf(f, "%llu %d %d", &sig, &nt, &ntb) == 3;
     fclose(f);
-    if (!ok || sig != hybrid_shape_sig(h) || nt < 1 || nt > cap) return 0;
+    if (!ok || sig != hybrid_shape_sig(h)) return 0;
+    if (nt < 1 || nt > cap || ntb < 1 || ntb > cap) return 0;
+    *nt_boundary = ntb;
     return nt;
 }
 
-static void hybrid_tcache_store(const hybrid_t* h, int32_t nt) {
+static void hybrid_tcache_store(const hybrid_t* h, int32_t nt, int32_t nt_boundary) {
     char path[HYBRID_TCACHE_PATH_MAX];
     if (!hybrid_tcache_path(path, sizeof(path))) return;
     veritate_mkdir(getenv(HYBRID_TCACHE_ENV));
     FILE* f = fopen(path, "wb");
     if (!f) return;
-    fprintf(f, "%llu %d\n", (unsigned long long)hybrid_shape_sig(h), nt);
+    fprintf(f, "%llu %d %d\n", (unsigned long long)hybrid_shape_sig(h), nt, nt_boundary);
     fclose(f);
 }
 
@@ -556,21 +595,32 @@ static void hybrid_threads_init(hybrid_t* h) {
     if (cap > HYBRID_MT_MAX) cap = HYBRID_MT_MAX;
     const char* s = getenv("VERITATE_HYBRID_THREADS");
     uint64_t t0 = veritate_now_ns();
-    int32_t nt;
+    int32_t nt, ntb = 0;
     const char* how;
     if (s && *s) {
         nt = atoi(s);
         if (nt > cap) nt = cap;
         if (nt < 1) nt = 1;
+        ntb = nt;   // an explicit pin governs both classes
         how = "override";
-    } else if ((nt = hybrid_tcache_load(h, cap)) > 0) {
+    } else if ((nt = hybrid_tcache_load(h, cap, &ntb)) > 0) {
         how = "cached";
     } else {
-        nt = hybrid_calibrate(h);
-        hybrid_tcache_store(h, nt);
+        hybrid_calibrate(h, &nt, &ntb);
+        hybrid_tcache_store(h, nt, ntb);
         how = "calibrated";
     }
     g_hybrid_nt = nt;
+    g_hybrid_nt_boundary = (ntb > 0 && ntb != nt) ? ntb : 0;
+
+    const char* sb = getenv("VERITATE_HYBRID_BOUNDARY_THREADS");
+    if (sb && *sb) {
+        int32_t nb = atoi(sb);
+        if (nb > cap) nb = cap;
+        if (nb < 1) nb = 1;
+        g_hybrid_nt_boundary = (nb != nt) ? nb : 0;
+        ntb = nb;
+    }
 
     const char* sp = getenv("VERITATE_HYBRID_PREFILL_THREADS");
     if (sp && *sp) {
@@ -580,7 +630,8 @@ static void hybrid_threads_init(hybrid_t* h) {
         g_hybrid_nt_prefill = np;
     }
     if (getenv("VERITATE_HYBRID_CALIB_LOG")) {
-        fprintf(stderr, "hybrid: threads=%d (%s) prefill_threads=%d pool=%d %.1fms\n", nt, how,
+        fprintf(stderr, "hybrid: threads=%d boundary=%d (%s) prefill_threads=%d pool=%d %.1fms\n",
+                nt, ntb > 0 ? ntb : nt, how,
                 g_hybrid_nt_prefill > 0 ? g_hybrid_nt_prefill : nt,
                 veritate_pool_size(), (double)(veritate_now_ns() - t0) / 1e6);
     }
@@ -889,6 +940,8 @@ void hybrid_step(hybrid_t* h, int32_t byte, trace_record_t* trace) {
         const float* se = h->slot_pos_emb + (size_t)h->slot_count * H;
         for (int32_t i = 0; i < H; i++) h->g[i] = h->x[i] + se[i];
     }
+    const int32_t nt_step = g_hybrid_nt;
+    if (slot_live && g_hybrid_nt_boundary > 0) g_hybrid_nt = g_hybrid_nt_boundary;
     for (int32_t gidx = 0; gidx < h->n_global; gidx++, L++) {
         if (trace) trace_residual(trace, h, L, slot_live ? h->g : h->x, 1);
         if (slot_live) recurrent_block_step(h, &h->blocks[L], gidx);
@@ -901,6 +954,7 @@ void hybrid_step(hybrid_t* h, int32_t byte, trace_record_t* trace) {
             if (trace->lens_logits) trace_lens_stage(h, L, slot_live ? h->g : h->x);
         }
     }
+    g_hybrid_nt = nt_step;
     if (slot_live) {
         for (int32_t i = 0; i < H; i++) h->x[i] += h->g[i];
     }
