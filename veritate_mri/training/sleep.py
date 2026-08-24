@@ -712,12 +712,19 @@ def tick():
 
 
 def watcher():
-    """Daemon loop for app startup. Polls fast while a child sits suspended so a
-    parked run resumes near sleep_resume_s instead of a watch period later."""
+    """Daemon loop for app startup. The resume check runs on the short poll and
+    the full pass every WATCH_EVERY_S: a suspend can land at any point inside a
+    watch period, so a loop that picked its interval up front would leave a
+    parked run stopped for up to a full period after the box went quiet."""
     serving.on_began(yield_to_serving)
+    last_tick = 0.0
     while True:
-        time.sleep(WATCH_PAUSED_S if suspended() else WATCH_EVERY_S)
+        time.sleep(WATCH_PAUSED_S)
         try:
-            tick()
+            if suspended():
+                resume_if_quiet()
+            if time.monotonic() - last_tick >= WATCH_EVERY_S:
+                last_tick = time.monotonic()
+                tick()
         except Exception as e:
             logmod.error("sleep", f"watcher: {e}")
