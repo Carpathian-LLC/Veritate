@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import authoring as authoring_mod
 from . import interview
-from .client import Client, TeacherError
+from .client import Client, TeacherCancelled, TeacherError
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -70,11 +70,25 @@ OPENER_BATCH = 12
 OPENER_MAX_TOKENS = 700
 MIN_OPENER_BYTES = 12
 MAX_OPENER_BYTES = 400
+OPENER_MIN_ROUNDS = 4
+OPENER_MIN_TEMPERATURE = 0.95
+OPENER_TAG_MAX = 10 ** 6
 
 FAILURE_ABORT_STREAK = 12
 # Consecutive opener batches that add nothing new before the pool is called dry.
 DRY_ROUNDS = 3
 OPENER_ROUND_SLACK = 4
+
+# A conversation that was queued when Stop landed is not a failure, and must not
+# push the run toward FAILURE_ABORT_STREAK: one Stop would otherwise read as a
+# dead teacher.
+REASON_STOPPED = "stopped"
+
+# Wall clock left, from the measured median call time. A conversation's calls run
+# one after another; only whole conversations run in parallel.
+CALLS_PER_REPLY = 2
+MS_PER_S = 1000.0
+S_PER_HOUR = 3600.0
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -269,9 +283,43 @@ class InterviewJob:
 
     # -- pass 1: openers ------------------------------------------------------
 
+    def _opener_batch(self, client, genre, situation, tag):
+        """One teacher call: OPENER_BATCH opening lines for one subject area."""
+        prompt = (f"Subject area: {situation}\nWrite {OPENER_BATCH} different opening lines. "
+                  f"Batch tag {tag:06d} (never output this).")
+        return interview.ask(client, [{"role": "user", "content": prompt}],
+                             OPENER_SYSTEM, max(self.temperature, OPENER_MIN_TEMPERATURE),
+                             OPENER_MAX_TOKENS, self._stop.is_set,
+                             self.feed.watcher(genre["id"]), CALL_SEED)
+
+    def _keep_openers(self, raw, genre, seen, out, store):
+        """Absorb one batch, returning how many lines were new. Main thread only:
+        `seen`, `out` and `store` are unsynchronised on purpose."""
+        added = 0
+        for line in (raw or "").splitlines():
+            line = line.strip().strip('"').strip()
+            line = line.lstrip("0123456789.)-\u2022 ").strip()
+            if not MIN_OPENER_BYTES <= len(line.encode("utf-8")) <= MAX_OPENER_BYTES:
+                continue
+            key = authoring_mod.normalize(line)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(line)
+            store.write(json.dumps({"genre": genre["id"], "text": line},
+                                   ensure_ascii=False) + "\n")
+            added += 1
+        if added:
+            store.flush()
+        return added
+
     def _openers_for(self, client, genre, want, taken):
         """Ask the teacher for opening lines. Scripting IS the right task here --
         short varied user turns are what a script writer is good at.
+
+        Runs max_concurrency batches at a time. Serially this was the whole cost of
+        a large run: measured 2026-08-22, 15 of a 16 hour run went on pass 1 at a
+        65 s median call while every worker sat idle, and pass 2 never started.
 
         Deduped against `taken` (openers this job already has) as well as against
         this batch, appended to disk as they arrive so an interrupted pass 1 is
@@ -287,56 +335,50 @@ class InterviewJob:
         rng.shuffle(order)
         out = []
         seen = {authoring_mod.normalize(t) for t in taken}
-        dry, fails = 0, 0
-        max_rounds = max(4, (want // OPENER_BATCH) * OPENER_ROUND_SLACK)
-        rounds = 0
+        dry, fails, rounds = 0, 0, 0
+        max_rounds = max(OPENER_MIN_ROUNDS, (want // OPENER_BATCH) * OPENER_ROUND_SLACK)
         store = open(self._path(OPENERS_FILE), "a", encoding="utf-8")  # noqa: SIM115
+        ex = ThreadPoolExecutor(max_workers=self.max_concurrency)
         try:
-            while len(out) < want and rounds < max_rounds and dry < DRY_ROUNDS:
-                if self._stop.is_set():
-                    break
-                # walk the seed list rather than sampling with replacement: every seed
-                # is used once before any repeats, which is where the diversity is
-                sit = situations[order[rounds % len(order)]]
-                rounds += 1
-                prompt = (f"Subject area: {sit}\nWrite {OPENER_BATCH} different opening lines. "
-                          f"Batch tag {rng.randrange(10**6):06d} (never output this).")
-                try:
-                    raw = interview.ask(client, [{"role": "user", "content": prompt}],
-                                        OPENER_SYSTEM, max(self.temperature, 0.95),
-                                        OPENER_MAX_TOKENS, self._stop.is_set,
-                                        self.feed.watcher(genre["id"]), CALL_SEED)
-                except TeacherError as e:
-                    # A teacher that is down fails every batch. Without this the
-                    # loop sat here for max_rounds x the client's own retries,
-                    # which on a large run is hours of nothing.
-                    fails += 1
-                    self._counts["last_error"] = f"openers: {type(e).__name__}: {e}"
-                    self._err_counts[str(self._counts["last_error"])[:REASON_KEY_MAX]] += 1
-                    if fails >= FAILURE_ABORT_STREAK:
-                        self._aborted = True
+            while (len(out) < want and rounds < max_rounds and dry < DRY_ROUNDS
+                   and fails < FAILURE_ABORT_STREAK and not self._stop.is_set()):
+                short_by = want - len(out)
+                wave = min(self.max_concurrency, max_rounds - rounds,
+                           -(-short_by // OPENER_BATCH))
+                futures = []
+                for _ in range(wave):
+                    # walk the seed list rather than sampling with replacement: every
+                    # seed is used once before any repeats, which is where the
+                    # diversity is
+                    sit = situations[order[rounds % len(order)]]
+                    rounds += 1
+                    futures.append(ex.submit(self._opener_batch, client, genre, sit,
+                                             rng.randrange(OPENER_TAG_MAX)))
+                for fut in futures:
+                    try:
+                        raw = fut.result()
+                    except TeacherCancelled:
                         break
-                    continue
-                fails = 0
-                added = 0
-                for line in (raw or "").splitlines():
-                    line = line.strip().strip('"').strip()
-                    line = line.lstrip("0123456789.)-\u2022 ").strip()
-                    if not MIN_OPENER_BYTES <= len(line.encode("utf-8")) <= MAX_OPENER_BYTES:
+                    except TeacherError as e:
+                        # A teacher that is down fails every batch. Without this the
+                        # loop sat here for max_rounds x the client's own retries,
+                        # which on a large run is hours of nothing.
+                        fails += 1
+                        reason = f"openers: {type(e).__name__}: {e}"
+                        self._counts["last_error"] = reason
+                        self._err_counts[reason[:REASON_KEY_MAX]] += 1
                         continue
-                    key = authoring_mod.normalize(line)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    out.append(line)
-                    store.write(json.dumps({"genre": genre["id"], "text": line},
-                                           ensure_ascii=False) + "\n")
-                    added += 1
-                if added:
-                    store.flush()
-                dry = dry + 1 if added == 0 else 0
+                    fails = 0
+                    dry = 0 if self._keep_openers(raw, genre, seen, out, store) else dry + 1
         finally:
+            ex.shutdown(wait=False, cancel_futures=True)
             store.close()
+        if fails >= FAILURE_ABORT_STREAK:
+            # A teacher that fails every opener batch fails every conversation too.
+            # Stopping the whole job here is what keeps pass 2 from queueing the
+            # entire run against an endpoint already known to be down.
+            self._aborted = True
+            self._stop.set()
         return out[:want]
 
     def _stored_openers(self):
@@ -382,7 +424,7 @@ class InterviewJob:
         # big run -- and without this check every queued task still made its
         # teacher calls after Stop was pressed.
         if self._stop.is_set():
-            return None, "stopped"
+            return None, REASON_STOPPED
         cid = conversation_id(genre["id"], idx)
         try:
             turns = interview.build_conversation(
@@ -429,6 +471,11 @@ class InterviewJob:
                 plan.append((g, op))
         self._remaining = [conversation_id(g["id"], i) for i, (g, _) in enumerate(plan)]
         self._flush()
+        # Pass 1 stopping -- teacher down, or Stop pressed -- ends the run here.
+        # Queueing pass 2 anyway wrote one "stopped" row per planned conversation,
+        # burying the real error under thousands of rows that said nothing.
+        if self._stop.is_set():
+            return
 
         samples = open(self._path(SAMPLES_FILE), "a", encoding="utf-8")  # noqa: SIM115
         errors = open(self._path(ERRORS_FILE), "a", encoding="utf-8")    # noqa: SIM115
@@ -460,6 +507,8 @@ class InterviewJob:
                     cid = conversation_id(g["id"], i)
                     try:
                         rec, why = fut.result()
+                    except TeacherCancelled:
+                        rec, why = None, REASON_STOPPED
                     except Exception as e:
                         rec, why = None, f"{type(e).__name__}: {e}"
                     with self._lock:
@@ -474,7 +523,8 @@ class InterviewJob:
                             self._counts["consec_fail"] = 0
                         else:
                             self._counts["failed"] += 1
-                            self._counts["consec_fail"] += 1
+                            if why != REASON_STOPPED:
+                                self._counts["consec_fail"] += 1
                             self._counts["last_error"] = why or "rejected"
                             self._err_counts[(why or "rejected")[:REASON_KEY_MAX]] += 1
                             errors.write(json.dumps(
@@ -500,7 +550,20 @@ class InterviewJob:
             errors.close()
             self._flush()
 
+    def _eta_hours(self, p50_ms):
+        """Hours of wall clock left at the measured median call time.
+
+        A job is sized in conversations but paid for in calls, and the two differ
+        by 2*depth-1. Without this the only way to learn that a run was a week
+        long was to watch it not finish."""
+        if not p50_ms or not self._remaining:
+            return 0.0
+        per_conversation_s = (CALLS_PER_REPLY * self.depth - 1) * p50_ms / MS_PER_S
+        return round(len(self._remaining) * per_conversation_s
+                     / self.max_concurrency / S_PER_HOUR, 1)
+
     def _flush(self):
+        stats = self.feed.snapshot()["stats"]
         payload = {
             "job_id": self.job_id,
             "remaining": list(self._remaining),
@@ -513,7 +576,8 @@ class InterviewJob:
             "opener_shortfall": {k: v for k, v in self._opener_shortfall.items() if v},
             # the live feed is memory on the running job; these are the numbers
             # that have to survive it, so they go in state.json with the rest
-            "call_stats": self.feed.snapshot()["stats"],
+            "call_stats": stats,
+            "eta_hours": self._eta_hours(stats["p50_ms"]),
             "authoring": self.gate.stats(),
         }
         tmp = self._path(STATE_FILE) + ".tmp"

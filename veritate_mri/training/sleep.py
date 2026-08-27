@@ -44,7 +44,7 @@ import time
 from bisect import bisect_right
 
 from readers import bin as binr
-from readers.paths import EXPERIENCE_ROOT, MODELS_ROOT, SLEEP_ROOT
+from readers.paths import EXPERIENCE_ROOT, MODELS_ROOT, SLEEP_ROOT, corpus_train_path, corpus_val_path
 from runtime import logs as logmod
 from runtime import serving
 from runtime import settings as settings_mod
@@ -53,6 +53,10 @@ from training import trainer_runner
 
 # ------------------------------------------------------------------------------------
 # Constants
+
+# stems the controller builds itself; the mix names them like any corpus
+FACT_STEM = "experience_fact_sft"
+STUDY_STEM = "study"
 
 WATCH_EVERY_S = 60
 # while a sleep child sits suspended the watcher polls fast enough that the
@@ -69,6 +73,7 @@ SLEEP_OVERRIDES = {
     "wsd_decay_kind": "sqrt", "loss_mask": "assistant", "resume": None,
     "name": None, "corpus": None, "total_steps": None, "ckpt_every": None,
     "eval_every": None, "base_lr": None, "min_lr": None, "description": None,
+    "stop_on_val_rise": None,
     # a pretrain recipe logs every 10-20 steps; a sleep dose can be shorter than
     # that, and an inherited interval writes no train.csv row at all, so the run
     # looks like nothing happened. Sleep is short by construction: log every step.
@@ -364,6 +369,49 @@ def _fit_eval_iters(base, batch, val_bytes):
     return max(1, min(int(base.get("eval_iters") or 1), int(val_bytes) // window))
 
 
+def _mix_stems(mix):
+    """[(stem, weight)] parsed from a corpus mix string."""
+    out = []
+    for part in str(mix or "").split(","):
+        stem, _, weight = part.strip().partition(":")
+        if stem.strip():
+            out.append((stem.strip(), float(weight or 1)))
+    return out
+
+
+def _stem_bytes(stem):
+    """(train_b, val_b) on disk for a corpus stem; 0 for a bin that is not there."""
+    def size(path):
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+    return size(corpus_train_path(stem)), size(corpus_val_path(stem))
+
+
+def _build_study_bins(cfg):
+    """Render the configured study sources into study bins. Source trees and documents
+    consolidate through the same E4 form generator that binds facts (varied forms,
+    content in the assistant turn), so code and long-form prose need no separate path."""
+    src = [p for p in (cfg.get("sleep_study_paths") or []) if os.path.exists(p)]
+    if not src:
+        return
+    import tools.build_study_corpus as bsc
+    nf, nc, ne, tb, _vb = bsc.build(src, stem=STUDY_STEM)
+    logmod.ok("sleep", f"study corpus: {nf} files -> {nc} chunks -> {ne} exposures ({tb}B)")
+
+
+def _mix_primary_bytes(cfg, tb, vb):
+    """Batch sizing and the too-small gate must measure the stem the run will actually
+    draw from, which is the heaviest mix member the controller builds."""
+    mine = {stem for stem, _ in _mix_stems(cfg["sleep_corpus"])} & {"experience", FACT_STEM, STUDY_STEM}
+    if not mine:
+        return tb, vb
+    stem = max(((s2, w) for s2, w in _mix_stems(cfg["sleep_corpus"]) if s2 in mine),
+               key=lambda pair: pair[1])[0]
+    return (tb, vb) if stem == "experience" else _stem_bytes(stem)
+
+
 def _build_own_corpus(model, cfg, min_val_bytes=0):
     """Build the consolidation bins from the model's own exchanges only: write a
     per-model filtered view of the experience log and run the corpus builder
@@ -401,9 +449,15 @@ def _build_own_corpus(model, cfg, min_val_bytes=0):
     prev = bec.EXPERIENCE_ROOT
     bec.EXPERIENCE_ROOT = FILTER_ROOT
     try:
-        return bec.build(days=None, min_val_bytes=min_val_bytes)
+        n, tb, vb = bec.build(days=None, min_val_bytes=min_val_bytes)
+        if cfg.get("sleep_use_extraction"):
+            nf, _ftb, _fvb = bec.build_fact_bins(days=None, model=model)
+            logmod.ok("sleep", f"extraction: {nf} facts from {n} exchanges")
+        _build_study_bins(cfg)
     finally:
         bec.EXPERIENCE_ROOT = prev
+    tb, vb = _mix_primary_bytes(cfg, tb, vb)
+    return n, tb, vb
 
 
 def dose_steps(exchanges, cfg):
@@ -450,6 +504,11 @@ def launch_args(model, steps, cfg, train_bytes, val_bytes, ms=None):
         # experience bins are rebuilt every launch, so each run would score
         # different data and a model degrading across runs would be invisible.
         "val_bin": cfg["sleep_yardstick"],
+        # a consolidation run has no useful fixed length: it runs while it helps and
+        # stops when it starts costing more than it buys. Measured on wren1_8
+        # (2026-08-25, lr 2e-4): held-out val improved through step 10 and fell off a
+        # cliff by step 20, an edge no step count can find in advance
+        "stop_on_val_rise": float(cfg["sleep_stop_on_val_rise"]),
         "_cpu_budget": cpu_budget(cfg),
         "_nice": int(cfg.get("sleep_nice", 10)),
     })
@@ -480,15 +539,15 @@ def _train_progress(model):
 
 
 def _val_trend(model, start_step):
-    """(first, last) val loss this run logged above start_step. Either is None
-    when the run logged no val row at all; first is the only row when it logged
-    exactly one."""
+    """Val losses this run logged above start_step, oldest first; [] when it logged
+    none. The caller needs the count, not just the ends: one row cannot be compared
+    against itself."""
     path = os.path.join(MODELS_ROOT, model, "train.csv")
     try:
         with open(path, encoding="utf-8") as f:
             rows = [r.split(",") for r in f.read().splitlines() if r]
     except OSError:
-        return None, None
+        return []
     vals = []
     for parts in rows:
         if len(parts) < 3 or parts[1] != "val":
@@ -498,7 +557,7 @@ def _val_trend(model, start_step):
                 vals.append(float(parts[2]))
         except ValueError:
             continue
-    return (vals[0], vals[-1]) if vals else (None, None)
+    return vals
 
 
 def regressed(model, ms, start_step, cfg):
@@ -516,13 +575,24 @@ def regressed(model, ms, start_step, cfg):
     to a fixed corpus. With no history the comparison falls back to within this
     run, and a run that logged no val at all is not held.
 
+    The gate FAILS CLOSED. A run that logged no val, or logged one row with no
+    history to compare it against, is held rather than published: absence of
+    evidence is not evidence of safety. Publishing unvalidated checkpoints is
+    exactly how three degraded exports reached the served model on 2026-08-24
+    (val_first null, val_last null, served true).
+
     A guardrail against collapse, not a quality optimizer."""
-    first, last = _val_trend(model, start_step)
-    if last is None:
-        return False, None, None
-    baseline = float((ms or {}).get("val_best") or 0) or first
-    if not baseline or baseline <= 0:
-        return False, baseline, last
+    vals = _val_trend(model, start_step)
+    if not vals:
+        return True, None, None
+    last = vals[-1]
+    baseline = float((ms or {}).get("val_best") or 0)
+    if not baseline:
+        if len(vals) < 2:
+            return True, None, last
+        baseline = vals[0]
+    if baseline <= 0:
+        return True, baseline, last
     return last > baseline * (1.0 + float(cfg["sleep_val_tolerance"])), baseline, last
 
 
@@ -898,8 +968,13 @@ def finalize():
                     ms["val_best"] = min(v1, float(ms.get("val_best") or v1))
                 published = None
                 if held:
-                    logmod.warn("sleep", f"{model}: val {v0:.4f} -> {v1:.4f} over its own "
-                                         f"conversation; holding step {end_step} back from serving")
+                    # v0/v1 are None when the gate held for want of evidence rather
+                    # than for a measured regression
+                    trend = (f"val {v0:.4f} -> {v1:.4f} over its own conversation"
+                             if v0 is not None and v1 is not None
+                             else "the run logged no comparable validation")
+                    logmod.warn("sleep", f"{model}: {trend}; holding step {end_step} "
+                                         f"back from serving")
                 else:
                     try:
                         published = publish(model)

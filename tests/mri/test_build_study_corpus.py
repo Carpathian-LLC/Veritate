@@ -207,3 +207,118 @@ def test_limit_caps_the_chunk_budget(tmp_path):
     exam = json.loads((out / "s_exam.json").read_text())
     assert len(exam["studied"]) + len(exam["holdout"]) == 8
     assert nc == len(exam["studied"]) == 6
+
+
+OVERSIZE_SRC = (
+    "def small(x):\n"
+    '    """short enough to keep, padded out past the minimum size."""\n'
+    "    return x\n\n\n"
+    "def big(x):\n"
+    '    """kept short here."""\n'
+    + "    y = 1\n" * 200
+    + "    return y\n"
+)
+
+
+def test_oversize_chunks_are_dropped_not_sliced_by_default():
+    """A retrieval target must be a nameable unit. Byte-slicing a function into
+    "(part 4)" produces a target nobody would ask for whose first bytes are mid-body
+    indentation; measured on wren1_8 (2026-08-25) that made 93% of chunks parts and 76%
+    start with whitespace, so the model learned to emit spaces and greedy decode
+    stalled there through step 20."""
+    labels = [lb for lb, _ in bsc.chunk_document(OVERSIZE_SRC, "m.py", max_chunk=300)]
+    assert "m.py::small" in labels
+    assert "m.py::big" not in labels
+    assert not any("part" in lb for lb in labels)
+
+
+def test_split_oversize_restores_slicing_when_asked():
+    """Coverage over retrievability stays available, but has to be asked for."""
+    labels = [lb for lb, _ in bsc.chunk_document(OVERSIZE_SRC, "m.py", max_chunk=300,
+                                                 split_oversize=True)]
+    assert any("part" in lb for lb in labels)
+
+
+QA_SRC = '''
+def alpha(tok_w, pos_w):
+    """Blend the token and position weights. Extra sentence ignored."""
+    return tok_w + pos_w
+
+
+class Beta:
+    """A holder."""
+
+
+def _no_doc(self, x):
+    return x
+'''
+
+
+def test_python_qa_extracts_short_closed_answers():
+    """E4 bound 50-byte answers at 45/50 while 400-byte bodies bound at 0/48 for the same
+    integrated learning rate, so answer length is what decides binding."""
+    facts = {f["name"]: f for f in bsc.python_qa(QA_SRC, "m.py")}
+    assert set(facts) == {"alpha", "Beta", "_no_doc"}
+    assert facts["alpha"]["args"] == "tok_w, pos_w"
+    assert facts["alpha"]["doc"] == "Blend the token and position weights."
+    assert facts["Beta"]["kind"] == "class"
+    assert facts["_no_doc"]["args"] == "x"          # self is dropped
+
+
+def test_qa_answers_stay_short_and_are_never_truncated():
+    """A truncated answer trains the model to stop mid-token, so an over-long answer is
+    dropped instead."""
+    facts = bsc.python_qa(QA_SRC, "m.py")
+    for fa in facts:
+        for _q, ans in bsc.qa_pairs(fa):
+            assert 0 < len(ans) <= bsc.MAX_ANSWER_B
+    long_doc = {"name": "f", "file": "m.py", "args": "", "kind": "function",
+                "doc": "x" * (bsc.MAX_ANSWER_B + 10)}
+    assert all(len(a) <= bsc.MAX_ANSWER_B for _q, a in bsc.qa_pairs(long_doc))
+
+
+def test_qa_holds_out_whole_definitions_not_single_pairs(tmp_path):
+    """Withholding one pair per function leaks: a model told what f does can answer which
+    file f is in. The unit of holdout has to be the definition."""
+    src = tmp_path / "src"
+    src.mkdir()
+    for i in range(12):
+        (src / f"m{i}.py").write_text(
+            f'def fn_{i}(a, b):\n    """Does thing {i} for the test."""\n    return a\n')
+    out = tmp_path / "out"
+    nf, nd, ne, tb, _vb = bsc.build_qa([str(src)], stem="q", out_dir=str(out), seed=0,
+                                      holdout_frac=0.25)
+    exam = json.loads((out / "q_exam.json").read_text())
+    import re
+    fn_rx = re.compile(r"fn_\d+")
+    studied_fns = {m for r in exam["studied"] for m in fn_rx.findall(r["label"] + r["text"])}
+    holdout_fns = {m for r in exam["holdout"] for m in fn_rx.findall(r["label"] + r["text"])}
+    assert studied_fns and holdout_fns
+    assert studied_fns.isdisjoint(holdout_fns)
+    trained = ((out / "q_train.bin").read_bytes()
+               + (out / "q_val.bin").read_bytes()).decode()
+    trained_fns = set(fn_rx.findall(trained))          # boundary-aware: fn_1 vs fn_11
+    assert holdout_fns.isdisjoint(trained_fns), sorted(holdout_fns & trained_fns)
+    assert nf == 12 and nd == 9 and ne > 0 and tb > 0
+
+
+def test_qa_trains_both_directions():
+    """failures.md 2026-08-21: varied study forms in BOTH directions are what bind facts,
+    not exposure count. The first version had forward questions only and scored 2/25
+    against a 1/25 control (wren1_11@10)."""
+    fact = {"name": "alpha", "file": "m.py", "args": "x, y", "kind": "function",
+            "doc": "Blend two weights."}
+    pairs = bsc.qa_pairs(fact)
+    answers = [a for _q, a in pairs]
+    assert "m.py" in answers                      # forward: name -> location
+    assert answers.count("alpha") >= 2            # reverse: location/args/doc -> name
+    assert len(pairs) >= 15                       # E4 used ~20 forms per fact
+
+
+def test_qa_reverse_forms_do_not_leak_the_answer_into_the_question():
+    """A reverse question that contains the name it asks for is answerable by copying."""
+    fact = {"name": "alpha", "file": "m.py", "args": "x, y", "kind": "function",
+            "doc": "Blend two weights."}
+    for q, ans in bsc.qa_pairs(fact):
+        if ans == "alpha":
+            assert "alpha" not in q, q

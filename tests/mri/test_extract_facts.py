@@ -212,3 +212,45 @@ def test_build_fact_bins_renders_extracted_facts(tmp_path, monkeypatch):
 def _no_real_log(monkeypatch):
     """Extraction in these tests must never read the install's real experience log."""
     monkeypatch.setattr(ef, "EXPERIENCE_ROOT", os.path.join(os.sep, "nonexistent", "experience"))
+
+
+def test_self_facts_extract_from_user_turns():
+    """First-person statements about the person become {kind: self} facts."""
+    for sent, attr, obj in (("my sister's name is Wren.", "sister's name", "Wren"),
+                            ("My name is Sam.", "name", "Sam"),
+                            ("my timezone is Pacific.", "timezone", "Pacific"),
+                            ("I live in Portland.", "home", "Portland"),
+                            ("I work at Carpathian.", "workplace", "Carpathian"),
+                            ("I prefer short answers.", "preference", "short answers")):
+        cands, _rej = ef.scan_text(sent, role="user")
+        assert [(c["kind"], c["subj"], c["obj"]) for c in cands] == [("self", attr, obj)], sent
+
+
+def test_self_facts_only_mined_from_user_turns():
+    """The assistant saying "my name is ..." is the model talking about itself."""
+    assert ef.scan_text("My name is Sam.", role="assistant")[0] == []
+    assert ef.scan_text("My name is Sam.")[0] == []
+
+
+def test_self_intentions_are_not_facts():
+    """Attributes naming a transient intention never become durable memory."""
+    for s in ("my task is to fix the build.", "my goal is to ship tonight.",
+              "my plan is to rewrite it.", "my question is about sleep."):
+        cands, _rej = ef.scan_text(s, role="user")
+        assert cands == [], s
+
+
+def test_self_questions_hedges_and_negations_rejected():
+    """A trailing question mark sits outside the match, so it is read from the source."""
+    for s in ("my name is Sam?", "my name is not Sam.", "I might live in Portland.",
+              "I think my timezone is Pacific."):
+        cands, _rej = ef.scan_text(s, role="user")
+        assert cands == [], s
+
+
+def test_self_fact_renders_both_directions():
+    """make_fact emits forward and reverse question forms for a self-fact."""
+    fact = ef.make_fact("self", "sister's name", "Wren")
+    assert fact["stmt"] == "Your sister's name is Wren."
+    assert fact["q_fwd"] == "What is my sister's name?" and fact["a_fwd"] == "Wren"
+    assert fact["a_rev"] == "your sister's name"

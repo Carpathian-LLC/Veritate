@@ -230,6 +230,15 @@ RESERVED_STR_FLAGS = {
 RESERVED_FLOAT_FLAGS = {
     "l1_lambda": 0.0,
     "slm_keep": 0.6,
+    # Consolidation stop rule. A sleep run has no useful fixed length: it must run
+    # until it starts costing more than it buys, then stop. Measured on wren1_8
+    # (2026-08-25, lr 2e-4 over 48 study chunks): held-out val improved through step
+    # 10 (0.9782) and fell off a cliff by step 20 (1.1122), so a fixed step count
+    # either stops short of the gain or runs straight through the damage. Non-zero
+    # arms the rule: when a val reading exceeds the run's BEST by more than this
+    # fraction, the run checkpoints and stops. 0 disables it, so an ordinary
+    # pretrain run is unaffected.
+    "stop_on_val_rise": 0.0,
 }
 RESERVED_INT_FLAGS = {
     # With --hooks light, promote every Nth checkpoint back to the full suite,
@@ -573,6 +582,17 @@ CHATML_PROBE_WINDOW_LEN = 8192
 CHATML_ASSISTANT_OPEN = b"<|im_start|>assistant\n"
 CHATML_IM_START       = b"<|im_start|>"
 CHATML_IM_END         = b"<|im_end|>"
+
+
+def val_rose_past_best(v, best_val, tolerance):
+    """Consolidation stop rule: True when this val reading exceeds the run's BEST by
+    more than `tolerance` (fractional). A consolidation run has no useful fixed
+    length -- it must run while it helps and stop when it starts costing more than it
+    buys. Zero tolerance disables the rule, leaving ordinary runs unaffected."""
+    tolerance = float(tolerance or 0.0)
+    if tolerance <= 0.0 or best_val in (None, float("inf")):
+        return False
+    return v > best_val * (1.0 + tolerance)
 
 
 def _keep_assistant(row_bytes):
@@ -1179,6 +1199,7 @@ def run(plugin_id, here):
 
     grow_to_ffn = int(getattr(args, "grow_to_ffn", 0) or 0)
     val_hist    = []
+    best_val, best_val_step, stop_now = float("inf"), 0, False
     has_grown   = False
     t0 = time.time()
     last_log = t0
@@ -1248,6 +1269,16 @@ def run(plugin_id, here):
                 append_train_row(name, step, "val", v, lr=lr,
                                  wall_s=time.time() - t0, seed=args.seed)
                 val_hist.append(v)
+                if v < best_val:
+                    best_val, best_val_step = v, step
+                stop_rise = float(getattr(args, "stop_on_val_rise", 0.0) or 0.0)
+                if val_rose_past_best(v, best_val, stop_rise):
+                    print("STOP step " + str(step) + "  val " + format(v, ".4f")
+                          + " rose past best " + format(best_val, ".4f")
+                          + " (step " + str(best_val_step) + ") by more than "
+                          + format(stop_rise * 100, ".1f") + "%; best weights are "
+                          + "step_" + str(best_val_step) + ".pt", flush=True)
+                    stop_now = True
                 # Growth only nets compute if the cheap stage stops the moment its
                 # curve flattens (successes.md 2026-07-25); a fixed step count
                 # overspends the small shape and turns a 3.6x step win into a loss.
@@ -1264,7 +1295,7 @@ def run(plugin_id, here):
                           + "  params " + str(sum(p.numel() for p in veritate_model.parameters()))
                           + "  (val flattened)", flush=True)
 
-        if step % args.ckpt_every == 0 or step == args.total_steps:
+        if step % args.ckpt_every == 0 or step == args.total_steps or stop_now:
             ckpt_args = vars(args).copy()
             ckpt_args["vocab"]  = veritate_model.vocab
             ckpt_args["hidden"] = veritate_model.hidden
@@ -1277,6 +1308,9 @@ def run(plugin_id, here):
             ckpt_path = save.save(veritate_model, name, step, optimizer=opt, args=ckpt_args,
                                   dump_set=skip_dumps)
             print("checkpoint + hooks(" + hook_label + "): " + ckpt_path, flush=True)
+
+        if stop_now:
+            break
 
     print("done.", flush=True)
 

@@ -49,6 +49,14 @@ STMT_TEMPLATES = {
               "The {obj} around here is {subj}.",
               "{subj}'s trade is that of {obj_art}.",
               "Being {obj_art} is {subj}'s work."],
+    # self-facts carry the possessive in subj ("your sister's name"), so the
+    # sentence-initial forms take the capitalized variant
+    "self":  ["{subj_cap} is {obj}.",
+              "{obj} is {subj}.",
+              "You told me {subj} is {obj}.",
+              "Noted: {subj} is {obj}.",
+              "I remember that {subj} is {obj}.",
+              "{subj_cap}: {obj}."],
 }
 
 # ------------------------------------------------------------------------------------
@@ -59,6 +67,10 @@ def _an(word):
     return f"an {word}" if word[0].lower() in "aeiou" else f"a {word}"
 
 
+def _cap(text):
+    return text[:1].upper() + text[1:]
+
+
 def render_fact(fact, rng, per_fact):
     """Yield ChatML exchange strings for one fact: varied statements (both
     directions), QA both directions, and dialogue forms."""
@@ -67,7 +79,8 @@ def render_fact(fact, rng, per_fact):
     pool = STMT_TEMPLATES.get(kind, STMT_TEMPLATES["lives"])
     obj = fact["obj"]
     for t in pool:
-        s = t.format(subj=fact["subj"], obj=obj, obj_art=_an(obj))
+        s = t.format(subj=fact["subj"], obj=obj, obj_art=_an(obj),
+                     subj_cap=_cap(fact["subj"]))
         outs.append(f"{IM_S}user\nTell me something.{IM_E}\n{IM_S}assistant\n{s}{IM_E}\n")
     outs.append(f"{IM_S}user\n{fact['q_fwd']}{IM_E}\n{IM_S}assistant\n"
                 f"{fact['a_fwd'].capitalize() if fact['a_fwd'][0].islower() else fact['a_fwd']}"

@@ -11074,6 +11074,9 @@ const TEACHER_AUTHOR_BUILD = "/teacher/authoring/build";
 const AUTHOR_JOB_STORE = "vt:training:author_job";
 const AUTHOR_REJECT_SHOWN = 6;
 const AUTHOR_MB = 1024 * 1024;
+const IV_ETA_MINUTES = 60;
+const IV_ETA_HOURS = 24;
+const IV_ETA_DAY_AT = 48;
 
 function _authorStore(id) { try { localStorage.setItem(AUTHOR_JOB_STORE, id); } catch (e) {} }
 function _authorStored() { try { return localStorage.getItem(AUTHOR_JOB_STORE); } catch (e) { return null; } }
@@ -17090,6 +17093,7 @@ function _ivRenderStats(s) {
     ["teacher calls", (c.calls || 0).toLocaleString()],
     ["calls that failed", (c.failed || 0).toLocaleString()],
     ["kept short after a failure", (c.salvaged || 0).toLocaleString()],
+    ["estimated time left", _ivEta(s.eta_hours)],
   ].map(p => `<span class="author-stat"><b>${_trEsc(String(p[1]))}</b> <span>${p[0]}</span></span>`).join("");
 
   if (warn) {
@@ -17351,6 +17355,17 @@ function _ivBarWidth(ms, ref) {
 function _ivMs(ms) {
   const n = Number(ms) || 0;
   return n < 1000 ? `${Math.round(n)}ms` : `${(n / 1000).toFixed(2)}s`;
+}
+
+// A job is sized in conversations but paid for in calls, and one conversation is
+// 2*depth-1 of them, run one after another. A target that reads as reasonable can
+// be a week of wall clock, so say so while there is still time to change it.
+function _ivEta(hours) {
+  const h = Number(hours) || 0;
+  if (h <= 0) return "measuring...";
+  if (h < 1) return `${Math.round(h * IV_ETA_MINUTES)}min`;
+  if (h < IV_ETA_DAY_AT) return `${h.toFixed(1)}h`;
+  return `${Math.floor(h / IV_ETA_HOURS)}d ${Math.round(h % IV_ETA_HOURS)}h`;
 }
 
 // Which banned phrases the teacher keeps saying. The count is the whole point:

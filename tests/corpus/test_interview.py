@@ -214,3 +214,131 @@ def test_openers_are_deduplicated_and_a_dry_pool_stops_early(tmp_path):
     assert len(out) == 3, "duplicates must not be kept"
     assert len(set(out)) == 3
     assert teacher.calls <= 6, "must give up once the pool is dry, not keep paying"
+
+
+def test_a_dead_teacher_on_the_first_answer_reports_its_own_error():
+    """Swallowing this reported every dead teacher as "empty conversation" and
+    discarded the only text that said which one it was (2026-08-22 post-mortem)."""
+    from teacher.client import TeacherUnavailableError
+
+    class Dead:
+        def complete(self, messages, **kw):
+            raise TeacherUnavailableError("upstream unavailable: 500")
+
+    with pytest.raises(TeacherUnavailableError):
+        interview.build_conversation(Dead(), "Opener?", depth=3, seed=1)
+
+
+def test_a_failure_after_a_complete_exchange_is_still_salvaged():
+    """The control for the test above: work already paid for is never discarded."""
+    from teacher.client import TeacherError as TE
+
+    class DiesOnSecondCall:
+        def __init__(self): self.calls = 0
+        def complete(self, messages, **kw):
+            self.calls += 1
+            if self.calls == 1:
+                return _long(4)
+            raise TE("gone")
+
+    turns = interview.build_conversation(DiesOnSecondCall(), "Opener?", depth=3, seed=1)
+    assert [t["role"] for t in turns] == ["user", "assistant"]
+
+
+def test_opener_batches_run_concurrently(tmp_path):
+    """Serially, pass 1 was the whole cost of a large run: 15 of 16 hours on
+    2026-08-22 at a 65 s median call, with every worker idle and pass 2 unstarted."""
+    import threading
+
+    from teacher import interview_job
+
+    barrier = threading.Barrier(4, timeout=5)
+
+    class Concurrent:
+        """Only answers once four callers have arrived at the same time."""
+        def __init__(self): self.n = 0
+        def complete(self, messages, **kw):
+            self.n += 1
+            barrier.wait()
+            return "\n".join(f"Question number {self.n}-{i}?" for i in range(4))
+
+    job = interview_job.InterviewJob(
+        "j", str(tmp_path), {"genres": [], "gates": {}}, [], 48, 2,
+        "ollama", gate=object(), max_concurrency=4)
+    out = job._openers_for(Concurrent(), {"id": "conversation", "situations": ["a", "b"]},
+                           48, [])
+    assert out, "the barrier released, so four batches were in flight at once"
+
+
+def test_a_dead_teacher_in_pass_one_never_queues_pass_two(tmp_path):
+    """The 2026-08-22 run wrote 3,983 "stopped" rows against an endpoint it had
+    already proved was down, burying the real error under rows that said nothing."""
+    import os
+
+    from teacher import interview_job
+    from teacher.client import TeacherUnavailableError
+
+    class Gate:
+        def stats(self): return {}
+
+    class Dead:
+        def complete(self, messages, **kw):
+            raise TeacherUnavailableError("upstream unavailable: 500")
+
+    spec = {"genres": [{"id": "conversation", "situations": ["a"],
+                        "min_turns": 2, "max_turns": 6}], "gates": {}}
+    job = interview_job.InterviewJob(
+        "j", str(tmp_path), spec, ["conversation"], 500, 2,
+        "ollama", gate=Gate(), max_concurrency=4)
+    job._client = lambda: Dead()
+    job.run()
+
+    assert job._aborted
+    assert job._stop.is_set()
+    assert not os.path.isfile(os.path.join(str(tmp_path), interview_job.ERRORS_FILE)), \
+        "pass 2 must not run against a teacher pass 1 already found dead"
+
+
+def test_stopping_a_run_does_not_read_as_a_dead_teacher(tmp_path):
+    """TeacherCancelled subclasses TeacherError, so Stop used to walk the run into
+    FAILURE_ABORT_STREAK and report itself as an abort by a dead endpoint."""
+    import json
+
+    from teacher import interview_job
+    from teacher.client import TeacherCancelled
+
+    class Gate:
+        def stats(self): return {}
+
+    class Cancelling:
+        def complete(self, messages, **kw):
+            raise TeacherCancelled("cancelled")
+
+    planned = interview_job.FAILURE_ABORT_STREAK * 2
+    with open(str(tmp_path / interview_job.OPENERS_FILE), "w", encoding="utf-8") as f:
+        for i in range(planned):
+            f.write(json.dumps({"genre": "conversation", "text": f"Opening line {i}?"}) + "\n")
+
+    spec = {"genres": [{"id": "conversation", "situations": ["a"]}], "gates": {}}
+    job = interview_job.InterviewJob(
+        "j", str(tmp_path), spec, ["conversation"], planned, 2, "ollama", gate=Gate())
+    job._client = lambda: Cancelling()
+    job.run()
+
+    assert job._counts["failed"] == planned
+    assert job._counts["consec_fail"] == 0, "a cancel is not a teacher failure"
+    assert not job._aborted, "Stop must not report itself as a dead teacher"
+
+
+def test_eta_is_measured_in_calls_not_conversations(tmp_path):
+    """A job is sized in conversations but paid for in 2*depth-1 sequential calls.
+    The 2026-08-22 run was a 171 hour job that read as a reasonable number."""
+    from teacher import interview_job
+
+    job = interview_job.InterviewJob(
+        "j", str(tmp_path), {"genres": [], "gates": {}}, [], 30250, 3,
+        "ollama", gate=object(), max_concurrency=16)
+    job._remaining = ["x"] * 30250
+    # the run's own measured median: 65 s per call, 5 calls per conversation
+    assert job._eta_hours(64992) == pytest.approx(170.6, abs=1.0)
+    assert job._eta_hours(0) == 0.0

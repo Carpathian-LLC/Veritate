@@ -56,3 +56,5 @@ veritate_mri/data/synth_jobs/
 /facts/
 /facts_pipeline/
 /temp
+# Lab notebook: local-only, never committed.
+lab/

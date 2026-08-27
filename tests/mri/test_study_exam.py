@@ -27,12 +27,24 @@ def test_prefix_share_measures_the_opening():
 
 def test_summarize_reports_means_and_counts():
     """Aggregates are means over chunks plus an identify count, not a single score."""
-    rows = [{"sim": 0.5, "prefix": 0.2, "identify": True},
-            {"sim": 0.1, "prefix": 0.0, "identify": False}]
+    rows = [{"sim": 0.5, "prefix": 0.2, "identify": True, "raw_bytes": 30},
+            {"sim": 0.1, "prefix": 0.0, "identify": False, "raw_bytes": 30}]
     s = se.summarize(rows)
-    assert s == {"n": 2, "sim": 0.3, "prefix": 0.1, "identify": 1, "identify_acc": 0.5}
+    assert s["n"] == 2 and s["sim"] == 0.3 and s["prefix"] == 0.1
+    assert s["identify"] == 1 and s["identify_acc"] == 0.5
 
 
 def test_summarize_of_nothing_is_not_a_score():
     """An empty split reports n=0 rather than a misleading zero score."""
     assert se.summarize([]) == {"n": 0}
+
+
+def test_summarize_separates_silent_from_degenerate():
+    """An all-whitespace decode strips to "" and scores like a model that emitted
+    nothing. Those are different failures, and reporting them as one hid a real
+    result on 2026-08-25: the model was producing 64 spaces, not staying silent."""
+    rows = [{"sim": 0.0, "prefix": 0.0, "identify": False, "raw_bytes": 64, "degenerate": True},
+            {"sim": 0.0, "prefix": 0.0, "identify": False, "raw_bytes": 0, "degenerate": False},
+            {"sim": 0.5, "prefix": 0.1, "identify": True, "raw_bytes": 90, "degenerate": False}]
+    s = se.summarize(rows)
+    assert s["degenerate"] == 1 and s["silent"] == 1 and s["n"] == 3

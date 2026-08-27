@@ -19,6 +19,9 @@ default and was the fix) plus a dose long enough to move the number for a reason
 
 ## corpus generation
 
+**An interview run reporting 4,011 rejections had rejected nothing: 3,983 were the job cancelling its own queue**
+Job `18c0419c805d`, 30,250 conversations requested, **0 written in 16 hours**; the 42 on disk pre-date the launch. Gate `rejects` was empty. The teacher (api.carpathian.ai) ran at a **65 s median call, 44 s to first token**, then returned 500s; 12 consecutive failed opener batches hit `FAILURE_ABORT_STREAK`, which set `_aborted` but not `_stop`, so pass 2 queued 24,750 conversations against an endpoint already known dead and aborted again. Kill-lines: (1) a failure reason that discards the exception (`empty conversation` for 28 dead calls) makes an outage undiagnosable — errors propagate; (2) `TeacherCancelled` subclasses `TeacherError`, so counting cancels as failures turns one Stop into a reported dead teacher; (3) pass 1 was single-threaded and ate 15 of the 16 hours. Sizing constraint that survives the fixes: at a 65 s median, depth 3 is 5 sequential calls per conversation, so 30,250 conversations is **171 hours** at concurrency 16. Size interview runs against measured throughput (~1,400 conversations overnight at this rate), not a target number. Full post-mortem: `lab/2026-08-25-interview-run-abort-postmortem.md`. (2026-08-25)
+
 **Authoring both sides of a dialogue in one call is what produces terse assistant turns — not the model, the format, or the model size**
 Corrected 2026-08-20 the same day it was first written; the original entry blamed the teacher and was wrong. The authoring pipeline asks the teacher to WRITE A DIALOGUE — invent the user turns and the assistant turns together, as a script. Measured on that task, nothing clears the 200 B median floor:
 

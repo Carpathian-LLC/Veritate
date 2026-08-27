@@ -106,7 +106,8 @@ DEFAULTS = {
     # Reserved: route the sleep corpus through the experience builder's fact
     # extraction pass instead of raw exchanges. Read by nothing until the
     # extraction mode lands in tools/build_experience_corpus.py.
-    "sleep_use_extraction": False,
+    "sleep_use_extraction": True,
+    "sleep_study_paths": [],
     "sleep_idle_min": 2,
     "sleep_days": 3,
     "sleep_min_exchanges": 8,
@@ -122,6 +123,10 @@ DEFAULTS = {
     # walking the wrong way must not become the source of its own next training
     # set. Compared within one run only, because each sleep rebuilds its bins.
     "sleep_val_tolerance": 0.02,
+    # Consolidation stop rule, handed to the trainer. A sleep run stops the moment a
+    # val reading exceeds the run's best by more than this fraction, so the dose is
+    # found rather than guessed. 0 disables and restores fixed-length runs.
+    "sleep_stop_on_val_rise": 0.02,
     # Corpus whose _val.bin every sleep run validates against, pinned so that
     # successive runs are comparable. Left to the training mix, validation
     # follows its heaviest member and the experience bins are rebuilt each
@@ -155,7 +160,7 @@ DEFAULTS = {
     "sleep_nice": 10,
     "sleep_batch_size": 0,
     "sleep_step_seconds": 300,
-    "sleep_corpus": "experience:0.75,mixed_chat:0.25",
+    "sleep_corpus": "experience_fact_sft:0.75,mixed_chat:0.25",
     # Advanced: stream reduced (compact) MRI telemetry frames. The engine summarizes
     # each byte's telemetry itself (~33x smaller per-byte frame) instead of shipping
     # full-resolution arrays for the browser to reduce. The dashboard renders the

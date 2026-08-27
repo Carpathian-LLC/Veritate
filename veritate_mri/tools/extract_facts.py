@@ -83,6 +83,29 @@ SPECIAL_RX = [(k, re.compile(p), g) for k, p, g in (
     ("lives", rf"You remember {NAME}\? They(?:'ve| have) moved to {PLACE}", False),
 )]
 
+# Self-facts: what the user states about THEMSELVES. The third-person NAME patterns
+# above never fire on first person, so this is the entire personal-memory surface and
+# it is what a tell-it-once assistant is actually asked to keep. The value is
+# terminated at sentence punctuation and length-capped so a run-on instruction cannot
+# become a durable fact.
+SELF_ATTR = r"((?:[a-z]+(?:'s)?\s+){0,2}[a-z]+(?:'s)?)"
+SELF_VAL = r"([^.!?;:]{1,40}?)"
+# (fixed attribute, regex); a None attribute reads the attribute from group 1
+SELF_RX = [(a, re.compile(p, re.I)) for a, p in (
+    (None,         rf"\bmy {SELF_ATTR} is {SELF_VAL}(?=[.!?;,]|$)"),
+    ("name",       rf"\bcall me {SELF_VAL}(?=[.!?;,]|$)"),
+    ("home",       rf"\bI live in {SELF_VAL}(?=[.!?;,]|$)"),
+    ("job",        rf"\bI work as an? {SELF_VAL}(?=[.!?;,]|$)"),
+    ("workplace",  rf"\bI work at {SELF_VAL}(?=[.!?;,]|$)"),
+    ("preference", rf"\bI prefer {SELF_VAL}(?=[.!?;,]|$)"),
+)]
+# attributes naming a transient intention rather than a durable fact about the person
+SELF_ATTR_REJECT = frozenset([
+    "task", "goal", "plan", "point", "question", "problem", "issue", "concern", "worry", "guess",
+    "hunch", "bet", "advice", "answer", "reply", "response", "output", "understanding", "sense",
+    "fault", "aim", "intent", "intention", "request", "instruction", "hope", "fear", "bad"])
+SELF_VAL_REJECT = frozenset(["a", "an", "the", "that", "this", "it", "not", "no", "to", "and", "but", "so"])
+
 CUES = [(re.compile(p), r) for p, r in (
     (r"n't\b|\bnot\b|\bnever\b|\bno longer\b|\bnobody\b",                          "negated"),
     (r"\bused to\b|\bformerly\b|\bretired\b|\bmoved (?:out|away)\b",               "past/former"),
@@ -200,12 +223,61 @@ def _validate(kind, subj, obj, sent, guarded, cands, rejs):
     cands.append({"kind": kind, "subj": subj, "obj": obj, "src": sent})
 
 
-def scan_text(text):
+def _validate_self(attr, obj, sent, cands, rejs):
+    """Precision gate for a self-fact: a false memory about the person is worse than
+    a missed one, so every ambiguous shape rejects."""
+    attr = " ".join(attr.split()).strip().lower()
+    obj = " ".join(obj.split()).strip().rstrip(",")
+    if not attr or not obj:
+        return
+    if attr in SELF_ATTR_REJECT or attr.split()[-1] in SELF_ATTR_REJECT:
+        rejs.append((sent, f"self attribute is an intention: {attr}"))
+        return
+    if obj.lower() in SELF_VAL_REJECT or obj.lower().startswith("to "):
+        rejs.append((sent, f"self value not a fact: {obj}"))
+        return
+    cands.append({"kind": "self", "subj": attr, "obj": obj, "src": sent})
+
+
+def _sentence_at(text, pos):
+    """The sentence containing pos. Hedges and negations bind to the whole clause, not
+    to the matched span: "I think my timezone is Pacific" must reject."""
+    start = max([text.rfind(c, 0, pos) for c in ".!?\n"])
+    ends = [i for i in (text.find(c, pos) for c in ".!?\n") if i != -1]
+    return text[start + 1:min(ends) if ends else len(text)].strip()
+
+
+def _scan_self(text, cands, rejs):
+    """Mine first-person self-facts, returning the text with each hit blanked so the
+    third-person scanners cannot re-read the same span."""
+    for fixed, rx in SELF_RX:
+        for m in rx.finditer(text):
+            span = m.group(0).strip()
+            sent = _sentence_at(text, m.start()) or span
+            if _is_question(sent) or text[m.end():m.end() + 1] == "?":
+                rejs.append((span, "question"))
+                continue
+            reason = _cue(sent)
+            if reason:
+                rejs.append((span, reason))
+                continue
+            attr = fixed if fixed else m.group(1)
+            obj = m.group(2) if fixed is None else m.group(1)
+            _validate_self(attr, obj, span, cands, rejs)
+        text = rx.sub(" ", text)
+    return text
+
+
+def scan_text(text, role=None):
     """Extract fact candidates from one turn's text. Returns (candidates,
     rejections): candidates are {kind, subj, obj, src}; rejections are
-    (sentence, reason) for pattern hits blocked by a filter."""
+    (sentence, reason) for pattern hits blocked by a filter. Self-facts mine user
+    turns only: the assistant saying "my name is ..." is the model talking about
+    itself, not a fact about the person."""
     cands, rejs = [], []
     work = text
+    if role == "user":
+        work = _scan_self(work, cands, rejs)
     for kind, rx, guarded in SPECIAL_RX:
         for m in rx.finditer(work):
             span = m.group(0).strip()
@@ -249,7 +321,11 @@ def scan_text(text):
 def make_fact(kind, subj, obj, revised=False, seen=1):
     """Build one build_fact_sft-schema fact. Extra keys (seen, revised) ride along;
     the renderer ignores them."""
-    if kind == "job":
+    if kind == "self":
+        fact = {"stmt": f"Your {subj} is {obj}.", "subj": f"your {subj}", "obj": obj,
+                "q_fwd": f"What is my {subj}?", "a_fwd": obj,
+                "q_rev": f"What of mine is {obj}?", "a_rev": f"your {subj}", "kind": "self"}
+    elif kind == "job":
         art = "an" if obj[0] in "aeiou" else "a"
         fact = {"stmt": f"{subj} works as {art} {obj}.", "subj": subj, "obj": obj,
                 "q_fwd": f"What does {subj} do for work?", "a_fwd": obj,
@@ -273,8 +349,8 @@ def extract(records, model=None):
         if model and not model_match(rec.get("model", ""), model):
             continue
         ts = rec.get("ts") or 0
-        for _role, text in parse_exchange(rec):
-            cands, rejs = scan_text(text)
+        for role, text in parse_exchange(rec):
+            cands, rejs = scan_text(text, role=role)
             for sent, reason in rejs:
                 rejections[(sent, reason)] = rejections.get((sent, reason), 0) + 1
             for c in cands:

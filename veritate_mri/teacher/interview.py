@@ -243,7 +243,11 @@ def build_conversation(client, opener, depth, seed=0, temperature=0.9, cancel_ch
     A teacher failure part way through ends the conversation at its last complete
     exchange instead of raising. Stop is one of those failures (the client raises
     TeacherCancelled from its cancel check), so pressing Stop keeps the turns that
-    were already generated rather than paying for them and discarding them."""
+    were already generated rather than paying for them and discarding them.
+
+    A failure with nothing complete to keep raises instead. Swallowing it reported
+    every dead teacher as "empty conversation" and discarded the only text that
+    said which one it was."""
     rng = random.Random(seed)
     turns = [{"role": ROLE_USER, "text": opener}]
     for i in range(depth):
@@ -253,6 +257,8 @@ def build_conversation(client, opener, depth, seed=0, temperature=0.9, cancel_ch
             raw = ask(client, history, BASE_SYSTEM + " " + reg["instruction"],
                       temperature, 1600, cancel_check, watch, CALL_ANSWER)
         except TeacherError:
+            if len(turns) < MIN_SALVAGE_TURNS:
+                raise
             salvage(watch, turns)
             break
         reply = clean_reply(raw, reg["max_bytes"])

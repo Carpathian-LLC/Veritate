@@ -179,9 +179,15 @@ def test_stop_keeps_what_the_conversation_already_had():
     assert [t["role"] for t in turns] == ["user", "assistant"]
 
 
-def test_a_conversation_with_no_reply_at_all_is_still_dropped():
-    """Salvage keeps complete exchanges, not an unanswered question."""
-    assert interview.build_conversation(FlakyClient(ok=0), "anyone there?", 3) is None
+def test_a_conversation_with_no_reply_at_all_reports_the_teacher_error():
+    """Salvage keeps complete exchanges, not an unanswered question. With nothing
+    complete to keep, the caller gets the teacher's own error: reporting these as
+    "empty conversation" is what made the 2026-08-22 abort unreadable."""
+    feed = CallFeed()
+    with pytest.raises(TeacherError):
+        interview.build_conversation(FlakyClient(ok=0), "anyone there?", 3,
+                                     watch=feed.watcher(CONVERSATION))
+    assert feed.snapshot()["stats"]["salvaged"] == 0
 
 
 def test_a_salvaged_conversation_is_counted_and_the_failure_is_kept():

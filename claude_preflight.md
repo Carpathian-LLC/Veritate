@@ -10,7 +10,7 @@ The complete documentation set is five files at repo root:
 2. `documentation.md` — the single platform reference: every component, contract, and measured constraint. Read the relevant section before touching a component. The dashboard wiki tab serves it.
 3. `successes.md` / `failures.md` / `ideas.md` — the research ledgers: what worked (with numbers), what was falsified (with kill-lines), what to try next. Read before designing any experiment.
 
-There are no other documentation locations. If a fact is not in these files or the code, it is not established. `worklog.md` is the append-only running log for long autonomous runs; `handoff.md` is the rolling state log between sessions. Neither is documentation.
+There are no other documentation locations. If a fact is not in these files or the code, it is not established. `worklog.md` is the append-only running log for long autonomous runs; `handoff.md` is the rolling state log between sessions; `lab/` is the raw experiment notebook, whose protocol is `lab/README.md`. None of the three is documentation.
 
 ## communication
 
@@ -59,8 +59,10 @@ There are no other documentation locations. If a fact is not in these files or t
 
 ## docs
 
-34. All documentation lives in the five files above. Never create a new doc file, doc folder, or scratch notes file.
+34. All documentation lives in the five files above. Never create a new doc file, doc folder, or scratch notes file. The sole exception is `lab/`, the raw experiment notebook, which is entirely local-only and never committed; `lab/README.md` defines its format.
 35. A change that alters a contract, route, setting, or invariant updates the affected `documentation.md` section in the same diff. Docs state current behavior only — no history, no "previously"; git carries history.
 36. Doc voice: a senior developer writing objective instructions. No first person, no hedging, no assistant register ("simply", "note that", "let's"), no narrative of how anything came to be.
 37. Ledger entries are short: bold title, then one to three lines — claim, measured numbers with units and date, kill-line for failures. No essays.
 38. Build notes are sections under `## build notes` in `documentation.md`, one per `versions.json::build`, three to ten lines, user-facing actions only. A breaking build also gets a `BUILD_NOTICES` entry (integer key) in `veritate_mri/runtime/settings.py`.
+
+39. Every experiment, measurement, tuning attempt and abandoned line of work gets a `lab/` entry in the session it happens, in the format `lab/README.md` specifies, including the ones that produced no number and the ones that were reasoned about and dropped without running. The ledgers carry the three-line conclusion and name the entry; the entry carries the hypothesis, the pre-committed falsifier, the controls and the threats to validity. Ledger brevity (rule 37) does not apply inside `lab/`.

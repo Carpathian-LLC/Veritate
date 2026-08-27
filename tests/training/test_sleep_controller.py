@@ -32,7 +32,7 @@ CFG = {
     "sleep_keep_finals": 3, "sleep_lr": 5e-06,
     "sleep_corpus": "experience:0.75,mixed_chat:0.25", "sleep_step_seconds": 300,
     "sleep_ckpt_seconds": 1800, "sleep_val_tolerance": 0.02,
-    "sleep_yardstick": "mixed_chat",
+    "sleep_yardstick": "mixed_chat", "sleep_stop_on_val_rise": 0.02,
 }
 # enough own-experience bytes to fill the recipe's batch, so tests that are not
 # about batch sizing get the recipe's own value
@@ -460,13 +460,34 @@ def test_an_improving_run_publishes(tmp_path, monkeypatch):
     assert sleep.regressed("toy", {}, 3000, CFG)[0] is False
 
 
-def test_no_val_row_cannot_be_judged_and_is_not_held(tmp_path, monkeypatch):
-    """Holding on no evidence would stall the loop on exactly the boxes it is
-    meant to serve."""
+def test_no_val_row_is_held_because_the_gate_fails_closed(tmp_path, monkeypatch):
+    """An unvalidated run is held, not published. Failing open here served three
+    degraded exports on 2026-08-24 (val_first null, val_last null, served true):
+    absence of evidence is not evidence of safety."""
     _roots(tmp_path, monkeypatch)
     _model(tmp_path)
     _csv(tmp_path)
-    assert sleep.regressed("toy", {}, 3000, CFG) == (False, None, None)
+    assert sleep.regressed("toy", {}, 3000, CFG) == (True, None, None)
+
+
+def test_one_val_row_with_no_history_is_held(tmp_path, monkeypatch):
+    """A single row has nothing to be compared against: comparing it to itself
+    always passes, which is the fail-open bug wearing a different hat."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    _csv(tmp_path, _val(3010, 1.30))
+    held, baseline, last = sleep.regressed("toy", {}, 3000, CFG)
+    assert held and baseline is None and last == 1.30
+
+
+def test_one_val_row_is_judged_against_the_high_water_mark(tmp_path, monkeypatch):
+    """With a val_best on record a single row IS comparable, so the run publishes
+    or holds on that comparison rather than being held for want of a second row."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    _csv(tmp_path, _val(3010, 1.30))
+    assert sleep.regressed("toy", {"val_best": 1.29}, 3000, CFG)[0] is False
+    assert sleep.regressed("toy", {"val_best": 1.00}, 3000, CFG)[0] is True
 
 
 def test_the_comparison_ignores_rows_from_earlier_runs(tmp_path, monkeypatch):
@@ -514,6 +535,8 @@ def test_finalize_publishes_the_consolidated_weights(tmp_path, monkeypatch):
     monkeypatch.setattr(sleep, "publish", lambda m: published.append(m) or {"bytes": 1})
     assert sleep.maybe_sleep().startswith("sleeping: toy")
     (tmp_path / "models" / "toy" / "checkpoints" / "step_3050.pt").write_bytes(b"x")
+    # the gate fails closed, so a run only reaches publish with comparable val rows
+    _csv(tmp_path, _val(3010, 1.30), _val(3020, 1.29))
     sleep.finalize()
     assert published == ["toy"]
     assert sleep.history()[0]["served"] is True
@@ -525,14 +548,20 @@ def test_a_failed_publish_does_not_fail_the_sleep(tmp_path, monkeypatch):
     _armed(tmp_path, monkeypatch, models=("toy",), pending=(20,))
     monkeypatch.setattr(sleep.trainer_runner, "start", lambda pid, args: {"ok": True})
 
+    attempted = []
+
     def boom(_m):
+        attempted.append(_m)
         raise OSError("disk full")
 
     monkeypatch.setattr(sleep, "publish", boom)
     assert sleep.maybe_sleep().startswith("sleeping: toy")
     (tmp_path / "models" / "toy" / "checkpoints" / "step_3050.pt").write_bytes(b"x")
+    _csv(tmp_path, _val(3010, 1.30), _val(3020, 1.29))
     sleep.finalize()
     ms = sleep._load_state()["models"]["toy"]
+    # without this the test would pass vacuously once the gate holds the run
+    assert attempted == ["toy"]
     assert not ms["sleeping"] and ms.get("cooldown_until") is None
     assert sleep.history()[0]["event"] == "awake" and sleep.history()[0]["served"] is False
 
@@ -910,3 +939,68 @@ def test_status_is_never_suspended_while_awake(tmp_path, monkeypatch):
     monkeypatch.setattr(sleep.trainer_runner, "state", dict)
     monkeypatch.setattr(sleep, "_PAUSE", {"suspended": True, "warned": False})
     assert sleep.status()["suspended"] is False
+
+
+def test_mix_stems_parses_weights():
+    """A corpus mix string reads as (stem, weight) pairs."""
+    assert sleep._mix_stems("a:0.75,b:0.25") == [("a", 0.75), ("b", 0.25)]
+    assert sleep._mix_stems("solo") == [("solo", 1.0)]
+    assert sleep._mix_stems("") == []
+
+
+def test_mix_primary_bytes_measures_the_stem_actually_drawn(tmp_path, monkeypatch):
+    """Batch sizing reads the heaviest stem the controller builds, not the raw
+    experience bins, or a study run would be sized from a corpus it never draws."""
+    monkeypatch.setattr(sleep, "corpus_train_path", lambda s: str(tmp_path / f"{s}_train.bin"))
+    monkeypatch.setattr(sleep, "corpus_val_path", lambda s: str(tmp_path / f"{s}_val.bin"))
+    (tmp_path / "study_train.bin").write_bytes(b"x" * 900)
+    (tmp_path / "study_val.bin").write_bytes(b"y" * 90)
+    cfg = {"sleep_corpus": "study:0.75,mixed_chat:0.25"}
+    assert sleep._mix_primary_bytes(cfg, 11, 22) == (900, 90)
+    # a mix naming no controller-built stem falls back to the experience counts
+    assert sleep._mix_primary_bytes({"sleep_corpus": "mixed_chat:1.0"}, 11, 22) == (11, 22)
+
+
+def test_study_bins_build_from_configured_paths(tmp_path, monkeypatch):
+    """Configured study sources render into study bins through the shared generator."""
+    import tools.build_study_corpus as bsc
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "m.py").write_text("def alpha(x):\n    '''doc long enough to pass.'''\n    return x * 2\n")
+    seen = {}
+    monkeypatch.setattr(bsc, "build", lambda paths, **kw: seen.update(paths=paths, kw=kw) or (1, 1, 8, 99, 9))
+    sleep._build_study_bins({"sleep_study_paths": [str(src)]})
+    assert seen["paths"] == [str(src)] and seen["kw"]["stem"] == sleep.STUDY_STEM
+
+
+def test_study_bins_skip_when_no_sources_configured():
+    """No configured sources means no study lane, not an error."""
+    sleep._build_study_bins({"sleep_study_paths": []})
+    sleep._build_study_bins({})
+
+
+def test_default_sleep_corpus_is_not_the_falsified_raw_transcript_form():
+    """failures.md 2026-08-21 m2: raw experience transcripts scored 0/50 closed-book and
+    degraded val. The shipped default must not be that form."""
+    from runtime import settings as settings_mod
+    stems = {s for s, _ in sleep._mix_stems(settings_mod.DEFAULTS["sleep_corpus"])}
+    assert "experience" not in stems
+    assert sleep.FACT_STEM in stems or sleep.STUDY_STEM in stems
+
+
+def test_sleep_hands_the_trainer_a_stop_rule(tmp_path, monkeypatch):
+    """A consolidation run has no useful fixed length. Without this the 2026-08-24 run
+    trained 512 steps straight through a rising val with the signal in train.csv the
+    whole time."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    args = sleep.launch_args("toy", 30, CFG, BIG_LOG, BIG_LOG)
+    assert args["stop_on_val_rise"] == 0.02
+
+
+def test_the_stop_rule_can_be_disabled(tmp_path, monkeypatch):
+    """Zero restores fixed-length runs for anyone who wants the old behaviour."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    cfg = dict(CFG, sleep_stop_on_val_rise=0)
+    assert sleep.launch_args("toy", 30, cfg, BIG_LOG, BIG_LOG)["stop_on_val_rise"] == 0.0

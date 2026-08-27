@@ -34,6 +34,9 @@ MRI_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = os.path.dirname(MRI_ROOT)
 IM_S, IM_E = "<|im_start|>", "<|im_end|>"
 EXCERPT_B = 200
+# default matches build_study_corpus's recite form; code-QA corpora pass "{label}"
+# because there the label IS the question
+RECITE_PROMPT = "Show me {label}."
 MAX_NEW_DEFAULT = 192
 
 # ------------------------------------------------------------------------------------
@@ -55,7 +58,14 @@ def ask(brain, q, max_new):
         i = text.find(m)
         if i >= 0:
             text = text[:i]
-    return text.strip()
+    # the raw length rides along: stripping turns a degenerate all-whitespace decode
+    # into "", which scores identically to a model that emitted nothing. Those are
+    # different failures and reporting them as one hid a real result on 2026-08-25.
+    return text.strip(), len(text)
+
+
+def ask_text(brain, q, max_new):
+    return ask(brain, q, max_new)[0]
 
 
 def prefix_share(reply, target):
@@ -69,7 +79,7 @@ def prefix_share(reply, target):
     return round(n / max(1, len(target)), 4)
 
 
-def score_chunk(brain, chunk, max_new):
+def score_chunk(brain, chunk, max_new, prompt=RECITE_PROMPT):
     """Both directions for one chunk: recite (label -> body) and identify (body -> label).
 
     Similarity is measured against the first max_new bytes of the chunk, not the whole
@@ -78,13 +88,20 @@ def score_chunk(brain, chunk, max_new):
     splits are capped identically, so the studied-vs-holdout gap stays the signal."""
     label, text = chunk["label"], chunk["text"]
     target = text[:max_new]
-    recite = ask(brain, f"Show me {label}.", max_new)
-    ident = ask(brain, f"Where is this from?\n{text[:EXCERPT_B]}", 48)
+    recite, recite_raw = ask(brain, prompt.format(label=label), max_new)
+    ident, _ident_raw = ask(brain, f"Where is this from?\n{text[:EXCERPT_B]}", 48)
     sim = difflib.SequenceMatcher(None, recite, target).ratio()
     return {"label": label, "bytes": len(text), "scored_bytes": len(target),
             "sim": round(sim, 4),
             "prefix": prefix_share(recite, target),
             "identify": label.lower() in ident.lower(),
+            # silent vs degenerate: an all-whitespace decode strips to "" and would
+            # otherwise be reported as the model saying nothing
+            "raw_bytes": recite_raw,
+            "degenerate": bool(recite_raw > 0 and not recite),
+            # for a short closed answer, containment is the honest metric: sequence
+            # similarity over a 12-byte answer is dominated by incidental characters
+            "hit": bool(target.strip()) and target.strip().lower() in recite.lower(),
             "reply": recite[:120], "ident_reply": ident[:60]}
 
 
@@ -93,6 +110,10 @@ def summarize(rows):
         return {"n": 0}
     n = len(rows)
     return {"n": n,
+            "degenerate": sum(bool(r.get("degenerate")) for r in rows),
+            "hit": sum(bool(r.get("hit")) for r in rows),
+            "hit_acc": round(sum(bool(r.get("hit")) for r in rows) / n, 3),
+            "silent": sum(1 for r in rows if not r.get("raw_bytes")),
             "sim": round(sum(r["sim"] for r in rows) / n, 4),
             "prefix": round(sum(r["prefix"] for r in rows) / n, 4),
             "identify": sum(r["identify"] for r in rows),
@@ -100,7 +121,7 @@ def summarize(rows):
 
 
 def run(model, step, stem="study", threads=4, max_new=MAX_NEW_DEFAULT, limit=0,
-        device="auto", out_path=None, exam_path=None):
+        device="auto", out_path=None, exam_path=None, prompt=RECITE_PROMPT):
     if device == "cpu":
         os.environ["VERITATE_INFER_DEVICE"] = "cpu"
     os.environ["VERITATE_EXPERIENCE_LOG"] = "0"      # an exam is not experience
@@ -118,7 +139,7 @@ def run(model, step, stem="study", threads=4, max_new=MAX_NEW_DEFAULT, limit=0,
             chunks = chunks[:limit]
         rows = []
         for i, ch in enumerate(chunks):
-            rows.append(score_chunk(brain, ch, max_new))
+            rows.append(score_chunk(brain, ch, max_new, prompt))
             if i % 10 == 0:
                 print(f"[exam] {split} {i}/{len(chunks)} sim={rows[-1]['sim']:.3f} "
                       f"id={rows[-1]['identify']}", flush=True)
@@ -130,7 +151,9 @@ def run(model, step, stem="study", threads=4, max_new=MAX_NEW_DEFAULT, limit=0,
     if out_path:
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=1)
-    print(f"RESULT {model}@{step}  studied sim {st.get('sim')} prefix {st.get('prefix')} "
+    print(f"RESULT {model}@{step}  studied hit {st.get('hit')}/{st.get('n')} "
+          f"holdout hit {ho.get('hit')}/{ho.get('n')}  |  studied sim {st.get('sim')} "
+          f"prefix {st.get('prefix')} "
           f"id {st.get('identify')}/{st.get('n')}  |  holdout sim {ho.get('sim')} "
           f"prefix {ho.get('prefix')} id {ho.get('identify')}/{ho.get('n')}  |  "
           f"GAP sim {report['gap_sim']} id {report['gap_identify']}")
@@ -147,10 +170,12 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="score only the first N per split")
     ap.add_argument("--device", choices=("auto", "cpu"), default="auto")
     ap.add_argument("--exam", default=None, help="path to {stem}_exam.json")
+    ap.add_argument("--prompt", default=RECITE_PROMPT,
+                    help='prompt template; use "{label}" for code-QA corpora')
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     run(a.model, a.step, stem=a.stem, threads=a.threads, max_new=a.max_new, limit=a.limit,
-        device=a.device, out_path=a.out, exam_path=a.exam)
+        device=a.device, out_path=a.out, exam_path=a.exam, prompt=a.prompt)
 
 
 if __name__ == "__main__":
