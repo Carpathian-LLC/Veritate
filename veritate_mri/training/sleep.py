@@ -74,6 +74,13 @@ SLEEP_OVERRIDES = {
     "name": None, "corpus": None, "total_steps": None, "ckpt_every": None,
     "eval_every": None, "base_lr": None, "min_lr": None, "description": None,
     "stop_on_val_rise": None,
+    # inherited from config.json when "", pinned when set. training_args is copied
+    # forward by fork.py and grow_routes.py without being rewritten by the run that
+    # actually produced the weights, so a grown model can carry the regime of an
+    # ancestor: wren2 trains with --state_carry chunks while its config still reads
+    # "off". Consolidating an unlimited-context model with the carry off trains it
+    # in a regime it is never served in.
+    "state_carry": None,
     # a pretrain recipe logs every 10-20 steps; a sleep dose can be shorter than
     # that, and an inherited interval writes no train.csv row at all, so the run
     # looks like nothing happened. Sleep is short by construction: log every step.
@@ -512,6 +519,11 @@ def launch_args(model, steps, cfg, train_bytes, val_bytes, ms=None):
         "_cpu_budget": cpu_budget(cfg),
         "_nice": int(cfg.get("sleep_nice", 10)),
     })
+    carry = str(cfg.get("sleep_state_carry") or "").strip()
+    if carry:
+        args["state_carry"] = carry
+    elif base.get("state_carry") is not None:
+        args["state_carry"] = base["state_carry"]
     args["batch_size"] = _fit_batch(base, cfg, train_bytes, ms)
     args["eval_iters"] = _fit_eval_iters(base, args["batch_size"], val_bytes)
     return args

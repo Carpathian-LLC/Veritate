@@ -133,6 +133,11 @@ DEFAULTS = {
     # launch, so a model degrading across runs would score different data every
     # time and the drift would be invisible. Must exist on the box.
     "sleep_yardstick": "mixed_chat",
+    # "" inherits state_carry from the model's config.json. Set to "chunks" or "off"
+    # to pin it, which is required for any model whose config carries an ancestor's
+    # training_args: fork and grow copy that block forward without the producing run
+    # rewriting it, so a carry-trained model can read as carry-off.
+    "sleep_state_carry": "",
     "sleep_lr": 5e-06,
     # Weak-hardware levers. A sleep child sized for the training box takes every
     # core; on an 8-core 800 MHz CPU that costs a served request 2.5-3x

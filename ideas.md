@@ -25,6 +25,7 @@ One line per idea; sections below hold mechanism + falsifier. Numbering gaps are
 - IDEA 19 — train the no-repeat behavior into the weights — mechanism 1 (guard-distilled SFT) killed 2026-08-18 (failures.md); unlikelihood loss and DPO remain open
 - IDEA 20 — persistent memory: tell wren once and it never forgets (three-timescale program) — THE research focus; E1 dose killed, E1b delta-alone killed BUT state became content-bearing (anticopy 0.06 -> 0.47); E1c (delta + recall curriculum) running; E3 serving/persistence + experience log + sleep tooling shipped
 - IDEA 21 — grow the trained net instead of retraining: function-preserving expansion of wren to the 500M flagship — opened 2026-08-20 on user directive
+- IDEA 24 — CPU-native image generation: 1080p byte-level image models designed against the measured roofline — opened 2026-08-31 on user directive; design + arithmetic only, F0 unmeasured
 
 ## the goal (2026-08-10)
 
@@ -216,3 +217,9 @@ stable -- and the clamp lift independently removed the symptom that motivated (2
 4->8 rung gained 10.4% and the 13% knee rejected it; at 2.0 GHz it gains 17.5% and clears. Retry (2)
 on a box where the two classes actually diverge (more cores, or a shape whose global stack is a
 different fraction of the step).
+
+## image generation
+
+**IDEA 24 — image generation designed for the CPU roofline: 1080p from 60 GFLOP, no full-resolution tensor ever materialized (2026-08-31)**
+Two measured facts on cardinal set the design: AR byte decode is bandwidth-bound at ~12 GF/s effective while batched matmul is compute-bound at 145 GF/s (12x), and one 1920x1080x64 fp32 feature map is 530 MB = 44 s of traffic, so every published decoder is categorically impossible here regardless of precision. Mechanism: byte-aligned residual VQ (256 entries per plane, so one code is one byte and vocab 256 holds), a byte transformer prior over a coarse grid decoded in ~4 masked parallel passes, and a per-pixel tile-streamed decoder whose weights stay L1-resident. Output resolution becomes a loop bound, not a tensor dimension: 4K costs 4x the cheap stage and zero extra prior. Conditioning is free (caption bytes + `<|endoftext|>` + code bytes in one stream). Estimated 1080p: ~430 ms cardinal, ~63 ms desktop, from ~60 GFLOP.
+Falsifiers, in cost order, F0/F1 needing no LM training: **F0** both decoder arms at random weights must hit <=200 ms/1080p on the Mac with peak working set <=8 MB, against a conventional VQGAN decoder measured as control in the same session. **F1** RVQ codec alone must reach LPIPS <=0.15 under 2,048 codes, else the interactive claim on cardinal is withdrawn. **F2** 4-pass masked decode must match causal AR quality; >8 passes fails the budget. **F3** samples beat a nearest-neighbor baseline on 2AFC. Quality has zero evidence behind it; the speed case is arithmetic against measured rooflines only. Design, arithmetic and threats: `lab/2026-08-31-cpu-native-image-generation.md`.

@@ -1004,3 +1004,35 @@ def test_the_stop_rule_can_be_disabled(tmp_path, monkeypatch):
     _model(tmp_path)
     cfg = dict(CFG, sleep_stop_on_val_rise=0)
     assert sleep.launch_args("toy", 30, cfg, BIG_LOG, BIG_LOG)["stop_on_val_rise"] == 0.0
+
+
+def test_state_carry_is_pinned_when_the_setting_names_one(tmp_path, monkeypatch):
+    """fork and grow copy training_args forward without the producing run rewriting it,
+    so a carry-trained model can read as carry-off. Pinning overrides the stale value."""
+    cfg = dict(CFG)
+    cfg["sleep_state_carry"] = "chunks"
+    monkeypatch.setattr(sleep, "_recipe", lambda m: {"seq": 1024, "n_chunks": 1,
+                                                     "batch_size": 4, "state_carry": "off"})
+    args = sleep.launch_args("toy", 10, cfg, train_bytes=10 ** 7, val_bytes=10 ** 6)
+    assert args["state_carry"] == "chunks"
+
+
+def test_state_carry_is_inherited_when_the_setting_is_empty(tmp_path, monkeypatch):
+    """Empty means inherit: a model whose config is accurate must keep its own regime."""
+    cfg = dict(CFG)
+    cfg["sleep_state_carry"] = ""
+    monkeypatch.setattr(sleep, "_recipe", lambda m: {"seq": 1024, "n_chunks": 1,
+                                                     "batch_size": 4, "state_carry": "chunks"})
+    args = sleep.launch_args("toy", 10, cfg, train_bytes=10 ** 7, val_bytes=10 ** 6)
+    assert args["state_carry"] == "chunks"
+
+
+def test_a_recipe_without_state_carry_does_not_invent_one(tmp_path, monkeypatch):
+    """An absent key means the trainer's own default applies; forwarding a guess as an
+    explicit flag would silently change the regime of an older model."""
+    cfg = dict(CFG)
+    cfg["sleep_state_carry"] = ""
+    monkeypatch.setattr(sleep, "_recipe", lambda m: {"seq": 1024, "n_chunks": 1,
+                                                     "batch_size": 4})
+    args = sleep.launch_args("toy", 10, cfg, train_bytes=10 ** 7, val_bytes=10 ** 6)
+    assert "state_carry" not in args
