@@ -196,10 +196,12 @@ def check_output(height, width, out_scale):
 def default_codec_name(set_name, height, width, patch, planes, out_scale=1):
     """Keyed on what a codec depends on, not on the model: every model trained on the
     same pictures at the same geometry reuses the fit. An output scale above 1 is part of
-    the geometry (`_x2`): the decoder learned different pixels."""
+    the geometry (`_x2`): the decoder learned different pixels. The codec recipe
+    (`image_codec.RECIPE`, its default capacity and loss) is part of the name too, so a
+    fit from before a recipe change is not picked up as if it were current."""
     return (str(set_name) + "_" + str(int(height)) + "x" + str(int(width)) + "_p" + str(int(patch))
             + "x" + str(int(planes)) + ("_x" + str(int(out_scale)) if int(out_scale) > 1 else "")
-            + CODEC_NAME_SUFFIX)
+            + "_" + image_codec.RECIPE + CODEC_NAME_SUFFIX)
 
 
 def default_corpus_stem(codec_name):

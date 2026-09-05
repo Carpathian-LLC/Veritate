@@ -83,8 +83,20 @@ FILES           = ("samples.png", "passes.png", "fill.png", "layers.png", "confi
 
 
 def _tile(frame_u8):
+    """One THUMB x THUMB tile. A frame at THUMB is pasted as is (no resampling); a bigger one
+    (an out_scale render) is reduced with a proper filter; a non-square frame keeps its
+    shape and is centred on the background, so every tile grid stays a fixed geometry."""
     img = Image.fromarray(np.asarray(frame_u8, dtype=np.uint8), "RGB")
-    return img.resize((THUMB, THUMB), Image.BILINEAR)
+    w, h = img.size
+    if max(w, h) != THUMB:
+        s = THUMB / max(w, h)
+        img = img.resize((max(1, round(w * s)), max(1, round(h * s))), Image.LANCZOS)
+        w, h = img.size
+    if (w, h) == (THUMB, THUMB):
+        return img
+    out = Image.new("RGB", (THUMB, THUMB), BG)
+    out.paste(img, ((THUMB - w) // 2, (THUMB - h) // 2))
+    return out
 
 
 def _grid(tiles, cols):

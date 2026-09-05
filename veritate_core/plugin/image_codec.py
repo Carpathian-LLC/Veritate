@@ -34,10 +34,16 @@ from veritate_core.plugin.image_decode import RGB, VOCAB_BYTE_LEVEL, PatchDecode
 # Constants
 
 DEFAULT_PLANES       = 4
-DEFAULT_LATENT_DIM   = 32
 DEFAULT_PATCH        = 20
-DEFAULT_ENC_BLOCKS   = 2
-DEFAULT_DEC_HIDDEN   = 64
+# Capacity (recipe v2, 2026-09-05). Measured on 1,024 cached 320 px photos, 3 epochs, CPU,
+# held-out PSNR: latent 32 / hidden 64 / 2 blocks 16.6 dB; hidden 256 17.4; latent 64 +
+# hidden 256 17.5; + 4 encoder blocks 17.7. The decoder is a rounding error in the prior's
+# cost, so the wider one is free at generation; an L1 gradient (edge) loss was tried and
+# OVER-smoothed (sharpness 13 -> 5 of the originals' 11), so the loss stays plain L1.
+DEFAULT_LATENT_DIM   = 64
+DEFAULT_ENC_BLOCKS   = 4
+DEFAULT_DEC_HIDDEN   = 256
+RECIPE               = "v2"     # bumps when these defaults change, so an older fit is not reused by name
 DEFAULT_BAND         = 4
 DEFAULT_COMMIT_BETA  = 0.25
 # Output pixels per code cell = patch * out_scale. The encoder reads the frame at `patch`

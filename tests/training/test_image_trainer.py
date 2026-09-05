@@ -31,8 +31,8 @@ from veritate_core.plugin import hardware
 
 H = W = 40
 TINY = {"layers": 1, "hidden": 32, "ffn": 64, "heads": 2, "params": 10000}
-CODEC = "set_40x40_p20x2_codec"              # <set>_<h>x<w>_p<patch>x<planes>_codec
-STEM  = "set_40x40_p20x2_img"
+CODEC = "set_40x40_p20x2_v2_codec"           # <set>_<h>x<w>_p<patch>x<planes>_<recipe>_codec
+STEM  = "set_40x40_p20x2_v2_img"
 ARGV = ["image_trainer.py", "--name", "smoke", "--description", "image trainer test",
         "--image_set", "set", "--size", "tiny", "--height", str(H), "--width", str(W),
         "--planes", "2", "--patch", "20", "--caption_bytes", "24", "--seq", "0",
@@ -218,9 +218,14 @@ def test_a_failed_stage_is_recorded_in_progress(home, monkeypatch):
     assert "no image set" in prog["message"]
 
 
-def test_default_names_key_on_the_set_and_the_geometry():
-    assert image_trainer.default_codec_name("photos", 320, 320, 20, 4) == "photos_320x320_p20x4_codec"
-    assert image_trainer.default_corpus_stem("photos_320x320_p20x4_codec") == "photos_320x320_p20x4_img"
+def test_default_names_key_on_the_set_the_geometry_and_the_codec_recipe():
+    """A fit from before a recipe change (the 2026-09-05 capacity bump) must not be reused as
+    if it were current: the recipe is in the name, so the old file simply is not found."""
+    from veritate_core.plugin import image_codec
+    tag = image_codec.RECIPE
+    assert image_trainer.default_codec_name("photos", 320, 320, 20, 4) == f"photos_320x320_p20x4_{tag}_codec"
+    assert image_trainer.default_codec_name("photos", 320, 320, 20, 4, 2) == f"photos_320x320_p20x4_x2_{tag}_codec"
+    assert image_trainer.default_corpus_stem(f"photos_320x320_p20x4_{tag}_codec") == f"photos_320x320_p20x4_{tag}_img"
 
 
 def test_the_memory_plan_halves_the_forward_until_the_step_fits():
@@ -348,7 +353,7 @@ def test_an_output_scale_is_part_of_the_codec_and_the_pictures_come_out_bigger(h
     name = "smoke_tiny"
     with open(paths.config_path(name), encoding="utf-8") as handle:
         ta = json.load(handle)["training_args"]
-    assert ta["out_scale"] == 2 and ta["codec"] == "set_40x40_p20x2_x2_codec"
+    assert ta["out_scale"] == 2 and ta["codec"] == "set_40x40_p20x2_x2_v2_codec"
     assert ta["image_code_bytes"] == 2 * (H // 20) * (W // 20) and ta["seq"] == 64
     codec = image_codec.load(paths.codec_path(ta["codec"]))
     assert codec.out_scale == 2

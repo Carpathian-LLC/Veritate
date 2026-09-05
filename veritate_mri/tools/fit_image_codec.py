@@ -237,10 +237,11 @@ def evaluate(codec, cache, rows, device, batch_size):
     return {"l1": total_l1 / max(1, seen), "psnr": psnr, "images": seen}
 
 
-def fit(set_name, codec_name, height=320, width=320, planes=4, patch=20, latent_dim=32,
-        dec_hidden=64, epochs=8, batch_size=32, lr=3e-4, device="auto", resume=False,
+def fit(set_name, codec_name, height=320, width=320, planes=4, patch=20,
+        latent_dim=image_codec.DEFAULT_LATENT_DIM, dec_hidden=image_codec.DEFAULT_DEC_HIDDEN,
+        epochs=8, batch_size=32, lr=3e-4, device="auto", resume=False,
         limit=FIT_SAMPLE_MAX, seed=0, verbose=True, progress=None, should_stop=None,
-        out_scale=image_codec.DEFAULT_OUT_SCALE):
+        out_scale=image_codec.DEFAULT_OUT_SCALE, enc_blocks=image_codec.DEFAULT_ENC_BLOCKS):
     """Fit the codec on (a sample of) a set and save it. Returns the report.
 
     `progress(stage, done, total, **facts)` is called with stage "decode" while the
@@ -265,7 +266,7 @@ def fit(set_name, codec_name, height=320, width=320, planes=4, patch=20, latent_
                              "built under one codec is unreadable by another")
     else:
         codec = image_codec.ImageCodec(planes=planes, latent_dim=latent_dim, patch=patch,
-                                       dec_hidden=dec_hidden, out_scale=out_scale)
+                                       dec_hidden=dec_hidden, out_scale=out_scale, enc_blocks=enc_blocks)
     codec = codec.to(dev)
     codec.train()
     opt = torch.optim.AdamW(codec.parameters(), lr=lr)

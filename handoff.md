@@ -186,6 +186,21 @@ measurements while a run is live.** Shipped:
   classifier-free guidance (not wired into generation yet).
 - Tests: codec out_scale, fit out_scale cache, corpus out_scale, trainer out_scale + refusal,
   probe_every cadence, probe at 2x, route 2x PNG, grid own-context + dropout.
+- **18:30, after "the flows fork" / "ENSURE THE FLOWS ARE INDEPENDENT" / "test images so blurry":**
+  `/train/discovery` models now carry `training`; the text *Continue a saved model* picker drops
+  image models (`model_name` input); the Images form's Model card opens with **New model /
+  Continue a saved image model** buttons (`imgfModeWanted`, `_imgfResumeChanged` toggles the
+  fields and the select; newest model preselected); **continue training ›** on the Models-tab
+  image header and **continue this model ›** on the live view call `_trOpenImageContinue(name)`
+  (`_trSwitchFlow` extracted from the flow modal's `flowPick`; pending resume applied when
+  `/images/models` arrives). Blur: probe `THUMB` is now 320 (the frame itself; `_tile` letterboxes
+  non-square frames and Lanczos-reduces 2x renders), shown at 160 css px; the 96 px thumbnails
+  the user's runs wrote so far cannot be sharpened. Codec recipe v2 (`image_codec.RECIPE` in the
+  codec name): latent 64 / hidden 256 / 4 enc blocks, measured on CPU (scratchpad `codec_ab.py`,
+  1,024 cached photos, 3 epochs): 16.58 -> 17.72 dB; the edge loss over-smoothed and is not
+  used. Form gained a **detail** select (standard 1,024 B / fine 2,048 B = 8 planes / finest
+  4,096 B = patch 10; sets planes/patch, hint prices the step time). The real sharpness lever is
+  bytes per picture; the codec ceiling at 1,024 B is ~20 dB and `recon.png` shows it.
 - Open: compile at 80m/200m unmeasured (the run holds the GPU); CFG in `fill`/prompt panel; the
   user's live 20m run predates all of this (bf16, probe at checkpoints only) - a relaunch takes
   auto precision, probe_every and the new loader. Restart the dashboard for the Python side.

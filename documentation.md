@@ -427,10 +427,16 @@ Stages, each skipped when its output already exists:
    (`POST /images/caption`, status/stop beside it) skips pictures that already have a caption and is
    resumable. The corpus sidecar records the caption count, so the next launch rebuilds the corpus
    and the words reach the model. Without this stage captions are folder names.
-2. **Codec.** `codec` blank means `<set>_<h>x<w>_p<patch>x<planes>_codec` (`images_320x320_p20x4_codec`,
-   plus `_x2` under an output scale, see `out_scale`): named after what a codec depends on, so
-   every model trained on those pictures at that frame reuses it, whatever its size or name.
-   Missing, it is fitted with `fit_image_codec` on a SAMPLE of the set:
+2. **Codec.** `codec` blank means `<set>_<h>x<w>_p<patch>x<planes>[_x<scale>]_<recipe>_codec`
+   (`images_320x320_p20x4_v2_codec`; `_x2` under an output scale, see `out_scale`; the recipe
+   tag `image_codec.RECIPE` bumps when the codec's default capacity or loss changes, so a fit
+   from before the change is not reused by name): named after what a codec depends on, so every
+   model trained on those pictures at that frame reuses it, whatever its size or name. Recipe v2
+   (2026-09-05): latent 64, decoder hidden 256, 4 encoder blocks (was 32 / 64 / 2), measured
+   +1.1 dB held-out PSNR at the same bytes per picture on 1,024 cached photos; an L1 edge loss
+   was tried and over-smoothed, so the loss stays plain L1. The decoder is a rounding error in
+   the prior's cost, so the wider one is free at generation. Missing, it is fitted with
+   `fit_image_codec` on a SAMPLE of the set:
    `codec_images` (8,192) pictures in content-hash order, which is a random draw; 0 fits on all.
    A codec does not improve past ~10k pictures, and the sample is all that is decoded into the
    pixel cache (8,192 x 320x320 is 2.5 GB; the whole of a 140k-picture library at 1920x1080 would
@@ -578,10 +584,13 @@ Everything is recovered with forward hooks under no_grad; a probe never changes 
 trainer passes the train bin for the novelty pass. `GET /images/mri/<model>` returns every step's
 metrics with the files present; `GET /images/mri/<model>/<step>/<file>` serves a picture.
 
-**Rendering.** Probe pngs hold 192 px tiles (`THUMB`; `metrics.json` records `thumb` and `gap`
-so the tab can crop any probe, old 96 px ones included) and are shown at a fixed 128 css px per
-tile (`_imriPhoto`: the width is computed from the tile count, so the browser never stretches
-them, and they stay sharp on a 2x display); click any picture for the full-size png. Every map --
+**Rendering.** Probe pngs hold the frame itself per tile (`THUMB` 320: nothing is resampled at
+the default frame; a 2x render is reduced with a Lanczos filter, a non-square frame keeps its shape
+inside the square cell; `metrics.json` records `thumb` and `gap` so the tab can crop any probe,
+old 96 px ones included) and are shown at a fixed 160 css px per tile (`_imriPhoto`: the width is
+computed from the tile count, so the browser never stretches them, and they stay sharp on a 2x
+display); click any picture for the full-size png. Pictures written by a run that predates this
+hold 96 px thumbnails and cannot be sharpened after the fact. Every map --
 formation order, churn, where it improved, confidence, loss per cell, attention by head -- is drawn
 from the numbers in `metrics.json` as a fixed-cell SVG (`_imriCellHeat`: square cells, never
 stretched to the panel, hover for the value, a gradient legend under each), the pngs serving only
@@ -658,11 +667,19 @@ seq (`_imgfDerivedSeq`), counts both attention tensors in the bytes the trainer 
 GPU, so a size that cannot fit reads red ("WILL NOT FIT even one picture at a time") before launch,
 and one that fits only in pieces reads amber; the size hint carries the same word.
 
-**Continue a model from the Images form.** The Model card's *start from* select lists saved image
-models (`/images/models`: those with a checkpoint) as "continue <name> · step N". Picking one hides
-name, size and picture size, sends `--resume <name>`, and the trainer pins the model's pictures,
-frame, codec, corpus and size from its `config.json` (`pin_structural_args`) whatever else the form
-sent; `total_steps` is the new end. The run route skips its name check on resume.
+**Continuing is per kind, and the two kinds never mix.** *Continue a saved model* (the text
+action) lists text models only: `/train/discovery` tags every model with its `training` kind and
+the picker drops image models, because the text trainer would build the wrong model from one. An
+image model continues from the Images action: the Model card opens with two buttons, **New
+model** and **Continue a saved image model**; the second shows the list of saved image models
+(`/images/models`: those with a checkpoint, newest preselected), hides name, size, picture size,
+detail and output size, and says what is kept. It sends `--resume <name>`, and the trainer pins the
+model's pictures, frame, codec, corpus, size and output scale from its `config.json`
+(`pin_structural_args`) whatever else the form sent; `total_steps` is the new end. The run route
+skips its name check on resume. Two shortcuts land there with the model already picked: **continue
+training ›** in the header of an image model's Models-tab page, and **continue this model ›** on the
+Training tab's live view once a run has stopped or finished (`_trOpenImageContinue`: switches the
+action, waits for the model list, selects the model, scrolls to the form).
 
 Not yet: output beyond the training frame, and F1 itself -- no codec has finished fitting on real
 photographs yet (the first real launch, 2026-09-05, was stopped in its decode stage at 1920x1080);
@@ -704,10 +721,18 @@ exist or holds no pictures. Only pictures the codec and corpus stages can read c
 
 ### codec
 
-The image <-> bytes codec for the run. Blank fits a new one named `<model>_codec` on the set before
-training; a name reuses that codec. A corpus is only readable under the codec that wrote it, so a
-named codec whose `patch` or `planes` differ from the form is refused rather than silently producing
-a corpus the model cannot decode.
+The image <-> bytes codec for the run. Blank fits (or reuses) the one named for the set, the frame,
+the patch, the planes, the output scale and the codec recipe
+(`<set>_<h>x<w>_p<patch>x<planes>[_x<scale>]_<recipe>_codec`, see the trainer's stage 2); a name
+reuses that codec. A corpus is only readable under the codec that wrote it, so a named codec whose
+`patch` or `planes` differ from the form is refused rather than silently producing a corpus the
+model cannot decode; a named codec's `out_scale` replaces the form's, because the codec owns the
+output size. Capacity (recipe v2): latent 64, decoder hidden 256, 4 encoder blocks -- measured
++1.1 dB over the v1 defaults at the same bytes, and free at generation because the decoder is a
+rounding error next to the prior. The ceiling at 1,024 bytes per 320 px picture is still ~20 dB
+PSNR (300:1 compression): `recon.png` in the probe shows exactly how sharp a picture can get, and
+the model can never beat it. Sharper pictures need more bytes per picture, which is the form's
+**detail** select (below), or a bigger frame.
 
 ### height_width
 
@@ -765,7 +790,11 @@ same layout.
 
 Residual VQ depth of the codec. Each plane adds one byte per patch and quantizes what the planes
 above it missed; planes are emitted coarse to fine, so a prefix of the byte string decodes to a valid
-lower-fidelity picture (anytime output). Costs bytes per image linearly.
+lower-fidelity picture (anytime output). Costs bytes per image linearly. The form's **detail**
+select sets `planes` and `patch` together: *standard* (patch 20, 4 planes: 1,024 bytes per 320 px
+picture, the fast default), *fine* (8 planes: 2,048 bytes, visibly sharper, about 2.5x the step
+time), *finest* (patch 10, 4 planes: 4,096 bytes, about 8x); *custom* shows whenever the advanced
+fields say something else. The geometry hint prices every choice in bytes, tokens and step time.
 
 ### patch
 

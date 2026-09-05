@@ -8412,8 +8412,11 @@ function _trBuildInput(a) {
            `<input type="hidden" data-arg="${_trEsc(name)}" data-arg-kind="corpus" value="${_trEsc(initial.join("+"))}">`;
   }
   if (t === "model_name") {
+    // text models only: an image model continues from the Images action, which pins its
+    // pictures, frame and codec; the text trainer would build the wrong model from it
+    const textModels = (trainState.discovery.models || []).filter(m => m.training !== "image");
     const opts = ['<option value="">- pick a model -</option>']
-      .concat(trainState.discovery.models.map(m => `<option value="${_trEsc(m.name)}" ${m.name === def ? "selected" : ""}>${_trEsc(m.name)}</option>`))
+      .concat(textModels.map(m => `<option value="${_trEsc(m.name)}" ${m.name === def ? "selected" : ""}>${_trEsc(m.name)}</option>`))
       .join("");
     return `<select data-arg="${_trEsc(name)}" data-arg-kind="model_name" style="${inputBase}">${opts}</select>`;
   }
@@ -10489,6 +10492,10 @@ const IMGF_STYLE = `<style>
   .imgf-field > label { color:var(--dim); font-size:10.5px; }
   .imgf-field input[type=text], .imgf-field input[type=number], .imgf-field select, .imgf-field textarea, .imgf input.imgf-in { background:#11141d; border:1px solid var(--line); color:var(--text); padding:5px 7px; font:inherit; border-radius:3px; box-sizing:border-box; min-width:0; }
   .imgf-hint { color:var(--dim); font-size:10.5px; line-height:1.4; }
+  .imgf-mode { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0 10px; }
+  .imgf-mode-btn { background:#0a0c12; border:1px solid var(--line); color:var(--dim); border-radius:4px; padding:7px 14px; cursor:pointer; font:inherit; font-size:12px; }
+  .imgf-mode-btn.on { border-color:var(--accent); color:var(--accent); font-weight:600; box-shadow:0 0 0 1px var(--accent); }
+  .imgf-mode select { background:#11141d; border:1px solid var(--line); color:var(--text); padding:6px 8px; font:inherit; border-radius:3px; min-width:260px; }
   .imgf-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:8px 14px; }
   .imgf-sets { display:flex; flex-direction:column; gap:4px; }
   .imgf-set { display:grid; grid-template-columns:16px minmax(80px,1fr) auto minmax(60px,110px) auto; gap:10px; align-items:center; padding:6px 8px; border:1px solid var(--line); border-radius:4px; cursor:pointer; background:#11141d; }
@@ -10614,6 +10621,34 @@ function _imgfSyncSize() {
   _imgfSetFrame(IMGF_SIZES.includes(edge) ? edge : IMGF_SIZE_DEFAULT, IMGF_SHAPE_DEFAULT);
 }
 
+// Picture detail: bytes per picture, set through the codec's patch and planes. More bytes is
+// sharper and costs tokens (the step time), which the geometry hint prices.
+const IMGF_DETAIL = [
+  ["standard", 20, 4, "1,024 bytes per 320 px picture: the fast default; the codec's own reconstruction is soft (~20 dB)"],
+  ["fine", 20, 8, "2,048 bytes: eight residual planes, visibly sharper, about 2.5x the step time"],
+  ["finest", 10, 4, "4,096 bytes: 10 px cells, sharpest the codec gets, about 8x the step time"],
+];
+function _imgfSetDetail(name) {
+  const d = IMGF_DETAIL.find(x => x[0] === name);
+  if (!d) return;
+  for (const [n, v] of [["patch", d[1]], ["planes", d[2]]]) {
+    const el = _trArgEl(n);
+    if (!el || String(el.value) === String(v)) continue;
+    el.value = String(v);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+}
+function _imgfSyncDetail() {
+  const sel = document.querySelector("#trainArgs [data-imgf-detail]");
+  if (!sel) return;
+  const patch = parseInt(_trArgVal("patch"), 10), planes = parseInt(_trArgVal("planes"), 10);
+  const d = IMGF_DETAIL.find(x => x[1] === patch && x[2] === planes);
+  sel.value = d ? d[0] : "custom";
+  const hint = document.querySelector("#trainArgs [data-detail-hint]");
+  if (hint) hint.innerHTML = d ? d[3] : `custom: patch ${patch || "?"} px, ${planes || "?"} planes (advanced)`;
+}
+
 // Step cost of a frame against the default (320 square, patch 20, 4 planes), from the token
 // count: the linear layers scale with it and attention with its square, in the shares an
 // 80m step measured on an M2 (2026-09-05: attention ~40%).
@@ -10636,6 +10671,7 @@ function _imgfDescLine(image) {
 }
 
 function _imgfUpdateHints() {
+  _imgfSyncDetail();
   _imgfSyncSize();
   const sizeHint = document.querySelector("#trainArgs [data-size-hint]");
   if (sizeHint) sizeHint.innerHTML = _imgfSizeHint(_trArgVal("size"));
@@ -10696,11 +10732,16 @@ function _trRenderImageForm(p, argsEl) {
     </details>
     <div class="imgf-card">
       <div class="imgf-head"><span class="imgf-title">Model</span><span class="imgf-sub" data-imgf-resume-info></span></div>
+      <div class="imgf-mode">
+        <button type="button" class="imgf-mode-btn on" data-imgf-mode="new">New model</button>
+        <button type="button" class="imgf-mode-btn" data-imgf-mode="continue">Continue a saved image model</button>
+        <select data-arg="resume" data-imgf-resume style="display:none"><option value="">- pick an image model -</option></select>
+      </div>
       <div class="imgf-grid">
-        <div class="imgf-field"><label>start from</label><select data-arg="resume" data-imgf-resume><option value="">new model</option></select></div>
         <div class="imgf-field" data-imgf-newonly><label>name</label>${input("name")}</div>
         <div class="imgf-field" data-imgf-newonly><label>size</label>${input("size")}<div class="imgf-hint" data-size-hint></div></div>
         <div class="imgf-field" data-imgf-newonly><label>picture size</label><span style="display:none">${input("height")}${input("width")}</span><div style="display:flex;gap:6px;flex-wrap:wrap"><select data-imgf-size title="long edge of the frame the model works on">${IMGF_SIZES.map(px => `<option value="${px}">${px} px</option>`).join("")}</select><select data-imgf-shape title="shape of the frame; photos are scaled to cover it and centre-cropped">${IMGF_SHAPES.map(s => `<option value="${s[0]}">${s[0]}</option>`).join("")}</select></div><div class="imgf-hint" data-geom-hint></div></div>
+        <div class="imgf-field" data-imgf-newonly><label>detail</label><select data-imgf-detail title="bytes per picture: sharper costs step time">${IMGF_DETAIL.map(d => `<option value="${d[0]}">${d[0]}</option>`).join("")}<option value="custom">custom</option></select><div class="imgf-hint" data-detail-hint></div></div>
         <div class="imgf-field" data-imgf-newonly><label>output size</label>${input("out_scale")}<div class="imgf-hint">${(TRAINER_SCHEMA.image.find(f => f.name === "out_scale") || {}).help || ""}</div></div>
       </div>
       <div class="imgf-field"><label>notes (optional)</label>${input("description")}</div>
@@ -10711,11 +10752,25 @@ function _trRenderImageForm(p, argsEl) {
   if (sizeSel) sizeSel.addEventListener("change", () => { _imgfSetSize(parseInt(sizeSel.value, 10)); _imgfUpdateHints(); });
   const shapeSel = argsEl.querySelector("[data-imgf-shape]");
   if (shapeSel) shapeSel.addEventListener("change", () => { _imgfSetFrame(parseInt((sizeSel || {}).value, 10) || IMGF_SIZE_DEFAULT, shapeSel.value); _imgfUpdateHints(); });
+  const detailSel = argsEl.querySelector("[data-imgf-detail]");
+  if (detailSel) detailSel.addEventListener("change", () => { _imgfSetDetail(detailSel.value); _imgfUpdateHints(); });
   const resumeSel = argsEl.querySelector("[data-imgf-resume]");
   if (resumeSel) resumeSel.addEventListener("change", _imgfResumeChanged);
+  argsEl.querySelectorAll("[data-imgf-mode]").forEach(btn => btn.addEventListener("click", () => {
+    if (!resumeSel) return;
+    if (btn.dataset.imgfMode === "new") { resumeSel.value = ""; }
+    else if (!resumeSel.value) {
+      // continue: the newest saved image model is the likely one; the select shows the rest
+      const newest = _imgfResumeModels.slice().sort((a, b) => ((b.steps || []).slice(-1)[0] || 0) - ((a.steps || []).slice(-1)[0] || 0))[0];
+      if (newest) resumeSel.value = newest.name;
+    }
+    imgfModeWanted = btn.dataset.imgfMode;
+    _imgfResumeChanged();
+  }));
   _imgfLoadResumeOptions();
   _imgfIntro(current);
 }
+let imgfModeWanted = "new";
 
 // Saved image models (those with a checkpoint) the run can continue from. The trainer
 // pins a resumed model's pictures, frame, codec and size, so only the schedule fields
@@ -10731,7 +10786,10 @@ function _imgfLoadResumeOptions() {
       const last = (m.steps || [])[m.steps.length - 1];
       return `<option value="${_trEsc(m.name)}">continue ${_trEsc(m.name)} &middot; step ${Number(last || 0).toLocaleString()}</option>`;
     }).join("");
-    if (cur && _imgfResumeModels.some(m => m.name === cur)) sel.value = cur;
+    const pending = trainState._imgfPendingResume;
+    if (pending && _imgfResumeModels.some(m => m.name === pending)) {
+      sel.value = pending; imgfModeWanted = "continue"; trainState._imgfPendingResume = null;
+    } else if (cur && _imgfResumeModels.some(m => m.name === cur)) sel.value = cur;
     _imgfResumeChanged();
   }).catch(() => {});
 }
@@ -10739,11 +10797,17 @@ function _imgfLoadResumeOptions() {
 function _imgfResumeChanged() {
   const name = _trArgVal("resume");
   const m = _imgfResumeModels.find(x => x.name === name) || null;
-  document.querySelectorAll("#trainArgs [data-imgf-newonly]").forEach(el => { el.style.display = name ? "none" : ""; });
+  const continuing = !!name || imgfModeWanted === "continue";
+  document.querySelectorAll("#trainArgs [data-imgf-newonly]").forEach(el => { el.style.display = continuing ? "none" : ""; });
+  document.querySelectorAll("#trainArgs [data-imgf-mode]").forEach(b => b.classList.toggle("on", (b.dataset.imgfMode === "continue") === continuing));
+  const sel = document.querySelector("#trainArgs [data-imgf-resume]");
+  if (sel) sel.style.display = continuing ? "" : "none";
   const info = document.querySelector("#trainArgs [data-imgf-resume-info]");
   if (info) {
     const last = m && (m.steps || [])[m.steps.length - 1];
-    info.innerHTML = name ? `continues <b>${_trEsc(name)}</b>${last ? ` from step ${Number(last).toLocaleString()}` : ""}${m && m.height ? ` &middot; ${m.height}&times;${m.width} px` : ""} &middot; total steps below is the new end` : "";
+    info.innerHTML = name
+      ? `continues <b>${_trEsc(name)}</b>${last ? ` from step ${Number(last).toLocaleString()}` : ""}${m && m.height ? ` &middot; ${m.height}&times;${m.width} px` : ""} &middot; its pictures, frame, codec and size are kept; <i>total steps</i> below is the new end`
+      : continuing ? (_imgfResumeModels.length ? "pick the model to continue" : "no saved image model yet: train one first") : "";
   }
   _trUpdateComposedName();
   _trUpdateVramEstimate();
@@ -11541,7 +11605,8 @@ const IMG_LIVE_STYLE = `<style>
   .imgl-stage.running .imgl-bar i { background:var(--warm); }
   .imgl-msg { font-size:12px; color:var(--text); }
   .imgl-fail { font-size:12px; color:var(--hot); background:rgba(255,93,143,.08); border:1px solid var(--hot); border-radius:4px; padding:8px 10px; white-space:pre-wrap; }
-  .imgl-saved { font-size:11px; color:var(--dim); }
+  .imgl-saved { font-size:11px; color:var(--dim); display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .imgl-continue { background:#0a0c12; border:1px solid var(--accent); color:var(--accent); border-radius:4px; padding:4px 10px; cursor:pointer; font:inherit; font-size:11px; font-weight:600; }
   .imgl-kpis { display:flex; gap:10px; flex-wrap:wrap; }
   .imgl-kpi { background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:8px 12px; min-width:120px; }
   .imgl-kpi .v { font-size:18px; font-weight:700; color:var(--text); }
@@ -11762,13 +11827,15 @@ function _imgLiveRender() {
         ${state === "failed" ? `<div class="imgl-fail">${_trEsc(p.message || "the run failed; see the run log")}</div>` : ""}
         <div class="imgl-stages">${stages}</div>
         ${p && p.message && state !== "failed" ? `<div class="imgl-msg">${_trEsc(p.message)}</div>` : ""}
-        <div class="imgl-saved">${saved}</div>
+        <div class="imgl-saved">${saved}${ck.length && state !== "running" ? `<button type="button" class="imgl-continue" data-imgl-continue title="open the Training tab with this model picked to continue">continue this model &rsaquo;</button>` : ""}</div>
         ${kpis ? `<div class="imgl-kpis">${kpis}</div>` : ""}
       </div>
     </div>
     ${panels}
     ${log}
   </div>`;
+  const cont = box.querySelector("[data-imgl-continue]");
+  if (cont) cont.addEventListener("click", () => _trOpenImageContinue(name));
   const open = box.querySelector("[data-imgl-open]");
   if (open) open.addEventListener("click", e => {
     e.preventDefault();
@@ -12446,6 +12513,36 @@ function _trGotoTeacherSettings(ev) {
   }, 80);
 }
 
+// Switch the Training tab to an action (flow) and render its picker, form and status.
+// The action picker's cards call this; so does "continue training" on an image model's
+// Models-tab page, which lands here with the model already chosen.
+function _trSwitchFlow(flow) {
+  trainState.flow = flow;
+  trainState.selected = null;
+  _trStore(flow);
+  _trToggleMetrics(flow);
+  // Core Trainers list is flow-scoped; force a refetch on the next render.
+  coreTrainersState.ready = false;
+  _trShowRagPanel(flow === "rag");
+  _trUpdateTeacherGate();
+  _trRenderPicker();
+  _trRenderForm();
+  _trRenderStatus();
+  _exRender();
+}
+
+// Open the Training tab on the Images action with `name` picked to continue. The image
+// form's model list loads asynchronously; the pending name is applied when it arrives.
+function _trOpenImageContinue(name) {
+  const busy = trainState.running && trainState.running.status === "running";
+  if (busy) { alert("a run is training now; stop it first, then continue " + name + "."); return; }
+  trainState._imgfPendingResume = name;
+  activateTab("training");
+  _trSwitchFlow("image");
+  const wrap = _trEl("trainFormWrap");
+  if (wrap && wrap.scrollIntoView) setTimeout(() => wrap.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const flowModal = $("trainFlowModal");
   const flowOpen  = $("trainFlowOpenBtn");
@@ -12468,18 +12565,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const flowPick = (flow) => {
     const busy = trainState.running && trainState.running.status === "running";
     if (busy && flow !== "export") return;
-    trainState.flow = flow;
-    trainState.selected = null;
-    _trStore(flow);
-    _trToggleMetrics(flow);
-    // Core Trainers list is flow-scoped; force a refetch on the next render.
-    coreTrainersState.ready = false;
-    _trShowRagPanel(flow === "rag");
-    _trUpdateTeacherGate();
-    _trRenderPicker();
-    _trRenderForm();
-    _trRenderStatus();
-    _exRender();
+    _trSwitchFlow(flow);
     flowCloseModal();
   };
   if (flowOpen && flowModal) flowOpen.addEventListener("click", flowOpenModal);
@@ -18707,6 +18793,8 @@ const IMG_MRI_STYLE = `<style>
   .imri-head { display:flex; gap:14px; flex-wrap:wrap; align-items:center; font-size:11.5px; color:var(--dim); }
   .imri-head b { color:var(--text); }
   .imri-live { color:var(--warm); font-weight:600; }
+  .imri-continue { margin-left:auto; background:#0a0c12; border:1px solid var(--accent); color:var(--accent); border-radius:4px; padding:5px 12px; cursor:pointer; font:inherit; font-size:12px; font-weight:600; }
+  .imri h2 { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .imri-strip { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; }
   .imri-strip button { flex:none; background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:4px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:3px; }
   .imri-strip button.on { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
@@ -18951,11 +19039,12 @@ function _imriScale(loText, hiText, kind) {
 // Diverging heat kept as a name for older call sites.
 function _imriDivHeat(rows, title) { return _imriCellHeat(rows, { kind: "div", empty: title }); }
 
-// A probe png shown at a fixed tile size. New probes hold THUMB (192) px per tile and are
-// shown at IMRI_CSS_TILE, so they stay sharp on a 2x display; older 96 px probes show at
-// 96. `cols` is the png's tile count across, which fixes the css width so the browser never
-// stretches it. Click opens the png at full size.
-const IMRI_CSS_TILE = 128;
+// A probe png shown at a fixed tile size. New probes hold the frame itself per tile (THUMB
+// 320, nothing resampled) and are shown at IMRI_CSS_TILE, so they stay sharp on a 2x
+// display; older 96 px probes show at 96, which is all the pixels they have. `cols` is the
+// png's tile count across, which fixes the css width so the browser never stretches it.
+// Click opens the png at full size.
+const IMRI_CSS_TILE = 160;
 function _imriTileCss(s) { return Math.min(IMRI_CSS_TILE, (s && s.thumb) || 96); }
 function _imriPhoto(url, s, cols, alt) {
   const thumb = (s && s.thumb) || 96, gap = (s && s.gap) || 4, css = _imriTileCss(s);
@@ -19143,7 +19232,7 @@ function _imgMriRender() {
 
   box.innerHTML = IMG_MRI_STYLE + `<div class="imri">
     <div class="panel">
-      <h2>${_trEsc(name)} <em>image model &middot; ${g.height || "?"}&times;${g.width || "?"} px &middot; ${g.image_code_bytes || "?"} bytes/picture &middot; ${planes} planes &middot; ${layers || "?"} layers${imgMriState.running ? ' &middot; <span class="imri-live">training now</span>' : ""}</em></h2>
+      <h2>${_trEsc(name)} <em>image model &middot; ${g.height || "?"}&times;${g.width || "?"} px &middot; ${g.image_code_bytes || "?"} bytes/picture &middot; ${planes} planes &middot; ${layers || "?"} layers${imgMriState.running ? ' &middot; <span class="imri-live">training now</span>' : ""}</em>${!imgMriState.running && (d.checkpoint_steps || []).length ? `<button type="button" class="imri-continue" data-imri-continue title="open the Training tab with this model picked to continue from its last checkpoint">continue training &rsaquo;</button>` : ""}</h2>
       <div class="body">
         <div class="imri-head"><span>pictures: <b>${_trEsc(d.image_set || "?")}</b></span><span>codec: <b>${_trEsc(d.codec || "?")}</b></span><span>probes: <b>${steps.length}</b></span><span>showing step <b>${cur.step.toLocaleString()}</b></span></div>
         <div class="imri-strip" data-imri-strip>${steps.map(s => `<button type="button" data-imri-step="${s.step}" class="${s.step === cur.step ? "on" : ""}" title="step ${s.step}">${has(s, "samples.png") ? `<img src="${url(s.step, "samples.png")}" alt="">` : ""}<span>${s.step.toLocaleString()}</span></button>`).join("")}</div>
@@ -19269,6 +19358,8 @@ function _imgMriRender() {
 
   // scrubber + films (event handlers live on the elements; the strip buttons use delegation)
   const q = sel => box.querySelector(sel);
+  const cont = q("[data-imri-continue]");
+  if (cont) cont.addEventListener("click", () => _trOpenImageContinue(name));
   const range = q("[data-imri-range]");
   if (range) range.addEventListener("input", () => { imgMriState.follow = false; _imgMriStepTo(parseInt(range.value, 10)); });
   const prevBtn = q("[data-imri-prev]"), nextBtn = q("[data-imri-next]"), playBtn = q("[data-imri-play]"), follow = q("[data-imri-follow]");

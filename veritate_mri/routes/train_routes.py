@@ -25,6 +25,18 @@ from training import train_stream as train_stream_mod
 # ------------------------------------------------------------------------------------
 # Functions
 
+def _training_kind(name):
+    """'image' for a picture model, 'text' otherwise (what config.json says, or text)."""
+    import json
+
+    from readers import paths
+    try:
+        with open(paths.config_path(name), encoding="utf-8") as handle:
+            return json.load(handle).get("training") or "text"
+    except (OSError, ValueError):
+        return "text"
+
+
 def register(app):
     @app.route("/train/discovery")
     def train_discovery():
@@ -32,7 +44,9 @@ def register(app):
         for name in models.list_models():
             steps = checkpoints.list_steps(name)
             if not steps: continue
-            out_models.append({"name": name, "steps": steps})
+            # the kind decides which form may continue it: image models continue from the
+            # Images action, text models from Continue a saved model -- never the other
+            out_models.append({"name": name, "steps": steps, "training": _training_kind(name)})
         out_models.sort(key=lambda r: r["name"])
         return {
             "corpora":    corpus_reader.list_stems(),
