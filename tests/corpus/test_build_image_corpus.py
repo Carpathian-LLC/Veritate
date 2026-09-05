@@ -107,3 +107,11 @@ def test_the_streaming_build_reads_cached_frames_and_decodes_the_rest(tmp_path):
     frame = fit_image_codec._decode((str(images / names[4]), H, W))
     image = torch.from_numpy(np.array(frame)).permute(2, 0, 1).float().div(255.0)
     assert build_image_corpus.pack_record(codec, image) in data
+
+    # with an output scale the cache holds the pictures at 2x, so every picture is decoded
+    # at the frame instead: the same corpus, none of it from the cache
+    rep2 = build_image_corpus.build_streaming(fake, "set", "c", "img2", H, W, val_every=2,
+                                              device="cpu", verbose=False, out_scale=2)
+    assert rep2["images"] == 5 and rep2["from_cache"] == 0 and rep2["decoded"] == 5
+    train2 = (tmp_path / "corpus" / "img2_train.bin").read_bytes()
+    assert train2.count(build_image_corpus.RECORD_SEP) == rep2["train_records"]

@@ -78,7 +78,8 @@ def load_image_model(name, step=None):
     codec = image_codec.load(paths.codec_path(ta["codec"]))
     codec.eval()
     geometry = {"height": int(ta["height"]), "width": int(ta["width"]), "seq": int(shape["seq"]),
-                "code_bytes": int(ta["image_code_bytes"]), "patch": codec.patch, "planes": codec.planes}
+                "code_bytes": int(ta["image_code_bytes"]), "patch": codec.patch, "planes": codec.planes,
+                "out_scale": getattr(codec, "out_scale", 1)}          # decoded pictures are this many x the frame
     return model, codec, geometry, step
 
 

@@ -61,29 +61,43 @@ def cosine_mask_ratio(rng, count):
     return np.cos(rng.uniform(0.0, 1.0, size=count) * (math.pi / 2.0))
 
 
-def make_record_loader(bin_path, seq, batch_size, code_bytes, mask_byte, seed):
+def make_record_loader(bin_path, seq, batch_size, code_bytes, mask_byte, seed, caption_dropout=0.0):
     """Record-aligned masked draws. Returns (draw, usable_records).
 
     Every window is `seq` bytes ending at a code block's last byte, so positions
-    [seq - code_bytes, seq) are always the image and everything before is context. A
-    record with less than `seq` bytes of history is left-padded with PAD_BYTE, so every
-    record in the bin is a training example."""
+    [seq - code_bytes, seq) are always the image and everything before is context. The
+    context is the record's OWN bytes only -- the separator that opens it and its caption;
+    whatever the bin holds before that (the previous picture's code tail) is replaced with
+    PAD_BYTE, which is exactly the window generation builds (image_sample.build_window), so
+    the model trains on what it will be given. A record with less than `seq` bytes of
+    history is left-padded the same way, so every record in the bin is a training example.
+    `caption_dropout` is the share of draws whose whole context is padded: the model learns
+    to draw from nothing too, which is what a caption-free generation asks for and what
+    classifier-free guidance needs."""
     if code_bytes > seq:
         raise ValueError("image_code_bytes " + str(code_bytes) + " exceeds seq " + str(seq)
                          + "; the objective cannot see a whole image")
     arr = np.memmap(bin_path, dtype=np.uint8, mode="r")
-    ends = code_block_ends(bin_path)
-    ends = ends[ends >= code_bytes]
+    all_ends = code_block_ends(bin_path)
+    ends = all_ends[all_ends >= code_bytes]
     if ends.size == 0:
         raise ValueError("no image records in " + str(bin_path))
     rng = np.random.RandomState(seed)
     first_code = seq - code_bytes
+    p_drop = float(caption_dropout or 0.0)
 
     def draw():
         picks = ends[rng.randint(0, ends.size, size=batch_size)]
+        drops = rng.uniform(size=batch_size) < p_drop if p_drop > 0 else np.zeros(batch_size, dtype=bool)
         window = np.full((batch_size, seq), PAD_BYTE, dtype=np.int64)
         for b, end in enumerate(picks):
-            start = max(0, int(end) - seq)
+            end = int(end)
+            i = int(np.searchsorted(all_ends, end))
+            # the previous record's separator opens this one; nothing before it is ours
+            own_start = int(all_ends[i - 1]) if i > 0 else 0
+            start = max(own_start, end - seq)
+            if drops[b]:
+                start = end - code_bytes
             window[b, seq - (end - start):] = arr[start:end]
         tokens = torch.from_numpy(window)
         targets = torch.full_like(tokens, IGNORE_INDEX)

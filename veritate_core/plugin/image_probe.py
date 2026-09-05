@@ -65,8 +65,8 @@ SAMPLE_PASSES   = 8
 EVAL_BATCHES    = 2
 EVAL_BATCH      = 8
 SEED            = 1234
-THUMB           = 192         # px per tile in the grids: shown at ~128 css px, crisp on a 2x display
-GAP             = 4
+THUMB           = 320         # px per tile: the frame itself at the default size, so nothing is resampled
+GAP             = 4           # away; the tab shows tiles at 160 css px (crisp on a 2x display), full size on click
 BG              = (14, 16, 22)
 MASK_GREY       = (90, 90, 90)
 CALIBRATION_BINS = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0001)
@@ -401,6 +401,7 @@ def dump(model, codec, geometry, name, step, val_path, device, out_dir=None, cap
     h, w, seq, code_bytes = geometry["height"], geometry["width"], geometry["seq"], geometry["code_bytes"]
     planes, patch = codec.planes, codec.patch
     gh, gw = h // patch, w // patch
+    paint = patch * getattr(codec, "out_scale", 1)      # decoded frames are out_scale x the model's frame
     cell = gh * gw
     first = seq - code_bytes
     was_training = model.training
@@ -428,7 +429,7 @@ def dump(model, codec, geometry, name, step, val_path, device, out_dir=None, cap
                 shown = entry["codes"].copy()
                 shown[entry["unknown"]] = 0                          # placeholder under the grey
                 grey = entry["unknown"][:cell].reshape(gh, gw)       # a cell is unknown while plane 0 is
-                pass_tiles.append(_tile(_grey_cells(_decode(codec, shown, h, w), grey, patch)))
+                pass_tiles.append(_tile(_grey_cells(_decode(codec, shown, h, w), grey, paint)))
             _grid(pass_tiles, len(pass_tiles)).save(os.path.join(out_dir, "passes.png"))
             metrics["pass_committed"] = [e["committed"] for e in trace]
             metrics["pass_confidence"] = [e["confidence"] for e in trace]
@@ -477,7 +478,7 @@ def dump(model, codec, geometry, name, step, val_path, device, out_dir=None, cap
                 filled = image_sample.fill(model, win, first, keep, passes=SAMPLE_PASSES, seed=SEED + b, device=device)
                 orig_img = _decode(codec, original, h, w)
                 filled_img = _decode(codec, filled, h, w)
-                fill_rows += [_tile(orig_img), _tile(_grey_cells(orig_img, ~keep_cells, patch)), _tile(filled_img)]
+                fill_rows += [_tile(orig_img), _tile(_grey_cells(orig_img, ~keep_cells, paint)), _tile(filled_img)]
                 recon_tiles.append(_tile(orig_img))
                 filled_frames.append(filled_img)
                 originals.append(orig_img)
@@ -507,7 +508,7 @@ def dump(model, codec, geometry, name, step, val_path, device, out_dir=None, cap
                 metrics["commit_layer"] = next((i + 1 for i, a in enumerate(agree) if a >= COMMIT_AGREEMENT), None)
 
             conf = confidence_probe(model, tokens, np.stack(masks), first, code_bytes, planes, gh, gw, device)
-            _grid([_tile(originals[0]), _tile(_grey_cells(originals[0], masks[0][:cell].reshape(gh, gw), patch)),
+            _grid([_tile(originals[0]), _tile(_grey_cells(originals[0], masks[0][:cell].reshape(gh, gw), paint)),
                    _tile(filled_frames[0]), _heatmap(conf["confidence_map"])], 4).save(
                 os.path.join(out_dir, "confidence.png"))
             _heatmap(conf["loss_map"], THUMB * 2).save(os.path.join(out_dir, "cell_loss.png"))

@@ -54,6 +54,28 @@ def test_a_prefix_of_the_planes_decodes_to_a_coarser_picture(codec):
     assert torch.equal(codec.decode(codes, planes=99), full)          # clamps to what exists
 
 
+def test_an_output_scale_paints_more_pixels_per_cell_from_the_same_bytes(tmp_path):
+    """out_scale=2: the encoder still reads the frame at `patch` px per cell (same code
+    bytes, same sequence), the decoder renders 2x the frame; the scale survives save/load."""
+    torch.manual_seed(0)
+    big = image_codec.ImageCodec(**KW, out_scale=2)
+    assert big.output_size(H, W) == (2 * H, 2 * W)
+    assert big.code_bytes(H, W) == KW["planes"] * (H // PATCH) * (W // PATCH)
+    frames = torch.rand(2, 3, 2 * H, 2 * W)                    # pictures at the output size
+    recon, parts = big(frames)
+    assert recon.shape == (2, 2 * H, 2 * W, 3)
+    assert parts["codes"].shape == (2, KW["planes"], H // PATCH, W // PATCH)
+    codes = big.encode(torch.rand(1, 3, H, W))[0]              # the frame the model reasons about
+    assert big.decode(codes).shape == (2 * H, 2 * W, 3)
+    path = str(tmp_path / "big.codec.pt")
+    image_codec.save(big, path)
+    again = image_codec.load(path)
+    assert again.out_scale == 2 and again.decode(codes).shape == (2 * H, 2 * W, 3)
+    assert image_codec.load(path).config["out_scale"] == 2
+    with pytest.raises(ValueError, match="out_scale"):
+        image_codec.ImageCodec(**KW, out_scale=5)
+
+
 def test_the_byte_string_round_trips(codec):
     """Bytes out of a corpus rebuild the exact codes that were encoded."""
     codes = codec.encode(torch.rand(1, 3, H, W))[0]

@@ -294,6 +294,7 @@ SCHEMA_IGNORED_FLAGS = frozenset({
     # field can refuse a launch, so they are ignorable here rather than fatal.
     "image_set", "codec", "height", "width", "planes", "patch", "caption_bytes",
     "codec_epochs", "codec_batch_size", "codec_lr", "codec_images", "compile", "probe_every",
+    "out_scale", "caption_dropout",
 })
 
 # Shape fields the dashboard renders. This trainer does NOT take shape from

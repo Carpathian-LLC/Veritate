@@ -40,6 +40,12 @@ DEFAULT_ENC_BLOCKS   = 2
 DEFAULT_DEC_HIDDEN   = 64
 DEFAULT_BAND         = 4
 DEFAULT_COMMIT_BETA  = 0.25
+# Output pixels per code cell = patch * out_scale. The encoder reads the frame at `patch`
+# px per cell (the prior's cost is unchanged); the decoder paints out_scale x more pixels
+# per cell, learned from the pictures at that size. Resolution as a decoder loop bound,
+# not a longer sequence (IDEA 24).
+DEFAULT_OUT_SCALE    = 1
+OUT_SCALES           = (1, 2, 3, 4)
 # The masked objective needs a byte that is never a real code. Reserving the top one
 # costs a single codebook entry and keeps vocab at 256, so the engine is untouched.
 MASK_BYTE            = VOCAB_BYTE_LEVEL - 1
@@ -109,17 +115,24 @@ class ImageCodec(nn.Module):
 
     def __init__(self, planes=DEFAULT_PLANES, latent_dim=DEFAULT_LATENT_DIM, patch=DEFAULT_PATCH,
                  enc_blocks=DEFAULT_ENC_BLOCKS, dec_hidden=DEFAULT_DEC_HIDDEN, band=DEFAULT_BAND,
-                 commit_beta=DEFAULT_COMMIT_BETA):
+                 commit_beta=DEFAULT_COMMIT_BETA, out_scale=DEFAULT_OUT_SCALE):
         super().__init__()
+        if int(out_scale) not in OUT_SCALES:
+            raise ValueError("out_scale must be one of " + str(OUT_SCALES) + ", got " + str(out_scale))
         self.config = {"planes": planes, "latent_dim": latent_dim, "patch": patch,
                        "enc_blocks": enc_blocks, "dec_hidden": dec_hidden, "band": band,
-                       "commit_beta": commit_beta}
+                       "commit_beta": commit_beta, "out_scale": int(out_scale)}
         self.patch = patch
         self.planes = planes
+        self.out_scale = int(out_scale)
         self.commit_beta = commit_beta
         self.encoder = Encoder(latent_dim, patch, enc_blocks)
         self.vq = ResidualVQ(planes, latent_dim)
-        self.decoder = PatchDecoder(latent_dim, patch, dec_hidden, band)
+        self.decoder = PatchDecoder(latent_dim, patch * self.out_scale, dec_hidden, band)
+
+    def output_size(self, height, width):
+        """Pixels of a decoded frame for a picture encoded at `height` x `width`."""
+        return height * self.out_scale, width * self.out_scale
 
     def code_bytes(self, height, width):
         """Length in bytes of one encoded frame at this geometry."""
@@ -141,8 +154,11 @@ class ImageCodec(nn.Module):
         return self.decoder.render(features)
 
     def forward(self, images):
-        """Training path: reconstruction in [0, 1] plus the losses fit_step sums."""
-        latent = self.encoder(images).permute(0, 2, 3, 1)
+        """Training path: reconstruction in [0, 1] plus the losses fit_step sums. `images`
+        are at the OUTPUT size; the encoder reads them pooled down by out_scale, the
+        decoder is scored against them in full."""
+        source = F.avg_pool2d(images, self.out_scale) if self.out_scale > 1 else images
+        latent = self.encoder(source).permute(0, 2, 3, 1)
         codes, quantized, commitment = self.vq.quantize(latent)
         recon = self.decoder(quantized)
         target = images.permute(0, 2, 3, 1)

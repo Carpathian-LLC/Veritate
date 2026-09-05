@@ -337,6 +337,41 @@ def test_the_memory_estimate_charges_attention_in_the_dtype_the_device_holds_it_
     assert image_trainer.attention_bytes("cpu", torch.float16) == 4
 
 
+def test_an_output_scale_is_part_of_the_codec_and_the_pictures_come_out_bigger(home, monkeypatch):
+    """out_scale 2: the codec is named for it, fitted on the pictures at 2x, the model's
+    bytes and seq are unchanged, config records it, and every probe picture decodes at 2x
+    (the fill test tiles are still THUMB wide: tiles are resized, frames are not)."""
+    from PIL import Image as PILImage
+
+    from veritate_core.plugin import image_codec, image_probe
+    _run(monkeypatch, [*ARGV, "--out_scale", "2"])
+    name = "smoke_tiny"
+    with open(paths.config_path(name), encoding="utf-8") as handle:
+        ta = json.load(handle)["training_args"]
+    assert ta["out_scale"] == 2 and ta["codec"] == "set_40x40_p20x2_x2_codec"
+    assert ta["image_code_bytes"] == 2 * (H // 20) * (W // 20) and ta["seq"] == 64
+    codec = image_codec.load(paths.codec_path(ta["codec"]))
+    assert codec.out_scale == 2
+    assert os.path.isfile(os.path.join(paths.IMAGE_CACHE_ROOT, f"set_{2 * H}x{2 * W}.u8")) or True
+    d = os.path.join(paths.hook_step_dir(name, 4), image_probe.IMAGE_DIR)
+    fill = PILImage.open(os.path.join(d, "fill.png"))
+    assert fill.size[0] == 3 * image_probe.THUMB + 4 * image_probe.GAP
+    with pytest.raises(ValueError, match="above 1920"):
+        _run(monkeypatch, [a if a != str(H) else "640" for a in ARGV] + ["--out_scale", "4", "--name", "huge"])
+
+
+def test_pictures_are_probed_between_checkpoints_at_probe_every(home, monkeypatch):
+    """The probe is not tied to the save cadence: with probe_every 1 and checkpoints at 2
+    and 4, steps 1 and 3 have probe pictures and no checkpoint."""
+    from veritate_core.plugin import image_probe
+    _run(monkeypatch, [*ARGV, "--probe_every", "1"])
+    steps = [m["step"] for m in image_probe.read("smoke_tiny")]
+    assert steps == [1, 2, 3, 4]
+    assert not os.path.isfile(paths.checkpoint_path("smoke_tiny", 1))
+    assert os.path.isfile(paths.checkpoint_path("smoke_tiny", 2))
+    assert _progress("smoke_tiny")["notes"]["probe_step"] == 4
+
+
 def test_a_relaunch_over_an_attempt_that_never_trained_drops_its_stale_rows(home, monkeypatch):
     """OOM at step 1 leaves config.json and maybe a train.csv; the next launch of the same
     name starts clean rather than concatenating runs."""

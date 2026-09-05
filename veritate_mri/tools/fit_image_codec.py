@@ -239,28 +239,33 @@ def evaluate(codec, cache, rows, device, batch_size):
 
 def fit(set_name, codec_name, height=320, width=320, planes=4, patch=20, latent_dim=32,
         dec_hidden=64, epochs=8, batch_size=32, lr=3e-4, device="auto", resume=False,
-        limit=FIT_SAMPLE_MAX, seed=0, verbose=True, progress=None, should_stop=None):
+        limit=FIT_SAMPLE_MAX, seed=0, verbose=True, progress=None, should_stop=None,
+        out_scale=image_codec.DEFAULT_OUT_SCALE):
     """Fit the codec on (a sample of) a set and save it. Returns the report.
 
     `progress(stage, done, total, **facts)` is called with stage "decode" while the
-    cache fills and "codec" during the epochs (facts: epoch, epochs, loss, recon)."""
+    cache fills and "codec" during the epochs (facts: epoch, epochs, loss, recon).
+    `out_scale` > 1 caches and scores the pictures at out_scale x the frame: the encoder
+    reads them pooled down to the frame, the decoder learns to paint the full size."""
+    out_scale = int(out_scale)
+    out_h, out_w = height * out_scale, width * out_scale
     decode_cb = (lambda d, t: progress("decode", d, t)) if progress else None
-    cache_path, names = build_cache(set_name, height, width, limit=limit, verbose=verbose,
+    cache_path, names = build_cache(set_name, out_h, out_w, limit=limit, verbose=verbose,
                                     progress=decode_cb, should_stop=should_stop)
     cache = np.memmap(cache_path, dtype=np.uint8, mode="r",
-                      shape=(len(names), height, width, RGB))
+                      shape=(len(names), out_h, out_w, RGB))
     train_rows, val_rows = _split(names)
 
     dev = hardware.pick_device(device)
     out_path = paths.codec_path(codec_name)
     if resume and os.path.isfile(out_path):
         codec = image_codec.load(out_path)
-        if codec.patch != patch or codec.planes != planes:
+        if codec.patch != patch or codec.planes != planes or codec.out_scale != out_scale:
             raise ValueError("resumed codec geometry differs from the flags; a corpus "
                              "built under one codec is unreadable by another")
     else:
         codec = image_codec.ImageCodec(planes=planes, latent_dim=latent_dim, patch=patch,
-                                       dec_hidden=dec_hidden)
+                                       dec_hidden=dec_hidden, out_scale=out_scale)
     codec = codec.to(dev)
     codec.train()
     opt = torch.optim.AdamW(codec.parameters(), lr=lr)
@@ -272,7 +277,8 @@ def fit(set_name, codec_name, height=320, width=320, planes=4, patch=20, latent_
               f"({len(train_rows)} train / {len(val_rows)} val)", flush=True)
         print(f"geometry: {height}x{width}  patch {patch}  planes {planes}  "
               f"-> {code_bytes} code bytes/image "
-              f"({height * width * RGB / code_bytes:.0f}x compression)", flush=True)
+              f"({height * width * RGB / code_bytes:.0f}x compression)"
+              + (f"  decoded at {out_h}x{out_w} ({out_scale}x)" if out_scale > 1 else ""), flush=True)
 
     steps_per_epoch = max(1, len(train_rows) // batch_size)
     total_images = epochs * steps_per_epoch * batch_size
@@ -312,6 +318,7 @@ def fit(set_name, codec_name, height=320, width=320, planes=4, patch=20, latent_
     return {"codec": codec_name, "path": out_path, "set": set_name,
             "images": len(names), "train": len(train_rows), "val": len(val_rows),
             "height": height, "width": width, "patch": patch, "planes": planes,
+            "out_scale": out_scale, "out_height": out_h, "out_width": out_w,
             "image_code_bytes": code_bytes, "device": dev, "epochs": epochs,
             "seconds": round(elapsed, 1), "images_per_s": round(images_seen / elapsed, 1),
             "history": history}
@@ -327,6 +334,9 @@ def main():
     ap.add_argument("--patch", type=int, default=image_codec.DEFAULT_PATCH)
     ap.add_argument("--latent-dim", type=int, default=image_codec.DEFAULT_LATENT_DIM)
     ap.add_argument("--dec-hidden", type=int, default=image_codec.DEFAULT_DEC_HIDDEN)
+    ap.add_argument("--out-scale", type=int, default=image_codec.DEFAULT_OUT_SCALE,
+                    choices=image_codec.OUT_SCALES,
+                    help="decode at this many x the frame (the decoder learns the extra pixels)")
     ap.add_argument("--epochs", type=int, default=8)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
@@ -348,7 +358,7 @@ def main():
               planes=args.planes, patch=args.patch, latent_dim=args.latent_dim,
               dec_hidden=args.dec_hidden, epochs=args.epochs, batch_size=args.batch_size,
               lr=args.lr, device=args.device, resume=args.resume, limit=args.limit,
-              seed=args.seed)
+              seed=args.seed, out_scale=args.out_scale)
     best = min(rep["history"], key=lambda h: h["l1"]) if rep["history"] else {}
     print(f"saved {rep['path']}")
     print(f"{rep['images']} images, {rep['epochs']} epochs in {rep['seconds']}s "

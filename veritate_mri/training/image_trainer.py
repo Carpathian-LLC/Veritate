@@ -105,7 +105,8 @@ COMPILE_OVERHEAD   = 1.30     # what a torch.compile'd graph holds over eager (m
 BUDGET_FRACTION    = 0.70     # share of unified memory a run may plan on
 GB                 = 1024 ** 3
 STRUCTURAL_ARGS    = ("image_set", "codec", "corpus", "height", "width", "patch", "planes",
-                      "caption_bytes", "seq", "size")
+                      "caption_bytes", "seq", "size", "out_scale")
+MAX_OUTPUT_EDGE    = 1920     # decoded picture edge: out_scale x the frame, and the pixel cache's size
 
 _STOP = {"requested": False}
 
@@ -178,11 +179,27 @@ def resolve_seq(seq, code_bytes, caption_bytes):
     return seq
 
 
-def default_codec_name(set_name, height, width, patch, planes):
+def check_output(height, width, out_scale):
+    """The decoded picture must stay within MAX_OUTPUT_EDGE: it is also the size every
+    cached picture is stored at for the codec fit."""
+    if int(out_scale) not in image_codec.OUT_SCALES:
+        raise ValueError("out_scale must be one of " + ", ".join(str(s) for s in image_codec.OUT_SCALES)
+                         + ", got " + str(out_scale))
+    out_h, out_w = height * int(out_scale), width * int(out_scale)
+    if max(out_h, out_w) > MAX_OUTPUT_EDGE:
+        raise ValueError("output " + str(out_h) + "x" + str(out_w) + " px (" + str(out_scale) + "x the "
+                         + str(height) + "x" + str(width) + " frame) is above " + str(MAX_OUTPUT_EDGE)
+                         + " px; pick a smaller frame or output scale")
+    return out_h, out_w
+
+
+def default_codec_name(set_name, height, width, patch, planes, out_scale=1):
     """Keyed on what a codec depends on, not on the model: every model trained on the
-    same pictures at the same geometry reuses the fit."""
+    same pictures at the same geometry reuses the fit. An output scale above 1 is part of
+    the geometry (`_x2`): the decoder learned different pixels."""
     return (str(set_name) + "_" + str(int(height)) + "x" + str(int(width)) + "_p" + str(int(patch))
-            + "x" + str(int(planes)) + CODEC_NAME_SUFFIX)
+            + "x" + str(int(planes)) + ("_x" + str(int(out_scale)) if int(out_scale) > 1 else "")
+            + CODEC_NAME_SUFFIX)
 
 
 def default_corpus_stem(codec_name):
@@ -296,6 +313,11 @@ def ensure_codec(args, codec_name, device, prog):
                              + " planes " + str(codec.planes) + " but the run asks for patch "
                              + str(args.patch) + " planes " + str(args.planes)
                              + "; a corpus is unreadable under a different codec")
+        have_scale = int(getattr(codec, "out_scale", 1))
+        if have_scale != int(args.out_scale):
+            print("codec: " + codec_name + " decodes at " + str(have_scale) + "x the frame; the run's out_scale "
+                  + str(args.out_scale) + " is replaced by it (the codec owns the output size)", flush=True)
+            args.out_scale = have_scale
         print("codec: " + codec_name + " (existing, " + path + ")", flush=True)
         prog.skip("decode", "codec " + codec_name + " already fitted")
         prog.skip("codec", "codec " + codec_name + " reused")
@@ -325,7 +347,7 @@ def ensure_codec(args, codec_name, device, prog):
         planes=int(args.planes), patch=int(args.patch), epochs=int(args.codec_epochs),
         batch_size=int(args.codec_batch_size), lr=float(args.codec_lr), device=device,
         limit=sample, seed=int(args.seed), verbose=True, progress=progress,
-        should_stop=stop_requested)
+        should_stop=stop_requested, out_scale=int(args.out_scale))
     best = min(report["history"], key=lambda h: h["l1"]) if report["history"] else {}
     print("codec: fitted in " + str(report["seconds"]) + "s, held-out L1 "
           + format(best.get("l1", float("nan")), ".4f") + "  PSNR "
@@ -359,7 +381,7 @@ def ensure_corpus(args, stem, codec_name, device, prog):
         print("corpus: building " + stem, flush=True)
     report = build_image_corpus.build_streaming(
         paths, args.image_set, codec_name, stem, int(args.height), int(args.width),
-        device=device, verbose=True, should_stop=stop_requested,
+        device=device, verbose=True, should_stop=stop_requested, out_scale=int(args.out_scale),
         progress=lambda d, t: prog.stage("encode", d, t, "encoding pictures " + format(d, ",")
                                          + " / " + format(t, ",")))
     meta = dict(want)
@@ -415,6 +437,7 @@ def run(plugin_id):
           + ("  (measured " + ", ".join(k + " " + str(v) + " TFLOPS" for k, v in rates.items()) + ")" if rates else "")
           + ("  (autocast off)" if amp_dtype is None else ""), flush=True)
     code_bytes = check_geometry(int(args.height), int(args.width), int(args.patch), int(args.planes))
+    check_output(int(args.height), int(args.width), int(args.out_scale))
 
     previous_handlers = _install_stop_handlers()
     prog = image_progress.Progress(paths.model_dir(name), device, total_steps=int(args.total_steps))
@@ -434,11 +457,13 @@ def run(plugin_id):
 def _run_stages(args, name, device, amp_dtype, code_bytes, size_presets, resume_mode,
                 plugin_id, prog):
     codec_name = (args.codec or "").strip() or default_codec_name(
-        args.image_set, int(args.height), int(args.width), int(args.patch), int(args.planes))
+        args.image_set, int(args.height), int(args.width), int(args.patch), int(args.planes), int(args.out_scale))
     stem = (args.corpus or "").strip() or default_corpus_stem(codec_name)
+    out_h, out_w = int(args.height) * int(args.out_scale), int(args.width) * int(args.out_scale)
     print("geometry: " + str(args.height) + "x" + str(args.width) + "  patch " + str(args.patch)
-          + "  planes " + str(args.planes) + "  -> " + str(code_bytes) + " code bytes/image",
-          flush=True)
+          + "  planes " + str(args.planes) + "  -> " + str(code_bytes) + " code bytes/image"
+          + ("  decoded at " + str(out_h) + "x" + str(out_w) + " (" + str(args.out_scale) + "x)"
+             if int(args.out_scale) > 1 else ""), flush=True)
 
     ensure_codec(args, codec_name, device, prog)
     meta = ensure_corpus(args, stem, codec_name, device, prog)
@@ -532,7 +557,8 @@ def _run_stages(args, name, device, amp_dtype, code_bytes, size_presets, resume_
 
     def build_loaders(m):
         loaders["train"], loaders["n"] = image_grid.make_record_loader(
-            train_path, seq, m, code_bytes, image_codec.MASK_BYTE, args.seed)
+            train_path, seq, m, code_bytes, image_codec.MASK_BYTE, args.seed,
+            caption_dropout=float(getattr(args, "caption_dropout", 0.0) or 0.0))
         loaders["val"] = None
         if val_path:
             loaders["val"], _ = image_grid.make_record_loader(
@@ -717,6 +743,8 @@ def _run_stages(args, name, device, amp_dtype, code_bytes, size_presets, resume_
             prog.stage("train", step, args.total_steps, "stopped at step " + format(step, ","))
             raise StopRequested("stopped at step " + str(step) + "; checkpoint saved")
 
+    if last_saved != args.total_steps:
+        checkpoint(args.total_steps)                  # the last step was skipped (non-finite); save what trained
     prog.done("train", "trained " + format(args.total_steps, ",") + " steps  loss "
               + format(last_loss, ".4f"))
     prog.end(image_progress.RUN_DONE, "done")

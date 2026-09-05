@@ -140,6 +140,18 @@ def test_the_probe_records_how_the_picture_formed_and_what_formed_first(rig):
     assert 0.0 <= m["colour_match"] <= 1.0
 
 
+def test_the_probe_paints_hidden_cells_at_the_codecs_output_scale(rig):
+    """A 2x codec decodes 2x frames; the grey cells and the tiles must still line up."""
+    model, _codec, g, val = rig
+    torch.manual_seed(0)
+    big = image_codec.ImageCodec(planes=PLANES, latent_dim=8, patch=PATCH, dec_hidden=32, out_scale=2).eval()
+    m = image_probe.dump(model, big, g, "pix2", 3, val, "cpu", train_path=val)
+    d = os.path.join(paths.hook_step_dir("pix2", 3), image_probe.IMAGE_DIR)
+    assert m["fill_accuracy"] >= 0.0
+    assert Image.open(os.path.join(d, "fill.png")).size[0] == 3 * image_probe.THUMB + 4 * image_probe.GAP
+    assert m["thumb"] == image_probe.THUMB and m["gap"] == image_probe.GAP
+
+
 def test_formation_order_reads_the_pass_each_cell_was_decided_in():
     trace = [{"pass": 1, "unknown": np.array([True, False, True, True])},
              {"pass": 2, "unknown": np.array([True, False, False, True])},

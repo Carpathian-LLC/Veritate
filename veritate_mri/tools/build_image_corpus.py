@@ -160,13 +160,16 @@ def _open_cache(paths, set_name, height, width):
 
 def build_streaming(paths, set_name, codec_name, stem, height, width, out_dir=None,
                     val_every=VAL_EVERY, captions=True, device="auto", verbose=True,
-                    workers=None, progress=None, should_stop=None):
+                    workers=None, progress=None, should_stop=None, out_scale=1):
     """The corpus for a whole set, at the speed of the codec rather than of Pillow.
 
     Frames in the pixel cache (the sample the codec was fitted on) are read from it;
     the rest are decoded by a thread pool that always works one batch ahead of the
     encode, so decode and GPU overlap. `progress(done, total)` after every batch;
-    `should_stop()` true raises StopRequested and removes the half-written bins."""
+    `should_stop()` true raises StopRequested and removes the half-written bins.
+    With `out_scale` > 1 the cache holds the pictures at out_scale x the frame (what the
+    decoder learned from), so every picture is decoded at the frame here instead: one
+    decode path for the whole corpus, at the cost of re-decoding the fitted sample."""
     from tools import fit_image_codec
 
     set_dir = paths.image_set_dir(set_name)
@@ -175,7 +178,7 @@ def build_streaming(paths, set_name, codec_name, stem, height, width, out_dir=No
     names = fit_image_codec._set_images(set_dir)
     if not names:
         raise ValueError("no images in " + set_dir)
-    cache, row_of = _open_cache(paths, set_name, height, width)
+    cache, row_of = _open_cache(paths, set_name, height, width) if int(out_scale) == 1 else (None, {})
 
     codec = image_codec.load(paths.codec_path(codec_name))
     dev = hardware.pick_device(device)

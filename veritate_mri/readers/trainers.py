@@ -134,7 +134,9 @@ IMAGE_TRAINER_DEFAULTS = {
     "width":         320,
     "planes":        4,
     "patch":         20,
+    "out_scale":     1,         # decoded pictures are this many x the frame: 2 renders 640 px from a 320 px model
     "caption_bytes": 128,       # context budget ahead of the image; seq = auto from it
+    "caption_dropout": 0.1,     # share of training draws with no caption: the model learns to draw unprompted too
     "seq":           0,         # 0 = image_code_bytes + caption_bytes, rounded to 64
     # codec fit (stage 1, skipped when `codec` names an existing one)
     "codec_epochs":     8,
@@ -160,7 +162,7 @@ IMAGE_TRAINER_DEFAULTS = {
     "optimizer":     "muon",
     "use_8bit_adam": False,
     "ckpt_every":    500,
-    "probe_every":   100,       # the picture probe (samples, fill, formation) between checkpoints; 0 = only at checkpoints
+    "probe_every":   100,       # picture probe (samples, fill, formation) between checkpoints; 0 = checkpoints only
     "eval_every":    250,
     "eval_iters":    8,
     "log_every":     25,

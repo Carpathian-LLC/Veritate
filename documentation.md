@@ -427,9 +427,10 @@ Stages, each skipped when its output already exists:
    (`POST /images/caption`, status/stop beside it) skips pictures that already have a caption and is
    resumable. The corpus sidecar records the caption count, so the next launch rebuilds the corpus
    and the words reach the model. Without this stage captions are folder names.
-2. **Codec.** `codec` blank means `<set>_<h>x<w>_p<patch>x<planes>_codec` (`images_320x320_p20x4_codec`):
-   named after what a codec depends on, so every model trained on those pictures at that frame
-   reuses it, whatever its size or name. Missing, it is fitted with `fit_image_codec` on a SAMPLE of the set:
+2. **Codec.** `codec` blank means `<set>_<h>x<w>_p<patch>x<planes>_codec` (`images_320x320_p20x4_codec`,
+   plus `_x2` under an output scale, see `out_scale`): named after what a codec depends on, so
+   every model trained on those pictures at that frame reuses it, whatever its size or name.
+   Missing, it is fitted with `fit_image_codec` on a SAMPLE of the set:
    `codec_images` (8,192) pictures in content-hash order, which is a random draw; 0 fits on all.
    A codec does not improve past ~10k pictures, and the sample is all that is decoded into the
    pixel cache (8,192 x 320x320 is 2.5 GB; the whole of a 140k-picture library at 1920x1080 would
@@ -465,9 +466,14 @@ Stages, each skipped when its output already exists:
    forward and retries the step; at one picture it is a clear error naming the size as too big for
    this device (800m at seq 1152 is that case on a 24 GB Mac: ~21 GB at one picture). A relaunch
    of a name whose earlier attempt never saved a checkpoint is allowed (`POST /trainers/run` only
-   409s when weights exist) and drops that attempt's `train.csv` rows first. Logs `img/s` beside `tok/s`; `config.json` carries
-   `training: image`, the codec name, the set and the geometry, which is everything decoding a
-   sample later needs.
+   409s when weights exist) and drops that attempt's `train.csv` rows first. Every draw's context
+   is the record's own bytes (PAD, separator, caption: the window generation builds; the previous
+   picture's code tail the bin holds before the separator is padded out), and `caption_dropout`
+   (0.1) of draws carry no context at all, so the model also learns to draw unprompted. The
+   picture probe runs every `probe_every` steps (100) as well as at every checkpoint, so the
+   first pictures appear at step 100, not at the first save. Logs `s/step`, `img/s` beside
+   `tok/s`; `config.json` carries `training: image`, the codec name, the set, the geometry and
+   `out_scale`, which is everything decoding a sample later needs.
 
 **Speed** (measured, M2 with 10 GPU cores and 24 GB, seq 1152, batch 16, 2026-09-05; the profile
 script and its output are in the handoff). The 137 s/step the first 80m run showed was paging: the
@@ -571,6 +577,17 @@ learns those names, not open vocabulary. Describe-anything generation needs a ca
 Everything is recovered with forward hooks under no_grad; a probe never changes the model. The
 trainer passes the train bin for the novelty pass. `GET /images/mri/<model>` returns every step's
 metrics with the files present; `GET /images/mri/<model>/<step>/<file>` serves a picture.
+
+**Rendering.** Probe pngs hold 192 px tiles (`THUMB`; `metrics.json` records `thumb` and `gap`
+so the tab can crop any probe, old 96 px ones included) and are shown at a fixed 128 css px per
+tile (`_imriPhoto`: the width is computed from the tile count, so the browser never stretches
+them, and they stay sharp on a 2x display); click any picture for the full-size png. Every map --
+formation order, churn, where it improved, confidence, loss per cell, attention by head -- is drawn
+from the numbers in `metrics.json` as a fixed-cell SVG (`_imriCellHeat`: square cells, never
+stretched to the panel, hover for the value, a gradient legend under each), the pngs serving only
+as a fallback for probes that predate the numbers. The filmstrip canvases are sized for the
+display's pixel ratio. The view is grouped into sections: what it draws, how a picture forms,
+inside the model, over training.
 
 **The Models tab shows an image model OR a text model, never both.** The decision comes from the
 model's kind (`training` in `/timelines`, else `config.json`) and is made before anything is
@@ -694,10 +711,55 @@ a corpus the model cannot decode.
 
 ### height_width
 
-Training frame in pixels. Every picture is cover-scaled and center-cropped to it, so nothing is
-stretched or padded. Both must be multiples of `patch`. `image_code_bytes = planes x (height/patch)
-x (width/patch)`; at the defaults (320x320, patch 20, 4 planes) that is 1,024 bytes, inside IDEA 24's
-2,048-code F1 budget.
+Training frame in pixels: what the model reasons about and pays for. Every picture is cover-scaled
+and center-cropped to it, so nothing is stretched or padded. Both must be multiples of `patch`.
+`image_code_bytes = planes x (height/patch) x (width/patch)`; at the defaults (320x320, patch 20,
+4 planes) that is 1,024 bytes, inside IDEA 24's 2,048-code F1 budget. The form sets the pair from
+two selects: a **long edge** (160 to 960 px) and a **shape** (square, landscape 4:3 / 3:2, wide
+16:9, portrait 3:4 / 2:3), the short edge snapped to a multiple of the patch; the hint under them
+shows the exact frame, the bytes and tokens per picture, and the step time relative to the 320
+square, estimated from the token count (linear layers scale with it, attention with its square, in
+the 60/40 shares an 80m step measured on an M2). A bigger frame is the expensive way to a bigger
+picture: 640 square at patch 20 is 4,096 bytes and ~8x the step time, 960 is ~30x and does not fit
+this class of machine. Bigger finished pictures come from `out_scale` instead; a coarser `patch`
+(40) at a larger frame keeps the token count and lets the codec carry the pixels.
+
+### out_scale
+
+How many times the frame the finished pictures are: `1` (default), `2`, `3`, `4`; `2` renders
+640x640 px from a 320x320 model. Resolution as a decoder loop bound, not a longer sequence
+(IDEA 24): the model's bytes, tokens, memory and step time do not change. The codec is fitted with
+the sample pictures cached at the OUTPUT size (`out_scale^2` times the cache: 8,192 pictures at
+640x640 is 10 GB, the form's hint says how much), the encoder reads them pooled down to the frame,
+and the decoder (`PatchDecoder` at `patch x out_scale` px per cell) learns to paint the full size
+from real pixels at that size, scored by L1 and PSNR against them like any codec fit. The extra
+detail is therefore the decoder's, learned from your photos, not the model's; blur in a 2x picture
+is the codec ceiling (`recon.png`) at 2x. The codec carries the scale (`ImageCodec.out_scale`, in
+its saved config) and is named for it (`images_320x320_p20x4_x2_codec`), so a 1x and a 2x codec
+over the same pictures coexist; a run that names an existing codec adopts its scale. The corpus is
+built from every picture decoded at the frame (the 2x cache is not reused for it, so one decode
+path feeds the encoder). Generation, the probe pictures and the prompt panel all come out at the
+output size; the decoded edge is capped at 1920 px (`MAX_OUTPUT_EDGE`), which the form flags.
+
+### probe_every
+
+Image trainer. Steps between picture probes (`image_probe.dump`: samples, fill test, formation,
+attention, all of the Models tab) run on the eager model with no weights saved; default 100, `0`
+= only at checkpoints. Each probe is ~10-20 s on an M2, so 100 costs a few percent of a run and
+the first pictures appear at step 100 instead of the first checkpoint (500). Checkpoints still
+probe. The Models tab and the prompt panel list probes and checkpoints separately: the scrubber
+walks probes, drawing with words needs a checkpoint.
+
+### caption_dropout
+
+Image trainer. Share of training draws whose whole context is padded (default 0.1): the model sees
+the picture with no separator and no caption, exactly the window an unprompted generation gives it,
+so it learns to draw from nothing as well as from words. This is what classifier-free guidance
+needs and what makes the prompt panel's *caption influence* (with words vs without) a fair
+comparison. The context is otherwise the record's own bytes only: the loader pads everything before
+the separator that opens the record (`image_grid.make_record_loader`), because the bin holds the
+previous picture's code tail there and generation never does; training and generation now see the
+same layout.
 
 ### planes
 

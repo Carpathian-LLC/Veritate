@@ -94,6 +94,27 @@ def test_every_mode_returns_a_png_at_the_frame(client, mode):
     assert image.size == (W, H)
 
 
+def test_a_model_with_an_output_scale_generates_pictures_at_that_scale(client, tmp_path):
+    """The codec owns the output size: a 2x codec makes the same bytes come out 2x the frame."""
+    torch.manual_seed(0)
+    codec = image_codec.ImageCodec(planes=PLANES, latent_dim=8, patch=PATCH, dec_hidden=32, out_scale=2)
+    image_codec.save(codec, paths.codec_path("big_codec"))
+    model = Veritate(256, 32, 1, 64, 2, SEQ, causal=False)
+    os.makedirs(paths.checkpoints_dir("pix_big"), exist_ok=True)
+    torch.save({"model": model.state_dict()}, paths.checkpoint_path("pix_big", 1))
+    cfg = {"name": "pix_big", "training": "image", "kind": "trainer",
+           "shape": {"vocab": 256, "hidden": 32, "layers": 1, "ffn": 64, "heads": 2, "seq": SEQ},
+           "training_args": {"codec": "big_codec", "height": H, "width": W, "out_scale": 2,
+                             "image_code_bytes": PLANES * (H // PATCH) * (W // PATCH)}}
+    with open(paths.config_path("pix_big"), "w", encoding="utf-8") as handle:
+        json.dump(cfg, handle)
+    body = {"model": "pix_big", "mode": "text", "caption": "sky", "passes": 1, "seed": 1}
+    res = client.post("/images/generate", json=body)
+    assert res.status_code == 200, res.get_json()
+    image = Image.open(io.BytesIO(base64.b64decode(res.get_json()["png"])))
+    assert image.size == (2 * W, 2 * H)
+
+
 def test_a_text_model_is_refused(client):
     res = client.post("/images/generate", json={"model": "prose", "mode": "text"})
     assert res.status_code == 400

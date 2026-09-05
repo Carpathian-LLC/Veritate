@@ -152,6 +152,44 @@ Best now: 20m 2.4 s/step (5k steps 3.3 h), 80m 8x2 8.5 s eager (compiled unmeasu
 - Restart the dashboard for the Python side; the 80m model's step-87 probe predates every new
   field. The user should re-launch (or continue) with the form as stored: precision auto.
 
+**2026-09-05 17:30 - HIGHER-RES OPTIONS, DASHBOARD RENDERING, PROBE CADENCE, MORE OPTIMIZATION.**
+User: "higher res image options... keep optimizing... would an actual GPU be faster?", then
+mid-turn "fix the models dashboard, pixelated and WAY too big, messy and blurry" and "did you
+hardcode checkpoints? first pictures at step 500". **The user launched `test_image_gen_2_20m`
+(20m, bf16 - the stored/old form value, compile auto) while my compile benchmark was on the
+GPU; the benchmark was killed at once (its 17 s/step reading is contaminated, discard). No GPU
+measurements while a run is live.** Shipped:
+- **Output scale** (`out_scale` 1/2/3/4; form "output size"): the codec decodes at
+  `patch x out_scale` px per cell (`ImageCodec(out_scale=)`, `PatchDecoder` at the bigger patch;
+  forward pools the OUTPUT-size picture down for the encoder and scores the decoder at full size).
+  Fit caches the sample at the output size (`fit(..., out_scale=)`), corpus decodes every picture
+  at the frame (`build_streaming(out_scale=)` skips the 2x cache), codec named `..._x2_codec`,
+  trainer `check_output` caps the decoded edge at 1920 (`MAX_OUTPUT_EDGE`), an existing codec's
+  scale wins over the form. Probe paints grey cells at `patch*out_scale`; `load_image_model`
+  geometry carries `out_scale`; generation/prompt pictures come out scaled. Tokens/memory/step
+  time unchanged by design (IDEA 24: resolution as a decoder loop bound).
+- **Frame selects**: long edge 160-960 + shape (square, 4:3, 3:2, 16:9, 3:4, 2:3), short edge
+  snapped to the patch (`_imgfFrame`/`_imgfSetFrame`/`_imgfSyncSize`); the hint shows frame,
+  bytes, tokens, relative step time (`_imgfRelativeCost`: 0.6 r + 0.4 r^2 in tokens), output
+  px and codec-cache GB. Trainer still refuses > 1024 px frames.
+- **Dashboard rendering** (the complaint): probe `THUMB` 96 -> 192 (metrics record `thumb`/`gap`);
+  `_imriPhoto` fixes each png's css width from its tile count (128 css px per tile, crisp on 2x,
+  never stretched), click = full-size lightbox; every map is a fixed-cell SVG from metrics
+  (`_imriCellHeat`, gradient legend `_imriScale`), pngs only as fallback; filmstrips at
+  devicePixelRatio with per-step tile geometry; view regrouped into sections. Live view uses the
+  same helpers (shared `IMRI_SHARED_STYLE`, defined before both style blocks).
+- **probe_every** (default 100; 0 = checkpoints only): `probe()` split from `checkpoint()`;
+  pictures every 100 steps without a save. Live text names the step. `ckpt_every` unchanged (500).
+- **Training/generation alignment**: `make_record_loader` pads everything before the record's own
+  separator (the bin held the previous picture's code tail there; `build_window` never does) and
+  takes `caption_dropout` (default 0.1: whole context padded = the unprompted window). Prepares
+  classifier-free guidance (not wired into generation yet).
+- Tests: codec out_scale, fit out_scale cache, corpus out_scale, trainer out_scale + refusal,
+  probe_every cadence, probe at 2x, route 2x PNG, grid own-context + dropout.
+- Open: compile at 80m/200m unmeasured (the run holds the GPU); CFG in `fill`/prompt panel; the
+  user's live 20m run predates all of this (bf16, probe at checkpoints only) - a relaunch takes
+  auto precision, probe_every and the new loader. Restart the dashboard for the Python side.
+
 **IMAGE MODELS (IDEA 24) - trainable from the dashboard as of 2026-09-05.** User decision, after the
 one-trainer pushback (rule 17-30): a SEPARATE canonical image trainer. Shipped:
 - `training/image_trainer.py`, registered as `native/image_trainer` (`readers/trainers.py`

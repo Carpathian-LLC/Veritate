@@ -92,6 +92,39 @@ def test_a_record_at_the_start_of_the_bin_still_trains(tmp_path):
         c for c, keep in zip(codes, unmasked[SEQ - CODE_BYTES:].tolist(), strict=True) if keep)
 
 
+def test_the_context_is_the_records_own_bytes_and_nothing_before_them(corpus):
+    """The window before a picture is PAD, then the separator, then its caption -- the same
+    layout generation builds (image_sample.build_window). The previous picture's code
+    tail, which the bin holds right before the separator, must never be in the window."""
+    seq = 64                                           # room for pad + separator + caption before the image
+    draw, _n = image_grid.make_record_loader(corpus, seq, 16, CODE_BYTES, MASK_BYTE, seed=3)
+    tokens, _targets = draw()
+    sep = image_grid.RECORD_SEP
+    first = seq - CODE_BYTES
+    for b in range(16):
+        ctx = bytes(tokens[b, :first].tolist())
+        assert ctx.count(sep) <= 1
+        head, _, tail = ctx.rpartition(sep)
+        # this record's caption sits right before its image (the bin's first record has no
+        # separator before it, only pad); nothing of the previous picture survives
+        assert tail.lstrip(bytes([image_grid.PAD_BYTE])).startswith(b"caption")
+        assert set(head) <= {image_grid.PAD_BYTE}
+
+
+def test_caption_dropout_pads_the_whole_context(corpus):
+    """With dropout at 1 every draw is caption-free: the exact window an unprompted
+    generation gives the model. At 0 nothing changes."""
+    draw, _n = image_grid.make_record_loader(corpus, SEQ, BATCH, CODE_BYTES, MASK_BYTE, seed=0, caption_dropout=1.0)
+    tokens, targets = draw()
+    first = SEQ - CODE_BYTES
+    assert (tokens[:, :first] == image_grid.PAD_BYTE).all()
+    assert (targets[:, :first] == image_grid.IGNORE_INDEX).all()
+    assert (targets[:, first:] != image_grid.IGNORE_INDEX).any()
+    plain, _ = image_grid.make_record_loader(corpus, SEQ, BATCH, CODE_BYTES, MASK_BYTE, seed=0, caption_dropout=0.0)
+    kept, _ = plain()
+    assert (kept[:, :first] != image_grid.PAD_BYTE).any()
+
+
 def test_an_image_wider_than_the_window_is_refused(corpus):
     """Training on a window that cannot hold a whole image is silently wrong, so it raises."""
     with pytest.raises(ValueError, match="exceeds seq"):

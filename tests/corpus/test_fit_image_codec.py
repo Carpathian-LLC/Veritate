@@ -133,6 +133,25 @@ def test_fitting_lowers_held_out_error_and_saves_a_loadable_codec(home):
     assert reloaded.code_bytes(H, W) == rep["image_code_bytes"]
 
 
+def test_an_output_scale_caches_and_scores_the_pictures_at_that_size(home):
+    """out_scale=2 fits the decoder on the pictures at twice the frame: the cache holds
+    2H x 2W frames, the saved codec carries the scale and decodes to it, and the code
+    length is still the frame's."""
+    for i in range(6):
+        _add(home, f"{i:08x}_p.png", (20 * i, 100, 200 - 20 * i))
+    rep = fit_image_codec.fit("set", "big", height=H, width=W, planes=PLANES, patch=PATCH,
+                              epochs=1, batch_size=2, device="cpu", verbose=False, out_scale=2)
+    assert rep["out_scale"] == 2 and (rep["out_height"], rep["out_width"]) == (2 * H, 2 * W)
+    assert rep["image_code_bytes"] == PLANES * (H // PATCH) * (W // PATCH)
+    assert os.path.isfile(os.path.join(str(home / "cache"), f"set_{2 * H}x{2 * W}.u8"))
+    import torch
+
+    codec = fit_image_codec.image_codec.load(fit_image_codec.paths.codec_path("big"))
+    assert codec.out_scale == 2
+    codes = codec.encode(torch.rand(1, 3, H, W))[0]
+    assert codec.decode(codes).shape == (2 * H, 2 * W, 3)
+
+
 def test_resuming_onto_a_different_geometry_is_refused(home):
     """A corpus is unreadable without the codec that wrote it, so geometry cannot drift."""
     for i in range(8):

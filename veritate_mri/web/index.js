@@ -8646,6 +8646,8 @@ const TRAINER_SCHEMA = {
     { name: "codec",         type: "codec",     advanced: true, label: "image codec",           help: "the image <-> bytes codec. Blank fits a new one on these pictures first (recommended for a new set); or reuse a codec you fitted before. A corpus is only readable under the codec that wrote it." },
     { name: "height",        type: "int",       required: true, label: "picture height (px)",   help: "every photo is scaled and center-cropped to this size for training. Must be a multiple of the patch size (20)." },
     { name: "width",         type: "int",       required: true, label: "picture width (px)",    help: "must be a multiple of the patch size (20). image bytes = planes x (height/patch) x (width/patch); keep that under ~2,048 for interactive decode (IDEA 24 F1)." },
+    { name: "out_scale",     type: "str",       required: true, label: "output size",           help: "how many times the frame the finished pictures are: 2 renders 640 px from a 320 px model. The model's work (tokens, memory, step time) does not change; the codec's decoder learns the extra pixels from your photos at that size, so the codec fit caches the sample pictures out_scale^2 times bigger and the extra detail is the decoder's, not the model's.", choices: ["1","2","3","4"] },
+    { name: "caption_dropout", type: "float",   advanced: true, label: "caption dropout",       help: "share of training draws shown with no caption (0.1 = one in ten). The model learns to draw unprompted as well as from words, which is what caption-free generation asks for and what classifier-free guidance needs." },
     { name: "precision",     type: "str",       required: true, label: "number precision",      help: "auto (recommended) = the half precision this GPU is measured fastest at when the run starts: fp16 on an M1/M2, where bf16 matmuls run at half the fp16 rate. fp16 / bf16 force one (fp16 trains under loss scaling); fp32 = double memory, slowest. The run log prints the measured rates.", choices: ["auto","fp16","bf16","fp32"] },
     { name: "compile",       type: "str",       advanced: true, label: "compile the model",     help: "torch.compile fuses the model's small kernels into a few big ones. Measured 1.54x per step on an M2 at 20m. auto = on for a GPU, off on the CPU; the first step takes ~10 s longer while it compiles, and a graph that will not compile falls back to the plain model with a line in the run log.", choices: ["auto","on","off"] },
     { name: "description",   type: "text",                      label: "what this model is for", help: "saved into the model config. If blank, auto-filled." },
@@ -8687,7 +8689,7 @@ const WIKI_SETTING_PAGES = {
   weight_decay: "weight_decay", grad_clip: "grad_clip", label_smoothing: "label_smoothing",
   image_set: "image_set", codec: "codec", height: "height_width", width: "height_width",
   planes: "planes", patch: "patch", caption_bytes: "caption_bytes", codec_epochs: "codec_epochs",
-  compile: "compile",
+  compile: "compile", out_scale: "out_scale", probe_every: "probe_every", caption_dropout: "caption_dropout",
 };
 
 // Build the per-render arg list for a plugin. Render order = required fields
@@ -10553,33 +10555,71 @@ function _imgfSizeHint(size) {
   return `${n} &middot; needs a big GPU${mem}`;
 }
 
-// Square frames the model trains on. A multiple of the codec patch (20 px), and
-// small: at 320 a picture is 1,024 bytes, at 640 it is 4,096 and generation slows.
-// A typed 1920x1080 once meant an 869 GB decode cache; the select is the guard.
-const IMGF_SIZES = [160, 240, 320, 400, 480, 640];
+// The frame the model trains on: a long edge and a shape. Every edge is a multiple of the
+// codec patch, and the frame is what the model pays for: at 320x320 / patch 20 a picture
+// is 1,024 bytes; attention grows with the square of that. A typed 1920x1080 once meant
+// an 869 GB decode cache; the selects are the guard (the trainer refuses above 1024 px).
+// Bigger finished pictures come from `out_scale` (the decoder), not a bigger frame.
+const IMGF_SIZES = [160, 240, 320, 400, 480, 640, 800, 960];
 const IMGF_SIZE_DEFAULT = 320;
+const IMGF_SHAPES = [["square", 1, 1], ["landscape 4:3", 4, 3], ["landscape 3:2", 3, 2], ["wide 16:9", 16, 9], ["portrait 3:4", 3, 4], ["portrait 2:3", 2, 3]];
+const IMGF_SHAPE_DEFAULT = "square";
 
-function _imgfSetSize(px) {
-  for (const n of ["height", "width"]) {
+// (height, width) for a long edge, a shape and a patch: the short edge snaps to a multiple
+// of the patch, never below one patch, so the codec can tile it.
+function _imgfFrame(edge, shape, patch) {
+  const sh = IMGF_SHAPES.find(s => s[0] === shape) || IMGF_SHAPES[0];
+  const [, a, b] = sh;
+  const snap = v => Math.max(patch, Math.round(v / patch) * patch);
+  if (a === b) return [edge, edge];
+  return a > b ? [snap(edge * b / a), edge] : [edge, snap(edge * a / b)];
+}
+
+function _imgfSetFrame(edge, shape) {
+  const patch = parseInt(_trArgVal("patch"), 10) || 20;
+  const [h, w] = _imgfFrame(edge, shape, patch);
+  for (const [n, v] of [["height", h], ["width", w]]) {
     const el = _trArgEl(n);
-    if (!el || String(el.value) === String(px)) continue;
-    el.value = String(px);
+    if (!el || String(el.value) === String(v)) continue;
+    el.value = String(v);
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
   const sel = document.querySelector("#trainArgs [data-imgf-size]");
-  if (sel) sel.value = String(px);
+  if (sel) sel.value = String(edge);
+  const shp = document.querySelector("#trainArgs [data-imgf-shape]");
+  if (shp) shp.value = shape;
 }
+function _imgfSetSize(px) { _imgfSetFrame(px, (document.querySelector("#trainArgs [data-imgf-shape]") || {}).value || IMGF_SHAPE_DEFAULT); }
 
-// The select follows height/width (defaults, a resumed run); a pair the select does
-// not offer (an old 1920x1080 launch left in the tuning store) snaps to the default.
+// The selects follow height/width (defaults, a resumed run, the tuning store): the long edge
+// and the shape whose snapped frame reproduces the pair; a pair no select can make (an old
+// 1920x1080 launch) snaps to the default square.
 function _imgfSyncSize() {
   const sel = document.querySelector("#trainArgs [data-imgf-size]");
   const h = _trArgEl("height"), w = _trArgEl("width");
   if (!sel || !h || !w) return;
-  const cur = parseInt(h.value, 10);
-  if (IMGF_SIZES.includes(cur) && String(w.value) === String(cur)) { sel.value = String(cur); return; }
-  _imgfSetSize(IMGF_SIZE_DEFAULT);
+  const patch = parseInt(_trArgVal("patch"), 10) || 20;
+  const ch = parseInt(h.value, 10), cw = parseInt(w.value, 10);
+  const edge = Math.max(ch, cw);
+  if (IMGF_SIZES.includes(edge)) {
+    const shape = IMGF_SHAPES.find(s => { const [fh, fw] = _imgfFrame(edge, s[0], patch); return fh === ch && fw === cw; });
+    if (shape) {
+      sel.value = String(edge);
+      const shp = document.querySelector("#trainArgs [data-imgf-shape]");
+      if (shp) shp.value = shape[0];
+      return;
+    }
+  }
+  _imgfSetFrame(IMGF_SIZES.includes(edge) ? edge : IMGF_SIZE_DEFAULT, IMGF_SHAPE_DEFAULT);
+}
+
+// Step cost of a frame against the default (320 square, patch 20, 4 planes), from the token
+// count: the linear layers scale with it and attention with its square, in the shares an
+// 80m step measured on an M2 (2026-09-05: attention ~40%).
+function _imgfRelativeCost(tokens) {
+  const r = tokens / 1152;
+  return 0.6 * r + 0.4 * r * r;
 }
 
 let _trDescLineDefault = null;
@@ -10603,10 +10643,24 @@ function _imgfUpdateHints() {
   if (!geom) return;
   const h = parseInt(_trArgVal("height"), 10), w = parseInt(_trArgVal("width"), 10);
   const patch = parseInt(_trArgVal("patch"), 10) || 20, planes = parseInt(_trArgVal("planes"), 10) || 4;
+  const scale = parseInt(_trArgVal("out_scale"), 10) || 1;
+  const cap = parseInt(_trArgVal("caption_bytes"), 10) || 0;
+  const nCache = parseInt(_trArgVal("codec_images"), 10) || 8192;
   if (!h || !w) { geom.textContent = ""; return; }
   if (h % patch || w % patch) { geom.innerHTML = `<span style="color:var(--hot)">multiples of ${patch} only</span>`; return; }
   const bytes = planes * (h / patch) * (w / patch);
-  geom.innerHTML = `${bytes.toLocaleString()} bytes per picture${bytes > 2048 ? ` <span style="color:var(--warm)">&middot; slow to generate</span>` : ""}`;
+  const tokens = Math.ceil((bytes + cap) / 64) * 64;
+  const rel = _imgfRelativeCost(tokens);
+  const outH = h * scale, outW = w * scale;
+  const cacheGB = nCache * outH * outW * 3 / 1e9;
+  const tooBig = Math.max(outH, outW) > 1920;
+  let cost = "";
+  if (rel > 1.15) cost = `<span style="color:${rel > 4 ? "var(--hot)" : "var(--warm)"}">&asymp; ${rel >= 10 ? rel.toFixed(0) : rel.toFixed(1)}&times; the step time of 320 px</span>`;
+  else if (rel < 0.85) cost = `<span style="color:var(--data-pos)">&asymp; ${rel.toFixed(2)}&times; the step time of 320 px</span>`;
+  geom.innerHTML = `frame ${w}&times;${h} &middot; ${bytes.toLocaleString()} bytes per picture, ${tokens.toLocaleString()} tokens`
+    + (cost ? ` &middot; ${cost}` : "")
+    + (scale > 1 ? ` &middot; pictures come out ${outW}&times;${outH} px${tooBig ? ` <span style="color:var(--hot)">&middot; above 1920 px, the trainer will refuse</span>` : ""} &middot; codec cache ${cacheGB >= 1 ? cacheGB.toFixed(1) + " GB" : Math.round(cacheGB * 1000) + " MB"}` : "")
+    + (bytes > 2048 ? ` <span style="color:var(--warm)">&middot; slow to generate</span>` : "");
 }
 
 function _imgfIntro(current) {
@@ -10621,7 +10675,7 @@ function _trRenderImageForm(p, argsEl) {
   const fields = _trArgsForPlugin(p);
   const byName = Object.fromEntries(fields.map(a => [a.name, a]));
   const input = (n) => byName[n] ? _trBuildInput(byName[n]) : "";
-  const placed = new Set(["name", "image_set", "size", "height", "width", "description", "resume"]);
+  const placed = new Set(["name", "image_set", "size", "height", "width", "out_scale", "description", "resume"]);
   const advanced = fields.filter(a => !placed.has(a.name) && !a.uiOnly);
   const advGrid = advanced.map(a => `<div class="imgf-field" title="${_trEsc(a.help || "")}"><label>${_trEsc(a.label || a.name)}</label>${_trBuildInput(a)}</div>`).join("");
   const sets = trainState.discovery.image_sets || [];
@@ -10646,7 +10700,8 @@ function _trRenderImageForm(p, argsEl) {
         <div class="imgf-field"><label>start from</label><select data-arg="resume" data-imgf-resume><option value="">new model</option></select></div>
         <div class="imgf-field" data-imgf-newonly><label>name</label>${input("name")}</div>
         <div class="imgf-field" data-imgf-newonly><label>size</label>${input("size")}<div class="imgf-hint" data-size-hint></div></div>
-        <div class="imgf-field" data-imgf-newonly><label>picture size</label><span style="display:none">${input("height")}${input("width")}</span><select data-imgf-size>${IMGF_SIZES.map(px => `<option value="${px}">${px} &times; ${px}</option>`).join("")}</select><div class="imgf-hint" data-geom-hint></div></div>
+        <div class="imgf-field" data-imgf-newonly><label>picture size</label><span style="display:none">${input("height")}${input("width")}</span><div style="display:flex;gap:6px;flex-wrap:wrap"><select data-imgf-size title="long edge of the frame the model works on">${IMGF_SIZES.map(px => `<option value="${px}">${px} px</option>`).join("")}</select><select data-imgf-shape title="shape of the frame; photos are scaled to cover it and centre-cropped">${IMGF_SHAPES.map(s => `<option value="${s[0]}">${s[0]}</option>`).join("")}</select></div><div class="imgf-hint" data-geom-hint></div></div>
+        <div class="imgf-field" data-imgf-newonly><label>output size</label>${input("out_scale")}<div class="imgf-hint">${(TRAINER_SCHEMA.image.find(f => f.name === "out_scale") || {}).help || ""}</div></div>
       </div>
       <div class="imgf-field"><label>notes (optional)</label>${input("description")}</div>
       <details class="imgf-adv"><summary>Advanced</summary><div class="imgf-grid" style="margin-top:10px">${advGrid}</div></details>
@@ -10654,6 +10709,8 @@ function _trRenderImageForm(p, argsEl) {
   </div>`;
   const sizeSel = argsEl.querySelector("[data-imgf-size]");
   if (sizeSel) sizeSel.addEventListener("change", () => { _imgfSetSize(parseInt(sizeSel.value, 10)); _imgfUpdateHints(); });
+  const shapeSel = argsEl.querySelector("[data-imgf-shape]");
+  if (shapeSel) shapeSel.addEventListener("change", () => { _imgfSetFrame(parseInt((sizeSel || {}).value, 10) || IMGF_SIZE_DEFAULT, shapeSel.value); _imgfUpdateHints(); });
   const resumeSel = argsEl.querySelector("[data-imgf-resume]");
   if (resumeSel) resumeSel.addEventListener("change", _imgfResumeChanged);
   _imgfLoadResumeOptions();
@@ -11203,7 +11260,7 @@ document.addEventListener("change", (e) => {
     if (cap) _capSummary(cap);
     return;
   }
-  if (e.target.matches('[data-arg="size"], [data-arg="height"], [data-arg="width"], [data-arg="patch"], [data-arg="planes"]')) _imgfUpdateHints();
+  if (e.target.matches('[data-arg="size"], [data-arg="height"], [data-arg="width"], [data-arg="patch"], [data-arg="planes"], [data-arg="out_scale"], [data-arg="caption_bytes"], [data-arg="codec_images"]')) _imgfUpdateHints();
   const box = _capBox();
   if (!box) return;
   if (e.target.matches("[data-cap-style]")) {
@@ -11448,6 +11505,17 @@ const IMG_LIVE_TRAINER_ID = "native/image_trainer";
 const IMG_LIVE_POLL_RUNNING_MS = 2500;
 const IMG_LIVE_POLL_IDLE_MS = 10000;
 const IMG_LIVE_STAGES = [["decode", "decode pictures"], ["codec", "fit codec"], ["encode", "encode corpus"], ["train", "train"]];
+// Shared by the Models tab and the Training tab's live view: photo tiles at a fixed size,
+// heat maps that never stretch, the click-to-enlarge overlay.
+const IMRI_SHARED_STYLE = `<style>
+  .imri-photo { display:block; max-width:100%; height:auto; border:1px solid var(--line); border-radius:3px; background:#0a0c12; cursor:zoom-in; image-rendering:auto; }
+  .imri-heat { display:block; flex:none; }
+  .imri-scale { display:inline-flex; align-items:center; gap:6px; font-size:10px; color:var(--dim); }
+  .imri-scale i { display:inline-block; width:72px; height:8px; border-radius:2px; }
+  .imri-lightbox { position:fixed; inset:0; background:rgba(0,0,0,.86); display:flex; align-items:center; justify-content:center; z-index:9999; cursor:zoom-out; }
+  .imri-lightbox img { max-width:96vw; max-height:96vh; image-rendering:auto; border:1px solid var(--line); border-radius:4px; background:#0a0c12; }
+</style>`;
+
 const IMG_LIVE_STYLE = `<style>
   .imgl { display:flex; flex-direction:column; gap:10px; }
   .imgl .panel .body { display:flex; flex-direction:column; gap:10px; }
@@ -11486,7 +11554,7 @@ const IMG_LIVE_STYLE = `<style>
   .imgl-figs img { max-width:100%; border:1px solid var(--line); border-radius:3px; background:#0a0c12; }
   .imgl-figs h4 { margin:0; font-size:11px; color:var(--dim); font-weight:600; }
   .imgl-log { margin:0; font:11px monospace; color:var(--dim); background:#0a0c12; border:1px solid var(--line); border-radius:3px; padding:8px; max-height:220px; overflow:auto; white-space:pre-wrap; }
-</style>`;
+</style>` + IMRI_SHARED_STYLE;
 
 // Mirrors save.compose_name(name, size) so the view can find the run's model dir
 // from the runner's args before config.json exists.
@@ -11661,17 +11729,23 @@ function _imgLiveRender() {
     if (lp && lp.step != null) {
       const u = f => `/images/mri/${encodeURIComponent(name)}/${lp.step}/${f}?${lp.step}`;
       const F = f => (lp.files || []).includes(f);
-      const nPlanes = lp.planes || (d.geometry && d.geometry.planes) || "";
+      const nPlanes = lp.planes || (d.geometry && d.geometry.planes) || 1;
       const passes = (lp.pass_committed || []).length;
+      const nSamp = 8 + ((lp.caption_samples || []).length);
+      const [lgh, lgw] = lp.grid || [0, 0];
+      const formation = Array.isArray(lp.commit_pass_map) && lgh && lgw
+        ? _imriCellHeat(_imriRows(lp.commit_pass_map, lgh, lgw), { lo: 1, hi: lp.formation_passes || passes || 8, cell: 10, fmt: v => "pass " + v })
+        : (F("formation.png") ? _imriPhoto(u("formation.png"), lp, 2, "formation order") : "");
+      _imriWireLightbox();
       probe = `<div class="imgl-figs">`
-        + (F("samples.png") ? `<h4>drawn from nothing &middot; same seeds every checkpoint</h4><img src="${u("samples.png")}" alt="samples">` : "")
-        + (F("passes.png") ? `<h4>how one picture forms &middot; ${passes ? passes + " passes, " : ""}grey cells still undecided</h4><img src="${u("passes.png")}" alt="decode passes">` : "")
-        + ((F("formation.png") || F("planes.png")) ? `<div class="imgl-row">`
-          + (F("formation.png") ? `<div><h4>which pass decided each cell</h4><img src="${u("formation.png")}" alt="formation order" title="blue: decided in the first passes (layout); orange: in the last (detail)"><span class="meta">blue early &middot; orange late</span></div>` : "")
-          + (F("planes.png") ? `<div><h4>coarse to fine &middot; 1, 2, &hellip; ${nPlanes} planes</h4><img src="${u("planes.png")}" alt="coarse to fine" title="the same sample rendered from a prefix of its planes: what each residual plane adds"></div>` : "")
+        + (F("samples.png") ? `<h4>drawn from nothing &middot; same seeds every probe &middot; click a picture to enlarge</h4>${_imriPhoto(u("samples.png"), lp, nSamp, "samples")}` : "")
+        + (F("passes.png") ? `<h4>how one picture forms &middot; ${passes ? passes + " passes, " : ""}grey cells still undecided</h4>${_imriPhoto(u("passes.png"), lp, passes || 8, "decode passes")}` : "")
+        + ((formation || F("planes.png")) ? `<div class="imgl-row">`
+          + (formation ? `<div><h4>which pass decided each cell</h4>${formation}${_imriScale("pass 1", "last pass")}</div>` : "")
+          + (F("planes.png") ? `<div><h4>coarse to fine &middot; 1, 2, &hellip; ${nPlanes} planes</h4>${_imriPhoto(u("planes.png"), lp, nPlanes, "coarse to fine")}</div>` : "")
           + `</div>` : "")
-        + (F("fill.png") ? `<h4>held-out pictures: original &middot; half hidden &middot; the model's fill</h4><img src="${u("fill.png")}" alt="fill test">` : "")
-        + `<div class="meta">checkpoint ${Number(lp.step).toLocaleString()}${lp.fill_accuracy != null ? ` &middot; fill accuracy ${(100 * lp.fill_accuracy).toFixed(1)}%` : ""}${lp.codes_used != null ? ` &middot; ${lp.codes_used} / 255 codes in use` : ""}${lp.colour_match != null ? ` &middot; colour match ${(100 * lp.colour_match).toFixed(0)}%` : ""}${lp.detail_ratio != null ? ` &middot; detail ${(100 * Math.min(1, lp.detail_ratio)).toFixed(0)}% of the codec ceiling` : ""} &middot; <a href="#" data-imgl-open>full brain view &rsaquo;</a></div></div>`;
+        + (F("fill.png") ? `<h4>held-out pictures: original &middot; half hidden &middot; the model's fill</h4>${_imriPhoto(u("fill.png"), lp, 3, "fill test")}` : "")
+        + `<div class="meta">probe at step ${Number(lp.step).toLocaleString()}${lp.fill_accuracy != null ? ` &middot; fill accuracy ${(100 * lp.fill_accuracy).toFixed(1)}%` : ""}${lp.codes_used != null ? ` &middot; ${lp.codes_used} / 255 codes in use` : ""}${lp.colour_match != null ? ` &middot; colour match ${(100 * lp.colour_match).toFixed(0)}%` : ""}${lp.detail_ratio != null ? ` &middot; detail ${(100 * Math.min(1, lp.detail_ratio)).toFixed(0)}% of the codec ceiling` : ""} &middot; <a href="#" data-imgl-open>full brain view &rsaquo;</a></div></div>`;
     }
     panels = `<div class="grid r2">
       <div class="panel"><h2>loss <em>train and held-out, by step</em></h2><div class="body"><div class="imgl-chart">${svg}</div><div class="imgl-legend"><span><i style="background:${IMRI_COLORS[1]}"></i>train</span><span><i style="background:${IMRI_COLORS[3]}"></i>held-out</span></div></div></div>
@@ -18625,7 +18699,7 @@ const imgMriState = { active: false, model: null, data: null, step: null, timer:
                       prompt: { model: null, state: null, timer: null, photo: null, photoName: "" } };
 const IMG_MRI_PLAY_MS = 1200;
 const IMG_MRI_PROMPT_POLL_MS = 1500;
-const IMRI_TILE = 96, IMRI_GAP = 4;            // image_probe.THUMB / GAP: the grid geometry of every probe png
+const LAYER_COLS_JS = 8;                      // image_probe.LAYER_COLS: tiles per row in layers.png / attention.png
 const IMG_MRI_POLL_MS = 4000;
 const IMG_MRI_STYLE = `<style>
   .imri { display:flex; flex-direction:column; gap:10px; }
@@ -18671,7 +18745,13 @@ const IMG_MRI_STYLE = `<style>
   .imri-prompt .res img { width:120px; height:120px; display:block; border-radius:2px; }
   .imri-prompt .res img.small { width:60px; height:60px; }
   .imri-prompt .res span { font-size:10px; color:var(--dim); }
-</style>`;
+  .imri-section { font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin:8px 0 -4px 2px; font-weight:700; }
+  .imri-section span { text-transform:none; letter-spacing:0; font-weight:400; margin-left:8px; }
+  .imri-heatwrap { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
+  .imri-side { display:flex; flex-direction:column; gap:6px; flex:1 1 160px; min-width:140px; font-size:10.5px; color:var(--dim); }
+  .imri-chart.small svg { height:120px; }
+  .imri-grid-3 { grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); }
+</style>` + IMRI_SHARED_STYLE;
 const IMRI_COLORS = ["#5dff9b", "#5db8ff", "#ffae5d", "#ff5d8f", "#c77dff", "#ffe45d", "#5dffe4", "#ff7a5d"];
 
 function _imriSvgLine(series, opts) {
@@ -18827,19 +18907,80 @@ function _imriRows(flat, gh, gw) {
   return rows;
 }
 
-// Diverging heat: green where `rows` is positive (improved), red where negative.
-function _imriDivHeat(rows, title) {
-  if (!rows || !rows.length) return `<svg viewBox="0 0 600 60"><text x="300" y="34" fill="#6f7480" font-size="11" text-anchor="middle">${title || "no data yet"}</text></svg>`;
-  const nr = rows.length, nc = rows[0].length, W = 300, H = 300;
-  const cw = W / nc, ch = H / nr;
-  let max = 1e-6;
-  rows.forEach(r => r.forEach(v => { max = Math.max(max, Math.abs(v)); }));
-  const col = v => { const t = Math.max(-1, Math.min(1, v / max)); return t >= 0 ? `rgba(93,255,155,${(0.15 + 0.85 * t).toFixed(2)})` : `rgba(255,93,143,${(0.15 - 0.85 * t).toFixed(2)})`; };
-  let out = `<svg viewBox="0 0 ${W} ${H}" style="height:auto;max-width:300px;aspect-ratio:1">`;
-  rows.forEach((r, i) => r.forEach((v, j) => {
-    out += `<rect x="${(j * cw).toFixed(1)}" y="${(i * ch).toFixed(1)}" width="${(cw - 0.5).toFixed(1)}" height="${(ch - 0.5).toFixed(1)}" fill="${col(v)}"><title>${v >= 0 ? "improved" : "worse"} ${Math.abs(v).toFixed(3)}</title></rect>`;
-  }));
+// Fixed-cell heat map, never stretched: every cell is `cell` css px square, so a 16x16
+// grid is a small crisp square and a 12x12 head grid reads as a table. `kind`: "heat"
+// (blue low -> orange high), "div" (green positive, red negative, symmetric about 0).
+// `lo`/`hi` pin the scale (a pass count, a 0..1 share); otherwise the data's range.
+function _imriCellHeat(rows, opts) {
+  opts = opts || {};
+  if (!rows || !rows.length || !rows[0].length) return `<span class="meta">${_trEsc(opts.empty || "no data yet")}</span>`;
+  const nr = rows.length, nc = rows[0].length;
+  const cell = opts.cell || Math.max(8, Math.min(16, Math.floor(224 / Math.max(nr, nc))));
+  const rowLabel = opts.rowLabel || null, colLabel = opts.colLabel || null;
+  const L = rowLabel ? 30 : 1, T = 1, B = colLabel ? 16 : 1, R = 1;
+  const W = L + nc * cell + R, H = T + nr * cell + B;
+  const flat = rows.flat().filter(v => typeof v === "number" && isFinite(v));
+  if (!flat.length) return `<span class="meta">${_trEsc(opts.empty || "no data yet")}</span>`;
+  let lo = opts.lo !== undefined ? opts.lo : Math.min(...flat), hi = opts.hi !== undefined ? opts.hi : Math.max(...flat);
+  if (opts.kind === "div") { hi = Math.max(1e-6, ...flat.map(Math.abs)); lo = -hi; }
+  if (hi <= lo) hi = lo + 1;
+  const col = v => {
+    if (opts.kind === "div") { const t = Math.max(-1, Math.min(1, v / hi)); return t >= 0 ? `rgba(93,255,155,${(0.12 + 0.88 * t).toFixed(2)})` : `rgba(255,93,143,${(0.12 - 0.88 * t).toFixed(2)})`; }
+    const t = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+    return `rgb(${Math.round(40 + 215 * t)},${Math.round(90 + 70 * t)},${Math.round(230 - 210 * t)})`;
+  };
+  const fmt = opts.fmt || (v => Number(v).toFixed(2));
+  let out = `<svg class="imri-heat" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  rows.forEach((r, i) => {
+    if (rowLabel) out += `<text x="${L - 3}" y="${T + i * cell + cell / 2 + 3}" fill="#6f7480" font-size="9" text-anchor="end">${rowLabel(i)}</text>`;
+    r.forEach((v, j) => {
+      const label = (rowLabel ? rowLabel(i) + " " : "") + (colLabel ? colLabel(j) : `row ${i + 1}, col ${j + 1}`);
+      out += `<rect x="${L + j * cell}" y="${T + i * cell}" width="${cell - 1}" height="${cell - 1}" fill="${typeof v === "number" && isFinite(v) ? col(v) : "#1e2330"}"><title>${label}: ${typeof v === "number" ? fmt(v) : "?"}</title></rect>`;
+    });
+  });
+  if (colLabel) for (let j = 0; j < nc; j++) out += `<text x="${L + j * cell + cell / 2}" y="${H - 4}" fill="#6f7480" font-size="9" text-anchor="middle">${colLabel(j)}</text>`;
   return out + `</svg>`;
+}
+
+// The legend under a heat: a gradient bar with the two ends named.
+function _imriScale(loText, hiText, kind) {
+  const grad = kind === "div" ? "linear-gradient(90deg, rgb(255,93,143), #1e2330, rgb(93,255,155))" : "linear-gradient(90deg, rgb(40,90,230), rgb(255,160,20))";
+  return `<span class="imri-scale"><span>${loText}</span><i style="background:${grad}"></i><span>${hiText}</span></span>`;
+}
+
+// Diverging heat kept as a name for older call sites.
+function _imriDivHeat(rows, title) { return _imriCellHeat(rows, { kind: "div", empty: title }); }
+
+// A probe png shown at a fixed tile size. New probes hold THUMB (192) px per tile and are
+// shown at IMRI_CSS_TILE, so they stay sharp on a 2x display; older 96 px probes show at
+// 96. `cols` is the png's tile count across, which fixes the css width so the browser never
+// stretches it. Click opens the png at full size.
+const IMRI_CSS_TILE = 128;
+function _imriTileCss(s) { return Math.min(IMRI_CSS_TILE, (s && s.thumb) || 96); }
+function _imriPhoto(url, s, cols, alt) {
+  const thumb = (s && s.thumb) || 96, gap = (s && s.gap) || 4, css = _imriTileCss(s);
+  const w = Math.round((cols * thumb + (cols + 1) * gap) * css / thumb);
+  return `<img class="imri-photo" src="${url}" alt="${_trEsc(alt || "")}" style="width:${w}px" data-full="${url}" title="click to enlarge">`;
+}
+
+function _imriLightbox(url) {
+  const old = document.querySelector(".imri-lightbox");
+  if (old) old.remove();
+  const box = document.createElement("div");
+  box.className = "imri-lightbox";
+  box.innerHTML = `<img src="${url}" alt="">`;
+  box.addEventListener("click", () => box.remove());
+  document.body.appendChild(box);
+}
+let _imriLightboxWired = false;
+function _imriWireLightbox() {
+  if (_imriLightboxWired) return;
+  _imriLightboxWired = true;
+  document.addEventListener("click", e => {
+    const img = e.target && e.target.closest ? e.target.closest("img.imri-photo") : null;
+    if (img) { e.preventDefault(); _imriLightbox(img.dataset.full || img.src); }
+  });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { const lb = document.querySelector(".imri-lightbox"); if (lb) lb.remove(); } });
 }
 
 function _imriImage(url, cb) {
@@ -18850,38 +18991,44 @@ function _imriImage(url, cb) {
   img.addEventListener("load", () => cb(img), { once: true });
 }
 
-// One tile of one probe png at every checkpoint, left to right. `outlines[i]` (a cell mask,
-// gh*gw) draws the cells that changed since the previous checkpoint.
-function _imriFilmstrip(canvas, steps, name, file, col, row, gh, gw, outlines) {
-  const T = IMRI_TILE, G = IMRI_GAP, n = steps.length;
-  canvas.width = n * (T + G) + G;
-  canvas.height = T + 2 * G + 14;
+// A filmstrip: one tile out of one probe png per frame, left to right, drawn at IMRI_FILM_TILE
+// css px on a canvas sized for the display's pixel ratio (crisp on 2x). `frames` are
+// {s: step record, col, row, label?}; `outlines[i]` (a gh*gw cell mask) outlines the cells
+// that changed since the frame before. Click a frame to jump to its checkpoint.
+const IMRI_FILM_TILE = 112, IMRI_FILM_GAP = 4;
+function _imriFilmstrip(canvas, frames, name, file, gh, gw, outlines) {
+  const T = IMRI_FILM_TILE, G = IMRI_FILM_GAP, n = frames.length;
+  const dpr = window.devicePixelRatio || 1;
+  const Wc = n * (T + G) + G, Hc = T + 2 * G + 14;
+  canvas.width = Math.round(Wc * dpr); canvas.height = Math.round(Hc * dpr);
+  canvas.style.width = Wc + "px"; canvas.style.height = Hc + "px";
   const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = "#0e1016";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  steps.forEach((s, i) => {
-    const x = G + i * (T + G);
+  ctx.fillRect(0, 0, Wc, Hc);
+  frames.forEach((f, i) => {
+    const s = f.s, x = G + i * (T + G);
     ctx.fillStyle = "#6f7480"; ctx.font = "9px sans-serif"; ctx.textAlign = "center";
-    ctx.fillText(String(s.step), x + T / 2, canvas.height - 3);
+    ctx.fillText(f.label || String(s.step), x + T / 2, Hc - 3);
     if (!(s.files || []).includes(file)) return;
-    const url = `/images/mri/${encodeURIComponent(name)}/${s.step}/${file}?${s.step}`;
-    _imriImage(url, img => {
-      ctx.drawImage(img, G + col * (T + G), G + row * (T + G), T, T, x, G, T, T);
+    const st = s.thumb || 96, sg = s.gap || 4;
+    _imriImage(`/images/mri/${encodeURIComponent(name)}/${s.step}/${file}?${s.step}`, img => {
+      ctx.drawImage(img, sg + f.col * (st + sg), sg + f.row * (st + sg), st, st, x, G, T, T);
       if (outlines && outlines[i] && gh && gw) {
         ctx.strokeStyle = "rgba(255,174,93,0.95)"; ctx.lineWidth = 1;
         const cw = T / gw, chh = T / gh;
         for (let c = 0; c < gh * gw; c++) if (outlines[i][c]) ctx.strokeRect(x + (c % gw) * cw + 0.5, G + Math.floor(c / gw) * chh + 0.5, cw - 1, chh - 1);
       }
-      if (s.step === imgMriState.step) { ctx.strokeStyle = "#5db8ff"; ctx.lineWidth = 2; ctx.strokeRect(x + 1, G + 1, T - 2, T - 2); }
+      if (!f.label && s.step === imgMriState.step) { ctx.strokeStyle = "#5db8ff"; ctx.lineWidth = 2; ctx.strokeRect(x + 1, G + 1, T - 2, T - 2); }
     });
   });
   canvas.onclick = e => {
     const rect = canvas.getBoundingClientRect();
-    const px = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const i = Math.floor((px - G) / (T + G));
-    if (i >= 0 && i < n) { imgMriState.follow = false; imgMriState.step = steps[i].step; _imgMriRender(); }
+    const i = Math.floor(((e.clientX - rect.left) * (Wc / rect.width) - G) / (T + G));
+    if (i >= 0 && i < n && !frames[i].label) { imgMriState.follow = false; imgMriState.step = frames[i].s.step; _imgMriRender(); }
   };
 }
+
 
 function _imgMriStepTo(idx) {
   const steps = (imgMriState.data && imgMriState.data.steps) || [];
@@ -18909,30 +19056,11 @@ function _imgMriPlay(on) {
   }, IMG_MRI_PLAY_MS);
 }
 
-function _imriHeat(rows, rowLabel, colLabel) {
-  // rows: [[v...]] in 0..1; blue = focused (low), orange = spread (high)
-  if (!rows || !rows.length || !rows[0].length) return `<svg viewBox="0 0 600 60"><text x="300" y="34" fill="#6f7480" font-size="11" text-anchor="middle">no data yet</text></svg>`;
-  const W = 600, L = 34, T = 6, B = 20, R = 6;
-  const nr = rows.length, nc = rows[0].length;
-  const ch = Math.max(10, Math.min(22, Math.floor(200 / nr)));
-  const H = T + nr * ch + B;
-  const cw = (W - L - R) / nc;
-  const col = v => { const t = Math.max(0, Math.min(1, v)); return `rgb(${Math.round(60 + 195 * t)},${Math.round(120 + 60 * t)},${Math.round(220 - 200 * t)})`; };
-  let out = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">`;
-  rows.forEach((r, i) => {
-    out += `<text x="${L - 4}" y="${T + i * ch + ch / 2 + 3}" fill="#6f7480" font-size="9" text-anchor="end">${rowLabel(i)}</text>`;
-    r.forEach((v, j) => {
-      out += `<rect x="${(L + j * cw).toFixed(1)}" y="${T + i * ch}" width="${Math.max(1, cw - 1).toFixed(1)}" height="${ch - 1}" fill="${col(v)}"><title>${rowLabel(i)} ${colLabel(j)}: ${Number(v).toFixed(2)}</title></rect>`;
-    });
-  });
-  for (let j = 0; j < nc; j++) out += `<text x="${(L + j * cw + cw / 2).toFixed(1)}" y="${H - 6}" fill="#6f7480" font-size="9" text-anchor="middle">${colLabel(j)}</text>`;
-  return out + `</svg>`;
-}
-
 function _imgMriRender() {
   const outer = document.getElementById("imgMri");
   const d = imgMriState.data;
   if (!outer) return;
+  _imriWireLightbox();
   // Two children: the main view is rebuilt on every refresh; the prompt panel is built once
   // per model so typing in it survives the polls while a run is training.
   let box = document.getElementById("imgMriMain");
@@ -18946,7 +19074,7 @@ function _imgMriRender() {
   _imgMriPromptMount(name, (d.checkpoint_steps || []).length > 0);
   if (!steps.length) {
     box.innerHTML = IMG_MRI_STYLE + `<div class="imri"><div class="panel"><h2>${_trEsc(name)} <em>image model</em></h2><div class="body meta">` +
-      `${d.checkpoint_steps && d.checkpoint_steps.length ? `${d.checkpoint_steps.length} checkpoints, none probed yet` : "no checkpoints yet"} &mdash; the probe runs at every checkpoint from now on${imgMriState.running ? " (training now)" : ""}.</div></div></div>`;
+      `${d.checkpoint_steps && d.checkpoint_steps.length ? `${d.checkpoint_steps.length} checkpoints, none probed yet` : "no probe yet"} &mdash; the probe runs every <i>pictures every</i> steps and at every checkpoint${imgMriState.running ? " (training now)" : ""}.</div></div></div>`;
     return;
   }
   if (imgMriState.follow || imgMriState.step === null || !steps.some(s => s.step === imgMriState.step)) imgMriState.step = steps[steps.length - 1].step;
@@ -18960,10 +19088,16 @@ function _imgMriRender() {
   const series = (key, color, label, pick) => ({ name: label, color, points: steps.map(s => [s.step, pick ? pick(s) : s[key]]).filter(q => num(q[1])) });
   const kpi = (v, k, title) => `<div class="imri-kpi" title="${_trEsc(title || "")}"><div class="v">${v}</div><div class="k">${k}</div></div>`;
   const pct = v => num(v) ? (v * 100).toFixed(1) + "%" : "&mdash;";
-  const fig = (file, alt, fallback) => has(cur, file) ? `<img src="${url(cur.step, file)}" alt="${alt}">` : `<span class="meta">${fallback || "not written at this step"}</span>`;
+  const photo = (file, cols, alt, fallback) => has(cur, file) ? _imriPhoto(url(cur.step, file), cur, cols, alt) : `<span class="meta">${fallback || "not in this probe"}</span>`;
+  const section = (title, sub) => `<div class="imri-section">${title}${sub ? ` <span>${sub}</span>` : ""}</div>`;
+  const legend = html => `<div class="imri-legend">${html}</div>`;
   const needVal = "needs held-out pictures (a val bin)";
+  const curIdx = steps.findIndex(s => s.step === cur.step);
+  const prev = curIdx > 0 ? steps[curIdx - 1] : null;
+  const [gh, gw] = cur.grid || [0, 0];
+  const tileCols = Math.min(LAYER_COLS_JS, layers || LAYER_COLS_JS);
 
-  // per-plane accuracy, loss by hidden fraction, codes: over training
+  // -- over training -------------------------------------------------------------------
   const acc = series("fill_accuracy", IMRI_COLORS[0], "all");
   const perPlane = Array.from({ length: planes }, (_, p) => ({
     name: `plane ${p}${p === 0 ? " (structure)" : p === planes - 1 ? " (detail)" : ""}`, color: IMRI_COLORS[(p + 1) % IMRI_COLORS.length],
@@ -18980,11 +19114,8 @@ function _imgMriRender() {
   const cal = cur.calibration || [];
   const passesN = (cur.pass_committed || []).length;
   const novelty = cur.novelty_per_sample || [];
-  const layerIdx = (arr) => arr.map((v, i) => [i + 1, v]);
+  const layerIdx = arr => arr.map((v, i) => [i + 1, v]);
   const commit = cur.commit_layer;
-  const curIdx = steps.findIndex(s => s.step === cur.step);
-  const prev = curIdx > 0 ? steps[curIdx - 1] : null;
-  const [gh, gw] = cur.grid || [0, 0];
   const churn = prev ? _imriChurn(prev, cur) : null;
   const churnSeries = steps.slice(1).map((s, i) => { const c = _imriChurn(steps[i], s); return c ? { step: s.step, c } : null; }).filter(Boolean);
   const churnAll = { name: "all planes", color: IMRI_COLORS[2], points: churnSeries.map(x => [x.step, x.c.all]) };
@@ -18993,6 +19124,7 @@ function _imgMriRender() {
   const improved = firstMap && Array.isArray(cur.loss_map) && cur.loss_map.length === firstMap.loss_map.length && cur !== firstMap && gh && gw
     ? _imriRows(cur.loss_map.map((v, i) => firstMap.loss_map[i] - v), gh, gw) : null;
   const nSamples = Math.min(8, (_imriSampleCodes(cur) || []).length || 8);
+  const captionN = (cur.caption_samples || []).length;
   // how it forms: the pass each plane commits in, what forms first, how far attention reaches
   const commitPlanes = cur.commit_pass_per_plane || [];
   const commitSeries = Array.from({ length: planes }, (_, p) => ({ name: `plane ${p}`, color: IMRI_COLORS[(p + 1) % IMRI_COLORS.length],
@@ -19003,19 +19135,24 @@ function _imgMriRender() {
   const reach = cur.attention_distance_per_layer || [];
   const meanOf = a => (a && a.length) ? a.reduce((x, y) => x + y, 0) / a.length : NaN;
   const reachSeries = series("attention_distance_mean", IMRI_COLORS[6], "mean reach", s => meanOf(s.attention_distance_per_layer));
+  // maps drawn from the numbers (crisp at any size), the pngs only as a fallback
+  const formationRows = Array.isArray(cur.commit_pass_map) && gh && gw ? _imriRows(cur.commit_pass_map, gh, gw) : null;
+  const lossRows = Array.isArray(cur.loss_map) && gh && gw ? _imriRows(cur.loss_map, gh, gw) : null;
+  const confRows = Array.isArray(cur.confidence_map) && gh && gw ? _imriRows(cur.confidence_map, gh, gw) : null;
+  const nPass = cur.formation_passes || passesN || 8;
 
   box.innerHTML = IMG_MRI_STYLE + `<div class="imri">
     <div class="panel">
       <h2>${_trEsc(name)} <em>image model &middot; ${g.height || "?"}&times;${g.width || "?"} px &middot; ${g.image_code_bytes || "?"} bytes/picture &middot; ${planes} planes &middot; ${layers || "?"} layers${imgMriState.running ? ' &middot; <span class="imri-live">training now</span>' : ""}</em></h2>
       <div class="body">
-        <div class="imri-head"><span>pictures: <b>${_trEsc(d.image_set || "?")}</b></span><span>codec: <b>${_trEsc(d.codec || "?")}</b></span><span>checkpoints probed: <b>${steps.length}</b></span><span>showing step <b>${cur.step.toLocaleString()}</b></span></div>
+        <div class="imri-head"><span>pictures: <b>${_trEsc(d.image_set || "?")}</b></span><span>codec: <b>${_trEsc(d.codec || "?")}</b></span><span>probes: <b>${steps.length}</b></span><span>showing step <b>${cur.step.toLocaleString()}</b></span></div>
         <div class="imri-strip" data-imri-strip>${steps.map(s => `<button type="button" data-imri-step="${s.step}" class="${s.step === cur.step ? "on" : ""}" title="step ${s.step}">${has(s, "samples.png") ? `<img src="${url(s.step, "samples.png")}" alt="">` : ""}<span>${s.step.toLocaleString()}</span></button>`).join("")}</div>
-        <div class="imri-scrub"><button type="button" data-imri-prev title="previous checkpoint">&#9664;</button>
-          <input type="range" data-imri-range min="0" max="${steps.length - 1}" value="${curIdx}" title="scrub through the checkpoints">
-          <button type="button" data-imri-next title="next checkpoint">&#9654;</button>
+        <div class="imri-scrub"><button type="button" data-imri-prev title="previous probe">&#9664;</button>
+          <input type="range" data-imri-range min="0" max="${steps.length - 1}" value="${curIdx}" title="scrub through the probes">
+          <button type="button" data-imri-next title="next probe">&#9654;</button>
           <button type="button" data-imri-play class="${imgMriState.playing ? "on" : ""}">${imgMriState.playing ? "&#10074;&#10074; pause" : "&#9654; play"}</button>
           <label><input type="checkbox" data-imri-follow ${imgMriState.follow ? "checked" : ""}> follow latest</label>
-          <span>step ${curIdx + 1} of ${steps.length}${prev ? ` &middot; since step ${prev.step.toLocaleString()}` : ""}</span></div>
+          <span>probe ${curIdx + 1} of ${steps.length}${prev ? ` &middot; since step ${prev.step.toLocaleString()}` : ""}</span></div>
         <div class="imri-kpis">
           ${kpi(pct(cur.fill_accuracy), "fill accuracy", "of hidden cells filled in exactly, half the picture hidden, on held-out pictures")}
           ${kpi(pct(cur.mean_confidence), "confidence", "the model's own probability on its picks for hidden cells")}
@@ -19023,124 +19160,110 @@ function _imgMriRender() {
           ${kpi(num(cur.novelty_mean) ? pct(cur.novelty_mean) : "&mdash;", "novelty", "cells of a sample that differ from the closest training picture; 0% is a copy")}
           ${kpi(commit ? `${commit}<span style="font-size:11px;color:var(--dim)"> / ${layers}</span>` : "&mdash;", "decides at layer", "first layer whose picture already matches the final answer on 90% of hidden cells")}
           ${kpi(num(cur.codes_used) ? `${cur.codes_used}<span style="font-size:11px;color:var(--dim)">/255</span>` : "&mdash;", "codes in use", "a collapse shows as a handful")}
-          ${kpi(ent.length ? (ent.reduce((a, b) => a + b, 0) / ent.length).toFixed(2) : "&mdash;", "attention spread", "0 focused, 1 uniform, averaged over layers")}
-          ${kpi(churn ? pct(1 - churn.all) : "&mdash;", "settled since last", "share of the same-seed samples' cells unchanged since the previous checkpoint; rising toward 100% is convergence")}
-          ${kpi(num(cur.centre_edge_loss_ratio) ? cur.centre_edge_loss_ratio.toFixed(2) : "&mdash;", "centre / edge loss", "above 1: the middle of the picture is harder than the border")}
-          ${kpi(num(cur.val_records) ? cur.val_records.toLocaleString() : "&mdash;", "held-out pictures", "")}
+          ${kpi(ent.length ? meanOf(ent).toFixed(2) : "&mdash;", "attention spread", "0 focused, 1 uniform, averaged over layers")}
+          ${kpi(churn ? pct(1 - churn.all) : "&mdash;", "settled since last", "share of the same-seed samples' cells unchanged since the previous probe; rising toward 100% is convergence")}
+          ${kpi(num(cur.colour_match) ? pct(cur.colour_match) : "&mdash;", "colour match", "how closely the samples' palette matches the held-out pictures; 100% is the same palette")}
+          ${kpi(num(cur.detail_ratio) ? pct(Math.min(1, cur.detail_ratio)) : "&mdash;", "detail", "sharpness of the samples against the codec's own reconstructions, the most detail a sample can have")}
         </div>
       </div>
     </div>
 
+    ${section("what it draws", "same seeds at every probe, so one draw evolves")}
     <div class="panel">
-      <h2>what it draws <em>same seeds at every checkpoint${(cur.caption_samples || []).length ? " &middot; right-hand tiles from held-out captions" : ""}</em></h2>
-      <div class="body"><div class="imri-fig">${fig("samples.png", "samples")}
-      ${(cur.caption_samples || []).length ? `<div class="imri-legend">${cur.caption_samples.map(c => `<span>&ldquo;${_trEsc(c)}&rdquo;</span>`).join("")}</div>` : ""}</div>
-      ${has(cur, "nearest.png") ? `<div class="imri-fig"><h4>closest training picture to each sample &middot; copying or inventing?</h4><img src="${url(cur.step, "nearest.png")}" alt="nearest training pictures">
-        <div class="cols">${novelty.map(v => `<span title="cells that differ from the nearest training picture">${pct(v)} new</span>`).join("")}</div></div>` : ""}</div>
+      <div class="body">
+        <div class="imri-fig">${photo("samples.png", nSamples + captionN, "samples")}
+        ${legend(`<span>${nSamples} from nothing${captionN ? `; then from held-out captions: ${cur.caption_samples.map(c => `&ldquo;${_trEsc(c)}&rdquo;`).join(", ")}` : ""}</span>`)}</div>
+        ${has(cur, "nearest.png") ? `<div class="imri-fig"><h4>closest training picture to each sample &middot; copying or inventing?</h4>${photo("nearest.png", nSamples, "nearest training pictures")}
+          ${legend(novelty.map(v => `<span>${pct(v)} new</span>`).join(""))}</div>` : ""}
+      </div>
     </div>
-
     <div class="panel">
-      <h2>one draw through training <em>the same seed at every checkpoint &middot; orange outlines: cells that changed since the checkpoint before</em></h2>
+      <h2>one draw through training <em>the same seed at every probe &middot; orange outlines: cells that changed since the probe before</em></h2>
       <div class="body"><div class="imri-film">
-        <div class="pick"><span>sample</span><select data-imri-sample>${Array.from({ length: nSamples }, (_, i) => `<option value="${i}" ${i === imgMriState.sample ? "selected" : ""}>${i + 1}</option>`).join("")}</select><span>click a frame to jump to that checkpoint</span></div>
+        <div class="pick"><span>sample</span><select data-imri-sample>${Array.from({ length: nSamples }, (_, i) => `<option value="${i}" ${i === imgMriState.sample ? "selected" : ""}>${i + 1}</option>`).join("")}</select><span>click a frame to jump to that probe</span></div>
         <canvas data-imri-film-samples></canvas>
-        <div class="pick"><span>held-out picture</span><select data-imri-fillpic>${[0, 1, 2, 3].map(i => `<option value="${i}" ${i === imgMriState.fillPic ? "selected" : ""}>${i + 1}</option>`).join("")}</select><span>its completion at every checkpoint (original at the left)</span></div>
+        <div class="pick"><span>held-out picture</span><select data-imri-fillpic>${[0, 1, 2, 3].map(i => `<option value="${i}" ${i === imgMriState.fillPic ? "selected" : ""}>${i + 1}</option>`).join("")}</select><span>its completion at every probe (original at the left)</span></div>
         <canvas data-imri-film-fill></canvas>
       </div></div>
     </div>
 
-    <div class="imri-grid">
-      <div class="panel"><h2>churn <em>what is still changing &middot; new: the settling map</em></h2>
-        <div class="body">${churn && gh && gw ? `<div class="imri-chart">${_imriHeat(_imriRows(churn.map, gh, gw), () => "", () => "")}</div>
-        <div class="imri-legend"><span>each cell: share of the ${churn.n} same-seed samples whose code there changed since step ${prev.step.toLocaleString()} (blue settled, orange still moving). Structure settles first; a region that keeps flickering late is one the model has not learned.</span></div>` : `<span class="meta">needs two probed checkpoints</span>`}
-        ${churnSeries.length ? `<div class="imri-chart">${_imriSvgLine([churnAll, ...churnPlanes], { y0: 0, y1: 1 })}</div>
-        <div class="imri-legend"><span><i style="background:${churnAll.color}"></i>cells changed since the previous checkpoint</span>${churnPlanes.map(p => `<span><i style="background:${p.color}"></i>${p.name}</span>`).join("")}<span>falling toward 0 is convergence; a jump is a phase change</span></div>` : ""}</div></div>
-      <div class="panel"><h2>where it improved <em>loss per cell, first probe minus now</em></h2>
-        <div class="body">${improved ? `<div style="display:flex;justify-content:center">${_imriDivHeat(improved)}</div>
-        <div class="imri-legend"><span>green: this region got easier since step ${firstMap.step.toLocaleString()}; red: harder. Solid green everywhere is learning; a red centre with green edges means it learned borders and backgrounds before subjects.</span></div>` : `<span class="meta">needs two probed checkpoints with held-out pictures</span>`}</div></div>
-    </div>
-
+    ${section("how a picture forms", "one sample, pass by pass")}
     <div class="panel">
-      <h2>how a picture forms <em>one sample, pass by pass &middot; grey cells are still undecided</em></h2>
-      <div class="body"><div class="imri-fig">${fig("passes.png", "decode passes")}
-        ${passesN ? `<div class="cols">${cur.pass_committed.map((n, i) => `<span>pass ${i + 1} &middot; ${n} cells${num((cur.pass_confidence || [])[i]) ? ` &middot; ${pct(cur.pass_confidence[i])} sure` : ""}</span>`).join("")}</div>` : ""}</div>
-        <div class="imri-legend"><span>the most confident cells are committed first; each pass sees the last one's decisions. A model that has learned structure commits the layout early and the detail late.</span></div></div>
+      <div class="body"><div class="imri-fig">${photo("passes.png", passesN || nPass, "decode passes")}
+        ${passesN ? legend(cur.pass_committed.map((n, i) => `<span>pass ${i + 1}: ${n} cells${num((cur.pass_confidence || [])[i]) ? `, ${pct(cur.pass_confidence[i])} sure` : ""}</span>`).join("")) : ""}
+        ${legend(`<span>grey cells are still undecided. The most confident cells are committed first and each pass sees the last one's decisions; a model that has learned structure commits the layout early and the detail late.</span>`)}</div></div>
+    </div>
+    <div class="imri-grid">
+      <div class="panel"><h2>the order it forms <em>which pass decided each cell</em></h2>
+        <div class="body"><div class="imri-heatwrap">${formationRows ? _imriCellHeat(formationRows, { lo: 1, hi: nPass, fmt: v => "pass " + v }) : photo("formation.png", 2, "formation order")}
+          <div class="imri-side">${_imriScale("pass 1", `pass ${nPass}`)}<span class="meta">blue cells were decided in the first passes, orange in the last. Structure should go blue before detail does.</span></div></div>
+        ${commitPlanes.length ? `<div class="imri-chart small">${_imriBars(commitPlanes, commitPlanes.map((_, p) => "plane " + p), IMRI_COLORS[2])}</div>${legend(`<span>mean commit pass per plane (of ${nPass}); plane 0 is structure, the last plane detail</span>`)}` : ""}
+        ${commitSeries.length > 0 && commitSeries[0].points.length > 1 ? `<div class="imri-chart small">${_imriSvgLine(commitSeries, { y0: 1, y1: Math.max(2, nPass) })}</div>${legend(commitSeries.map(s => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join("") + `<span>over training: the structure plane should commit earlier as the model learns</span>`)}` : ""}</div></div>
+      <div class="panel"><h2>coarse to fine <em>the first sample from 1, 2, &hellip; ${planes} planes</em></h2>
+        <div class="body"><div class="imri-fig"><div class="cols" style="max-width:${(planes * _imriTileCss(cur) + (planes + 1) * 4)}px">${Array.from({ length: planes }, (_, i) => `<span>${i + 1} plane${i ? "s" : ""}</span>`).join("")}</div>${photo("planes.png", planes, "coarse to fine")}
+        ${legend(`<span>each residual plane adds one byte per cell: the left tile is plane 0 alone (layout), the right tile the whole picture. The difference across the row is the detail the model still has to learn.</span>`)}</div></div></div>
+      <div class="panel"><h2>churn <em>what is still changing</em></h2>
+        <div class="body">${churn && gh && gw ? `<div class="imri-heatwrap">${_imriCellHeat(_imriRows(churn.map, gh, gw), { lo: 0, hi: 1, fmt: v => pct(v) + " of samples changed" })}
+          <div class="imri-side">${_imriScale("settled", "still moving")}<span class="meta">each cell: share of the ${churn.n} same-seed samples whose code there changed since step ${prev.step.toLocaleString()}. Structure settles first; a region that keeps flickering late is one the model has not learned.</span></div></div>` : `<span class="meta">needs two probes</span>`}
+        ${churnSeries.length ? `<div class="imri-chart small">${_imriSvgLine([churnAll, ...churnPlanes], { y0: 0, y1: 1 })}</div>${legend(`<span><i style="background:${churnAll.color}"></i>cells changed since the previous probe</span>` + churnPlanes.map(p => `<span><i style="background:${p.color}"></i>${p.name}</span>`).join("") + `<span>falling toward 0 is convergence; a jump is a phase change</span>`)}` : ""}</div></div>
+      <div class="panel"><h2>where it improved <em>loss per cell, first probe minus now</em></h2>
+        <div class="body">${improved ? `<div class="imri-heatwrap">${_imriCellHeat(improved, { kind: "div", fmt: v => (v >= 0 ? "easier by " : "harder by ") + Math.abs(v).toFixed(3) })}
+          <div class="imri-side">${_imriScale("harder", "easier", "div")}<span class="meta">since step ${firstMap.step.toLocaleString()}. Solid green everywhere is learning; a red centre with green edges means it learned borders and backgrounds before subjects.</span></div></div>` : `<span class="meta">needs two probes with held-out pictures</span>`}</div></div>
     </div>
 
+    ${section("inside the model", "held-out pictures, half the cells hidden")}
     <div class="imri-grid">
-      <div class="panel"><h2>the order it forms <em>which decode pass decided each cell</em></h2>
-        <div class="body"><div class="imri-fig" style="align-items:center">${fig("formation.png", "formation order")}
-        <div class="imri-legend"><span>blue cells were decided in the first passes, orange in the last. A model that has learned structure decides the layout first and leaves the detail planes to the late passes.</span></div></div>
-        ${commitPlanes.length ? `<div class="imri-chart">${_imriBars(commitPlanes, commitPlanes.map((_, p) => "plane " + p), IMRI_COLORS[2])}</div><div class="imri-legend"><span>mean commit pass per plane at this checkpoint (of ${cur.formation_passes || "?"}); plane 0 is structure, the last plane detail</span></div>` : ""}
-        ${commitSeries.length ? `<div class="imri-chart">${_imriSvgLine(commitSeries, { y0: 1, y1: Math.max(2, cur.formation_passes || 8) })}</div><div class="imri-legend">${commitSeries.map(s => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join("")}<span>over training: the structure plane should commit earlier as the model learns what a picture is</span></div>` : ""}</div></div>
-      <div class="panel"><h2>coarse to fine <em>the first sample rendered from 1, 2, &hellip; ${planes} planes</em></h2>
-        <div class="body"><div class="imri-fig"><div class="cols">${Array.from({ length: planes }, (_, i) => `<span>${i + 1} plane${i ? "s" : ""}</span>`).join("")}</div>${fig("planes.png", "coarse to fine")}
-        <div class="imri-legend"><span>each residual plane adds one byte per cell and refines the picture: the left tile is what plane 0 alone says, the right tile is the whole picture. What the model gets right in the left tile is layout; the difference across the row is the detail it still has to learn.</span></div></div></div>
-    </div>
-
-    <div class="imri-grid">
-      <div class="panel"><h2>what forms first <em>structure, colour, detail &middot; over training</em></h2>
-        <div class="body"><div class="imri-chart">${_imriSvgLine([structure, colour, detail], { y0: 0, y1: 1 })}</div>
-        <div class="imri-legend"><span><i style="background:${structure.color}"></i>structure: plane-0 fill accuracy</span><span><i style="background:${colour.color}"></i>colour: palette match to held-out pictures</span><span><i style="background:${detail.color}"></i>detail: sharpness against the codec ceiling (capped at 1)</span><span>the order these rise is the order the model learns; palette and layout come first, fine detail last</span></div></div></div>
-      <div class="panel"><h2>how far it looks <em>attention reach per layer, in cells</em></h2>
-        <div class="body">${reach.length ? `<div class="imri-chart">${_imriBars(reach, reach.map((_, i) => "L" + (i + 1)), IMRI_COLORS[6])}</div>` : `<span class="meta">${needVal}</span>`}
-        ${reachSeries.points.length > 1 ? `<div class="imri-chart">${_imriSvgLine([reachSeries])}</div>` : ""}
-        <div class="imri-legend"><span>attention-weighted distance from a cell to the cells it reads, averaged over heads${gh && gw ? ` (grid ${gh}&times;${gw}, so a uniform head reads ~${(0.52 * Math.hypot(gh, gw)).toFixed(1)} cells away)` : ""}. Untrained attention is near-uniform and reads far; as the model learns, texture layers settle near 1-2 cells while a few layers stay global for layout.</span></div></div></div>
-    </div>
-
-    <div class="imri-grid">
-      <div class="panel"><h2>can it complete a real picture <em>half the cells hidden</em></h2>
-        <div class="body"><div class="imri-fig"><div class="cols"><span>original</span><span>hidden</span><span>filled</span></div>${fig("fill.png", "fill test", needVal)}</div></div></div>
+      <div class="panel"><h2>can it complete a real picture</h2>
+        <div class="body"><div class="imri-fig"><div class="cols" style="max-width:${3 * _imriTileCss(cur) + 16}px"><span>original</span><span>hidden</span><span>filled</span></div>${photo("fill.png", 3, "fill test", needVal)}</div></div></div>
       <div class="panel"><h2>how sure it is <em>and whether that is earned</em></h2>
-        <div class="body"><div class="imri-fig"><div class="cols"><span>original</span><span>hidden</span><span>filled</span><span>confidence</span></div>${fig("confidence.png", "confidence map", needVal)}
-        <div class="imri-legend"><span>confidence map: blue cells it was unsure of, orange sure (known cells count as certain)</span></div></div>
-        ${cal.length ? `<div class="imri-chart">${_imriBars(cal.map(b => num(b.accuracy) ? b.accuracy : 0), cal.map(b => `${Math.round(b.lo * 100)}&ndash;${Math.round(b.hi * 100)}% sure`), IMRI_COLORS[4])}</div>
-        <div class="imri-legend"><span>bar = accuracy of the cells in that confidence band (${cal.map(b => b.n).join(" / ")} cells). Calibrated means the bars climb with the bands; flat bars mean the confidence is noise.</span></div>` : ""}</div></div>
-    </div>
-
-    <div class="imri-grid">
+        <div class="body"><div class="imri-heatwrap">${confRows ? _imriCellHeat(confRows, { lo: 0, hi: 1, fmt: v => pct(v) + " sure" }) : photo("confidence.png", 4, "confidence map", needVal)}
+          <div class="imri-side">${_imriScale("unsure", "sure")}<span class="meta">the model's probability on its pick for each hidden cell of the first held-out picture (known cells count as certain)</span></div></div>
+        ${cal.length ? `<div class="imri-chart small">${_imriBars(cal.map(b => num(b.accuracy) ? b.accuracy : 0), cal.map(b => `${Math.round(b.lo * 100)}&ndash;${Math.round(b.hi * 100)}%`), IMRI_COLORS[4])}</div>${legend(`<span>accuracy of the cells in each confidence band (${cal.map(b => b.n).join(" / ")} cells). Calibrated means the bars climb with the bands.</span>`)}` : ""}</div></div>
       <div class="panel"><h2>through the layers <em>what it would draw if it stopped at layer 1, 2, &hellip; ${layers || ""}</em></h2>
-        <div class="body"><div class="imri-fig">${fig("layers.png", "logit lens", needVal)}
-        <div class="imri-legend"><span>left to right, top to bottom: the residual after each block, read through the model's own output head. The picture the last tile shows is the answer; where it first appears is where the decision is made.</span></div></div>
-        ${agree.length ? `<div class="imri-chart">${_imriSvgLine([{ name: "agreement with final", color: IMRI_COLORS[1], points: layerIdx(agree) }, { name: "accuracy", color: IMRI_COLORS[0], points: layerIdx(lensAcc) }], { y0: 0, y1: 1, xname: "layer" })}</div>
-        <div class="imri-legend"><span><i style="background:${IMRI_COLORS[1]}"></i>agreement with the final layer</span><span><i style="background:${IMRI_COLORS[0]}"></i>accuracy against the real picture</span>${commit ? `<span>decides at layer ${commit}</span>` : ""}</div>` : ""}</div></div>
-      <div class="panel"><h2>residual depth <em>how much each layer carries</em></h2>
-        <div class="body">${norms.length ? `<div class="imri-chart">${_imriBars(norms, norms.map((_, i) => "L" + (i + 1)), IMRI_COLORS[2])}</div>` : `<span class="meta">${needVal}</span>`}
-        <div class="imri-legend"><span>mean norm of the residual stream over image positions after each block. A healthy net grows it steadily; a flat tail means late layers add little; a spike is a layer shouting.</span></div>
-        <div class="imri-fig" style="margin-top:6px"><h4>where it struggles &middot; loss per cell over held-out pictures</h4>${fig("cell_loss.png", "loss per cell", needVal)}
-        <div class="imri-legend"><span>orange cells are hard, blue easy.${num(cur.centre_loss) ? ` centre ${cur.centre_loss.toFixed(2)} vs edge ${cur.edge_loss.toFixed(2)}` : ""}</span></div></div></div></div>
+        <div class="body"><div class="imri-fig">${photo("layers.png", tileCols, "logit lens", needVal)}
+        ${legend(`<span>the residual after each block, read through the model's own output head. Where the final picture first appears is where the decision is made${commit ? ` (layer ${commit})` : ""}.</span>`)}</div>
+        ${agree.length ? `<div class="imri-chart small">${_imriSvgLine([{ name: "agreement with final", color: IMRI_COLORS[1], points: layerIdx(agree) }, { name: "accuracy", color: IMRI_COLORS[0], points: layerIdx(lensAcc) }], { y0: 0, y1: 1, xname: "layer" })}</div>${legend(`<span><i style="background:${IMRI_COLORS[1]}"></i>agreement with the final layer</span><span><i style="background:${IMRI_COLORS[0]}"></i>accuracy against the real picture</span>`)}` : ""}</div></div>
+      <div class="panel"><h2>where it struggles <em>and how much each layer carries</em></h2>
+        <div class="body"><div class="imri-heatwrap">${lossRows ? _imriCellHeat(lossRows, { fmt: v => "loss " + v.toFixed(2) }) : photo("cell_loss.png", 2, "loss per cell", needVal)}
+          <div class="imri-side">${_imriScale("easy", "hard")}<span class="meta">loss per cell over the held-out pictures${num(cur.centre_loss) ? `: centre ${cur.centre_loss.toFixed(2)} vs edge ${cur.edge_loss.toFixed(2)}` : ""}</span></div></div>
+        ${norms.length ? `<div class="imri-chart small">${_imriBars(norms, norms.map((_, i) => "L" + (i + 1)), IMRI_COLORS[2])}</div>${legend(`<span>mean residual norm after each block. A healthy net grows it steadily; a flat tail means late layers add little.</span>`)}` : ""}</div></div>
+      <div class="panel"><h2>where it looks <em>from the centre cell, one map per layer</em></h2>
+        <div class="body"><div class="imri-fig">${photo("attention.png", tileCols, "attention", needVal)}</div>
+        ${ent.length ? `<div class="imri-chart small">${_imriBars(ent, ent.map((_, i) => "L" + (i + 1)), "#5db8ff")}</div>${legend(`<span>attention spread per layer &mdash; lower is more focused</span>`)}` : ""}</div></div>
+      <div class="panel"><h2>attention by head <em>focused (blue) to uniform (orange)</em></h2>
+        <div class="body"><div class="imri-heatwrap">${_imriCellHeat(heads, { lo: 0, hi: 1, cell: 14, rowLabel: i => "L" + (i + 1), colLabel: j => "h" + j, empty: needVal })}
+          <div class="imri-side"><span class="meta">heads specialise as the model learns: a trained net shows a mix of sharp local heads and broad context heads; all-orange has not yet learned where to look.</span></div></div></div></div>
+      <div class="panel"><h2>how far it looks <em>attention reach per layer, in cells</em></h2>
+        <div class="body">${reach.length ? `<div class="imri-chart small">${_imriBars(reach, reach.map((_, i) => "L" + (i + 1)), IMRI_COLORS[6])}</div>` : `<span class="meta">${needVal}</span>`}
+        ${reachSeries.points.length > 1 ? `<div class="imri-chart small">${_imriSvgLine([reachSeries])}</div>` : ""}
+        ${legend(`<span>attention-weighted distance from a cell to the cells it reads, over heads${gh && gw ? ` (grid ${gh}&times;${gw}; a uniform head reads ~${(0.52 * Math.hypot(gh, gw)).toFixed(1)} cells away)` : ""}. Untrained attention reads far; trained texture layers settle near 1-2 cells while a few layers stay global.</span>`)}</div></div>
     </div>
 
-    <div class="imri-grid">
-      <div class="panel"><h2>where it looks <em>attention from the centre cell, one map per layer</em></h2>
-        <div class="body"><div class="imri-fig">${fig("attention.png", "attention", needVal)}
-        ${ent.length ? `<div class="imri-chart">${_imriBars(ent, ent.map((_, i) => "L" + (i + 1)), "#5db8ff")}</div><div class="imri-legend"><span>attention spread per layer &mdash; lower is more focused</span></div>` : ""}</div></div></div>
-      <div class="panel"><h2>attention by head <em>every head of every layer: focused (blue) to uniform (orange)</em></h2>
-        <div class="body"><div class="imri-chart">${_imriHeat(heads, i => "L" + (i + 1), j => "h" + j)}</div>
-        <div class="imri-legend"><span>heads specialise as the model learns: a trained net shows a mix of sharp local heads and broad context heads; all-orange is a net that has not yet learned where to look.</span></div></div></div>
-    </div>
-
-    <div class="imri-grid">
-      <div class="panel"><h2>fill accuracy over training <em>per plane: structure first, detail last</em></h2>
-        <div class="body"><div class="imri-chart">${_imriSvgLine([acc, ...perPlane], { y0: 0, y1: 1 })}</div>
-        <div class="imri-legend"><span><i style="background:${IMRI_COLORS[0]}"></i>all</span>${perPlane.map(p => `<span><i style="background:${p.color}"></i>${_trEsc(p.name)}</span>`).join("")}</div></div></div>
-      <div class="panel"><h2>loss by how much is hidden <em>lower is better</em></h2>
-        <div class="body"><div class="imri-chart">${_imriSvgLine(byRatio)}</div>
-        <div class="imri-legend">${byRatio.map(p => `<span><i style="background:${p.color}"></i>${p.name}</span>`).join("")}</div></div></div>
-      <div class="panel"><h2>confidence over training <em>sure, and right to be?</em></h2>
-        <div class="body"><div class="imri-chart">${_imriSvgLine([series("mean_confidence", IMRI_COLORS[4], "confidence"), series("expected_calibration_error", IMRI_COLORS[3], "calibration error")], { y0: 0, y1: 1 })}</div>
-        <div class="imri-legend"><span><i style="background:${IMRI_COLORS[4]}"></i>confidence</span><span><i style="background:${IMRI_COLORS[3]}"></i>calibration error (lower is better)</span></div></div></div>
-      <div class="panel"><h2>novelty over training <em>copying or inventing</em></h2>
-        <div class="body"><div class="imri-chart">${_imriSvgLine([series("novelty_mean", IMRI_COLORS[5], "novelty")], { y0: 0, y1: 1 })}</div>
-        <div class="imri-legend"><span>share of a sample's cells that differ from its closest training picture. Falling toward 0 is memorisation; a good model stays high while the pictures get better.</span></div></div></div>
-      <div class="panel"><h2>decision depth over training <em>which layer settles the answer</em></h2>
-        <div class="body"><div class="imri-chart">${_imriSvgLine([series("commit_layer", IMRI_COLORS[1], "decides at layer")], { y0: 0, y1: Math.max(1, layers) })}</div>
-        <div class="imri-legend"><span>early in training the last layers do all the work; as the net learns, the answer forms earlier and the top layers refine.</span></div></div></div>
+    ${section("over training", `${steps.length} probes`)}
+    <div class="imri-grid imri-grid-3">
+      <div class="panel"><h2>what forms first <em>structure, colour, detail</em></h2>
+        <div class="body"><div class="imri-chart small">${_imriSvgLine([structure, colour, detail], { y0: 0, y1: 1 })}</div>
+        ${legend(`<span><i style="background:${structure.color}"></i>structure: plane-0 fill accuracy</span><span><i style="background:${colour.color}"></i>colour match</span><span><i style="background:${detail.color}"></i>detail vs the codec ceiling</span>`)}</div></div>
+      <div class="panel"><h2>fill accuracy <em>per plane</em></h2>
+        <div class="body"><div class="imri-chart small">${_imriSvgLine([acc, ...perPlane], { y0: 0, y1: 1 })}</div>
+        ${legend(`<span><i style="background:${IMRI_COLORS[0]}"></i>all</span>` + perPlane.map(p => `<span><i style="background:${p.color}"></i>${_trEsc(p.name)}</span>`).join(""))}</div></div>
+      <div class="panel"><h2>loss by how much is hidden</h2>
+        <div class="body"><div class="imri-chart small">${_imriSvgLine(byRatio)}</div>
+        ${legend(byRatio.map(p => `<span><i style="background:${p.color}"></i>${p.name}</span>`).join(""))}</div></div>
+      <div class="panel"><h2>confidence <em>sure, and right to be?</em></h2>
+        <div class="body"><div class="imri-chart small">${_imriSvgLine([series("mean_confidence", IMRI_COLORS[4], "confidence"), series("expected_calibration_error", IMRI_COLORS[3], "calibration error")], { y0: 0, y1: 1 })}</div>
+        ${legend(`<span><i style="background:${IMRI_COLORS[4]}"></i>confidence</span><span><i style="background:${IMRI_COLORS[3]}"></i>calibration error (lower is better)</span>`)}</div></div>
+      <div class="panel"><h2>novelty <em>copying or inventing</em></h2>
+        <div class="body"><div class="imri-chart small">${_imriSvgLine([series("novelty_mean", IMRI_COLORS[5], "novelty")], { y0: 0, y1: 1 })}</div>
+        ${legend(`<span>share of a sample's cells that differ from its closest training picture; falling toward 0 is memorisation</span>`)}</div></div>
+      <div class="panel"><h2>decision depth <em>which layer settles the answer</em></h2>
+        <div class="body"><div class="imri-chart small">${_imriSvgLine([series("commit_layer", IMRI_COLORS[1], "decides at layer")], { y0: 0, y1: Math.max(1, layers) })}</div>
+        ${legend(`<span>early on the last layers do all the work; as the net learns, the answer forms earlier</span>`)}</div></div>
       <div class="panel"><h2>codes in use <em>a collapse shows as a handful</em></h2>
-        <div class="body"><div class="imri-chart">${_imriSvgLine([series("codes_used", IMRI_COLORS[2], "codes")], { y0: 0, y1: 255 })}</div></div></div>
-      <div class="panel"><h2>codec ceiling <em>the codec's own reconstruction of the same pictures</em></h2>
-        <div class="body"><div class="imri-fig">${fig("recon.png", "codec reconstruction", needVal)}
-        <div class="imri-legend"><span>the model cannot draw sharper than this; blur here is the codec's, not the model's</span></div></div></div></div>
+        <div class="body"><div class="imri-chart small">${_imriSvgLine([series("codes_used", IMRI_COLORS[2], "codes")], { y0: 0, y1: 255 })}</div></div></div>
+      <div class="panel"><h2>codec ceiling <em>the codec's own reconstruction</em></h2>
+        <div class="body"><div class="imri-fig">${photo("recon.png", 4, "codec reconstruction", needVal)}
+        ${legend(`<span>the model cannot draw sharper than this; blur here is the codec's, not the model's</span>`)}</div></div></div>
     </div>
   </div>`;
 
@@ -19159,32 +19282,15 @@ function _imgMriRender() {
   const filmS = q("[data-imri-film-samples]"), filmF = q("[data-imri-film-fill]");
   if (filmS) {
     const outlines = steps.map((s, i) => { if (!i) return null; const c = _imriChurn(steps[i - 1], s); return c && c.changed[imgMriState.sample] ? c.changed[imgMriState.sample] : null; });
-    _imriFilmstrip(filmS, steps, name, "samples.png", imgMriState.sample, 0, gh, gw, outlines);
+    _imriFilmstrip(filmS, steps.map(s => ({ s, col: imgMriState.sample, row: 0 })), name, "samples.png", gh, gw, outlines);
   }
   if (filmF) {
-    // the original once (left), then the completion at every checkpoint
-    const T = IMRI_TILE, G = IMRI_GAP;
-    const shown = [{ step: cur.step, files: cur.files, _col: 0, _label: "original" }].concat(steps.map(s => ({ ...s, _col: 2 })));
-    filmF.width = shown.length * (T + G) + G; filmF.height = T + 2 * G + 14;
-    const ctx = filmF.getContext("2d");
-    ctx.fillStyle = "#0e1016"; ctx.fillRect(0, 0, filmF.width, filmF.height);
-    shown.forEach((s, i) => {
-      const x = G + i * (T + G);
-      ctx.fillStyle = "#6f7480"; ctx.font = "9px sans-serif"; ctx.textAlign = "center";
-      ctx.fillText(s._label || String(s.step), x + T / 2, filmF.height - 3);
-      if (!(s.files || []).includes("fill.png")) return;
-      _imriImage(url(s.step, "fill.png"), img => {
-        ctx.drawImage(img, G + s._col * (T + G), G + imgMriState.fillPic * (T + G), T, T, x, G, T, T);
-        if (!s._label && s.step === imgMriState.step) { ctx.strokeStyle = "#5db8ff"; ctx.lineWidth = 2; ctx.strokeRect(x + 1, G + 1, T - 2, T - 2); }
-      });
-    });
-    filmF.onclick = e => {
-      const rect = filmF.getBoundingClientRect();
-      const i = Math.floor(((e.clientX - rect.left) * (filmF.width / rect.width) - G) / (T + G)) - 1;
-      if (i >= 0 && i < steps.length) { imgMriState.follow = false; imgMriState.step = steps[i].step; _imgMriRender(); }
-    };
+    // the original once (left), then the completion at every probe
+    const frames = [{ s: cur, col: 0, row: imgMriState.fillPic, label: "original" }].concat(steps.map(s => ({ s, col: 2, row: imgMriState.fillPic })));
+    _imriFilmstrip(filmF, frames, name, "fill.png", gh, gw, null);
   }
 }
+
 
 // ---- prompt it: the same words at every checkpoint ------------------------------------
 function _imgMriPromptMount(name, hasCheckpoints) {
