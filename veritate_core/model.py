@@ -19,6 +19,8 @@
 # veritate_core/model.py
 # ------------------------------------------------------------------------------------
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,6 +28,10 @@ import torch.nn.functional as F
 from . import qat as _qat
 
 VOCAB_BYTE_LEVEL = 256
+
+# Devices whose sdpa has no fused training kernel, where non-causal half-precision
+# attention is written out instead (see attention()).
+EXPLICIT_ATTENTION_DEVICES = ("mps",)
 
 # Precision tags a model declares via precision_tag() (rule 11a). Consumers
 # (dumpers, dashboard) read the tag; they never inspect the class name.
@@ -96,6 +102,28 @@ class QuantLinear(nn.Linear):
         return super().forward(x)
 
 
+def explicit_attention(q, k, v):
+    """softmax(q k^T / sqrt(d)) v, written out, in the tensors' own dtype. What the
+    fused kernel computes, without a fused kernel."""
+    scores = torch.matmul(q, k.transpose(-2, -1)) * (1.0 / math.sqrt(q.shape[-1]))
+    probs = torch.softmax(scores, dim=-1, dtype=scores.dtype)
+    return torch.matmul(probs, v)
+
+
+def attention(q, k, v, causal):
+    """Full attention over [B, heads, T, d]. The fused sdpa everywhere it is the fast
+    path. On MPS there is no fused kernel for training: sdpa falls back to a math path
+    that upcasts half inputs to fp32 and holds fp32 scores for backward. Measured on an
+    M2 (2026-09-05, 8 x 12 heads x 1152 x 64, forward + backward): sdpa fp32 131 ms,
+    sdpa fp16 146 ms, explicit fp16 74 ms holding half the memory. Only the non-causal
+    (picture) path in half precision takes the explicit form: a causal mask would cost
+    a T x T tensor the fused causal path never materialises, and fp32 measures the same
+    either way, so text runs are untouched."""
+    if causal or q.dtype == torch.float32 or q.device.type not in EXPLICIT_ATTENTION_DEVICES:
+        return F.scaled_dot_product_attention(q, k, v, is_causal=causal)
+    return explicit_attention(q, k, v)
+
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, hidden, heads, causal=True):
         super().__init__()
@@ -119,7 +147,7 @@ class CausalSelfAttention(nn.Module):
             q = _qat.fake_quant_act(q)
             k = _qat.fake_quant_act(k)
             v = _qat.fake_quant_act(v)
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=self.causal)
+        out = attention(q, k, v, self.causal)
         if self.qat and self.engine_faithful:
             out = _qat.fake_quant_act(out)
         out = out.transpose(1, 2).contiguous().view(B, T, C)

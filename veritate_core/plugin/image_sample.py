@@ -154,8 +154,10 @@ def build_window(seq, code_bytes, caption=b"", codes=None, keep=None):
 
 @torch.no_grad()
 def fill(model, window, first_code, keep=None, passes=DEFAULT_PASSES, temperature=1.0, seed=0,
-         device="cpu"):
-    """Parallel masked decode. Returns uint8 codes [code_bytes]."""
+         device="cpu", trace=None):
+    """Parallel masked decode. Returns uint8 codes [code_bytes]. A `trace` list receives
+    one entry per pass -- the codes so far, which positions are still unknown, how many
+    were committed and their mean confidence -- so a caller can show the picture forming."""
     code_bytes = len(window) - first_code
     keep = np.zeros(code_bytes, dtype=bool) if keep is None else np.asarray(keep, dtype=bool)
     tokens = torch.from_numpy(np.asarray(window, dtype=np.int64).copy()).unsqueeze(0).to(device)
@@ -185,6 +187,13 @@ def fill(model, window, first_code, keep=None, passes=DEFAULT_PASSES, temperatur
         image = tokens[0, first_code:]
         image[commit] = sampled[commit]
         unknown = unknown & ~commit
+        if trace is not None:
+            committed = conf[commit]
+            trace.append({"pass": t,
+                          "codes": tokens[0, first_code:].to(torch.uint8).cpu().numpy().copy(),
+                          "unknown": unknown.cpu().numpy().copy(),
+                          "committed": int(commit.sum()),
+                          "confidence": float(committed.mean()) if committed.numel() else None})
         if not bool(unknown.any()):
             break
     return tokens[0, first_code:].to(torch.uint8).cpu().numpy()
@@ -204,6 +213,17 @@ def generate(model, codec, geometry, mode="text", caption=b"", source=None, stre
              device="cpu"):
     """Every mode through one fill. `source` is PIL image bytes (any format PIL reads).
     Returns (png_bytes, info)."""
+    codes, info = generate_codes(model, codec, geometry, mode=mode, caption=caption, source=source,
+                                 strength=strength, rect=rect, expand=expand, passes=passes,
+                                 temperature=temperature, seed=seed, device=device)
+    return decode_png(codec, codes, geometry["height"], geometry["width"]), info
+
+
+def generate_codes(model, codec, geometry, mode="text", caption=b"", source=None, strength=DEFAULT_STRENGTH,
+                   rect=None, expand=DEFAULT_EXPAND, passes=DEFAULT_PASSES, temperature=1.0, seed=0,
+                   device="cpu"):
+    """generate() before the decode: the uint8 codes and the info dict. What a probe that
+    compares two generations (with and without the words) needs."""
     if mode not in MODES:
         raise ValueError("unknown mode: " + str(mode) + " (valid: " + ", ".join(MODES) + ")")
     h, w, seq, code_bytes = geometry["height"], geometry["width"], geometry["seq"], geometry["code_bytes"]
@@ -242,4 +262,4 @@ def generate(model, codec, geometry, mode="text", caption=b"", source=None, stre
     info = {"mode": mode, "height": h, "width": w, "code_bytes": code_bytes, "passes": passes,
             "regenerated": code_bytes if keep is None else int((~keep).sum()),
             "caption_bytes": len(caption)}
-    return decode_png(codec, out, h, w), info
+    return out, info

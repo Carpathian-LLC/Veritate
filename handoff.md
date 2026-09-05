@@ -25,6 +25,9 @@ was already the training device). The user hit Stop at 3,800 decoded (exit -15);
   320 px (3.1x); at 1920x1080 only 15 -> 19. With 8,192 sampled pictures the decode stage is well
   under a minute at 320 px, against ~42 min for the whole set at 1920x1080.
 - `data/trainer_tuning.json`: height/width reset to 320 by hand (the trainer refuses 1920x1080).
+- Footer (user ask, same day): the Platform Build chip is dropped from the version list
+  (`HIDDEN` in `loadVersions`; `/versions` still returns `build`), and a static
+  `Developed by Carpathian` link to https://carpathian.ai closes the footer (`.footer-credit`).
 - No visibility before train.csv -> `veritate_core/plugin/image_progress.py` writes
   `models/<name>/progress.json` (stages decode/codec/encode/train, device, notes, run state);
   `GET /images/live/<name>`; the Training tab's `#imgLive` view replaces the byte panels for image
@@ -38,6 +41,116 @@ was already the training device). The user hit Stop at 3,800 decoded (exit -15);
 - Tests added: fit_image_codec (disk guard, sample cap, EXIF, stop), build_image_corpus (streaming
   with a partial cache), image_trainer (progress through stages, stop saves a checkpoint, MAX_EDGE,
   failed state), image routes (`/images/live`). Full suite 1800 passed (hooks excluded).
+
+**2026-09-05 10:45 - SECOND LAUNCH OOM (800m); NAMING + MEMORY PLAN SHIPPED.** At 320x320 the
+pipeline ran: decode 8,192 pictures in ~20 s (390 img/s, 8 threads), codec fitted (held-out PSNR
+17.2 dB after epoch 1; 8 epochs), corpus 136,921 train / 2,798 val records (148 MB) in ~6 min,
+all on `mps`. Then step 1 of **800m** (793M params, 28 layers, 24 heads, seq 1152, batch 16) died:
+`MPS out of memory ... tried to allocate 1.91 GiB` = one layer's fp32 attention scores
+(16 x 24 x 1152^2 x 4 B) on a 24 GB box. The form's estimator had shown nothing for the image flow
+(seq 0). The user relaunched at 80m under the same name, which refitted a codec and re-encoded the
+corpus because both were named after the model. Shipped:
+- Codec and corpus keyed on set + geometry: `<set>_<h>x<w>_p<patch>x<planes>_codec` / `..._img`
+  (`default_codec_name`, `default_corpus_stem`). Any size or name reuses them. The 800m run's
+  artifacts were renamed by hand to `images_320x320_p20x4_*` (sidecar `codec` updated) so nothing
+  is redone; the 80m run in flight (old code) wrote its own `test_image_gen_80m_*` copies.
+- `plan_micro_batch` before the first step (fp32 weights/grads/opt + acts + 2 fp32 attention
+  tensors per layer, vs min(70% unified, available)); gradient accumulation with
+  `masked_step(scale=1/accum)`; OOM handler halves pictures per forward and retries the step,
+  clear error at one picture. `progress.json` notes `micro_batch`/`grad_accum`/`oom_retries`; the
+  live view shows "pictures per forward m x a".
+- `POST /trainers/run` 409s only when the model has a checkpoint; a config-only dir from a failed
+  attempt relaunches, and the trainer drops that attempt's train.csv rows.
+- Form estimator derives the image seq and counts both attention tensors; image verdicts: red
+  "WILL NOT FIT even one picture at a time" vs amber "fits only in pieces". Size hint says the same.
+- Sizes on this 24 GB box at 320 px: 20m/30m/50m fit whole at batch 16; 80m/85m fit at ~4 pictures
+  per forward (estimate); 200m at 1-2; 800m does not fit at 1.
+
+**2026-09-05 12:00 - MODELS TAB: IMAGE OR TEXT, NEVER BOTH; FULL IMAGE BRAIN; CONTINUE FROM GUI.**
+User saw byte-model panels/status on the image model's Models tab ("LLM stuff") and asked for far
+more image visibility, then "yes" to continue-from-GUI. Shipped:
+- Exclusivity: `ensureLearningLoaded` decides image-vs-text FIRST (`_imgMriDecide`, now reading
+  `training` from `/timelines`, which carries it) and returns for an image model; classroom mirror
+  and canvas renders gated; picker labels "image model"; picker panel's subtitle swapped and its
+  byte-model description hidden while an image model is shown; the Training tab's "full brain"
+  link sets the timeline before activating the tab (the old order raced and re-picked a text run).
+- Probe (`image_probe.py`) now writes 10 files: samples, passes (decode trajectory via
+  `image_sample.fill(trace=)`), fill, layers (logit lens per block through `project_byte0`),
+  confidence (per-cell map + calibration bins + ECE), cell_loss (per-cell loss map, centre/edge),
+  nearest (hamming nearest training picture over a 16k-record sample; novelty), attention (+ per
+  head), recon, metrics. New metrics: lens_agreement/accuracy_per_layer, commit_layer,
+  residual_norm_per_layer, mean_confidence, calibration, expected_calibration_error, novelty_*,
+  pass_committed/confidence, attention_entropy_per_head. Trainer passes `train_path`.
+- Models tab image view rebuilt around those (`_imgMriRender`, `_imriHeat` heatmap helper,
+  `_imriSvgLine` x-axis name option): 9 KPIs, nearest-training row under samples, pass strip,
+  confidence + calibration bars, through-the-layers strip + chart, residual depth bars, cell-loss
+  map, per-head heatmap, and 8 over-training charts.
+- Images form: *start from* select (`data-arg="resume"`, options from `/images/models`); picking
+  a model hides name/size/picture size; validation skips those; composed name shows the resumed
+  dir; trainer `pin_structural_args` keeps image_set/codec/corpus/height/width/patch/planes/
+  caption_bytes/seq/size from the model's config whatever the form sent.
+- Tests: probe (all files + new metrics, zero-novelty copy), sample trace, trainer resume pinning.
+  The 80m model's existing step-87 probe predates this and shows only the old five files until its
+  next checkpoint; a continued run writes the full set.
+
+**2026-09-05 13:00 - PROMPTABLE BRAIN VIEW, PROGRESSION FILMSTRIPS, CHURN (new signal).** User:
+"make it promptable... more visual stuff for seeing the progressing... invent something new".
+Shipped:
+- Prompt panel in the image Models view (`#imgMriPrompt`, built once per model so typing survives
+  the 4 s polls): words + seed + passes + optional photo -> `POST /images/mri/<name>/prompt`
+  background job (`_PROMPT` state, `_run_prompt`, `_pick_steps` thins to 12 evenly spaced steps,
+  last kept) drawing WITH and WITHOUT the words at the same seed per checkpoint via the new
+  `image_sample.generate_codes` (generate() minus the decode); `steering` = share of cells the
+  words changed; results stream in; **caption influence** curve over steps.
+- Scrubber row (prev/next/range/play/follow latest), filmstrips (`_imriFilmstrip`: canvas crops of
+  sample i from every checkpoint's samples.png; held-out picture j's completion from fill.png with
+  the original at the left), click-to-jump.
+- **Churn** (invented here): probe now stores `sample_codes_b64` per step; the tab diffs consecutive
+  checkpoints cell by cell (`_imriChurn`) -> settling map (share of same-seed samples whose cell
+  changed), orange outlines on the filmstrip, "settled since last" KPI, churn curve all planes +
+  per plane. Convergence = curve to 0; late-flickering regions = unlearned.
+- **Where it improved**: probe stores `loss_map`/`confidence_map`/`grid`; tab renders first-probe
+  minus now as a diverging heat (`_imriDivHeat`).
+- Tests: prompt job end to end on the tiny model, idle/404, step thinning; stored codes/maps;
+  generate_codes == generate before decode. Full suite green.
+- The 80m model's step-87 probe predates `sample_codes_b64`; churn/improvement need two probes
+  with the new fields (the next two checkpoints of a continued run).
+
+**2026-09-05 16:15 - WHY IT TRAINED SO SLOWLY; SPEED MEASURED AND FIXED; FORMATION VISUALS.** User:
+"why does it train so freaking slow... optimize... more visuals on how it forms." Profiled first
+(scratchpad `bench_step*.py`, random tokens, no launch): the 80m run's 137 s/step was PAGING (old
+code, 16 pictures/forward, ~29 GB on 24 GB). Within memory, on this M2 (10 GPU cores):
+- **bf16 is the slow path on this GPU**: GEMM fp16 3.22 TFLOPS, fp32 2.79, bf16 1.53. 20m step at
+  batch 16: bf16 4.28 s, fp16 3.54, fp32 3.47. bf16 was the default everywhere (autocast AND
+  torch.optim.Muon's hardcoded Newton-Schulz: 1.46 s of every 80m step, 0.98 in fp16/fp32).
+- **sdpa on MPS has no fused training kernel**: it upcasts to fp32 and saves fp32 probs (0.56 GB per
+  layer-batch at 8x12x1152). Written out in fp16: 74 ms vs 131/146 ms, half the memory.
+- **torch.compile works on MPS (torch 2.14 inductor)**: 20m 3.15 -> 2.37 s.
+- Estimator was ~1.3x conservative; a bigger micro-batch is NOT faster once memory is tight (80m
+  16x1: 12.7 s at 17 GB vs 8x2: 8.5 s at 9.1 GB).
+Shipped: `hardware.half_precision_probe` + `PRECISION_CHOICES` (`auto`/`fp16`/`bf16`/`fp32`;
+`resolve_precision` measures on a GPU, fp32 on CPU, warns on slow bf16); `model.attention` /
+`explicit_attention` (non-causal half precision on `EXPLICIT_ATTENTION_DEVICES`=mps only; text,
+fp32, CUDA untouched); `optim.ns_dtype` measured on a GPU, native Muon only when bf16 wins;
+image trainer: `precision=auto` + GradScaler for fp16, `compile=auto` (GPU only; eager fallback
+`drop_compile`; probes/eval eager), `attention_bytes` in the memory plan, `COMPILE_OVERHEAD` 1.3,
+`s/step` in the log line and `progress.json` (`step_s`), notes `precision`/`attention`/
+`compiled`/`ns_dtype`, `precision_resolved` in config. Form: precision choices + `compile`
+(advanced), estimator half-aware; live view chips + per-step KPI. `data/trainer_tuning.json`
+image precision bf16 -> auto, compile auto (so the next launch takes the fast path).
+Best now: 20m 2.4 s/step (5k steps 3.3 h), 80m 8x2 8.5 s eager (compiled unmeasured at 80m),
+200m 4x4 19 s. The next lever is the token count (1,152/picture) - IDEA 24 addendum in ideas.md.
+- **Formation visuals** (probe + both tabs): `formation.png` (pass each cell was decided in) +
+  `commit_pass_map`/`commit_pass_per_plane`/`formation_passes`; `planes.png` coarse-to-fine render
+  (`ImageCodec.decode(codes, planes=k)`, `ResidualVQ.features(planes=)`); `sample_sharpness`/
+  `heldout_sharpness`/`detail_ratio`/`colour_match` ("what forms first" chart: structure, colour,
+  detail on one axis); `attention_distance_per_layer` ("how far it looks"). Training-tab live view
+  now shows passes + formation map + planes render under the samples. Models tab: four new
+  panels. Tests: precision/attention contract file, codec prefix decode, probe formation, trainer
+  fp16-scaler path (CPU made to say fp16), auto->fp32 on CPU, compile fallback, estimator bytes;
+  Muon dtype test updated to the measured policy. `tests/hooks` still excluded here.
+- Restart the dashboard for the Python side; the 80m model's step-87 probe predates every new
+  field. The user should re-launch (or continue) with the form as stored: precision auto.
 
 **IMAGE MODELS (IDEA 24) - trainable from the dashboard as of 2026-09-05.** User decision, after the
 one-trainer pushback (rule 17-30): a SEPARATE canonical image trainer. Shipped:

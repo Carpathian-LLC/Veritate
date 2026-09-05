@@ -98,14 +98,18 @@ def make_record_loader(bin_path, seq, batch_size, code_bytes, mask_byte, seed):
     return draw, int(ends.size)
 
 
-def masked_step(model, tokens, targets, amp_dtype, device_type, backward=False):
+def masked_step(model, tokens, targets, amp_dtype, device_type, backward=False, scale=1.0, scaler=None):
     """One masked-fill step. The model's own cross_entropy ignores the -1 positions, so
     the objective needs no second loss path. Returns None on a non-finite loss, which is
-    the contract the trainer's step skipping already expects."""
+    the contract the trainer's step skipping already expects. `scale` multiplies the loss
+    before backward (1/accum under gradient accumulation); a `scaler` (torch.amp.GradScaler,
+    fp16 autocast) scales it again so small gradients survive the half format. The
+    returned loss is unscaled either way."""
     with torch.autocast(device_type=device_type, dtype=amp_dtype, enabled=amp_dtype is not None):
         _, loss = model(tokens, targets)
     if not torch.isfinite(loss):
         return None
     if backward:
-        loss.backward()
+        scaled = loss * scale if scale != 1.0 else loss
+        (scaler.scale(scaled) if scaler is not None else scaled).backward()
     return loss.detach()

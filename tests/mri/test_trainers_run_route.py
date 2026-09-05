@@ -173,3 +173,26 @@ def test_unknown_trainer_leaves_runner_idle(runner):
     """A rejected launch releases the run claim so the next launch is not blocked."""
     _post(runner, {"id": UNKNOWN_ID, "args": RUN_ARGS})
     assert trainer_runner.state()["status"] == trainer_runner.STATUS_IDLE
+
+
+def test_a_name_whose_previous_attempt_never_saved_a_checkpoint_may_be_relaunched(runner, monkeypatch, tmp_path):
+    """Out of memory at step 1 leaves config.json and no weights. That is not a model to
+    protect; the same name launches again. Weights on disk keep the 409."""
+    import json
+    import os
+
+    from readers import paths
+    monkeypatch.setattr(paths, "MODELS_ROOT", str(tmp_path / "models"))
+    name, size = "retry_me", "20m"
+    composed = f"{name}_{size}"
+    os.makedirs(paths.model_dir(composed))
+    with open(paths.config_path(composed), "w", encoding="utf-8") as handle:
+        json.dump({"name": composed}, handle)
+    resp = _launch(runner, {"name": name, "size": size})
+    assert resp.status_code == 200 and resp.get_json()["ok"]
+    os.makedirs(paths.checkpoints_dir(composed), exist_ok=True)
+    with open(paths.checkpoint_path(composed, 1), "wb") as handle:
+        handle.write(b"weights")
+    resp = _post(runner, {"id": TRAINER_ID, "args": {"name": name, "size": size}})
+    assert resp.status_code == 409
+    assert "already exists" in resp.get_json()["error"]

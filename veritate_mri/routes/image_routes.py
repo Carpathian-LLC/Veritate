@@ -44,6 +44,7 @@ import subprocess
 import threading
 import time
 
+import numpy as np
 from flask import request, send_from_directory
 from readers import images as images_reader
 from readers import trainers as trainers_reader
@@ -75,6 +76,11 @@ _CAPTION_LOCK = threading.Lock()
 _INGEST = {"status": INGEST_IDLE, "set": None, "sources": None, "report": None,
            "error": None, "started_at": None, "finished_at": None, "done": 0, "total": 0}
 _INGEST_LOCK = threading.Lock()
+PROMPT_IDLE, PROMPT_RUNNING, PROMPT_OK, PROMPT_FAILED, PROMPT_STOPPED = "idle", "running", "ok", "failed", "stopped"
+PROMPT_MAX_STEPS = 12          # checkpoints drawn per request, evenly spaced, the last always included
+_PROMPT = {"status": PROMPT_IDLE, "model": None, "caption": "", "seed": 0, "passes": 8, "mode": "text",
+           "steps": [], "results": [], "error": None, "stop": False, "started_at": None, "finished_at": None}
+_PROMPT_LOCK = threading.Lock()
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -392,6 +398,94 @@ def mri_payload(name):
             "checkpoint_steps": checkpoints.list_steps(name), "steps": rows}
 
 
+def prompt_state():
+    with _PROMPT_LOCK:
+        return dict(_PROMPT)
+
+
+def _pick_steps(all_steps, wanted, limit=PROMPT_MAX_STEPS):
+    """The checkpoints to draw at: the asked ones, else all, thinned evenly to `limit`
+    with the last kept."""
+    steps = sorted({int(x) for x in wanted}) if wanted else list(all_steps)
+    steps = [x for x in steps if x in set(all_steps)]
+    if len(steps) <= limit:
+        return steps
+    idx = [round(i * (len(steps) - 1) / (limit - 1)) for i in range(limit)]
+    return [steps[i] for i in sorted(set(idx))]
+
+
+def _run_prompt(name, steps, caption, seed, passes, mode, source, strength):
+    from veritate_core.plugin import hardware, image_sample
+    device = hardware.pick_device()
+    try:
+        for step in steps:
+            if _PROMPT["stop"]:
+                break
+            t0 = time.time()
+            model, codec, geometry, real_step = _resident_model(name, step, device)
+            with_words, _ = image_sample.generate_codes(
+                model, codec, geometry, mode=mode, caption=caption, source=source, strength=strength,
+                passes=passes, seed=seed, device=device)
+            without, _ = image_sample.generate_codes(
+                model, codec, geometry, mode=mode, caption="", source=source, strength=strength,
+                passes=passes, seed=seed, device=device)
+            steering = float(np.mean(np.asarray(with_words) != np.asarray(without))) if caption else 0.0
+            h, w = geometry["height"], geometry["width"]
+            result = {"step": int(real_step),
+                      "png": base64.b64encode(image_sample.decode_png(codec, with_words, h, w)).decode("ascii"),
+                      "uncond_png": base64.b64encode(image_sample.decode_png(codec, without, h, w)).decode("ascii"),
+                      "steering": steering, "seconds": round(time.time() - t0, 2)}
+            with _PROMPT_LOCK:
+                _PROMPT["results"] = _PROMPT["results"] + [result]
+        with _PROMPT_LOCK:
+            _PROMPT.update(status=PROMPT_STOPPED if _PROMPT["stop"] else PROMPT_OK, finished_at=time.time())
+    except Exception as e:
+        with _PROMPT_LOCK:
+            _PROMPT.update(status=PROMPT_FAILED, error=type(e).__name__ + ": " + str(e), finished_at=time.time())
+
+
+def start_prompt(name, body):
+    """Draw the same words (and optional photo) at several checkpoints of one image model, in
+    the background. Each result carries the picture with the words and the same-seed picture
+    without them; `steering` is the share of cells the words changed."""
+    from readers import checkpoints
+
+    from veritate_core.plugin import image_sample
+    all_steps = checkpoints.list_steps(name)
+    if not all_steps:
+        return {"ok": False, "error": "no checkpoint for " + name}, 400
+    caption = str(body.get("caption") or "").strip()
+    mode = str(body.get("mode") or "text").strip()
+    if mode not in ("text", "variation"):
+        return {"ok": False, "error": "mode must be text or variation"}, 400
+    try:
+        source = _decode_source(body.get("image"))
+    except (ValueError, TypeError) as e:
+        return {"ok": False, "error": "bad source image: " + str(e)}, 400
+    if mode == "variation" and source is None:
+        return {"ok": False, "error": "variation needs a photo"}, 400
+    steps = _pick_steps(all_steps, body.get("steps") or [])
+    if not steps:
+        return {"ok": False, "error": "none of the asked steps has a checkpoint"}, 400
+    with _PROMPT_LOCK:
+        if _PROMPT["status"] == PROMPT_RUNNING:
+            return {"ok": False, "error": "a prompt run is already going"}, 409
+        passes = max(1, min(int(body.get("passes", image_sample.DEFAULT_PASSES)), image_sample.MAX_PASSES))
+        _PROMPT.update(status=PROMPT_RUNNING, model=name, caption=caption, seed=int(body.get("seed", 0)),
+                       passes=passes, mode=mode, steps=steps, results=[], error=None, stop=False,
+                       started_at=time.time(), finished_at=None)
+        args = (name, steps, caption, _PROMPT["seed"], _PROMPT["passes"], mode, source,
+                float(body.get("strength", image_sample.DEFAULT_STRENGTH)))
+    threading.Thread(target=_run_prompt, name="images:prompt", daemon=True, args=args).start()
+    return {"ok": True, "state": prompt_state()}, 200
+
+
+def stop_prompt():
+    with _PROMPT_LOCK:
+        _PROMPT["stop"] = True
+    return {"ok": True, "state": prompt_state()}
+
+
 def _running_run_name(run):
     """The model dir the runner's current args resolve to, or None."""
     args = (run or {}).get("args") or {}
@@ -458,6 +552,24 @@ def register(app):
         if not safe_name(name) or not models.exists(name):
             return {"ok": False, "error": "no such model"}, 404
         return _safe("images", lambda: mri_payload(name))
+
+    @app.route("/images/mri/<path:name>/prompt", methods=["POST"])
+    def images_mri_prompt(name):
+        from readers import models
+        if not safe_name(name) or not models.exists(name):
+            return {"ok": False, "error": "no such model"}, 404
+        return _safe("images", lambda: start_prompt(name, request.get_json(silent=True) or {}))
+
+    @app.route("/images/mri/<path:name>/prompt/status")
+    def images_mri_prompt_status(name):
+        st = prompt_state()
+        if st.get("model") != name:
+            return {"ok": True, "state": {"status": PROMPT_IDLE, "model": name, "results": []}}
+        return {"ok": True, "state": st}
+
+    @app.route("/images/mri/<path:name>/prompt/stop", methods=["POST"])
+    def images_mri_prompt_stop(_name):
+        return _safe("images", stop_prompt)
 
     @app.route("/images/live/<path:name>")
     def images_live(name):

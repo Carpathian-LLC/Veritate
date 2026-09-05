@@ -28,6 +28,29 @@
 #   smaller than the image would train on half a picture and report a loss anyway.
 #   A frame above MAX_EDGE is refused: 1920x1080 is 20,736 code bytes per picture and
 #   an 869 GB cache over a phone library; the model works on a fixed small frame.
+# - The codec and the corpus are keyed on what they depend on -- the set and the
+#   geometry (`<set>_<h>x<w>_p<patch>x<planes>_codec`, `..._img`) -- never on the model.
+#   Every model trained on the same pictures at the same frame reuses both; changing the
+#   size or the name costs nothing but the training itself.
+# - Memory is planned before the first step: the estimate counts weights, grads and
+#   optimizer state plus, per layer, the activations and the two attention tensors a
+#   device without a flash kernel holds for backward (quadratic in seq, the dominant
+#   term for a picture model; fp32 under sdpa's fallback, the working dtype under the
+#   explicit path model.attention takes on MPS). Calibrated against measured peaks on an
+#   M2 (2026-09-05): 20m at 16 pictures 8.2 GB measured / 8.8 estimated, 80m at 4
+#   pictures 6.1 / 6.0. When the batch does not fit, each step runs as several smaller
+#   forwards with the gradients accumulated -- same batch, same result, slower. An
+#   out-of-memory error mid-run halves the pictures per forward and retries the step;
+#   at one picture per forward it is a clear error naming the size as too big.
+# - Speed is measured, not assumed. `precision=auto` (the default) runs the half
+#   precision this GPU is fastest at (hardware.half_precision_probe: fp16 on an M2,
+#   where bf16 matmuls run at half the fp16 rate); fp16 trains under torch.amp.GradScaler
+#   so small gradients survive the format. Muon orthogonalizes in the same measured
+#   dtype. `compile=auto` runs the training forward through torch.compile on a GPU
+#   (measured 1.54x on an M2 at 20m: the model is small enough to be launch-bound, and
+#   the fused kernels are what a GPU this size needed); a compile failure falls back to
+#   eager with a log line and the run continues. Probes and evaluation use the eager
+#   model, which shares the weights. Every step logs seconds per step beside tok/s.
 # - The manifest the dashboard renders and the flags this process parses are the same
 #   dict (readers/trainers.IMAGE_TRAINER_MANIFEST), so the form and the parser cannot
 #   drift. Launch is through POST /trainers/run, like every trainer (rule 13).
@@ -56,8 +79,10 @@ from readers import paths
 from readers import trainers as trainers_reader
 from tools import build_image_corpus, fit_image_codec
 
+from veritate_core import model as model_mod
 from veritate_core.model import Veritate
 from veritate_core.plugin import hardware, image_codec, image_grid, image_probe, image_progress, save
+from veritate_core.plugin import optim as optim_helpers
 from veritate_core.plugin.image_progress import StopRequested
 
 # ------------------------------------------------------------------------------------
@@ -69,6 +94,18 @@ CODEC_NAME_SUFFIX  = "_codec"
 CORPUS_STEM_SUFFIX = "_img"
 IMAGE_EXTS         = fit_image_codec.IMAGE_EXTS
 STOP_SIGNALS       = ("SIGTERM", "SIGINT")
+OOM_MARKERS        = ("out of memory",)
+ATTN_SAVED_TENSORS = 2        # scores + probs held for backward without a flash kernel
+ATTN_FALLBACK_BYTES = 4       # sdpa's math fallback upcasts them to fp32 whatever autocast says
+ACT_TENSORS_PER_LAYER = 13    # the coefficient the dashboard estimator uses
+IMAGE_PRECISIONS   = hardware.PRECISION_CHOICES
+COMPILE_CHOICES    = ("auto", "on", "off")
+PYTORCH_OVERHEAD   = 1.15
+COMPILE_OVERHEAD   = 1.30     # what a torch.compile'd graph holds over eager (measured 1.27, M2)
+BUDGET_FRACTION    = 0.70     # share of unified memory a run may plan on
+GB                 = 1024 ** 3
+STRUCTURAL_ARGS    = ("image_set", "codec", "corpus", "height", "width", "patch", "planes",
+                      "caption_bytes", "seq", "size")
 
 _STOP = {"requested": False}
 
@@ -139,6 +176,94 @@ def resolve_seq(seq, code_bytes, caption_bytes):
         raise ValueError("seq " + str(seq) + " is smaller than image_code_bytes " + str(code_bytes)
                          + "; the objective cannot see a whole image. Use 0 to derive it.")
     return seq
+
+
+def default_codec_name(set_name, height, width, patch, planes):
+    """Keyed on what a codec depends on, not on the model: every model trained on the
+    same pictures at the same geometry reuses the fit."""
+    return (str(set_name) + "_" + str(int(height)) + "x" + str(int(width)) + "_p" + str(int(patch))
+            + "x" + str(int(planes)) + CODEC_NAME_SUFFIX)
+
+
+def default_corpus_stem(codec_name):
+    base = codec_name[:-len(CODEC_NAME_SUFFIX)] if codec_name.endswith(CODEC_NAME_SUFFIX) else codec_name
+    return base + CORPUS_STEM_SUFFIX
+
+
+def is_oom(err):
+    msg = str(err).lower()
+    return any(m in msg for m in OOM_MARKERS)
+
+
+def free_device(device):
+    if device == "mps" and hasattr(torch, "mps"):
+        torch.mps.empty_cache()
+    elif device == "cuda":
+        torch.cuda.empty_cache()
+
+
+def estimate_step_bytes(shape, n_params, micro, seq, amp_bytes, optimizer, attn_bytes=ATTN_FALLBACK_BYTES):
+    """Training memory for one step at `micro` pictures per forward: fp32 weights, grads
+    and optimizer state (Muon keeps one momentum, AdamW two), activations per layer, and
+    the two attention tensors a device without a flash kernel materialises -- in fp32
+    under sdpa's fallback, in the working dtype (`attn_bytes` = amp bytes) under the
+    explicit path."""
+    state = 4 if optimizer == "muon" else 8
+    static = n_params * (4 + 4 + state)
+    acts = micro * seq * shape["hidden"] * shape["layers"] * ACT_TENSORS_PER_LAYER * amp_bytes
+    attn = ATTN_SAVED_TENSORS * micro * shape["heads"] * shape["layers"] * seq * seq * attn_bytes
+    return int((static + acts + attn) * PYTORCH_OVERHEAD)
+
+
+def attention_bytes(device, amp_dtype):
+    """Bytes per element of the attention tensors held for backward on `device`."""
+    explicit = device in model_mod.EXPLICIT_ATTENTION_DEVICES and amp_dtype is not None
+    return 2 if explicit else ATTN_FALLBACK_BYTES
+
+
+def shrink_micro(micro, batch):
+    """The next smaller pictures-per-forward that still divides the batch."""
+    micro = max(1, int(micro) // 2)
+    while micro > 1 and int(batch) % micro:
+        micro -= 1
+    return micro
+
+
+def plan_micro_batch(shape, n_params, batch, seq, amp_bytes, optimizer, budget, attn_bytes=ATTN_FALLBACK_BYTES):
+    """The largest pictures-per-forward, halving from `batch`, whose step fits `budget`;
+    1 when none does (the OOM handler is the backstop). Returns (micro, accum, bytes)."""
+    micro = int(batch)
+    while micro > 1 and estimate_step_bytes(shape, n_params, micro, seq, amp_bytes, optimizer, attn_bytes) > budget:
+        micro = shrink_micro(micro, batch)
+    est = estimate_step_bytes(shape, n_params, micro, seq, amp_bytes, optimizer, attn_bytes)
+    return micro, int(batch) // micro, est
+
+
+def torch_optimizers(opt):
+    """The torch optimizers behind the trainer's optimizer surface: Muon+AdamW is two."""
+    if hasattr(opt, "muon") and hasattr(opt, "adamw"):
+        return [opt.muon, opt.adamw]
+    return [opt]
+
+
+def want_compile(choice, device):
+    """torch.compile on a GPU by default; never on the CPU, where compiling a graph
+    costs more than the run it would speed up."""
+    return choice == "on" or (choice == "auto" and device != "cpu")
+
+
+def memory_budget():
+    return min(int(hardware.unified_memory_bytes() * BUDGET_FRACTION), int(hardware.available_memory_bytes()))
+
+
+def pin_structural_args(args):
+    """A resumed model's pictures, frame, codec, corpus and size are facts about its
+    weights, not choices: the form's values for them are ignored, whatever was sent."""
+    with open(paths.config_path(args.resume), encoding="utf-8") as handle:
+        ta = json.load(handle).get("training_args") or {}
+    for k in STRUCTURAL_ARGS:
+        if ta.get(k) is not None:
+            setattr(args, k, ta[k])
 
 
 def count_set_images(set_name):
@@ -260,11 +385,14 @@ def run(plugin_id):
     resume_mode = bool(args.resume)
     if resume_mode:
         vt.apply_resume_overrides(args, sys.argv)
+        pin_structural_args(args)
     save.require_description(args.description)
     if args.size not in size_presets:
         raise ValueError("unknown size: " + str(args.size) + " (valid: " + ", ".join(size_presets) + ")")
-    if args.precision not in vt.PRECISIONS:
-        raise ValueError("unknown precision: " + str(args.precision))
+    if args.precision not in IMAGE_PRECISIONS:
+        raise ValueError("unknown precision: " + str(args.precision) + " (valid: " + ", ".join(IMAGE_PRECISIONS) + ")")
+    if args.compile not in COMPILE_CHOICES:
+        raise ValueError("unknown compile: " + str(args.compile) + " (valid: " + ", ".join(COMPILE_CHOICES) + ")")
     if args.lr_schedule not in vt.LR_SCHEDULES:
         raise ValueError("unknown lr_schedule: " + str(args.lr_schedule))
     if not resume_mode and not (args.image_set or "").strip():
@@ -281,8 +409,11 @@ def run(plugin_id):
     np.random.seed(args.seed)
     device = hardware.pick_device()
     amp_dtype = hardware.resolve_precision(args.precision, device)
-    print("device: " + device + "  precision: "
-          + (args.precision if amp_dtype is not None else "fp32 (autocast off)"), flush=True)
+    args.precision_resolved = hardware.precision_label(amp_dtype)
+    _fast, rates = hardware.half_precision_probe(device)
+    print("device: " + device + "  precision: " + str(args.precision) + " -> " + args.precision_resolved
+          + ("  (measured " + ", ".join(k + " " + str(v) + " TFLOPS" for k, v in rates.items()) + ")" if rates else "")
+          + ("  (autocast off)" if amp_dtype is None else ""), flush=True)
     code_bytes = check_geometry(int(args.height), int(args.width), int(args.patch), int(args.planes))
 
     previous_handlers = _install_stop_handlers()
@@ -302,8 +433,9 @@ def run(plugin_id):
 
 def _run_stages(args, name, device, amp_dtype, code_bytes, size_presets, resume_mode,
                 plugin_id, prog):
-    codec_name = (args.codec or "").strip() or (name + CODEC_NAME_SUFFIX)
-    stem = (args.corpus or "").strip() or (name + CORPUS_STEM_SUFFIX)
+    codec_name = (args.codec or "").strip() or default_codec_name(
+        args.image_set, int(args.height), int(args.width), int(args.patch), int(args.planes))
+    stem = (args.corpus or "").strip() or default_corpus_stem(codec_name)
     print("geometry: " + str(args.height) + "x" + str(args.width) + "  patch " + str(args.patch)
           + "  planes " + str(args.planes) + "  -> " + str(code_bytes) + " code bytes/image",
           flush=True)
@@ -345,19 +477,117 @@ def _run_stages(args, name, device, amp_dtype, code_bytes, size_presets, resume_
         if dropped:
             print("train.csv: dropped " + str(dropped) + " stale rows past step " + str(resume_step), flush=True)
     else:
+        if os.path.isfile(paths.train_csv_path(name)):
+            dropped = save.truncate_train_csv_at(name, 0)
+            if dropped:
+                print("train.csv: dropped " + str(dropped) + " rows from an earlier attempt that "
+                      "never saved a checkpoint", flush=True)
         corpus_hash = save.hash_corpus(stem)
         vt.write_config(name, args, shape, n_params, corpus_hash, plugin_id=plugin_id)
         print("wrote: " + paths.config_path(name), flush=True)
 
-    train_draw, train_n = image_grid.make_record_loader(
-        train_path, seq, args.batch_size, code_bytes, image_codec.MASK_BYTE, args.seed)
-    val_draw = None
-    if val_path:
-        val_draw, _ = image_grid.make_record_loader(
-            val_path, seq, args.batch_size, code_bytes, image_codec.MASK_BYTE, args.seed + 1)
+    # How many pictures fit in one forward. The batch is what the optimizer sees either
+    # way; below it the step is several forwards with the gradients added up.
+    amp_bytes = 2 if amp_dtype is not None else 4
+    attn_bytes = attention_bytes(device, amp_dtype)
+    attention_path = ("explicit " + args.precision_resolved) if attn_bytes < ATTN_FALLBACK_BYTES else "sdpa"
+    compiling = want_compile(args.compile, device)
+    budget = memory_budget()
+    # a compiled graph holds more between kernels (measured 11.1 GB against 8.2 eager at
+    # 20m x 16 pictures); the plan sees a smaller budget so the pictures per forward fit both
+    micro, accum, est = plan_micro_batch(shape, n_params, int(args.batch_size), seq, amp_bytes,
+                                         args.optimizer, int(budget / COMPILE_OVERHEAD) if compiling else budget,
+                                         attn_bytes)
+    plan = {"micro": micro, "accum": accum, "oom": 0, "fwd": model, "compiled": False}
+    print("attention: " + attention_path, flush=True)
+    if compiling:
+        try:
+            plan["fwd"] = torch.compile(model)
+            plan["compiled"] = True
+            print("compile: on (torch.compile; the first step includes compiling the graph)", flush=True)
+        except Exception as e:  # torch.compile raises its own exception family
+            print("compile: unavailable (" + type(e).__name__ + ": " + str(e) + "); running eager", flush=True)
+    else:
+        print("compile: off", flush=True)
+    scaler = None
+    if amp_dtype is torch.float16:
+        try:
+            scaler = torch.amp.GradScaler(device)
+            print("fp16: loss scaling on (torch.amp.GradScaler)", flush=True)
+        except (RuntimeError, ValueError, TypeError) as e:
+            print("fp16: loss scaling unavailable on " + device + " (" + str(e) + "); running unscaled", flush=True)
+    if accum > 1:
+        print("memory: ~" + format(est / GB, ".1f") + " GB at " + str(micro) + " pictures per forward, "
+              + format(budget / GB, ".1f") + " GB budget -> " + str(accum) + " forwards per step, batch "
+              + str(args.batch_size) + " unchanged", flush=True)
+    elif est > budget:
+        print("WARNING memory: ~" + format(est / GB, ".1f") + " GB estimated even at one picture per "
+              "forward; this machine budgets " + format(budget / GB, ".1f") + " GB. Expect out-of-memory: "
+              "pick a smaller size or picture size.", flush=True)
+    else:
+        print("memory: ~" + format(est / GB, ".1f") + " GB estimated for batch " + str(args.batch_size)
+              + " (" + format(budget / GB, ".1f") + " GB budget)", flush=True)
+
+    loaders = {}
+
+    def build_loaders(m):
+        loaders["train"], loaders["n"] = image_grid.make_record_loader(
+            train_path, seq, m, code_bytes, image_codec.MASK_BYTE, args.seed)
+        loaders["val"] = None
+        if val_path:
+            loaders["val"], _ = image_grid.make_record_loader(
+                val_path, seq, m, code_bytes, image_codec.MASK_BYTE, args.seed + 1)
+
+    build_loaders(micro)
+    train_n = loaders["n"]
     print("objective: masked_grid  records: " + str(train_n) + "  batch: " + str(args.batch_size),
           flush=True)
-    prog.note(params=n_params, records=train_n, seq=seq, image_code_bytes=code_bytes)
+    prog.note(params=n_params, records=train_n, seq=seq, image_code_bytes=code_bytes,
+              micro_batch=micro, grad_accum=accum, memory_estimate_bytes=est, memory_budget_bytes=budget,
+              precision=args.precision_resolved, attention=attention_path, compiled=plan["compiled"],
+              ns_dtype=hardware.precision_label(optim_helpers.ns_dtype(device)) if args.optimizer == "muon" else None)
+
+    def train_step():
+        """One optimizer step's worth of gradient: `accum` forwards of `micro` pictures.
+        Returns the mean loss, or None when any part was non-finite."""
+        opt.zero_grad(set_to_none=True)
+        total = 0.0
+        for _ in range(plan["accum"]):
+            toks, tgts = loaders["train"]()
+            toks = toks.to(device, non_blocking=True)
+            tgts = tgts.to(device, non_blocking=True)
+            part = image_grid.masked_step(plan["fwd"], toks, tgts, amp_dtype, device, backward=True,
+                                          scale=1.0 / plan["accum"], scaler=scaler)
+            if part is None:
+                return None
+            total += float(part)
+        return total / plan["accum"]
+
+    def drop_compile(step, err):
+        """torch.compile failed on this graph: the run continues eager, and says so."""
+        opt.zero_grad(set_to_none=True)
+        free_device(device)
+        plan["fwd"] = model
+        plan["compiled"] = False
+        print("compile: failed at step " + str(step) + " (" + type(err).__name__ + ": " + str(err)[:300]
+              + "); continuing eager", flush=True)
+        prog.note(compiled=False)
+
+    def shrink_after_oom(step, err):
+        opt.zero_grad(set_to_none=True)
+        free_device(device)
+        if plan["micro"] <= 1:
+            raise RuntimeError("out of memory at one picture per forward: size " + str(args.size)
+                               + " does not fit this device at seq " + str(seq)
+                               + "; pick a smaller size or a smaller picture size") from err
+        plan["micro"] = shrink_micro(plan["micro"], args.batch_size)
+        plan["accum"] = int(args.batch_size) // plan["micro"]
+        plan["oom"] += 1
+        build_loaders(plan["micro"])
+        print("out of memory at step " + str(step) + ": retrying with " + str(plan["micro"])
+              + " pictures per forward x " + str(plan["accum"]) + " (batch " + str(args.batch_size)
+              + " unchanged)", flush=True)
+        prog.note(micro_batch=plan["micro"], grad_accum=plan["accum"], oom_retries=plan["oom"])
 
     opt = vt.build_optimizer(vt.trainable_params(model), args, device, model=model)
     if resume_opt_state is not None:
@@ -367,6 +597,24 @@ def _run_stages(args, name, device, amp_dtype, code_bytes, size_presets, resume_
         except Exception as e:
             print("optimizer state restore skipped: " + str(e), flush=True)
 
+    def probe(step):
+        """The picture model's own probe (samples, fill test, formation, attention...):
+        what the Models tab shows instead of the text probes. Runs every `probe_every`
+        steps on the eager model, no weights saved, so the pictures appear long before
+        the first checkpoint and cost ~10-20 s each on this class of machine."""
+        try:
+            probe_codec = image_codec.load(paths.codec_path(codec_name))
+            pm = image_probe.dump(model, probe_codec, {"height": int(args.height), "width": int(args.width),
+                                                      "seq": seq, "code_bytes": code_bytes},
+                                  name, step, val_path, device, train_path=train_path)
+            print("image probe: fill acc " + format(pm.get("fill_accuracy", 0.0), ".3f")
+                  + "  codes used " + str(pm.get("codes_used")) + "/" + str(image_codec.CODEBOOK_ENTRIES)
+                  + "  (" + str(pm.get("seconds")) + "s)", flush=True)
+            prog.note(fill_accuracy=pm.get("fill_accuracy"), codes_used=pm.get("codes_used"),
+                      probe_step=step, probe_at=time.time())
+        except Exception as e:
+            print("image probe skipped: " + type(e).__name__ + ": " + str(e), flush=True)
+
     def checkpoint(step):
         ckpt_args = vars(args).copy()
         ckpt_args.update({"vocab": model.vocab, "hidden": model.hidden, "layers": model.layers,
@@ -375,20 +623,7 @@ def _run_stages(args, name, device, amp_dtype, code_bytes, size_presets, resume_
         ckpt_path = save.save(model, name, step, optimizer=opt, args=ckpt_args, dump_set=skip_dumps)
         print("checkpoint + hooks(" + hook_label + "): " + ckpt_path, flush=True)
         prog.note(last_checkpoint_step=step, last_checkpoint_at=time.time())
-        # The picture model's own probe: samples, fill test, per-plane accuracy,
-        # attention. What the Models tab shows instead of the text probes.
-        try:
-            probe_codec = image_codec.load(paths.codec_path(codec_name))
-            pm = image_probe.dump(model, probe_codec, {"height": int(args.height), "width": int(args.width),
-                                                      "seq": seq, "code_bytes": code_bytes},
-                                  name, step, val_path, device)
-            print("image probe: fill acc " + format(pm.get("fill_accuracy", 0.0), ".3f")
-                  + "  codes used " + str(pm.get("codes_used")) + "/" + str(image_codec.CODEBOOK_ENTRIES)
-                  + "  (" + str(pm.get("seconds")) + "s)", flush=True)
-            prog.note(fill_accuracy=pm.get("fill_accuracy"), codes_used=pm.get("codes_used"),
-                      probe_step=step)
-        except Exception as e:
-            print("image probe skipped: " + type(e).__name__ + ": " + str(e), flush=True)
+        probe(step)
 
     t0 = time.time()
     last_log, last_log_step = t0, resume_step
@@ -403,27 +638,43 @@ def _run_stages(args, name, device, amp_dtype, code_bytes, size_presets, resume_
                       wsd_decay_kind=args.wsd_decay_kind)
         for g in opt.param_groups:
             g["lr"] = lr
-        toks, tgts = train_draw()
-        toks = toks.to(device, non_blocking=True)
-        tgts = tgts.to(device, non_blocking=True)
         model.train()
-        opt.zero_grad(set_to_none=True)
-        loss = image_grid.masked_step(model, toks, tgts, amp_dtype, device, backward=True)
+        while True:
+            try:
+                loss = train_step()
+                break
+            except Exception as e:
+                if isinstance(e, RuntimeError) and is_oom(e):
+                    shrink_after_oom(step, e)
+                elif plan["compiled"]:
+                    drop_compile(step, e)
+                else:
+                    raise
         if loss is None:
             skipped += 1
             if skipped == 1 or skipped % args.log_every == 0:
                 print("WARNING step " + str(step) + ": non-finite loss, step skipped ("
                       + str(skipped) + " so far)", flush=True)
             continue
+        if scaler is not None:
+            for o in torch_optimizers(opt):
+                scaler.unscale_(o)
         gn = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         if not torch.isfinite(gn):
             opt.zero_grad(set_to_none=True)
+            if scaler is not None:
+                scaler.update()                       # the scale overflowed: it comes down
             skipped += 1
             if skipped == 1 or skipped % args.log_every == 0:
                 print("WARNING step " + str(step) + ": non-finite grad norm, step skipped ("
                       + str(skipped) + " so far)", flush=True)
             continue
-        opt.step()
+        if scaler is not None:
+            for o in torch_optimizers(opt):
+                scaler.step(o)
+            scaler.update()
+        else:
+            opt.step()
         last_loss = float(loss)
 
         if step % args.log_every == 0 or step == 1:
@@ -432,20 +683,21 @@ def _run_stages(args, name, device, amp_dtype, code_bytes, size_presets, resume_
             window_s = max(1e-6, now - last_log)
             tok_per_s = window_steps * args.batch_size * seq / window_s
             img_per_s = window_steps * args.batch_size / window_s
+            step_s = window_s / max(1, window_steps)
             print("step " + str(step) + "  loss " + format(float(loss), ".4f") + "  lr " + format(lr, ".2e")
-                  + "  gn " + format(float(gn), ".3f") + "  tok/s " + format(tok_per_s, ".0f")
-                  + "  img/s " + format(img_per_s, ".1f") + "  elapsed " + format(now - t0, ".0f") + "s",
-                  flush=True)
+                  + "  gn " + format(float(gn), ".3f") + "  " + format(step_s, ".2f") + " s/step  tok/s "
+                  + format(tok_per_s, ".0f") + "  img/s " + format(img_per_s, ".1f") + "  elapsed "
+                  + format(now - t0, ".0f") + "s", flush=True)
             save.append_train_row(name, step, "train", float(loss), lr=lr, grad_norm=float(gn),
                                   tok_per_s=tok_per_s, wall_s=now - t0, seed=args.seed)
             prog.stage("train", step, args.total_steps, "training  step " + format(step, ",") + " / "
                        + format(args.total_steps, ",") + "  loss " + format(float(loss), ".4f"),
-                       loss=round(float(loss), 5), lr=lr, grad_norm=round(float(gn), 4),
+                       loss=round(float(loss), 5), lr=lr, grad_norm=round(float(gn), 4), step_s=round(step_s, 3),
                        img_per_s=round(img_per_s, 2), tok_per_s=round(tok_per_s), skipped=skipped)
             last_log, last_log_step = now, step
 
-        if val_draw is not None and step % args.eval_every == 0:
-            v = vt.evaluate(model, val_draw, args.eval_iters, seq, amp_dtype, 1,
+        if loaders["val"] is not None and step % args.eval_every == 0:
+            v = vt.evaluate(model, loaders["val"], args.eval_iters * plan["accum"], seq, amp_dtype, 1,
                             device_type=device, objective=vt.OBJECTIVE_IMAGE)
             if v is not None:
                 print("step " + str(step) + "  val_loss " + format(v, ".4f"), flush=True)
@@ -456,6 +708,8 @@ def _run_stages(args, name, device, amp_dtype, code_bytes, size_presets, resume_
         if step % args.ckpt_every == 0 or step == args.total_steps:
             checkpoint(step)
             last_saved = step
+        elif args.probe_every > 0 and step % args.probe_every == 0:
+            probe(step)                               # pictures without a save
 
         if stop_requested():
             if last_saved != step:

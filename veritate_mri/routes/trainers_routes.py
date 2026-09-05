@@ -14,7 +14,7 @@
 # Imports:
 
 from flask import request
-from readers import models
+from readers import checkpoints, models
 from readers import trainers as trainers_reader
 from training import trainer_runner
 
@@ -45,7 +45,10 @@ def register(app):
                     slug = models.slugify_user_name(user_name)
                     if slug:
                         composed = f"{slug}_{size}"
-                        if models.exists(composed):
+                        # A dir with config.json but no checkpoint is an attempt that never
+                        # trained (out of memory at step 1, a refused stage); relaunching it is
+                        # what the user means. Only a model with weights on disk is protected.
+                        if models.exists(composed) and checkpoints.list_steps(composed):
                             return ({
                                 "ok": False,
                                 "error": f"model '{composed}' already exists. pick a different name "

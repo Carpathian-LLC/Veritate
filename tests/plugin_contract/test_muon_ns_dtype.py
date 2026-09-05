@@ -49,9 +49,18 @@ def test_cpu_orthogonalizes_in_fp32():
     assert optim.ns_dtype("cpu") is torch.float32
 
 
-def test_accelerated_devices_keep_bf16():
-    """bf16 is the upstream Muon dtype and stays wherever the device is fast at it."""
-    assert optim.ns_dtype("mps") is torch.bfloat16
+def test_a_gpu_orthogonalizes_in_the_half_precision_it_measures_fastest():
+    """bf16 is the upstream Muon dtype, but an M2 runs bf16 matmuls at half the fp16 rate
+    (1.46 s against 0.98 s per 80M step, 2026-09-05), so the GPU's dtype is measured, not
+    assumed: one of the two half formats, never fp32, and the native Muon (bf16 only) is
+    used only when bf16 is the pick."""
+    picked = optim.ns_dtype("mps")
+    assert picked in (torch.float16, torch.bfloat16)
+    muon = optim.build_muon(_Tiny(), _Args(), "mps").muon
+    if picked is torch.bfloat16:
+        assert not isinstance(muon, optim._VendoredMuon) or muon.ns_dtype is torch.bfloat16
+    else:
+        assert isinstance(muon, optim._VendoredMuon) and muon.ns_dtype is picked
 
 
 def test_cpu_gets_the_vendored_muon_so_the_dtype_is_ours():

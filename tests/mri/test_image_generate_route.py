@@ -16,6 +16,7 @@ import base64
 import io
 import json
 import os
+import time
 
 import pytest
 import torch
@@ -163,3 +164,39 @@ def test_live_lists_checkpoints_and_the_latest_probe_for_a_trained_model(client)
     assert d["last_checkpoint_at"] is not None
     assert d["latest_probe"]["step"] == 1 and "samples.png" in d["latest_probe"]["files"]
     assert d["running"] is False and d["log_tail"] == []
+
+
+def _wait_prompt(client, name, tries=200):
+    for _ in range(tries):
+        st = client.get("/images/mri/" + name + "/prompt/status").get_json()["state"]
+        if st["status"] != "running":
+            return st
+        time.sleep(0.05)
+    raise AssertionError("prompt job did not finish")
+
+
+def test_prompt_draws_the_words_at_every_checkpoint_with_and_without_them(client):
+    """The Models tab's prompt box: one picture with the words and one without, same seed,
+    at each checkpoint, and the share of cells the words moved."""
+    r = client.post("/images/mri/" + NAME + "/prompt", json={"caption": "a red square", "seed": 3, "passes": 2})
+    assert r.status_code == 200 and r.get_json()["ok"]
+    st = _wait_prompt(client, NAME)
+    assert st["status"] == "ok" and st["caption"] == "a red square" and st["steps"] == [1]
+    assert len(st["results"]) == 1
+    res = st["results"][0]
+    assert res["step"] == 1 and 0.0 <= res["steering"] <= 1.0
+    for key in ("png", "uncond_png"):
+        img = Image.open(io.BytesIO(base64.b64decode(res[key])))
+        assert img.size == (W, H)
+
+
+def test_prompt_status_for_another_model_is_idle_and_unknown_models_404(client):
+    st = client.get("/images/mri/prose/prompt/status").get_json()["state"]
+    assert st["status"] == "idle" and st["results"] == []
+    assert client.post("/images/mri/never/prompt", json={"caption": "x"}).status_code == 404
+
+
+def test_prompt_thins_many_checkpoints_evenly_and_keeps_the_last():
+    picked = image_routes._pick_steps(list(range(100, 3100, 100)), [], limit=6)
+    assert len(picked) == 6 and picked[0] == 100 and picked[-1] == 3000
+    assert image_routes._pick_steps([10, 20, 30], [20, 99]) == [20]

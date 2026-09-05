@@ -577,6 +577,8 @@
   .ckpt-cell .ckpt-cell-text .pr { color: var(--dim); }
 
   footer { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--dim); font-size: 11px; line-height: 1.6; }
+  footer .footer-credit { color: var(--soft); text-decoration: none; border-bottom: 1px dotted var(--line); }
+  footer .footer-credit:hover { color: var(--text); border-bottom-color: var(--text); }
   .spinner { width: 10px; height: 10px; border: 2px solid var(--dim); border-top-color: var(--warm); border-radius: 50%; display: inline-block; animation: spin 0.7s linear infinite; vertical-align: middle; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes cprogslide { 0% { background-position: 0 0; } 100% { background-position: 32px 0; } }

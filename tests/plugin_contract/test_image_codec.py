@@ -42,6 +42,18 @@ def test_one_code_is_exactly_one_byte(codec):
     assert len(codec.to_bytes(codes[0])) == codec.code_bytes(H, W)
 
 
+def test_a_prefix_of_the_planes_decodes_to_a_coarser_picture(codec):
+    """Residual planes are plane-major: rendering the first k is the picture the higher
+    planes refine, so a probe can show what each plane adds."""
+    codes = codec.encode(torch.rand(1, 3, H, W))[0]
+    coarse = codec.decode(codes, planes=1)
+    full = codec.decode(codes)
+    assert coarse.shape == full.shape == (H, W, 3) and coarse.dtype == torch.uint8
+    assert not torch.equal(coarse, full)
+    assert torch.equal(codec.decode(codes, planes=KW["planes"]), full)
+    assert torch.equal(codec.decode(codes, planes=99), full)          # clamps to what exists
+
+
 def test_the_byte_string_round_trips(codec):
     """Bytes out of a corpus rebuild the exact codes that were encoded."""
     codes = codec.encode(torch.rand(1, 3, H, W))[0]

@@ -103,3 +103,21 @@ def test_the_mask_schedule_stays_a_ratio():
     ratios = image_grid.cosine_mask_ratio(np.random.RandomState(0), 512)
     assert ratios.min() >= 0.0 and ratios.max() <= 1.0
     assert ratios.min() < 0.2 and ratios.max() > 0.8
+
+
+def test_a_scaled_backward_scales_the_gradient_and_not_the_reported_loss():
+    """Gradient accumulation: each of `accum` forwards contributes 1/accum of the gradient,
+    while the loss the trainer logs stays the real per-forward loss."""
+    from veritate_core.model import Veritate
+    torch.manual_seed(0)
+    model = Veritate(256, 16, 1, 32, 2, SEQ, causal=False)
+    toks = torch.randint(0, 255, (2, SEQ))
+    tgts = toks.clone()
+    tgts[:, : SEQ // 2] = -1
+    full = image_grid.masked_step(model, toks, tgts, None, "cpu", backward=True)
+    g_full = torch.cat([p.grad.flatten() for p in model.parameters() if p.grad is not None]).clone()
+    model.zero_grad(set_to_none=True)
+    half = image_grid.masked_step(model, toks, tgts, None, "cpu", backward=True, scale=0.5)
+    g_half = torch.cat([p.grad.flatten() for p in model.parameters() if p.grad is not None])
+    assert torch.allclose(half, full)
+    assert torch.allclose(g_half, 0.5 * g_full, atol=1e-6)

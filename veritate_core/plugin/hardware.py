@@ -24,6 +24,18 @@ DEVICE_ENV   = "VERITATE_DEVICE"
 VALID_FORCED = ("cuda", "mps", "cpu")
 KIB          = 1024
 
+# Autocast choices a trainer may ask for. `auto` is the half precision the device
+# measures fastest (half_precision_probe); the probe is a square matmul, sized so it
+# takes well under a second on any GPU and is cached per process.
+PRECISION_CHOICES  = ("auto", "fp16", "bf16", "fp32")
+# 2048 is the smallest square that ranks the dtypes the same way 4096 does on an M2
+# (1024 is launch-bound and ranked them wrong in one of two trials); ~0.3 s for all three.
+HALF_PROBE_N       = 2048
+HALF_PROBE_REPS    = 6
+HALF_PROBE_WARM_N  = 512       # one untimed matmul first, so the first dtype does not pay the cold start
+HALF_PROBE_MARGIN  = 1.10      # fp16 must beat bf16 by this much to displace the upstream default
+_HALF_PROBE_CACHE  = {}        # device -> (dtype or None, {"fp16": tflops, "bf16": ..., "fp32": ...})
+
 # CPU inference thread autotune. Batch-1 byte decode is latency-bound: on some
 # cores more threads help (bandwidth-rich), on others OpenMP spin-waits at the
 # per-token barriers and fewer win. Rather than a per-machine constant, the box
@@ -85,29 +97,104 @@ def pick_device(requested="auto"):
 
 
 def bf16_supported(device):
-    """True when `device` has real bf16 acceleration. CUDA consults torch; MPS
-    supports bf16 autocast; CPU is False because torch CPU autocast bf16 is
-    emulated (slower than fp32 even with AVX512-BF16) and doubles activation
-    bytes on weak boxes."""
+    """True when `device` runs bf16 autocast at all. CUDA consults torch; MPS
+    supports bf16 autocast (not always quickly: see half_precision_probe); CPU is
+    False because torch CPU autocast bf16 is emulated (slower than fp32 even with
+    AVX512-BF16) and doubles activation bytes on weak boxes."""
     import torch
     if device == "cuda":
         return bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
     return device == "mps"
 
 
-def resolve_precision(requested, device):
-    """Autocast dtype for `device` given a CLI precision string. Downgrades bf16
-    to fp32 (None) when the device lacks bf16 acceleration, so no machine runs
-    the emulated bf16 path. Returns a torch dtype for autocast, or None for
-    fp32. Logs one line on downgrade."""
+def _gemm_tflops(device, dtype, n=HALF_PROBE_N, reps=HALF_PROBE_REPS):
+    import time
+
     import torch
-    if (requested or "").strip().lower() != "bf16":
+    a = torch.randn(n, n, device=device, dtype=dtype)
+    b = torch.randn(n, n, device=device, dtype=dtype)
+    sync = torch.mps.synchronize if device == "mps" else (torch.cuda.synchronize if device == "cuda" else None)
+    for _ in range(2):
+        a @ b
+    if sync:
+        sync()
+    t0 = time.perf_counter()
+    for _ in range(reps):
+        a @ b
+    if sync:
+        sync()
+    return 2.0 * n ** 3 * reps / max(1e-9, time.perf_counter() - t0) / 1e12
+
+
+def half_precision_probe(device):
+    """Which half precision this GPU is fast at, MEASURED once per process: a square
+    matmul in fp16, bf16 and fp32. Apple's M1/M2 GPUs run bf16 at roughly half the fp16
+    rate (M2, 2026-09-05: fp16 3.2 TFLOPS, fp32 2.8, bf16 1.5), so the upstream default
+    of bf16 costs a picture model a quarter of its step there. Returns
+    (dtype, {"fp16": tflops, "bf16": tflops, "fp32": tflops}); dtype is None where
+    autocast is not worth running (CPU), and bf16 without a measurement where the
+    device is not present (an mps question asked on a Linux box)."""
+    import torch
+    if device in _HALF_PROBE_CACHE:
+        return _HALF_PROBE_CACHE[device]
+    if device == "cpu":
+        result = (None, {})
+    elif device == "cuda":
+        result = (torch.bfloat16 if bf16_supported(device) else torch.float16, {})
+    elif device == "mps" and not mps_supported():
+        result = (torch.bfloat16, {})
+    else:
+        rates = {}
+        try:
+            _gemm_tflops(device, torch.float32, n=HALF_PROBE_WARM_N, reps=1)     # pay the cold start once
+        except RuntimeError:
+            pass
+        for label, dtype in (("fp16", torch.float16), ("bf16", torch.bfloat16), ("fp32", torch.float32)):
+            try:
+                rates[label] = round(_gemm_tflops(device, dtype), 2)
+            except RuntimeError:
+                rates[label] = 0.0
+        pick = torch.float16 if rates["fp16"] >= rates["bf16"] * HALF_PROBE_MARGIN else torch.bfloat16
+        result = (pick, rates)
+    _HALF_PROBE_CACHE[device] = result
+    return result
+
+
+def precision_label(amp_dtype):
+    """The name a run log and config record for an autocast dtype."""
+    import torch
+    if amp_dtype is None:
+        return "fp32"
+    return {torch.float16: "fp16", torch.bfloat16: "bf16"}.get(amp_dtype, str(amp_dtype).split(".")[-1])
+
+
+def resolve_precision(requested, device):
+    """Autocast dtype for `device` given a CLI precision string: `fp32` (None), `bf16`,
+    `fp16`, or `auto`, which is the half precision this device MEASURES fastest
+    (half_precision_probe). Downgrades a half precision to fp32 (None) when the device
+    cannot run it, so no machine runs an emulated path; warns once about bf16 on a GPU
+    that is measured slow at it. Returns a torch dtype for autocast, or None for fp32."""
+    import torch
+    want = (requested or "").strip().lower()
+    if want not in PRECISION_CHOICES or want == "fp32":
         return None
-    if bf16_supported(device):
-        return torch.bfloat16
     from runtime import logs as logmod
-    logmod.warn("hardware", f"bf16 requested but {device} has no bf16 acceleration: running fp32")
-    return None
+    if device == "cpu":
+        if want != "fp32":
+            logmod.warn("hardware", f"{want} requested but cpu has no half-precision acceleration: running fp32")
+        return None
+    if want == "auto":
+        return half_precision_probe(device)[0]
+    if want == "fp16":
+        return torch.float16
+    if not bf16_supported(device):
+        logmod.warn("hardware", f"bf16 requested but {device} has no bf16 acceleration: running fp32")
+        return None
+    fast, rates = half_precision_probe(device)
+    if fast is torch.float16 and rates:
+        logmod.warn("hardware", "bf16 requested but this GPU measures fp16 at " + str(rates.get("fp16"))
+                    + " TFLOPS against bf16 at " + str(rates.get("bf16")) + ": precision=auto or fp16 is faster")
+    return torch.bfloat16
 
 
 def physical_cores():

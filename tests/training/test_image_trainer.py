@@ -31,6 +31,8 @@ from veritate_core.plugin import hardware
 
 H = W = 40
 TINY = {"layers": 1, "hidden": 32, "ffn": 64, "heads": 2, "params": 10000}
+CODEC = "set_40x40_p20x2_codec"              # <set>_<h>x<w>_p<patch>x<planes>_codec
+STEM  = "set_40x40_p20x2_img"
 ARGV = ["image_trainer.py", "--name", "smoke", "--description", "image trainer test",
         "--image_set", "set", "--size", "tiny", "--height", str(H), "--width", str(W),
         "--planes", "2", "--patch", "20", "--caption_bytes", "24", "--seq", "0",
@@ -66,13 +68,18 @@ def _run(monkeypatch, argv=ARGV):
     image_trainer.run(plugin_id=trainers_reader.IMAGE_TRAINER_ID)
 
 
+def _progress(name):
+    with open(os.path.join(paths.model_dir(name), "progress.json"), encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def test_one_launch_produces_codec_corpus_config_and_checkpoint(home, monkeypatch):
     """The whole point: pictures in, a trained image model out, nothing else to run."""
     _run(monkeypatch)
     name = "smoke_tiny"
-    assert os.path.isfile(paths.codec_path(name + "_codec"))
-    assert os.path.isfile(paths.corpus_train_path(name + "_img"))
-    assert os.path.isfile(paths.image_corpus_meta_path(name + "_img"))
+    assert os.path.isfile(paths.codec_path(CODEC))
+    assert os.path.isfile(paths.corpus_train_path(STEM))
+    assert os.path.isfile(paths.image_corpus_meta_path(STEM))
     with open(paths.config_path(name), encoding="utf-8") as handle:
         cfg = json.load(handle)
     ta = cfg["training_args"]
@@ -81,8 +88,8 @@ def test_one_launch_produces_codec_corpus_config_and_checkpoint(home, monkeypatc
     assert ta["objective"] == "masked_grid"
     assert ta["image_code_bytes"] == 2 * (H // 20) * (W // 20)
     assert ta["seq"] == 64                      # 8 image + 24 caption bytes, rounded to 64
-    assert ta["codec"] == name + "_codec"
-    assert ta["corpus"] == name + "_img"
+    assert ta["codec"] == CODEC                 # keyed on the set and geometry, not the model
+    assert ta["corpus"] == STEM
     assert os.path.isfile(paths.checkpoint_path(name, 4))
     with open(paths.train_csv_path(name), encoding="utf-8") as handle:
         rows = handle.read().strip().splitlines()
@@ -90,27 +97,28 @@ def test_one_launch_produces_codec_corpus_config_and_checkpoint(home, monkeypatc
     assert any(",val," in r for r in rows[1:])
 
 
-def test_a_current_corpus_is_not_rebuilt(home, monkeypatch):
-    """Re-launching on the same set must not spend the encode again."""
+def test_another_model_on_the_same_pictures_reuses_the_codec_and_the_corpus(home, monkeypatch):
+    """Changing the model's name or size must not spend the codec fit or the encode again:
+    both are named after the set and the geometry, and nothing in the form points at them."""
     _run(monkeypatch)
-    stem = "smoke_tiny_img"
-    before = os.path.getmtime(paths.corpus_train_path(stem))
-    argv = [a if a != "smoke" else "smoke2" for a in ARGV]
-    argv += ["--codec", "smoke_tiny_codec", "--corpus", stem]
+    codec_before = os.path.getmtime(paths.codec_path(CODEC))
+    corpus_before = os.path.getmtime(paths.corpus_train_path(STEM))
+    argv = [a if a != "smoke" else "another-name" for a in ARGV]
     _run(monkeypatch, argv)
-    assert os.path.getmtime(paths.corpus_train_path(stem)) == before
+    assert os.path.getmtime(paths.codec_path(CODEC)) == codec_before
+    assert os.path.getmtime(paths.corpus_train_path(STEM)) == corpus_before
+    with open(paths.config_path("another_name_tiny"), encoding="utf-8") as handle:
+        assert json.load(handle)["training_args"]["corpus"] == STEM
 
 
 def test_a_grown_set_rebuilds_the_corpus(home, monkeypatch):
     """New pictures must reach the corpus; the sidecar's image count is the tell."""
     _run(monkeypatch)
-    stem = "smoke_tiny_img"
     Image.new("RGB", (H * 2, H * 2), (1, 2, 3)).save(
         os.path.join(paths.IMAGES_ROOT, "set", "ffffffff_new.png"))
     argv = [a if a != "smoke" else "smoke3" for a in ARGV]
-    argv += ["--codec", "smoke_tiny_codec", "--corpus", stem]
     _run(monkeypatch, argv)
-    with open(paths.image_corpus_meta_path(stem), encoding="utf-8") as handle:
+    with open(paths.image_corpus_meta_path(STEM), encoding="utf-8") as handle:
         assert json.load(handle)["images"] == 25
 
 
@@ -208,3 +216,153 @@ def test_a_failed_stage_is_recorded_in_progress(home, monkeypatch):
     prog = image_progress.read(paths.model_dir("smoke_tiny"))
     assert prog["state"] == "failed"
     assert "no image set" in prog["message"]
+
+
+def test_default_names_key_on_the_set_and_the_geometry():
+    assert image_trainer.default_codec_name("photos", 320, 320, 20, 4) == "photos_320x320_p20x4_codec"
+    assert image_trainer.default_corpus_stem("photos_320x320_p20x4_codec") == "photos_320x320_p20x4_img"
+
+
+def test_the_memory_plan_halves_the_forward_until_the_step_fits():
+    """800m at seq 1152, batch 16 on a 24 GB Mac is the case that failed: the plan must
+    say so before the first step, and a size that fits must keep its batch whole."""
+    big = {"layers": 28, "hidden": 1536, "ffn": 6144, "heads": 24}
+    micro, accum, est = image_trainer.plan_micro_batch(big, 793_000_000, 16, 1152, 2, "muon",
+                                                       budget=int(24 * 0.7 * 1024 ** 3))
+    assert micro == 1 and accum == 16
+    assert est > int(24 * 0.7 * 1024 ** 3)          # does not fit even at one picture
+    small = {"layers": 8, "hidden": 512, "ffn": 2048, "heads": 8}
+    micro, accum, _ = image_trainer.plan_micro_batch(small, 20_000_000, 16, 1152, 2, "muon",
+                                                     budget=int(24 * 0.7 * 1024 ** 3))
+    assert (micro, accum) == (16, 1)
+    assert image_trainer.shrink_micro(12, 12) == 6 and image_trainer.shrink_micro(5, 10) == 2
+
+
+def test_an_out_of_memory_step_shrinks_the_forward_and_the_run_still_finishes(home, monkeypatch):
+    """The device says no at batch 2; the trainer retries the step at one picture per
+    forward, twice, adds the gradients up, and the run completes with the same batch."""
+    from veritate_core.plugin import image_grid, image_progress
+    real = image_grid.masked_step
+    seen = []
+
+    def oom_above_one(model, tokens, targets, *a, **k):
+        seen.append(int(tokens.shape[0]))
+        if k.get("backward") and tokens.shape[0] > 1:
+            raise RuntimeError("MPS backend out of memory (MPS allocated: 29.26 GiB)")
+        return real(model, tokens, targets, *a, **k)
+    monkeypatch.setattr(image_grid, "masked_step", oom_above_one)
+    _run(monkeypatch)
+    prog = image_progress.read(paths.model_dir("smoke_tiny"))
+    assert prog["state"] == "done"
+    assert prog["notes"]["micro_batch"] == 1 and prog["notes"]["grad_accum"] == 2
+    assert prog["notes"]["oom_retries"] == 1
+    assert 2 in seen and seen.count(1) >= 8          # 4 steps x 2 forwards, plus eval
+    assert os.path.isfile(paths.checkpoint_path("smoke_tiny", 4))
+
+
+def test_out_of_memory_at_one_picture_is_a_clear_error(home, monkeypatch):
+    from veritate_core.plugin import image_grid, image_progress
+
+    def always_oom(*a, **k):
+        if k.get("backward"):
+            raise RuntimeError("CUDA out of memory")
+        return image_grid.masked_step.__wrapped__(*a, **k) if hasattr(image_grid.masked_step, "__wrapped__") else None
+    monkeypatch.setattr(image_grid, "masked_step", always_oom)
+    with pytest.raises(RuntimeError, match="does not fit this device"):
+        _run(monkeypatch)
+    assert image_progress.read(paths.model_dir("smoke_tiny"))["state"] == "failed"
+
+
+def test_fp16_trains_under_loss_scaling_and_records_what_it_computed_in(home, monkeypatch):
+    """`precision` resolves on the device: here the CPU is made to say fp16 so the
+    GradScaler path runs end to end (unscale, clip, step, update) on the tiny model, and
+    config.json records the resolved precision, not just the request."""
+    import torch
+
+    monkeypatch.setattr(hardware, "resolve_precision", lambda want, dev: torch.float16 if want == "fp16" else None)
+    argv = [a if a != "fp32" else "fp16" for a in ARGV]
+    argv = [a if a != "smoke" else "half" for a in argv]
+    _run(monkeypatch, argv)
+    with open(paths.config_path("half_tiny"), encoding="utf-8") as handle:
+        ta = json.load(handle)["training_args"]
+    assert ta["precision"] == "fp16" and ta["precision_resolved"] == "fp16"
+    assert os.path.isfile(paths.checkpoint_path("half_tiny", 4))
+    prog = _progress("half_tiny")
+    assert prog["notes"]["precision"] == "fp16" and prog["notes"]["compiled"] is False
+    assert prog["stages"]["train"]["step_s"] > 0
+
+
+def test_auto_precision_is_fp32_on_a_cpu_and_a_bad_choice_is_refused(home, monkeypatch):
+    argv = [a if a != "fp32" else "auto" for a in ARGV]
+    _run(monkeypatch, argv)
+    with open(paths.config_path("smoke_tiny"), encoding="utf-8") as handle:
+        assert json.load(handle)["training_args"]["precision_resolved"] == "fp32"
+    with pytest.raises(ValueError, match="unknown precision"):
+        _run(monkeypatch, [a if a != "fp32" else "fp8" for a in ARGV])
+    with pytest.raises(ValueError, match="unknown compile"):
+        _run(monkeypatch, [*ARGV, "--compile", "maybe"])
+
+
+def test_a_compile_that_fails_falls_back_to_eager_and_the_run_finishes(home, monkeypatch):
+    """torch.compile is a speed lever, never a reason a run dies: a graph that will not
+    compile is dropped at the first step and training continues eager."""
+    import torch
+
+    def broken_compile(model, **_kw):
+        def fwd(*_a, **_k):
+            raise RuntimeError("inductor: no backend for this graph")
+        return fwd
+
+    monkeypatch.setattr(torch, "compile", broken_compile)
+    _run(monkeypatch, [*ARGV, "--compile", "on"])
+    assert os.path.isfile(paths.checkpoint_path("smoke_tiny", 4))
+    assert _progress("smoke_tiny")["notes"]["compiled"] is False
+    assert image_trainer.want_compile("auto", "cpu") is False
+    assert image_trainer.want_compile("auto", "mps") is True
+    assert image_trainer.want_compile("off", "mps") is False
+
+
+def test_the_memory_estimate_charges_attention_in_the_dtype_the_device_holds_it_in():
+    """sdpa's fallback holds fp32 attention whatever autocast says; the explicit path on
+    MPS holds the working dtype and measured half the memory (M2, 2026-09-05)."""
+    import torch
+
+    shape = {"hidden": 768, "layers": 12, "heads": 12}
+    fallback = image_trainer.estimate_step_bytes(shape, 85_000_000, 8, 1152, 2, "muon")
+    explicit = image_trainer.estimate_step_bytes(shape, 85_000_000, 8, 1152, 2, "muon", attn_bytes=2)
+    assert explicit < fallback
+    assert 9.5e9 < explicit < 11.5e9                    # measured peak 9.13 GB at 80m x 8 pictures
+    assert image_trainer.attention_bytes("mps", torch.float16) == 2
+    assert image_trainer.attention_bytes("mps", None) == 4
+    assert image_trainer.attention_bytes("cpu", torch.float16) == 4
+
+
+def test_a_relaunch_over_an_attempt_that_never_trained_drops_its_stale_rows(home, monkeypatch):
+    """OOM at step 1 leaves config.json and maybe a train.csv; the next launch of the same
+    name starts clean rather than concatenating runs."""
+    os.makedirs(paths.model_dir("smoke_tiny"), exist_ok=True)
+    with open(paths.train_csv_path("smoke_tiny"), "w", encoding="utf-8") as handle:
+        handle.write("step,split,loss,lr,grad_norm,tok_per_s,wall_s,seed\n7,train,9.9,0.1,1,1,1,0\n")
+    _run(monkeypatch)
+    with open(paths.train_csv_path("smoke_tiny"), encoding="utf-8") as handle:
+        rows = handle.read().strip().splitlines()[1:]
+    assert not any(r.startswith("7,") for r in rows)
+    assert rows and rows[0].startswith("1,")
+
+
+def test_continuing_a_model_keeps_its_frame_and_size_whatever_the_form_sent(home, monkeypatch):
+    """Resume from the Images form: the runner sends every field, but a model's pictures,
+    frame, codec, corpus and size are facts about its weights. Training continues from
+    the last checkpoint to the new total."""
+    _run(monkeypatch)
+    argv = ["image_trainer.py", "--resume", "smoke_tiny", "--description", "continue",
+            "--image_set", "set", "--size", "tiny", "--height", "200", "--width", "200",
+            "--planes", "3", "--total_steps", "6", "--batch_size", "2", "--ckpt_every", "2",
+            "--eval_every", "2", "--eval_iters", "1", "--log_every", "1", "--precision", "fp32",
+            "--optimizer", "adamw", "--warmup_steps", "1"]
+    _run(monkeypatch, argv)
+    assert os.path.isfile(paths.checkpoint_path("smoke_tiny", 6))
+    with open(paths.config_path("smoke_tiny"), encoding="utf-8") as handle:
+        ta = json.load(handle)["training_args"]
+    assert (ta["height"], ta["width"], ta["planes"]) == (H, W, 2)     # not 200x200 / 3
+    assert ta["corpus"] == STEM and ta["codec"] == CODEC

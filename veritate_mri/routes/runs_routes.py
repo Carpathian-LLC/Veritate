@@ -590,13 +590,15 @@ def register(app):
             try: ckpts_mtime = os.path.getmtime(paths.checkpoints_dir(name))
             except OSError: ckpts_mtime = 0
             mtime = max(hooks_mtime, ckpts_mtime)
+            cfg = cfg_reader.load(name) or {}
             out.append({
                 "name": name,
                 "mtime": mtime,
                 "n_checkpoints": len(hook_steps),
                 "n_pt_checkpoints": len(ckpt_steps),
                 "has_hooks": bool(hook_steps),
-                "prompt": (cfg_reader.load(name) or {}).get("training_args", {}).get("prompt", ""),
+                "prompt": cfg.get("training_args", {}).get("prompt", ""),
+                "training": cfg.get("training") or "text",    # image models get their own view
                 "source": "hooks" if hook_steps else "checkpoints",
             })
         out.sort(key=lambda r: -r["mtime"])

@@ -143,7 +143,8 @@ IMAGE_TRAINER_DEFAULTS = {
     "codec_images":     8192,   # pictures the codec is fitted on (a hash-ordered sample); 0 = all
     # the run
     "size":          "20m",
-    "precision":     "bf16",
+    "precision":     "auto",    # the half precision this GPU measures fastest (fp16 on an M2)
+    "compile":       "auto",    # torch.compile the training forward on a GPU; off on the CPU
     "total_steps":   5000,
     "batch_size":    16,
     "base_lr":       3e-4,
@@ -159,6 +160,7 @@ IMAGE_TRAINER_DEFAULTS = {
     "optimizer":     "muon",
     "use_8bit_adam": False,
     "ckpt_every":    500,
+    "probe_every":   100,       # the picture probe (samples, fill, formation) between checkpoints; 0 = only at checkpoints
     "eval_every":    250,
     "eval_iters":    8,
     "log_every":     25,

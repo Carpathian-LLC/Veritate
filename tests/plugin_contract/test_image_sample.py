@@ -124,3 +124,29 @@ def test_source_modes_refuse_to_run_without_a_source(rig):
     model, codec, g = rig
     with pytest.raises(ValueError, match="needs a source"):
         image_sample.generate(model, codec, g, mode="variation")
+
+
+def test_the_trace_shows_the_picture_forming_pass_by_pass(rig):
+    """One entry per pass; unknown cells shrink to none; every cell is committed once."""
+    model, _codec, _g = rig
+    first = SEQ - CODE_BYTES
+    trace = []
+    codes = image_sample.fill(model, image_sample.build_window(SEQ, CODE_BYTES), first, passes=4, seed=3,
+                              device="cpu", trace=trace)
+    assert 1 <= len(trace) <= 4
+    assert [e["pass"] for e in trace] == list(range(1, len(trace) + 1))
+    unknown = [int(e["unknown"].sum()) for e in trace]
+    assert unknown == sorted(unknown, reverse=True) and unknown[-1] == 0
+    assert sum(e["committed"] for e in trace) == CODE_BYTES
+    assert np.array_equal(trace[-1]["codes"], codes)
+    assert all(e["confidence"] is None or 0.0 <= e["confidence"] <= 1.0 for e in trace)
+
+
+def test_generate_codes_is_generate_before_the_decode(rig):
+    model, codec, g = rig
+    codes, info = image_sample.generate_codes(model, codec, g, mode="text", caption=b"hi", passes=2, seed=1,
+                                              device="cpu")
+    assert codes.shape == (CODE_BYTES,) and codes.dtype == np.uint8
+    assert info["caption_bytes"] == 2
+    png, _ = image_sample.generate(model, codec, g, mode="text", caption=b"hi", passes=2, seed=1, device="cpu")
+    assert png == image_sample.decode_png(codec, codes, H, W)

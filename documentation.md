@@ -325,7 +325,7 @@ Third-party dashboard extensions (distinct from trainer plugins — never relabe
 
 ### internal (dashboard surface)
 
-One route module per concern in `veritate_mri/routes/`. High-traffic groups: `/trainers` + `/trainers/run|stop|tune_defaults|sysprobe`, `/runs/*` (incl. timelines and eval-deep), `/models/*`, `/corpus/*` (incl. `/corpus/mix/plan`), `/settings` + `/settings/notices`, `/sys_metrics`, `/backends`, `/wiki*`, `/addons`, `/atlas/*` (concept/neuron/lifetime/circuit/concepts_inverted — pure derivations over hook dumps), `/teacher/*`, `/mesh/*` (machine-to-machine), `/models/git/*` (models repo sync), `/app/*` (updater). `/images/decode_bench` (POST) is the image-decoder benchmark described under image decoding; `/images/sets` (GET) lists the picture sets and fitted codecs, `/images/ingest` (POST, body `{set, sources:[paths], min_edge?, caption_from_folder?, copy?}`) collects photos from folders on this machine into `data/images/<set>/` in a background thread (400 on a bad set name or a missing folder, 409 while one runs), and `/images/ingest/status` (GET) reports it; `/images/pick_folder` (POST) opens the operating system's folder chooser on the dashboard's machine and returns the chosen path (`{ok, path}`, or `cancelled`, or `unavailable` on a headless box so the form falls back to a typed path). `/train/discovery` also returns `image_sets` and `codecs`. `/images/models` (GET) lists image models; `/images/generate` (POST) generates a PNG from one in any mode (see image models, generation). `/images/caption/options` (GET), `/images/caption/preview` (POST), `/images/caption` (POST, background), `/images/caption/status` (GET), `/images/caption/stop` (POST) are the captioning stage. `/images/mri/<model>` (GET) and `/images/mri/<model>/<step>/<file>` (GET) serve the image probe to the Models tab; `/images/live/<model>` (GET) is the Training tab's live view of an image run (progress.json, checkpoints, latest probe, run-log tail; 404 when there is no such run directory). `/teacher/target_status` (GET) answers where distillation calls will land and whether that machine is already training: `{provider, model, kind, host, targets_this_machine, training_active, run, contention, contention_kind, reason}`. A hosted-API teacher never contends. A local teacher on this box contends while `trainer_runner.state()` reports running. A local teacher pointed at another box reports `training_active: null` — unknowable from here, and reporting `false` would be a guess dressed as a fact. The route never raises: a guard that 500s would block the start it is meant to advise.
+One route module per concern in `veritate_mri/routes/`. High-traffic groups: `/trainers` + `/trainers/run|stop|tune_defaults|sysprobe`, `/runs/*` (incl. timelines and eval-deep), `/models/*`, `/corpus/*` (incl. `/corpus/mix/plan`), `/settings` + `/settings/notices`, `/sys_metrics`, `/backends`, `/wiki*`, `/addons`, `/atlas/*` (concept/neuron/lifetime/circuit/concepts_inverted — pure derivations over hook dumps), `/teacher/*`, `/mesh/*` (machine-to-machine), `/models/git/*` (models repo sync), `/app/*` (updater). `/images/decode_bench` (POST) is the image-decoder benchmark described under image decoding; `/images/sets` (GET) lists the picture sets and fitted codecs, `/images/ingest` (POST, body `{set, sources:[paths], min_edge?, caption_from_folder?, copy?}`) collects photos from folders on this machine into `data/images/<set>/` in a background thread (400 on a bad set name or a missing folder, 409 while one runs), and `/images/ingest/status` (GET) reports it; `/images/pick_folder` (POST) opens the operating system's folder chooser on the dashboard's machine and returns the chosen path (`{ok, path}`, or `cancelled`, or `unavailable` on a headless box so the form falls back to a typed path). `/train/discovery` also returns `image_sets` and `codecs`. `/images/models` (GET) lists image models; `/images/generate` (POST) generates a PNG from one in any mode (see image models, generation). `/images/caption/options` (GET), `/images/caption/preview` (POST), `/images/caption` (POST, background), `/images/caption/status` (GET), `/images/caption/stop` (POST) are the captioning stage. `/images/mri/<model>` (GET) and `/images/mri/<model>/<step>/<file>` (GET) serve the image probe to the Models tab; `/images/mri/<model>/prompt` (POST, background), `.../prompt/status` (GET) and `.../prompt/stop` (POST) draw a prompt at several checkpoints with and without the words; `/images/live/<model>` (GET) is the Training tab's live view of an image run (progress.json, checkpoints, latest probe, run-log tail; 404 when there is no such run directory). `/teacher/target_status` (GET) answers where distillation calls will land and whether that machine is already training: `{provider, model, kind, host, targets_this_machine, training_active, run, contention, contention_kind, reason}`. A hosted-API teacher never contends. A local teacher on this box contends while `trainer_runner.state()` reports running. A local teacher pointed at another box reports `training_active: null` — unknowable from here, and reporting `false` would be a guess dressed as a fact. The route never raises: a guard that 500s would block the start it is meant to advise.
 
 The authoritative settings-key list is `DEFAULTS` in `veritate_mri/runtime/settings.py` — treat the code as the reference; notable keys beyond the obvious: `speculative_enabled`, `speculative_bytes`, `speculative_chunk_bytes`, `speculative_pause_ms`, `read_ahead_enabled`, `api_read_ahead_enabled`, `api_generate_ahead_enabled`, `corpus_compose_chunk_bytes`, `corpus_compose_val_ratio`, `corpus_compose_seed`, `trainer_sizes_path`, `corpus_mix_max_epochs`, `pytorch_load_mode`, `warm_models`, `device_preference`, `api_key`.
 
@@ -427,7 +427,9 @@ Stages, each skipped when its output already exists:
    (`POST /images/caption`, status/stop beside it) skips pictures that already have a caption and is
    resumable. The corpus sidecar records the caption count, so the next launch rebuilds the corpus
    and the words reach the model. Without this stage captions are folder names.
-2. **Codec.** `codec` blank fits `<model>_codec` with `fit_image_codec` on a SAMPLE of the set:
+2. **Codec.** `codec` blank means `<set>_<h>x<w>_p<patch>x<planes>_codec` (`images_320x320_p20x4_codec`):
+   named after what a codec depends on, so every model trained on those pictures at that frame
+   reuses it, whatever its size or name. Missing, it is fitted with `fit_image_codec` on a SAMPLE of the set:
    `codec_images` (8,192) pictures in content-hash order, which is a random draw; 0 fits on all.
    A codec does not improve past ~10k pictures, and the sample is all that is decoded into the
    pixel cache (8,192 x 320x320 is 2.5 GB; the whole of a 140k-picture library at 1920x1080 would
@@ -438,7 +440,8 @@ Stages, each skipped when its output already exists:
    `codec_epochs`, `codec_batch_size`, `codec_lr` as before; held-out L1 and PSNR per epoch. A
    named codec is reused and a `patch`/`planes` mismatch refused, because a corpus is unreadable
    under a different codec.
-3. **Corpus.** `<model>_img_{train,val}.bin` for the WHOLE set (`build_image_corpus.build_streaming`):
+3. **Corpus.** `<codec>_img_{train,val}.bin` (`images_320x320_p20x4_img`, reused the same way) for the
+   WHOLE set (`build_image_corpus.build_streaming`):
    frames in the cache are read from it, every other picture is decoded by a thread pool one batch
    ahead of the codec, so Pillow and the GPU overlap and no picture is decoded twice; the sidecar
    `<stem>.image.json` records set, codec, geometry, image and caption counts and `image_code_bytes`.
@@ -446,9 +449,44 @@ Stages, each skipped when its output already exists:
 4. **Run.** `seq` = `image_code_bytes + caption_bytes` rounded up to 64 unless set explicitly (a value
    below the image is refused, not clipped). A frame above 1024 px on either side is refused
    (`MAX_EDGE`); the form's single *picture size* control offers 160-640 px squares and sets
-   `height` and `width` together, snapping a pair it does not offer back to 320. Logs `img/s` beside `tok/s`; `config.json` carries
+   `height` and `width` together, snapping a pair it does not offer back to 320. **Memory is
+   planned before the first step** (`plan_micro_batch`): weights + grads + optimizer state (Muon
+   one momentum, AdamW two) plus, per layer, activations and the two attention tensors a device
+   without a flash kernel holds for backward (`heads x seq^2`, the dominant term for a picture
+   model: fp32 under sdpa's fallback, the working dtype under the explicit path, see *Speed*
+   below; `attention_bytes`), against 70% of unified memory or what is free, whichever is less,
+   and 30% less than that when the model is compiled (a compiled graph measured 1.27x the eager
+   peak). Calibrated against measured peaks on an M2: 20m at 16 pictures 8.2 GB measured / 8.8
+   estimated, 80m at 4 pictures 6.1 / 6.0, 80m at 8 pictures 9.1 / 10.7. When the batch
+   does not fit in one forward the step becomes `accum` forwards of `micro` pictures with the loss
+   scaled by `1/accum` (`image_grid.masked_step(scale=)`): the optimizer sees the same batch, the
+   result is the same, the step is slower; the run log and `progress.json` say so (`micro_batch`,
+   `grad_accum`). An out-of-memory error mid-run frees the device cache, halves the pictures per
+   forward and retries the step; at one picture it is a clear error naming the size as too big for
+   this device (800m at seq 1152 is that case on a 24 GB Mac: ~21 GB at one picture). A relaunch
+   of a name whose earlier attempt never saved a checkpoint is allowed (`POST /trainers/run` only
+   409s when weights exist) and drops that attempt's `train.csv` rows first. Logs `img/s` beside `tok/s`; `config.json` carries
    `training: image`, the codec name, the set and the geometry, which is everything decoding a
    sample later needs.
+
+**Speed** (measured, M2 with 10 GPU cores and 24 GB, seq 1152, batch 16, 2026-09-05; the profile
+script and its output are in the handoff). The 137 s/step the first 80m run showed was paging: the
+old code ran 16 pictures per forward at ~29 GB on a 24 GB box. Within memory, four things decide a
+step, and each is measured rather than assumed:
+
+| lever | measured | what the trainer does |
+|---|---|---|
+| precision | GEMM fp16 3.2 TFLOPS, fp32 2.8, **bf16 1.5**; a 20m step 4.28 s in bf16 vs 3.54 fp16 vs 3.47 fp32 | `precision=auto` (default) picks the half precision `hardware.half_precision_probe` measures fastest on this GPU at launch (fp16 on M1/M2; bf16 stays where it is fast); fp16 runs under `torch.amp.GradScaler`; the log prints the rates and `config.json` records `precision_resolved` |
+| attention | sdpa on MPS has no fused training kernel and upcasts to fp32: 131 ms fp32 / 146 ms fp16 per layer-batch; written out in fp16 **74 ms, half the memory** | `veritate_core.model.attention` takes the explicit form for non-causal half-precision on MPS (`EXPLICIT_ATTENTION_DEVICES`); text runs, fp32 and CUDA are untouched. Full step: 20m 3.56 -> 3.15 s, peak 11.7 -> 8.2 GB; 80m at 4 pictures 9.44 -> 8.54 s |
+| Muon | its Newton-Schulz orthogonalization is hardcoded bf16 upstream: **1.46 s per 80m step** vs 0.98 in fp16/fp32 | `optim.ns_dtype` is the measured half precision on a GPU (the vendored Muon carries it); bf16 keeps `torch.optim.Muon` |
+| compile | inductor on MPS (torch 2.14): 20m step **3.15 -> 2.37 s (1.54x over eager, 1.8x over the old default)**, ~9 s to compile | `compile=auto` (default) wraps the training forward in `torch.compile` on a GPU, never on the CPU; probes and evaluation run the eager model on the same weights; a compile failure falls back to eager with a log line and the run continues |
+
+Where that leaves this box, best configuration: 20m 2.4 s/step (5,000 steps in 3.3 h), 80m at
+8x2 pictures 8.5 s eager (12 h; compiled unmeasured at this size), 200m at 4x4 19 s (26 h). More
+pictures per forward is not faster once memory is tight: 80m at 16x1 measured 12.7 s and 17 GB
+against 8.5 s at 8x2, which is why the planner's budget is what is free, not what is installed.
+The remaining cost is the token count itself (1,152 per picture: 4 planes x 256 cells + captions),
+which is the next lever (ideas.md, IDEA 24). Every log line and `progress.json` carry `s/step`.
 
 Measured on the fit path (M2, CPU forward, batch 16): decoding the batch in one pass instead of one
 image per Python iteration is 1.84x, bitwise identical (`PatchDecoder.forward` accepts a batch;
@@ -482,23 +520,103 @@ learns those names, not open vocabulary. Describe-anything generation needs a ca
 ### probe and the Models tab
 
 `veritate_core/plugin/image_probe.py` runs at every checkpoint of an image run and writes
-`hooks/step_<N>/image/`: `samples.png` (eight pictures from nothing, the SAME seeds at every step so
-the timeline shows one draw evolving, plus pictures from held-out captions when the set has any),
-`fill.png` (four held-out pictures: original / half the cells hidden / the model's completion),
-`recon.png` (the codec's own reconstruction of those pictures -- the ceiling the model cannot beat,
-so blur is attributed to the right stage), `attention.png` (where the centre cell attends, one map
-per layer, recovered from the qkv projection with a forward hook) and `metrics.json`: fill accuracy
-overall and per plane (plane 0 is coarse structure, the last plane is fine detail -- a model learns
-them in that order), loss at 25/50/75/100% hidden, codes in use out of 255 and their entropy (a
-collapse shows as a handful), attention spread per layer (0 focused, 1 uniform), and the held-out
-count. `GET /images/mri/<model>` returns every step's metrics with the files present;
-`GET /images/mri/<model>/<step>/<file>` serves a picture.
+`hooks/step_<N>/image/`, one file per question a person asks of a picture model:
 
-The Models tab detects an image model from `config.json` (`training: image`), hides the byte-level
-panels, and shows this instead: a strip of every probed checkpoint's samples (click to select), the
-KPIs for the selected step, the fill test, the attention maps with per-layer spread, and charts over
-training of fill accuracy (all and per plane), loss by hidden fraction, and codes in use. It polls
-while a run is training that model.
+- `samples.png` -- eight pictures from nothing, the SAME seeds at every step so the timeline shows
+  one draw evolving, plus pictures from held-out captions when the set has any.
+- `passes.png` -- the first sample forming pass by pass (`image_sample.fill(trace=)`): grey cells are
+  still undecided; `pass_committed` / `pass_confidence` per pass. A model that has learned structure
+  commits the layout early and the detail late.
+- `fill.png` -- four held-out pictures: original / half the cells hidden / the model's completion.
+- `layers.png` -- the logit lens for a picture: the residual after every block read through the
+  model's own output head and decoded, so the tab shows what it would draw if it stopped at layer
+  1, 2, ... L. `lens_agreement_per_layer` (with the final layer), `lens_accuracy_per_layer`, and
+  `commit_layer`: the first layer that already agrees with the final answer on 90% of hidden cells,
+  i.e. where the decision is made. `residual_norm_per_layer` beside it: how much each layer carries.
+- `confidence.png` -- original / hidden / filled / a per-cell confidence map for the first held-out
+  picture, plus `mean_confidence`, `calibration` (accuracy per confidence band) and
+  `expected_calibration_error`: is the confidence earned, or noise.
+- `cell_loss.png` -- loss per grid cell averaged over the held-out batch: where in the frame it
+  struggles; `centre_loss`, `edge_loss`, `centre_edge_loss_ratio`.
+- `nearest.png` -- the training picture closest to each sample by cell-wise hamming distance over a
+  fixed 16,384-record sample of the train bin, with `novelty_per_sample` / `novelty_mean` (share of
+  cells that differ; 0 is a copy). Memorisation shows as novelty falling toward 0.
+- `attention.png` -- where the centre cell attends, one map per layer, recovered from the qkv
+  projection with a forward hook; `attention_entropy_per_layer` and `attention_entropy_per_head`
+  (0 focused, 1 uniform).
+- `recon.png` -- the codec's own reconstruction of the held-out pictures: the ceiling the model
+  cannot beat, so blur is attributed to the right stage.
+- `formation.png` -- the order the first sample formed: a heat map of the decode pass in which each
+  cell (plane 0) was decided, blue early, orange late, read off the same `fill(trace=)` as
+  `passes.png`; `commit_pass_map` (per cell), `commit_pass_per_plane` (mean pass per plane: the
+  structure plane should commit earlier than the detail planes, and earlier as training goes on),
+  `formation_passes`.
+- `planes.png` -- coarse to fine: the first sample rendered from 1, 2, ... all of its planes
+  (`ImageCodec.decode(codes, planes=k)`; residual planes are plane-major so a prefix is a valid
+  coarser picture). What the left tile gets right is layout; the difference across the row is
+  what the detail planes carry.
+- `metrics.json` -- all of the above plus fill accuracy overall and per plane (plane 0 is coarse
+  structure, the last plane fine detail; a model learns them in that order), loss at 25/50/75/100%
+  hidden, codes in use out of 255 and their entropy (a collapse shows as a handful), held-out count,
+  **what forms first**: `sample_sharpness` and `heldout_sharpness` (mean absolute Laplacian of the
+  samples and of the codec's reconstructions of the held-out pictures, so `detail_ratio` is
+  detail against the ceiling) and `colour_match` (1 minus half the L1 distance between 4x4x4
+  colour histograms of samples and held-out pictures; 1 is the same palette),
+  `attention_distance_per_layer` (attention-weighted grid distance from a plane-0 cell to the
+  cells it reads, in cells, over heads: how far each layer looks), and the raw material the tab
+  derives progression from: `sample_codes_b64` (the same-seed samples' codes, so consecutive
+  checkpoints can be diffed cell by cell), `loss_map` and `confidence_map` (per grid cell),
+  `grid` (gh, gw).
+
+Everything is recovered with forward hooks under no_grad; a probe never changes the model. The
+trainer passes the train bin for the novelty pass. `GET /images/mri/<model>` returns every step's
+metrics with the files present; `GET /images/mri/<model>/<step>/<file>` serves a picture.
+
+**The Models tab shows an image model OR a text model, never both.** The decision comes from the
+model's kind (`training` in `/timelines`, else `config.json`) and is made before anything is
+loaded: `ensureLearningLoaded` decides first and returns for an image model, the classroom mirror
+and canvas renders are gated the same way, and the timeline picker labels image models. For an
+image model every byte-level panel is hidden and the picker panel's copy changes; the image view
+then shows: a strip of every probed checkpoint (click to select) and KPIs (fill accuracy,
+confidence, calibration error, novelty, decides-at-layer, codes in use, attention spread,
+centre/edge loss, held-out count); what it draws with the closest training picture under each
+sample and its novelty; how a picture forms pass by pass; **the order it forms** (the formation
+map, mean commit pass per plane as bars, and the per-plane commit pass over training) beside
+**coarse to fine** (the planes render); **what forms first** (plane-0 fill accuracy, colour match
+and detail ratio on one 0-1 axis over training: the order the curves rise is the order the model
+learns, palette and layout before fine detail) beside **how far it looks** (attention reach per
+layer as bars and its mean over training: untrained attention reads far and near-uniform, trained
+texture layers settle at 1-2 cells while a few layers stay global); the fill test beside the
+confidence map and the calibration bars; through the layers with the agreement/accuracy-per-layer
+chart; residual depth and where it struggles; attention per layer and the per-head heatmap; and
+over training: fill accuracy per plane, loss by hidden fraction, confidence and calibration error,
+novelty, decision depth, codes in use, and the codec ceiling. It polls while a run is training that
+model.
+
+**Progression.** A scrubber under the checkpoint strip (previous / next, a range slider, play at
+1.2 s per checkpoint, *follow latest* which tracks the newest probe while a run trains). **One draw
+through training**: a filmstrip of one same-seed sample cropped out of every checkpoint's
+`samples.png` (client-side canvas crops on the known 96 px / 4 px grid), and a second strip of one
+held-out picture's completion at every checkpoint with its original at the left; click a frame to
+jump there. **Churn** (new): the same-seed samples' codes at consecutive checkpoints are diffed cell
+by cell -- the settling map shows, per cell, the share of samples whose code there changed since
+the previous probe (blue settled, orange still moving), the filmstrip outlines those cells in
+orange, the *settled since last* KPI is the share of cells unchanged, and the churn curve (all
+planes and per plane) falls toward 0 as the model converges; a jump is a phase change, and a region
+that keeps flickering late is one the model has not learned. **Where it improved**: loss per cell at
+the first probe minus now, green easier, red harder -- a model typically learns borders and
+backgrounds before subjects, which shows as green edges around a red centre.
+
+**Prompt it.** A prompt box at the bottom of the image view (built once per model, so typing
+survives the polls): words, a seed, passes, an optional photo (then it is a variation of that
+photo guided by the words). *Draw at this checkpoint* or *draw at every checkpoint* start a
+background job (`POST /images/mri/<model>/prompt` with `{caption, steps?, seed, passes, image?,
+mode}`; `GET .../prompt/status`; `POST .../prompt/stop`) that draws, at up to 12 evenly spaced
+checkpoints with the last always included, the picture WITH the words and the same-seed picture
+WITHOUT them. Each result shows both, and `steering` -- the share of cells the words changed -- is
+plotted over training as **caption influence**: rising means the model is learning to listen to
+captions; flat near zero means the captions it trained on did not teach it these words (folder
+names, for instance). Results arrive one checkpoint at a time while the job runs.
 
 ### live view on the Training tab
 
@@ -508,15 +626,28 @@ log; it works before `config.json` exists, which is most of a first run's wall c
 tab shows it whenever the running trainer is `native/image_trainer`, the run picked in *live
 training* is an image model, or the Images action is open with a last run known, and hides the
 byte-model panels (register fluency, comprehension, concepts, lens drift) meanwhile. The view: a
-GPU/CPU chip with the device, the four stages as bars (done with duration, reused, running with
-done/total, rate and time left, pending), the trainer's message, a *model saved* line (checkpoints
-on disk, last step and age, steps to the next save), KPIs once training (step, loss, held-out loss,
-pictures/s, lr, time left, fill accuracy, parameters, pictures), the loss curve from `train.csv`,
-the latest checkpoint's samples and fill test with a link to the full Models-tab view, and the run
-log tail. A failed run shows its reason in red above the stages.
+GPU/CPU chip with the device and, from `progress.json` notes, chips for the precision the run
+computes in, *explicit attention* and *compiled* when those paths are on; the four stages as bars
+(done with duration, reused, running with done/total, rate and time left, pending), the trainer's
+message, a *model saved* line (checkpoints on disk, last step and age, steps to the next save),
+KPIs once training (step, loss, held-out loss, seconds per step, pictures/s, lr, time left, fill
+accuracy, pictures per forward, parameters, pictures), the loss curve from `train.csv`, and from
+the latest checkpoint: its samples, the pass-by-pass formation strip, the formation-order map
+beside the coarse-to-fine render, and its fill test, with colour match and detail against the
+codec ceiling in the caption and a link to the full Models-tab view; then the run log tail. A
+failed run shows its reason in red above the stages. The form's memory estimator derives the image
+seq (`_imgfDerivedSeq`), counts both attention tensors in the bytes the trainer will hold them in
+(half on Apple silicon under a half precision, fp32 otherwise) and treats `auto`/`fp16` as half on a
+GPU, so a size that cannot fit reads red ("WILL NOT FIT even one picture at a time") before launch,
+and one that fits only in pieces reads amber; the size hint carries the same word.
 
-Not yet: resume from the GUI (the trainer accepts `--resume`, the Images form does not offer it),
-output beyond the training frame, and F1 itself -- no codec has finished fitting on real
+**Continue a model from the Images form.** The Model card's *start from* select lists saved image
+models (`/images/models`: those with a checkpoint) as "continue <name> · step N". Picking one hides
+name, size and picture size, sends `--resume <name>`, and the trainer pins the model's pictures,
+frame, codec, corpus and size from its `config.json` (`pin_structural_args`) whatever else the form
+sent; `total_steps` is the new end. The run route skips its name check on resume.
+
+Not yet: output beyond the training frame, and F1 itself -- no codec has finished fitting on real
 photographs yet (the first real launch, 2026-09-05, was stopped in its decode stage at 1920x1080);
 the pipeline is proven on synthetic frames end to end.
 
@@ -612,7 +743,29 @@ Architecture selector: `dense` | `patched` | `hybrid` | `looped` | `recurrent` |
 
 ### precision
 
-`fp32` or `bf16`. bf16 halves activation memory and is the default where supported; unsupported devices resolve to fp32 with a warning, not an error.
+Text trainer: `fp32` or `bf16`. bf16 halves activation memory and is the default where supported;
+unsupported devices resolve to fp32 with a warning, not an error.
+
+Image trainer: `auto` (default), `fp16`, `bf16`, `fp32`. `auto` is the half precision this GPU is
+MEASURED fastest at when the run starts (`hardware.half_precision_probe`: a square matmul in fp16,
+bf16 and fp32, cached per process). On an M2 that is fp16, because bf16 matmuls run at half the
+fp16 rate there (3.2 vs 1.5 TFLOPS) and a bf16 step is 20-25% slower; on a GPU that is fast at bf16
+it stays bf16. fp16 trains under `torch.amp.GradScaler` (loss scaling, so small gradients survive
+the format; an overflowed step is skipped and the scale comes down). Asking for `bf16` on a GPU
+that measures fp16 faster warns with the two rates. The CPU resolves everything to fp32. The run
+log prints `precision: auto -> fp16 (measured fp16 3.2 TFLOPS, bf16 1.5, fp32 2.8)` and
+`config.json` records `precision_resolved`; Muon's orthogonalization uses the same measured dtype.
+
+### compile
+
+Image trainer: `auto` (default), `on`, `off`. `torch.compile` fuses the model's many small kernels
+into a few; a 20m picture model on an M2 is launch-bound enough that it measured 1.54x per step
+(3.15 -> 2.37 s at batch 16), the first step taking ~9 s longer to compile. `auto` compiles on a
+GPU and never on the CPU. Only the training forward is compiled; evaluation and the checkpoint probe
+run the eager model on the same weights. A graph that fails to compile, at build or at the first
+step, falls back to eager with a line in the run log and the run continues. The memory plan takes
+30% off the budget when compiling (a compiled graph measured 1.27x the eager peak). `progress.json`
+notes `compiled`; the live view shows a chip.
 
 ### batch_size
 

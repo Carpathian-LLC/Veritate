@@ -156,18 +156,25 @@ class MuonAdamW:
 
 
 def ns_dtype(device):
-    """Newton-Schulz working dtype: bf16 where the device accelerates it, fp32
-    where it does not."""
-    return torch.bfloat16 if hardware.bf16_supported(device) else torch.float32
+    """Newton-Schulz working dtype: the half precision the device MEASURES fastest
+    (fp16 on an M2, where bf16 matmuls run at half the fp16 rate and the
+    orthogonalization of an 80M model costs 1.46 s a step in bf16 against 0.98 s),
+    bf16 on a CUDA device that accelerates it, fp32 where nothing half is."""
+    if device == "cpu":
+        return torch.float32
+    if device == "cuda":
+        return torch.bfloat16 if hardware.bf16_supported(device) else torch.float32
+    picked, _rates = hardware.half_precision_probe(device)
+    return picked or torch.float32
 
 
 def _muon(params, args, device):
-    """torch.optim.Muon where its hardcoded bf16 orthogonalization is accelerated;
-    the vendored copy in the device's working dtype everywhere else."""
+    """torch.optim.Muon where its hardcoded bf16 orthogonalization is the measured
+    working dtype; the vendored copy in the device's working dtype everywhere else."""
     kwargs = {"lr": args.base_lr, "weight_decay": args.weight_decay,
               "momentum": MUON_MOMENTUM, "adjust_lr_fn": MUON_ADJUST_LR}
     native = getattr(torch.optim, "Muon", None)
-    if native is not None and hardware.bf16_supported(device):
+    if native is not None and ns_dtype(device) is torch.bfloat16:
         return native(params, **kwargs)
     if native is None:
         from runtime import logs as logmod

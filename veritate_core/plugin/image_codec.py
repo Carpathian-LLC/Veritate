@@ -93,10 +93,12 @@ class ResidualVQ(nn.Module):
         quantized = latent + (quantized - latent).detach()
         return torch.stack(codes, dim=1), quantized, commitment
 
-    def features(self, codes):
-        """codes [B, planes, gh, gw] -> summed codebook vectors [B, gh, gw, dim]."""
+    def features(self, codes, planes=None):
+        """codes [B, planes, gh, gw] -> summed codebook vectors [B, gh, gw, dim]. `planes`
+        sums only the first that many: the coarser picture a prefix of the planes holds."""
         total = 0
-        for plane in range(self.planes):
+        n = self.planes if planes is None else max(1, min(int(planes), self.planes))
+        for plane in range(n):
             total = total + F.embedding(codes[:, plane], self.codebooks[plane])
         return total
 
@@ -132,10 +134,10 @@ class ImageCodec(nn.Module):
         codes, _, _ = self.vq.quantize(latent)
         return codes
 
-    def decode(self, codes):
+    def decode(self, codes, planes=None):
         """codes [planes, gh, gw] -> uint8 frame [H, W, 3]. Plane-major, so a prefix of
-        the planes decodes to a valid coarser image."""
-        features = self.vq.features(codes.unsqueeze(0))[0]
+        the planes decodes to a valid coarser image: `planes=k` renders the first k."""
+        features = self.vq.features(codes.unsqueeze(0), planes=planes)[0]
         return self.decoder.render(features)
 
     def forward(self, images):
