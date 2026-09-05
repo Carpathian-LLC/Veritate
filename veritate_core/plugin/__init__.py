@@ -34,6 +34,9 @@ from veritate_core import (
 from veritate_core.plugin import (
     bench,
     hardware,
+    image_codec,
+    image_decode,
+    image_grid,
     mem_executor,
     mem_planner,
     multicorpus,

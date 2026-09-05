@@ -266,8 +266,10 @@ def state():
 
 
 def is_running():
+    """A run is in flight while its status is running OR its child still exists:
+    stop() flips the status before the child has exited."""
     with _LOCK:
-        return _STATE["status"] == STATUS_RUNNING
+        return _STATE["status"] == STATUS_RUNNING or _PROC is not None
 
 
 def pid():
@@ -306,12 +308,26 @@ def _build_argv(plugin, args):
     return out
 
 
+def _finish_run(token, code):
+    """Terminal status for the run started at `token`; a reaper whose run has
+    already been replaced writes nothing, so an old child exiting late cannot
+    mark a newer run failed (cardinal 2026-09-02: arm 1's exit stamped arm 2)."""
+    with _LOCK:
+        if _STATE.get("started_at") != token:
+            return
+    if code == 0:
+        _set(status=STATUS_OK, finished_at=time.time(), exit_code=code)
+    else:
+        _set(status=STATUS_FAILED, finished_at=time.time(), exit_code=code)
+
+
 def _run(plugin, args):
     global _PROC
     argv = _build_argv(plugin, args)
     logmod.info("plugin", f"start {plugin['id']}: {' '.join(argv[1:])}")
+    token = time.time()
     _set(status=STATUS_RUNNING, plugin_id=plugin["id"], args=args,
-         started_at=time.time(), finished_at=None, exit_code=None)
+         started_at=token, finished_at=None, exit_code=None)
     env = os.environ.copy()
     env.setdefault(PYTORCH_ALLOC_ENV_KEY, PYTORCH_ALLOC_ENV_DEFAULT)
     env[PLUGIN_ID_ENV] = str(plugin["id"])
@@ -399,15 +415,15 @@ def _run(plugin, args):
         try: log_fp.close()
         except Exception: pass
         with _LOCK:
-            _PROC = None
+            if _PROC is proc:
+                _PROC = None
         _clear_pid_file()
     code = proc.returncode
     if code == 0:
         logmod.ok("plugin", f"{plugin['id']} done")
-        _set(status=STATUS_OK, finished_at=time.time(), exit_code=code)
     else:
         logmod.error("plugin", f"{plugin['id']} exit={code}")
-        _set(status=STATUS_FAILED, finished_at=time.time(), exit_code=code)
+    _finish_run(token, code)
 
 
 def start(plugin_id, args=None):
@@ -417,6 +433,12 @@ def start(plugin_id, args=None):
     with _LOCK:
         if _STATE["status"] == STATUS_RUNNING:
             return {"ok": False, "error": f"already running: {_STATE['plugin_id']}"}
+        # stop() marks the state stopped the instant it signals the child; the
+        # child exits later. A launch in that window put two trainers on one
+        # model dir (cardinal 2026-09-02). The handle, not the status, says
+        # whether a child still exists.
+        if _PROC is not None:
+            return {"ok": False, "error": f"previous run still exiting: {_STATE['plugin_id']}"}
         _STATE["status"] = STATUS_RUNNING
         _STATE["plugin_id"] = plugin_id
     plugins = plugins_reader.scan()

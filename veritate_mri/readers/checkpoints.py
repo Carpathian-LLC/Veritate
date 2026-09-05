@@ -38,3 +38,11 @@ def latest_step(name):
 
 def path_for(name, step):
     return paths.checkpoint_path(name, step)
+
+
+def resolve_step(name, step):
+    """Requested step, or the newest on disk when a prune removed it mid-session."""
+    if os.path.isfile(path_for(name, step)):
+        return step
+    latest = latest_step(name)
+    return step if latest is None else latest

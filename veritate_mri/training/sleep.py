@@ -81,6 +81,11 @@ SLEEP_OVERRIDES = {
     # "off". Consolidating an unlimited-context model with the carry off trains it
     # in a regime it is never served in.
     "state_carry": None,
+    # a fresh optimizer every sleep: the checkpoint's Muon state is not restored
+    # under AdamW and the orthogonalization is a fifth of a cardinal step
+    "optimizer": None,
+    # a sleep lever, never inherited: how much of the model a night may move
+    "freeze_blocks": None,
     # a pretrain recipe logs every 10-20 steps; a sleep dose can be shorter than
     # that, and an inherited interval writes no train.csv row at all, so the run
     # looks like nothing happened. Sleep is short by construction: log every step.
@@ -502,6 +507,7 @@ def launch_args(model, steps, cfg, train_bytes, val_bytes, ms=None):
     args.update({
         "name": model, "resume": model, "corpus": cfg["sleep_corpus"],
         "total_steps": int(steps), "ckpt_every": _fit_ckpt_every(cfg, ms),
+        "optimizer": cfg["sleep_optimizer"], "freeze_blocks": int(cfg["sleep_freeze_blocks"]),
         "eval_every": _fit_ckpt_every(cfg, ms), "base_lr": lr, "min_lr": lr,
         "description": f"sleep consolidation: {steps} steps over own experience "
                        f"({cfg['sleep_corpus']}), constant lr {lr:g}",
@@ -551,9 +557,13 @@ def _train_progress(model):
 
 
 def _val_trend(model, start_step):
-    """Val losses this run logged above start_step, oldest first; [] when it logged
-    none. The caller needs the count, not just the ends: one row cannot be compared
-    against itself."""
+    """Val losses this run logged, oldest first; [] when it logged none. The caller
+    needs the count, not just the ends: one row cannot be compared against itself.
+    An armed run scores its starting weights before its first step and logs that
+    reading AT start_step with lr 0; it leads the trend, so a run that got worse
+    inside its first eval interval is measured against where it began rather than
+    against its own first damaged reading. A previous run's final row sits at the
+    same step with a real lr and is not the reference."""
     path = os.path.join(MODELS_ROOT, model, "train.csv")
     try:
         with open(path, encoding="utf-8") as f:
@@ -565,10 +575,12 @@ def _val_trend(model, start_step):
         if len(parts) < 3 or parts[1] != "val":
             continue
         try:
-            if int(parts[0]) > start_step:
-                vals.append(float(parts[2]))
+            step, v = int(parts[0]), float(parts[2])
+            lr = float(parts[3]) if len(parts) > 3 and parts[3] else None
         except ValueError:
             continue
+        if step > start_step or (step == start_step and lr == 0.0):
+            vals.append(v)
     return vals
 
 

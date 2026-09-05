@@ -29,7 +29,7 @@ CFG = {
     "sleep_enabled": True, "sleep_models": ["toy"], "sleep_idle_min": 20,
     "sleep_days": 3, "sleep_min_exchanges": 8, "sleep_steps_per_exchange": 10,
     "sleep_min_steps": 50, "sleep_max_steps": 500, "sleep_ckpt_every": 25,
-    "sleep_keep_finals": 3, "sleep_lr": 5e-06,
+    "sleep_keep_finals": 3, "sleep_lr": 5e-06, "sleep_optimizer": "adamw", "sleep_freeze_blocks": 0,
     "sleep_corpus": "experience:0.75,mixed_chat:0.25", "sleep_step_seconds": 300,
     "sleep_ckpt_seconds": 1800, "sleep_val_tolerance": 0.02,
     "sleep_yardstick": "mixed_chat", "sleep_stop_on_val_rise": 0.02,
@@ -468,6 +468,21 @@ def test_no_val_row_is_held_because_the_gate_fails_closed(tmp_path, monkeypatch)
     _model(tmp_path)
     _csv(tmp_path)
     assert sleep.regressed("toy", {}, 3000, CFG) == (True, None, None)
+
+
+def test_the_starting_weights_reading_anchors_the_gate(tmp_path, monkeypatch):
+    """An armed run scores its starting weights before step 1 and logs them at the
+    resume step with lr 0. That row leads the trend, so a run that degraded inside
+    its first eval interval (start 1.00, +1.5%, +3.0%) is held against the start
+    instead of passing against its own first damaged reading; the previous run's
+    final row at the same step carries a real lr and is not the reference."""
+    _roots(tmp_path, monkeypatch)
+    _model(tmp_path)
+    _csv(tmp_path, _val(3000, 1.30), "3000,val,1.00,0.000000e+00,,,0.0,0\n",
+         _val(3020, 1.015), _val(3040, 1.03))
+    assert sleep._val_trend("toy", 3000) == [1.00, 1.015, 1.03]
+    held, baseline, last = sleep.regressed("toy", {}, 3000, CFG)
+    assert held and (baseline, last) == (1.00, 1.03)
 
 
 def test_one_val_row_with_no_history_is_held(tmp_path, monkeypatch):
@@ -1036,3 +1051,25 @@ def test_a_recipe_without_state_carry_does_not_invent_one(tmp_path, monkeypatch)
                                                      "batch_size": 4})
     args = sleep.launch_args("toy", 10, cfg, train_bytes=10 ** 7, val_bytes=10 ** 6)
     assert "state_carry" not in args
+
+
+def test_freeze_blocks_is_the_sleep_setting_not_the_recipe(monkeypatch):
+    """How much of the model a night may move is a sleep lever: a recipe's freeze_blocks is
+    not inherited, the setting is what reaches argv."""
+    cfg = dict(CFG)
+    cfg["sleep_freeze_blocks"] = 12
+    monkeypatch.setattr(sleep, "_recipe", lambda m: {"seq": 1024, "n_chunks": 1,
+                                                     "batch_size": 4, "freeze_blocks": 3})
+    args = sleep.launch_args("toy", 10, cfg, train_bytes=10 ** 7, val_bytes=10 ** 6)
+    assert args["freeze_blocks"] == 12
+
+
+def test_optimizer_is_the_sleep_setting_not_the_recipe(tmp_path, monkeypatch):
+    """Sleep resumes with a fresh optimizer, so the recipe's Muon is not inherited: its
+    Newton-Schulz phase is 20 s of a 108 s cardinal step (2026-09-02) for nothing."""
+    cfg = dict(CFG)
+    cfg["sleep_optimizer"] = "adamw"
+    monkeypatch.setattr(sleep, "_recipe", lambda m: {"seq": 1024, "n_chunks": 1,
+                                                     "batch_size": 4, "optimizer": "muon"})
+    args = sleep.launch_args("toy", 10, cfg, train_bytes=10 ** 7, val_bytes=10 ** 6)
+    assert args["optimizer"] == "adamw"

@@ -182,6 +182,52 @@ def test_unavailable_provider_is_503(monkeypatch):
     assert r.status_code == 503
 
 
+def _real_route_client(monkeypatch, cloud_answer=None):
+    """App with the REAL _resolve_route: no local models exist, and the public model is
+    a stub that records whether it was reached."""
+    calls = []
+    monkeypatch.setattr(H, "is_local_model", lambda name: False)
+    from runtime import ai_assist
+
+    def fake_chat(text, system=None, history=None):
+        calls.append(text)
+        return {"ok": True, "answer": cloud_answer}
+    monkeypatch.setattr(ai_assist, "chat", fake_chat)
+    app = Flask(__name__)
+    H.register(app)
+    return app.test_client(), calls
+
+
+def test_an_unknown_model_name_is_404_not_the_public_model(monkeypatch):
+    """A model that is neither `cloud`, a teacher id, nor local is refused. Before this
+    the route fell through to the public endpoint, and 50 fact statements meant for an
+    empty local model dir were answered off-box on 2026-09-02."""
+    client, calls = _real_route_client(monkeypatch)
+    r = client.post("/v1/chat/completions",
+                    json={"model": "no_such_model", "messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 404
+    assert r.get_json()["error"]["code"] == "model_not_found"
+    assert calls == []
+
+
+def test_the_mri_endpoint_refuses_an_unknown_model_the_same_way(monkeypatch):
+    """Both OpenAI-shaped endpoints share the routing, so both refuse."""
+    client, calls = _real_route_client(monkeypatch)
+    r = client.post("/v1/chat/mri",
+                    json={"model": "no_such_model", "messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 404 and calls == []
+
+
+def test_cloud_is_still_reachable_by_its_own_name(monkeypatch):
+    """The public model is a deliberate choice, selected by name, never a fallback."""
+    client, calls = _real_route_client(monkeypatch, cloud_answer="from the cloud")
+    r = client.post("/v1/chat/completions",
+                    json={"model": "cloud", "messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 200
+    assert r.get_json()["choices"][0]["message"]["content"] == "from the cloud"
+    assert calls == ["hi"]
+
+
 def _post_chat(monkeypatch):
     """POST a non-stream /v1/chat/completions and return the parsed body."""
     return _client(monkeypatch).post(

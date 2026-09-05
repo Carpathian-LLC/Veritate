@@ -97,7 +97,7 @@ class QuantLinear(nn.Linear):
 
 
 class CausalSelfAttention(nn.Module):
-    def __init__(self, hidden, heads):
+    def __init__(self, hidden, heads, causal=True):
         super().__init__()
         if hidden % heads != 0:
             raise ValueError(f"hidden ({hidden}) must be divisible by heads ({heads})")
@@ -107,6 +107,9 @@ class CausalSelfAttention(nn.Module):
         self.proj = QuantLinear(hidden, hidden,     bias=False)
         self.qat = False
         self.engine_faithful = False
+        # An image grid has no causal order. Default True keeps every language
+        # checkpoint and the engine's forward unchanged; the flag holds no weights.
+        self.causal = causal
 
     def forward(self, x):
         B, T, C = x.shape
@@ -116,7 +119,7 @@ class CausalSelfAttention(nn.Module):
             q = _qat.fake_quant_act(q)
             k = _qat.fake_quant_act(k)
             v = _qat.fake_quant_act(v)
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=self.causal)
         if self.qat and self.engine_faithful:
             out = _qat.fake_quant_act(out)
         out = out.transpose(1, 2).contiguous().view(B, T, C)
@@ -165,10 +168,10 @@ class FFN(nn.Module):
 
 class Block(nn.Module):
     def __init__(self, hidden, ffn, heads, activation=ACT_DEFAULT, capture_l1=False,
-                 reg_mode=REG_DEFAULT):
+                 reg_mode=REG_DEFAULT, causal=True):
         super().__init__()
         self.n1   = RMSNorm(hidden)
-        self.attn = CausalSelfAttention(hidden, heads)
+        self.attn = CausalSelfAttention(hidden, heads, causal=causal)
         self.n2   = RMSNorm(hidden)
         self.ff   = FFN(hidden, ffn, activation=activation, capture_l1=capture_l1,
                         reg_mode=reg_mode)
@@ -184,7 +187,7 @@ class Block(nn.Module):
 
 class Veritate(nn.Module):
     def __init__(self, vocab, hidden, layers, ffn, heads, seq,
-                 activation=ACT_DEFAULT, capture_l1=False, reg_mode=REG_DEFAULT):
+                 activation=ACT_DEFAULT, capture_l1=False, reg_mode=REG_DEFAULT, causal=True):
         super().__init__()
         if vocab != VOCAB_BYTE_LEVEL:
             raise ValueError(f"vocab must be {VOCAB_BYTE_LEVEL} (byte-level only), got {vocab}")
@@ -215,7 +218,8 @@ class Veritate(nn.Module):
         self.blocks  = nn.ModuleList([Block(hidden, f, heads,
                                             activation=activation,
                                             capture_l1=capture_l1,
-                                            reg_mode=reg_mode)
+                                            reg_mode=reg_mode,
+                                            causal=causal)
                                       for f in ffn_per_layer])
         self.n_out   = RMSNorm(hidden)
         self.lm_head = QuantLinear(hidden, vocab, bias=False)

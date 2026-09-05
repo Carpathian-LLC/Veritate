@@ -52,9 +52,10 @@ def resolve_pytorch_model(name):
 
 
 def load_pytorch_brain(name, step, threads):
-    """Load Brain for name at step. On non-vanilla failure, scan other models
-    by recency and load the first vanilla one. Returns (brain, name, step)
-    or raises the original RuntimeError if nothing vanilla can be loaded."""
+    """Load Brain for name at step. A step pruned out from under a cached
+    default resolves to the newest on disk. On non-vanilla failure, scan other
+    models by recency and load the first vanilla one. Returns (brain, name,
+    step) or raises the original RuntimeError if nothing vanilla can be loaded."""
     # Lazy torch import: paying the ~1.5 GB tax only when a backend actually
     # spins up, not at every dashboard import.
     from inference.backends.pytorch import Brain, load_memory
@@ -62,6 +63,11 @@ def load_pytorch_brain(name, step, threads):
     def _try(n, s):
         ck = checkpoints.path_for(n, s)
         return Brain(ck, threads=threads, memory=load_memory(neuron_memory_path(n)))
+
+    live = checkpoints.resolve_step(name, step)
+    if live != step:
+        logmod.warn("backends", f"pytorch: {name} step {step} is gone; loading step {live}")
+        step = live
 
     try:
         return (_try(name, step), name, int(step))

@@ -8598,6 +8598,7 @@ const TRAINER_SCHEMA = {
     { name: "eval_iters",   type: "int",                        label: "eval batches",          help: "more = more accurate val loss." },
     // ---- experimental / test-model knobs (ADVANCED) ----
     { name: "bptt_window",  type: "int", advanced: true,        label: "BPTT window (chunks)",  help: "BPTT depth. 1 = frozen, 4 = balanced, n_chunks = full." },
+    { name: "freeze_blocks", type: "int", advanced: true,       label: "freeze bottom blocks",  help: "train only the top of the model: N freezes both embeddings and the first N blocks, and backward never enters them. 0 = train everything. Measured 2026-09-02 on cardinal: see the wiki page." },
     { name: "quant_mode",   type: "str", advanced: true,        label: "weight quant mode",     help: "active only when QAT enabled. int8 (default), int4, or ternary (BitNet 1.58).", choices: ["int8","int4","ternary"] },
     // ---- checkboxes (all together at the end; qat_enabled is up top with resume) ----
   ],
@@ -8607,7 +8608,7 @@ const TRAINER_SCHEMA = {
 // name -> page slug; the form renders a link next to the label for each.
 const WIKI_SETTING_PAGES = {
   recipe: "recipe", optimizer: "optimizer", trunk: "trunk", precision: "precision",
-  batch_size: "batch_size", seq: "seq", n_chunks: "n_chunks", bptt_window: "bptt_window",
+  batch_size: "batch_size", seq: "seq", n_chunks: "n_chunks", bptt_window: "bptt_window", freeze_blocks: "freeze_blocks",
   base_lr: "base_lr", min_lr: "min_lr", lr_schedule: "lr_schedule", warmup_steps: "warmup_steps",
   weight_decay: "weight_decay", grad_clip: "grad_clip", label_smoothing: "label_smoothing",
 };

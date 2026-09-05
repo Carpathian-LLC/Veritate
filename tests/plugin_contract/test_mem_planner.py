@@ -49,8 +49,18 @@ def _plan(**over):
 
 @pytest.fixture
 def fixed_host(monkeypatch):
-    """Pin the detected host memory so the budget is derived, not probed."""
+    """Pin the detected host memory so the budget is derived, not probed; nothing else
+    is resident, so the whole pool is available."""
     monkeypatch.setattr(mem_planner.hardware, "unified_memory_bytes", lambda: HOST_MEMORY_BYTES)
+    monkeypatch.setattr(mem_planner.hardware, "available_memory_bytes", lambda: HOST_MEMORY_BYTES)
+
+
+def test_a_co_tenant_lowers_the_budget_to_what_is_free(fixed_host, monkeypatch):
+    """A box already holding served engines or another job plans against what is
+    actually free, not the usable share of the total: a suspended sleep child keeps
+    its RSS, so planning from the total is the OOM path under active use."""
+    monkeypatch.setattr(mem_planner.hardware, "available_memory_bytes", lambda: 10 * GB)
+    assert _plan().budget_bytes == 10 * GB
 
 
 def test_budget_derives_from_the_detected_host_memory(fixed_host):

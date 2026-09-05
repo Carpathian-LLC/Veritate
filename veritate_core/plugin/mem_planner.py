@@ -89,7 +89,10 @@ def plan_training_memory(param_count, hidden, layers, ffn, batch, seq,
     sum(p.numel() for p in model.parameters())). `dtype` is the live-weight dtype.
     `budget_bytes` overrides the auto-detected unified-memory budget (tests)."""
     if budget_bytes is None:
-        budget_bytes = int(hardware.unified_memory_bytes() * USABLE_FRACTION)
+        # the usable share of the pool, or what is actually free if a co-tenant
+        # (served engines, another job) already holds part of it
+        budget_bytes = min(int(hardware.unified_memory_bytes() * USABLE_FRACTION),
+                           hardware.available_memory_bytes())
 
     params = param_count * DTYPE_BYTES[dtype]
     grads  = params

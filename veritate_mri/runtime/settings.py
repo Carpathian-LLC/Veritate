@@ -139,6 +139,14 @@ DEFAULTS = {
     # rewriting it, so a carry-trained model can read as carry-off.
     "sleep_state_carry": "",
     "sleep_lr": 5e-06,
+    # Consolidation resumes with a fresh optimizer at a constant low lr, so the
+    # optimizer is a sleep lever, not the recipe's: Muon's Newton-Schulz costs 20 s
+    # of a 108 s cardinal step (2026-09-02) and buys nothing at this dose.
+    "sleep_optimizer": "adamw",
+    # blocks (plus both embeddings) a sleep run leaves frozen, counted from the
+    # bottom; 0 trains the whole model. Backward never enters the frozen part:
+    # measured on cardinal (2026-09-02), see documentation.md `freeze_blocks`.
+    "sleep_freeze_blocks": 0,
     # Weak-hardware levers. A sleep child sized for the training box takes every
     # core; on an 8-core 800 MHz CPU that costs a served request 2.5-3x
     # throughput and ~200x first-byte latency. sleep_preempt suspends the child

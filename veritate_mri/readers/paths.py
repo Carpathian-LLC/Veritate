@@ -35,6 +35,9 @@ CORPUS_ROOT        = os.path.join(LOCAL_DATA_ROOT, "corpus")
 LEGACY_CORPUS_ROOT = os.path.join(PLUGINS_ROOT, "corpus")
 # Raw Project Gutenberg text cache the chat / agent corpus builders read from.
 PG_CACHE_ROOT   = os.path.join(CORPUS_ROOT, "_pg_cache")
+# Trained image codecs. Not run checkpoints: a codec is the image <-> bytes contract a
+# corpus was built under, and a bin is unreadable without the one that wrote it.
+CODEC_ROOT      = os.path.join(LOCAL_DATA_ROOT, "codecs")
 # The experience log: one JSONL file per local day recording every serving
 # exchange (bytes in/out + params). The substrate for sleep consolidation
 # (IDEA 20 T3) — the model trains on its own thought and actions. Bulk local
@@ -126,6 +129,7 @@ AUTHORING_SPEC_NAME = "corpus_spec.json"
 
 CORPUS_TRAIN_SUFFIX = "_train.bin"
 CORPUS_VAL_SUFFIX   = "_val.bin"
+CODEC_SUFFIX        = ".codec.pt"
 GRADE_EVAL_PREFIX   = "grade_"
 GRADE_EVAL_SUFFIX   = "_eval.bin"
 
@@ -187,6 +191,10 @@ def corpus_train_path(stem):
 
 def corpus_val_path(stem):
     return _corpus_file_path(f"{stem}{CORPUS_VAL_SUFFIX}")
+
+
+def codec_path(name):
+    return os.path.join(CODEC_ROOT, f"{name}{CODEC_SUFFIX}")
 
 
 def native_corpus_train_path(stem):

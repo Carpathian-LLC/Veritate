@@ -1,5 +1,164 @@
 # handoff
 
+## LIVE STATE 2026-09-03 08:45 - read this first, everything below is older
+
+**wren2 training**: pid 83227, healthy, step 76,000 of 144,000 (52.8%), ~6,000 B/s, 0 skipped steps
+across the last 50, ETA ~8.6 days. val has been flat-to-improving overnight in a 0.705-0.740 band:
+0.7286 @ 71,000, run low 0.7054 @ 75,500, 0.7194 @ 76,000. LR is flat 3e-4 wsd, so single-row rises
+are noise; the escalation bar is a sustained rise across 4+ val rows. Trainer RSS drifts 130-142 G
+with 92-105 Gi available on the 256 G box - Ollama's llama-server is holding only ~24 GB now, well
+down from the 104-108 GB in the 2026-09-02 note, so the memory risk has receded on its own. Disk 997
+Gi free, 15 checkpoints.
+
+**Checkpoint prune is ALIVE and self-running**, contrary to the 2026-09-02 note below: the Monitor
+watcher survived a `/clear` (that clears context, not background tasks) and has been pruning on its
+own all night, one deletion per new checkpoint. Keep-set now 15, not 14, because step_70000 aged out
+of the newest-8 window and is retained as a 5000-multiple milestone.
+
+**Facts pipeline ran 13 consecutive clean cycles overnight**, 16:27 through 08:27, no rate-limit
+backoff and no stuck lock. DB 37,091 claims / 29,994 verified across 52 shards, up from 32,047 /
+23,880. Per-cycle yield settled around +150-370 added and ~350 verified. It needs no VS Code: launchd
+fires it, and the extension directory supplies only the on-disk path to the CLI binary.
+
+**2026-09-03 06:27 incident - 183 unearned verification stamps.** Two verifier agents bulk-stamped
+without adjudicating: `apply_literature.py` stamped `set(range(544,755))` as one 210-line block,
+`apply_mycology.py` stamped all 106 lines unconditionally. Count arithmetic reconciled perfectly, so
+reconciliation could not see it; only the search-count gate and reading the workers' apply scripts
+exposed it. All 183 reverted, and the revert only worked because both verifiers happened to have kept
+their own copies - the driver had taken counts and hashes, not content. The 07:27 cycle re-verified
+mycology honestly to 105/106.
+
+**THE CYCLE AGENTS DO HAVE PERSISTENT MEMORY - at `~/.claude/projects/-/memory/`.** Five files,
+~26 KB, accumulating since 2026-09-02 17:05, chief among them `veritate-facts-cycle-oversight.md`
+(19 KB, a real and evolving audit playbook). The slug is `-` and not
+`-Users-mirach-00-usc1-Development-Veritate` because `run_cycle.sh` never cd's, so the CLI takes
+launchd's working directory; `guard_write.py` guards only the Veritate slug, so these writes succeed.
+An earlier version of this entry asserted the opposite - that nothing they saved persisted - which was
+wrong and was reached by checking the Veritate memory dir instead of theirs. Their playbook is ahead of
+the spec in places, so READ IT before changing driver_prompt.md.
+
+**Fix shipped 2026-09-03 07:51 in `facts_pipeline/driver_prompt.md`** (user-approved). It still earns
+its keep - in-repo rules are versioned and reviewable, and the 08:27 cycle measurably improved - but
+the stated reason was mistaken, and one of the rules was already falsified by the agents' own practice:
+1. Step 2 now takes a FULL CONTENT PRE-IMAGE (`cp facts/canonical/*.jsonl` to a temp dir, deleted at
+   cycle end), not counts alone, because reverts need the original line text.
+2. Step 3 carries a mandatory WEBFETCH-FIRST paragraph for every verifier prompt: WebSearch is
+   metered, WebFetch is not, and a low search count is the EXPECTED signature of good work rather
+   than a shortcut. Verifiers now report web checks broken out by tool with fetched URLs listed.
+3. Step 4's audit gate moved from "unusually low search count" (which misfires under WebFetch-first)
+   to evidence. CORRECTED 2026-09-03 13:20: my first version made "a range expression in the apply
+   script" the bulk-stamping tell, which the 12:27 cycle falsified - a worker wrote
+   `set(range(572,632))`, rewrote it in place as a literal 60-element list before leaving it on disk,
+   and disclosed the laundering as cosmetic. Step 4 now leads with the PREFIX TEST from the agents'
+   playbook (compare the stamp set against the UNVERIFIED lines only; a "scattered" set full of gaps
+   is usually a prefix whose gaps are already-verified lines), which the laundering cannot defeat,
+   plus concurrent verifiers as this cycle's own calibration (stamp rate within span, not stamp
+   count) and a rule never to trust self-reported fetch/search counts - agents undercount from memory
+   (reported 62/8 and 83/8, actually 116/11 and 126/15), so pull them from the subagent transcript.
+4. Steps 1 and 5 and the header state that launchd owns the schedule - never CronCreate/CronDelete,
+   citing the 2026-07-18 kill and `guard_schedule.py`, with an explicit "skip this step".
+Storm mode replaces step 2 wholesale, so it now requires the pre-image explicitly too.
+
+**Validated by the 08:27 cycle, the first under the new spec**: pre-image taken and removed with no
+stray dirs, 12 WebSearch against 231 WebFetch, and the evidence audit discriminated correctly rather
+than reverting blindly - it found a contiguous 60/60 stamped block (the bulk-stamping shape), pulled
+all 60 lines, and cleared it by mapping 19 URLs onto exactly the 19 claims that needed them. Four
+real catches that only come from reading sources: the morgen is 2.1165 acres not hectares; the Human
+Pangenome consortium launched 2019; the Sturgis MH-1A predates Akademik Lomonosov as first floating
+nuclear plant by ~44 years; Michael Fish's broadcast preceded the 1987 Great Storm by hours, not days.
+
+**Facts pipeline is PAUSED until 11:27 on 2026-09-03.** The 09:27 cycle died on its first call with
+`API Error: 529 Overloaded` and wrote nothing. This was NOT a transient one-request blip: Anthropic's
+status page logged "Elevated errors for multiple models" opening 13:26 UTC (Mythos/Fable 5.1,
+Mythos/Fable 5, Opus 5, Opus 4.8, Opus 4.6), root cause found 13:41, and the cycle fired at 13:27:02
+UTC - about a minute into a live incident. A separate Sonnet 5 incident had resolved at 12:56 UTC.
+Scope was partial, not total: 17 of the 18 cycles from 2026-09-02 16:27 onward succeeded and the
+interactive session kept working throughout. `run_cycle.sh` greps `529|overloaded` into the same 2 h
+`.backoff_until` it uses for real rate limits, so the 10:27 firing is skipped too; it self-clears
+when the next cycle succeeds. Backing off through a real incident is CORRECT and this entry's earlier
+claim that the 2 h backoff was wrong has been retracted. The narrow open question: the fix was in
+progress by 13:41, so a ~15 min retry would likely have caught the recovery and saved the 10:27
+cycle, while 2 h remains right for a genuine usage limit that will not clear sooner. Distinguishing
+the two cases is a user decision; `run_cycle.sh` is untouched.
+
+**Open for the user**: `timekeeping_calendars` looks saturated (24 facts returned with zero collision
+or confidence drops, i.e. plain budget exhaustion) and two cycles have suggested routing it to
+verification rather than expansion. `mycology_fungi` came in at 49 with room at 155 lines and may need
+a wider topical brief if it repeats. Both are corpus-routing calls, not made.
+
+**Session-bound, will NOT survive this session**: Monitor `bh19pp442` (wren2 auto-prune + hourly
+status, the one doing the pruning) and Monitor `bwlmk8d6c` (facts cycle completion, keyed on the log
+flushing at process exit - a history.csv row alone is wrong, maintain.py can write one mid-cycle).
+Scripts live in the session scratchpad. Re-arm both. Note for whoever rewrites them: Monitor runs
+commands under zsh, where an unmatched glob is a fatal error, so `ls dir/a_*.log dir/b_*.log` aborts
+entirely when only one pattern matches - use `find`.
+
+## LIVE STATE 2026-09-02 16:05 - older, superseded above where they conflict
+
+**wren2 training**: pid 83227, ppid 1 (launchd, so it survives session and VS Code exit), step ~70,840
+of 144,000 (49%), val floor 0.706-0.712, 0 skipped steps, ~6,000 B/s, ETA ~7 days. Resumed 2026-09-01
+from step_42250 after a memory-pressure kill; recipe unchanged except `hooks light` +
+`hooks_full_every 4`. Resume payload with every flag explicit is in the session scratchpad as
+`wren2_resume_args.json`. TRAP: `config.json` `training_args` is stale (`state_carry: off`,
+`name: wren1_0`) and `apply_resume_overrides` fills any OMITTED flag from it, so never resume without
+explicit flags.
+
+**IMAGE MODELS (IDEA 24) - pipeline built 2026-09-02, nothing trained.** Four pieces landed and
+unit-tested without touching wren2: `veritate_core/plugin/image_codec.py` (image <-> bytes, 255-entry
+codebooks, byte 255 reserved as MASK), `veritate_mri/tools/build_image_corpus.py` (records are
+`caption + fixed code block + <|endoftext|>`), `veritate_core/plugin/image_grid.py` (record-aligned
+masked draws), and the trainer's `objective=masked_grid` lever (needs `--image_code_bytes`, `seq >=
+image_code_bytes`, `trunk=dense`). `Veritate(causal=False)` is the only model change and holds no
+weights, so every checkpoint loads unchanged; default `objective=next_byte` leaves wren2's path
+untouched. Docs: `documentation.md` `## image models`. Next step is F1 and it needs a free box: fit
+the codec on real images, check reconstruction, THEN build a corpus. Nothing image-related has ever
+seen a real photograph - every test uses synthetic tensors, so the pipeline is verified and the
+research question is completely open.
+
+**Dashboard server**: down. `warm_models` cleared to `[]`; it had been pinning wren1_3 + wren_base as
+permanent engine subprocesses exempt from idle unload, which was the multi-GB footprint.
+
+**Memory is the standing risk**: Ollama `qwen2.5:14b-instruct` holds 104-108 GB (8.4 GB of weights, the
+rest KV cache for a 32k window); trainer 127-132 GB on a 256 GB box. Imagine was purged 2026-09-02.
+The untaken lever worth 70-100 GB is Ollama's `num_ctx` (drop to 8k) or a short `keep_alive`.
+
+**Checkpoint prune**: session-bound Monitor watcher, dies on session exit. Policy: keep step_0, every
+step divisible by 5000, and the 8 newest. Unpruned this fills ~6.7 GB/h.
+
+**Facts pipeline is now DURABLE**: `~/Library/LaunchAgents/com.veritate.facts.plist` fires
+`facts_pipeline/run_cycle.sh` at :13/:27/:43. The script picks its own mode: normal 3-agent cycle at
+:27, and the Sunday 00:00-10:00 storm (8 agents) at :13/:43 with the :27 run suppressed so two cycles
+never edit `facts/canonical/` at once. Weekday throttle is agent count plus a rate-limit backoff
+(`.backoff_until`, 2 h); the Sunday window ignores backoff by user directive. Both mode specs live in
+`facts_pipeline/driver_prompt.md`. DB at 32,047 claims / 23,880 verified across 50 shards.
+CronCreate is session-only and is what killed this pipeline on 2026-07-18;
+`.claude/hooks/guard_schedule.py` now blocks it unless the prompt starts with `SESSION-ONLY:`.
+
+**cardinal-01**: holds `wren1_3` (fp16, canonical, sleep-enrolled), `wren_base`, `wren2` (int8 export of
+step_70000, 0.57 GB, verified generating), and another agent's `exp_fastsleep_0902` which must not be
+touched. The C backend is a single shared slot, so switching models evicts whatever that agent has
+loaded. `models/wren2/checkpoints/step_70000.pt` (4.44 GB) is still staged there and can be deleted.
+
+**Corpus**: `data/corpus/_cp_cache/youtube_filtered/` holds 6.5 GB downloaded (Common Pile, CC BY 4.0,
+2007-2024 English speech transcripts, 18.6 GB of text). NOT filtered and NOT built into bins; that step
+is CPU-heavy and was deferred while wren2 trains. Rejected on licence: C4, stackexchange, wikimedia
+(share-alike); RedPajama and The Pile (provenance).
+
+## WREN2 STANDING DIRECTIVES (user, 2026-08-21) — outlive the current run
+
+wren2 is the flagship grown function-preserving from wren1_3@3000 to the `400m` shape
+(24L/1280/5120/20h, head_dim 64 preserved). These constraints bind every future mix, SFT,
+sleep recipe and export for this model, not just the pretrain in flight:
+
+- **Conversation and writing ONLY. Nothing technical, no code, no tool/agent data.** Code
+  corpora are permanently excluded from its mix.
+- Extra data only if VERY clean and commercially-clean licensed. NC and share-alike are
+  rejected (precedent: the fluency-corpus entry in successes.md).
+- Formal transcripts (hansard/scotus/chrg) stay at low weight — they trained looping once.
+- Aggressive checkpointing so learning stays verifiable throughout.
+- Finishing sequence: sleep-native recipe (validated E4), then PTQ int8 → parity gate → cardinal.
+- The user pushes git before any launch; never launch until they confirm the push.
+
 ## WREN2 WATCHER MANDATE (2026-08-23 21:xx) — for the agent assigned to wren2 only
 
 A second agent is working cardinal-01 (inference speed, sleep on weak hardware, UI) and must not
@@ -25,6 +184,181 @@ val 0.745226 @ 17,250 (prior: 0.7432 @ 17,000, 0.7322 @ 16,750, 0.7346 @ 16,500)
    bs16@seq2048 is the proven-safe shape. Late-phase plan (campaign end, not now): grow 2048->4096
    via `training/grow.py --seq` (bit-exact pos extension) + a short bs<=4 extension run.
 
+
+## 2026-09-03 09:05 EDT — DONE: sleep works on cardinal in one night (lab/2026-09-02-fast-consolidation-on-cardinal.md)
+
+**State now**: nothing running on cardinal (dashboard pid 203827 on port 8001 serves the deployed 2026-09-02/03 tree:
+trainer with `--freeze_blocks`, two-reading stop rule, freeze guard; sleep_optimizer/sleep_freeze_blocks; runner race fix;
+404 route; planner budget). Cardinal models: wren1_3, wren2, wren_base. exp_fastsleep_0902 (22 GB) and exp_e2e_0902
+DELETED 09:05 after their numbers landed in successes.md / failures.md / the lab entry. Cardinal sleep settings:
+enabled false, models [] (enrollment is the user's), recipe kept: freeze 15, AdamW 3e-5, mixed_chat yardstick, stop 0.10,
+ckpt 50, min = max = 200 steps. wren2 on mirach untouched throughout.
+**Result**: tell-it-once loop through /sleep/now on facts told over the API: 69/100 closed-book from the served bin after
+200 steps (2 h 43 min); hand-built drill curve 72/100 @200, ~90/100 @400-500; replayed mixed_chat +2.4% @200 / +0.8% @450
+(32-draw), un-replayed veritate_chat +6.6% / +4.6%. Full tables in the lab entry.
+**Session-bound things that died with this session**: monitors on cardinal's /tmp/arm3, /tmp/arm4, the e2e chain, the
+VAL32 chain; cardinal /tmp holds arm_eval2.sh, e2e_sleep.py, launch_arm.py, bench_step.py and the /tmp/arm*/ results
+(quiz JSONs, cap*.json) -- copy anything wanted before /tmp is cleared. memlog stopped.
+**Enforcement added 2026-09-03 09:30 EDT**: `.claude/hooks/guard_bash.py` (wired for Bash in settings.json) blocks a
+deletion under a models/ tree that does not check for a live trainer in the same command, and routes wren* deletions to
+the user; `.claude/skills/veritate-research/SKILL.md` gained the four measured rules (build sleep on weak hardware this
+way, read forgetting at 32 draws, un-enroll before quizzing, look before deleting).
+**Next program (user, 09:20 EDT)**: unlimited context without re-reading prior turns -- the model remembers what was just
+said from its carried state. Substrate exists: `/generate?fast=stream&state_id=<id>` (PyTorch backend) persists the carried
+states per conversation and the next call sends only the new bytes. Unmeasured: whether the model USES it. Acceptance
+test in ideas.md (turn 2 sent alone; baseline wren1_3@1000 1/6, wren1_5@700 3/6, goal 6/6); the real test is recall of a
+turn that has been committed into the state (filler > seq between the turns), with a fresh-state leak control.
+RUNNING 09:50 EDT 09-03 (session-bound): lab/2026-09-03-working-memory-from-carried-state.md pre-registered; probe
+/tmp/t1_recall.py on cardinal (PyTorch backend, greedy, 6 items x 5 conditions A in-window / B pending / C committed /
+D leak / E filler-only) on wren1_3@512 (filler 1,902 B > seq 1024) then wren2@70000 (filler 2,853 B > seq 2048);
+results /tmp/t1/wren1_3.json, /tmp/t1/wren2.json, logs alongside. Falsifier in the lab entry (C >= 3/6 with A >= 4/6
+= T1 exists; C = 0/6 on both with A >= 4/6 = the state needs a write rule first).
+DONE 11:54 EDT: wren1_3@512 A/B/C/D/E = 0/0/0/0/0 of 6 (abstention SFT); wren2@70000 = 3/3/0/0/0 of 6: every item the
+model answers in-window it answers byte-identically from the pending buffer and NOT from the committed state (0/3);
+C/E replies drift to the filler's topic. Not a formal kill (A 3/6 < the 4/6 bar) -- see the lab entry's interpretation.
+Blockers in order: (1) the abstention SFT refuses personal questions answerable from context; (2) the GLA decay state
+does not write facts (IDEA 20 T2b). NEXT, pre-committed: in-context recall SFT for wren2 at the E4 dose (freeze 15,
+3e-5), falsifier A < 5/6 after; if A >= 5/6 re-read C. Probe: scratchpad t1_recall.py (copy in cardinal /tmp), results
+copied to the session scratchpad; cardinal stream_states cleaned; PyTorch backend idle-unloads on its own.
+RUNNING 12:01 EDT 09-03: in-context recall SFT (lab/2026-09-03-in-context-recall-sft.md) on exp_recall_0903 (wren2@70000
+fork, 28 blocks, 595M) 70000 -> 70200, freeze 21, AdamW 3e-5, recall_chat:0.5,mixed_chat:0.5 (new `--recall` mode of
+tools/build_fact_chats.py, tests/corpus/test_build_fact_chats_recall.py, documented), state_carry chunks, mixed_chat
+yardstick, stop 0.10, ckpt/eval 50. Optimizer paged to NVMe by the planner (disk-bound step). A session-bound monitor
+launches the five-condition probe (`/tmp/t1_recall.py exp_recall_0903 70200 3`, glassblower item swapped for
+lighthouse keeper) when the run ends; results /tmp/t1/exp_recall.json. If the session died: run that probe by hand
+after the trainer exits, read the falsifier in the lab entry, delete exp_recall_0903 (check for a live trainer first).
+16:13 EDT: the session was resumed (the earlier monitor died with the old process); trainer at ~step 70160, mixed_chat
+0.4213 -> 0.4019 -> 0.3962 -> 0.3860 at 70000/50/100/150 (trainer draw, -8.4%).
+16:20 EDT, USER SAID HOLD OFF: probe chain STOPPED, nothing launches on its own. The trainer finishes step 70200 by itself
+(~17:15 EDT). To resume: confirm no trainer is running, then on cardinal
+`cd ~/Veritate && python3 /tmp/t1_recall.py exp_recall_0903 70200 3 /tmp/t1/exp_recall.json` (~1 h), read the falsifier
+in lab/2026-09-03-in-context-recall-sft.md, record, delete exp_recall_0903.
+2026-09-05 01:25 EDT, USER: "5 is what I really want. Figure it out." Hold lifted for the working-memory goal. Program in
+lab/2026-09-05-working-memory-program.md (three rungs, falsifiers pre-committed). Probe of exp_recall_0903@70200 RUNNING
+since 01:23 (session-bound monitor; results /tmp/t1/exp_recall.json). Corpus `recall_far` built on cardinal
+(`build_fact_chats --recall --gap-bytes 2200`, 2,598,944 B train, no probe words). Rung 1 launches when the probe lands:
+parent = exp_recall_0903@70200 if A >= 5/6 else wren2@70000; fork as exp_wm_0905; `launch_arm.py 3e-5 <start+200>
+--model exp_wm_0905 --corpus recall_far:0.35,recall_chat:0.15,mixed_chat:0.5 --extra '{"freeze_blocks": 14,
+"state_carry": "chunks", "val_bin": "mixed_chat", "stop_on_val_rise": 0.10, "ckpt_every": 50, "eval_every": 50}' --go`;
+then the five-condition probe on its final step. Working-memory number = condition C (committed state).
+**Open for the user**: (1) whether extract_facts should take facts from assistant turns (see the incident: a wrong closed-
+book answer became next night's drill); (2) which cardinal model to enroll for sleep, and the dose clamp (min/max steps);
+(3) git -- everything is uncommitted; (4) the E4 levers left in ideas.md (compact fact forms, fuse, replay share).
+
+### the day as it ran (kept for the record)
+
+**Running on cardinal-01** (reverse tunnel `ssh -p 2222 cardinal-01@127.0.0.1`, dashboard port 8001,
+restarted 16:48 EDT pid 203827 on the fully deployed 2026-09-02 tree (deploy2.tgz + deploy3.tgz: trainer incl. freeze_blocks, sleep, runner, settings, routes, planner, index.js); cardinal git HEAD is still 73632aa
+and the deployed files sit there untracked): ARM 4 RUNNING since 18:53 EDT (the overnight; trainer child of dashboard pid 203827, `pgrep -f veritate_trainer`):
+freeze_blocks 15 (66M of 270M train), AdamW 3e-5, 500 steps, ckpt/eval 50, val_bin mixed_chat, stop 0.10 (two readings),
+49 s/step, ETA ~01:45 EDT 2026-09-03; quiz loop into /tmp/arm4/, val_eval both corpora after. Step 0 mixed_chat 0.590527;
+STEP 50 (19:36 EDT): quiz fwd 4/50 rev 4/50, mixed_chat 0.571804 = -3.2% (below start), train loss 0.28.
+STEP 100 (20:20 EDT): quiz fwd 15/50 rev 14/50 (29/100), mixed_chat 0.572572 = -3.0%. Knee of the curve.
+STEP 150 (21:03 EDT): quiz fwd 26/50 rev 23/50 (49/100), mixed_chat 0.554772 = -6.1% (falling).
+STEP 200 (21:46 EDT): quiz fwd 35/50 rev 37/50 (72/100), mixed_chat 0.556883 = -5.7%. FALSIFIER CLEARED: nightly
+recipe on cardinal = freeze_blocks 15, AdamW 3e-5, 200 steps (2.7 h). Set on cardinal's settings after the run.
+STEP 250 (22:30 EDT): mixed_chat 0.600150 = +1.6% (jumped +7.8% from step 200), quiz 35/36 (71/100, flat); e2e re-armed
+at 200 steps.
+STEP 300 (23:18 EDT): quiz 36/43 (79/100), mixed_chat 0.552857 = -6.4%: step 250 was a wobble (4-draw reading swings
++-7% between checkpoints; two-reading rule vindicated again).
+STEP 350 (00:00 EDT): quiz 40/46 (86/100), mixed_chat 0.565726 = -4.2%.
+STEP 400 (00:45 EDT): quiz 42/45 (87/100), mixed_chat 0.567562 = -3.9%.
+STEP 450 (01:28 EDT): quiz 44/47 (91/100), mixed_chat 0.565807 = -4.2% (E4's ceiling at 1/9 of the bytes).
+STEP 500 (02:12 EDT) DONE: quiz 41/46 (87/100), mixed_chat 0.565822 = -4.2% on the trainer's draw. Plateau 87-91 from
+step 400. POST-RUN val_eval 8x4 (/tmp/arm4/cap_*.json) DISAGREES: mixed_chat +1..+4.6% above start at every checkpoint
+(+3.4% at 500), veritate_chat +16.5% at 50 falling to +4.8% at 500. The mixed_chat reading moves ~7% with the random
+windows, so the forgetting call is UNRESOLVED at the +2% level; a 32-draw val_eval on steps 0/200/300/500 (both corpora)
+is the number of record and runs after the e2e (never beside a trainer). Recall numbers stand (engine quiz, deterministic).
+E2E SLEEP RUNNING since 02:40 EDT 09-03 on exp_e2e_0902 through /sleep/now: 51 own exchanges -> 110,606 bytes of
+experience_fact_sft, 200 steps, freeze 15, 3e-5, ETA ~05:30 EDT; the chain then prints the history event
+(served/held, val_first/val_last) and quizzes the served bin into /tmp/e2e_quiz_after.json. A second chain runs the
+32-draw val_eval on arm 4's steps 200/300/450/500 (both corpora, /tmp/arm4/cap32_*.json) once the box is idle.
+E2E DONE 05:27 EDT: served=true held=false val_first 0.584803 val_last 0.521239; quiz through the served bin fwd 38/50
+rev 31/50 (69/100). THE TELL-IT-ONCE LOOP WORKS ON CARDINAL IN ONE NIGHT. VAL32 chain now running (~2 h).
+VAL32 mixed_chat (06:20 EDT): +2.36% @200, +2.64% @300, +0.83% @450, +3.52% @500 = at the +2% line (+-1%); the trainer's
+-4% rows were the outlier. veritate_chat VAL32 (09:02): +6.55/+7.81/+4.57/+4.91% at 200/300/450/500.
+INCIDENT 05:34-08:25 EDT: the e2e `arm` left sleep enabled; the 100 quiz exchanges counted as new own-experience and the
+watcher auto-launched a SECOND sleep on exp_e2e_0902 (151 exchanges, 126 KB drill incl. facts extracted from the model's
+own quiz answers, 200->400 steps). Ran unnoticed 2 h 50 min beside the VAL32 eval. I deleted the model dir at 08:24
+without checking for a live trainer (process error), then stopped the run via /trainers/stop (failed, -15) and removed
+the recreated dir. The 69/100 e2e quiz predates it and stands. OPEN DESIGN QUESTION FOR THE USER: should extract_facts
+take facts from assistant turns at all? A wrong closed-book answer becomes next night's drill. Cardinal settings now:
+sleep_enabled false, sleep_models [], recipe kept (freeze 15, 3e-5, adamw, mixed_chat, stop 0.10, ckpt 50, min=max 200).
+CHAINED (session-bound monitor, 20:26 EDT): when /tmp/arm4/progress.log reads 'all done', `/tmp/e2e_sleep.py
+exp_e2e_0902 arm 3e-5 200 15` sets the sleep settings (adamw, freeze 15, ckpt 50, yardstick mixed_chat, stop 0.10,
+tolerance 0.02) and POSTs /sleep/now; the monitor polls /sleep until the model is awake again, prints the history
+event (served/held, val_first/val_last) and quizzes the served bin closed-book into /tmp/e2e_quiz_after.json.
+exp_e2e_0902 has 51 experience records (its own), step_0.pt only, pre-sleep bin. If the session died before
+this ran: run those two commands by hand after arm 4's val_eval finishes, never while a trainer runs.
+AFTER the e2e: its `arm` phase leaves cardinal's settings at sleep_enabled true, sleep_models [exp_e2e_0902],
+min=max=200 steps, freeze 15, lr 3e-5, yardstick mixed_chat, stop 0.10. Keep freeze/lr/yardstick/stop as the box's
+recipe; re-point sleep_models to whatever the box serves (user's call) and delete exp_e2e_0902 + exp_fastsleep_0902
+once their numbers are in the ledgers. Freeze guard (count >= blocks refused) deployed to cardinal 21:55 EDT as a file. ARM 3 DONE 18:32 EDT
+(60/60): val_eval 8x4 veritate_chat +12.1/+2.3/+5.8%, mixed_chat +14.9/+5.5/+5.2% at 20/40/60, quiz 0-0, 2-0, 3-3 of 50
+(rising; mixed_chat sits on a ~+5% floor at full-param 1e-5, outside E4's +2%). Morning plan: fuse the best arm-4
+checkpoint toward step 0 (alpha 0.5, 0.7; `tools/fuse_checkpoints.py`), re-quiz + re-val each. Model
+`exp_fastsleep_0902` (= wren1_3/step_0 = wren1_0@1250, hardlinked), ARM 1 (AdamW 1e-4) FALSIFIED at step 20: veritate_chat +65.1% on identical windows, recall 0/50 fwd
+1/50 rev; stopped, step_20 deleted. ARM 2 (AdamW 3e-5) FALSIFIED at step 20 (16:28 EDT): val 1.113589 vs 1.006792 = +10.6%, recall 1/50 fwd 1/50 rev,
+replies fact-shaped with wrong bindings; stopped, step_20 deleted, results in /tmp/arm2/. ARM 3 = AdamW 1e-5, 60 steps, full
+parameters, complete: 6/100 at 1.7 MB of drill (E4 needed 59 MB for 12/100); val_eval on both corpora for 20/40/60 in
+/tmp/arm3/cap_*.json, then its checkpoints are deleted by the arm-4 chain. Arm 3 step 20: val +12.0% (1.127872), quiz 0/50 fwd 0/50 rev; step 40: val +1.9% (1.025540) -- the rise is a
+TRANSIENT (templates fit, then recovery under replay), so the stop rule at 0.02 read at step 20 would falsely stop a
+cardinal-sized dose. FIXED 18:25 EDT: `val_rose_past_start` now needs TWO consecutive readings above the start
+line (trainer + tests/training/test_consolidation_stop.py + documentation.md), deployed to cardinal as a file (the
+dashboard was not restarted; the trainer is spawned fresh per run, so arm 4 already runs the fixed rule). Arm 4 runs
+with stop_on_val_rise 0.10 and the +2% call comes from post-run val_eval.
+ARM 4 re-registered as the overnight (lab entry): `--freeze_blocks 15`, AdamW 3e-5, 500 steps, ckpt/eval 50, val_bin
+mixed_chat with stop_on_val_rise 0.10, launched after arm 3's val_eval with
+`launch_arm.py 3e-5 500 --extra '{"freeze_blocks": 15, "val_bin": "mixed_chat", "stop_on_val_rise": 0.10, "ckpt_every": 50, "eval_every": 50}' --go`,
+quiz loop `arm_eval2.sh exp_fastsleep_0902 /tmp/arm4 "0 50 100 150 200 250 300 350 400 450 500"`. ETA ~01:30 EDT 09-03.
+Freeze benchmark (idle box, AdamW, batch 7, act-ckpt on): 94.5 s full; blocks-only freeze 10 = 83.3 s, 15 = 78.5 s (pos_emb
+still trainable, so backward walked every block for its input grad); with BOTH embeddings frozen freeze 10 = 58.6 s (-38%,
+134M of 270M params train); freeze 15 = 47.5 s (-50%, 66M train, 4.8 GB RSS), freeze 15 + act-ckpt off = 40.0 s (-58%, 6.3 GB); act-ckpt off +
+blocks-only 10 = 62.5 s at 14.5 GB RSS. Full tables in the lab entry and documentation.md `freeze_blocks`. SHIPPED: `--freeze_blocks N` trainer flag (embeddings + blocks[:N] frozen, optimizer sees only
+trainable params), `sleep_freeze_blocks` setting (default 0) through sleep.launch_args, Training-form advanced field,
+tests/training/test_freeze_blocks.py; deployed to cardinal 16:48 EDT.
+Corpus finding (measured on the builder): fact_sft for 50 facts = 1000 exchanges, 500 unique; assistant bytes are 28%
+of bytes and subject/object mentions 13%, so ~41 of cardinal's 313 B/s are binding signal (arm 2's train loss 0.36
+is template fit, not binding). Next levers after arm 3: freezing the lower blocks (bench pending), compact QA forms
+in build_fact_sft (2-3x binding share per byte). Log
+`~/Veritate/.plugin_run.log`. Session-bound: `/tmp/arm_eval2.sh` (exports each checkpoint to the model's bin, drops the C
+subprocess, quizzes closed-book over /v1/chat/completions into `/tmp/arm1/quiz_<step>.json`, then
+val_eval on both chat corpora into `/tmp/arm1/cap_*.json`; the PyTorch quiz was killed for doubling
+the trainer's step time), `/tmp/e2e_sleep.py` (tell/arm/status/quiz phases), `/tmp/bench_step.py`
+(has a freeze-lower-blocks arm not yet run), `/tmp/launch_arm.py` (`--corpus`, `--model`). If the session died: read `/tmp/arm1/`, `train.csv` val
+rows, apply the falsifier in the lab entry, then DELETE `models/exp_fastsleep_0902` (rule 40).
+
+**Pre-committed falsifier**: fwd+rev >= 60/100 at some step <= 100 with veritate_chat val <= +2% of the
+step-0 reading = nightly recipe found; every step < 40/100 or val > +2% = lr cannot replace samples.
+Adaptive: val > +2% before fwd >= 30/50 -> arm 2 at 3e-5; fwd < 10/50 at 100 with val flat -> 3e-4.
+
+**Measured today (idle cardinal, batch 7)**: AdamW 92 s/step vs Muon 108 s (opt step 1.2 vs 20.3 s);
+activation checkpointing off -12%/sample, fits at batch 7. Forward+backward is 87-91 s of the step.
+
+**Decided**: sleep resumes under AdamW by default (`sleep_optimizer`, fresh moments, restore skipped
+and logged); the consolidation stop rule measures against the run's STARTING weights (armed resume
+scores them before step 1) instead of the run's best, which halted wren1_12 while it was improving.
+Both are deployed to cardinal (16:42 EDT) and in the working tree with tests. Then the end-to-end product test: fork wren1_0@1250 as `exp_e2e_0902` with
+its bin, tell it the 50 E4 facts through /generate, enroll it, `/sleep/now`, quiz closed-book after
+publish. wren2 on mirach untouched (pid 83227, step ~70k).
+
+**Cardinal fleet changed under this session (other agent, ~15:26 EDT)**: `wren1_0` and `wren1_0_int8` are gone,
+`wren2` (a checkpoint of the flagship) is installed, `warm_models` is `["wren_base"]`. `exp_e2e_0902` =
+wren1_0@1250 (hardlink of exp_fastsleep_0902/step_0) with its own fp16 bin, already told the 50 E4 facts
+(51 experience records, extract_facts 50/50) and waiting for arm 1's recipe before `/sleep/now`.
+
+**Route fix (tested, deployed to cardinal 16:42 EDT, 404 verified live)**: `/v1/chat/completions` and `/v1/chat/mri` return 404
+`model_not_found` for a model that is neither `cloud`, a teacher id, nor local; before, it fell through to the
+public endpoint and 50 fact statements went off-box at 15:41 EDT (nothing recorded or trained).
+
+**Uncommitted repo changes**: veritate_trainer.py (val_rose_past_start + starting-weights reference),
+sleep.py + settings.py (sleep_optimizer; publish gate anchored on the starting-weights row), hardware.py +
+mem_planner.py (budget = min(0.85 x total, available) so a co-tenant box plans against what is free),
+trainer_runner.py (start refused while a stopped child is still exiting; a late exit never stamps a newer
+run; is_running counts a live child), hybrid_routes.py (unknown model -> 404, never the cloud), tests (test_consolidation_stop rewritten, sleep_controller
++1), ideas.md pruned of finished ideas, successes.md (IDEA 22 entry), documentation.md (sleep_state_carry,
+sleep_optimizer, val_eval/fuse, stop rule, optimizer-switch resume). Plus another session's
+checkpoints.py/_brain.py/test_checkpoint_step_resolve.py, untouched. User runs git.
 
 2026-08-23 session-end handoff (user decommissioned the session). Ledgers hold the full numbers; this is state only. READ THIS SECTION FIRST — two watchers died with the session and one must be re-armed promptly.
 

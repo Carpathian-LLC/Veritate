@@ -41,7 +41,7 @@ import grow as grow_mod
 import numpy as np
 import torch
 
-from veritate_core.plugin import bench, hardware, multicorpus, paths, save
+from veritate_core.plugin import bench, hardware, image_codec, image_grid, multicorpus, paths, save
 from veritate_core.plugin import model as _model_mod
 from veritate_core.plugin import qat as qat_helpers
 
@@ -213,6 +213,12 @@ RESERVED_STR_FLAGS = {
     "state_rule": "gla",
     "state_carry": "off",
     "loss_mask": "off",
+    # What the run predicts. next_byte is ordinary causal byte prediction and the
+    # default, so no existing run changes. masked_grid trains bidirectionally to fill
+    # masked positions of an encoded image, which is what lets generation run in a few
+    # parallel passes instead of one forward per byte. Requires --image_code_bytes and
+    # trunk=dense.
+    "objective": "next_byte",
     # How much of the hook suite to write at each checkpoint.
     #   full  — every dump. ~137s per checkpoint on a 200m trunk.
     #   light — skip save.HEAVY_DUMPS. ~9s, because what remains reads weights
@@ -235,9 +241,12 @@ RESERVED_FLOAT_FLAGS = {
     # (2026-08-25, lr 2e-4 over 48 study chunks): held-out val improved through step
     # 10 (0.9782) and fell off a cliff by step 20 (1.1122), so a fixed step count
     # either stops short of the gain or runs straight through the damage. Non-zero
-    # arms the rule: when a val reading exceeds the run's BEST by more than this
-    # fraction, the run checkpoints and stops. 0 disables it, so an ordinary
-    # pretrain run is unaffected.
+    # arms the rule: an armed resume scores the starting weights before its first
+    # step, and when two consecutive later readings exceed that start by more than
+    # this fraction the run checkpoints and stops (one reading is a transient: the
+    # yardstick rises while a drill corpus is being fit and comes back under replay).
+    # 0 disables it, so an ordinary pretrain run is
+    # unaffected.
     "stop_on_val_rise": 0.0,
 }
 RESERVED_INT_FLAGS = {
@@ -246,6 +255,18 @@ RESERVED_INT_FLAGS = {
     # every checkpoint. 0 disables the promotion. Ignored when --hooks is full
     # (already everything) or off (deliberately nothing).
     "hooks_full_every": 0,
+    # Train only the top of a resumed model. N freezes the token and position
+    # embeddings (the LM head is tied to the token embedding and freezes with it)
+    # and the first N entries of model.blocks, so nothing below block N requires
+    # grad and backward never enters it. Freezing only the blocks is not enough:
+    # a trainable embedding below them makes backward walk every block for its
+    # input gradient. 0 trains everything. Measured on cardinal (2026-09-02, 200M
+    # hybrid, 20 blocks, batch 7, AdamW): see documentation.md `freeze_blocks`.
+    "freeze_blocks": 0,
+    # Bytes of encoded image at the end of each corpus record, reported by
+    # build_image_corpus. Only read when objective=masked_grid, which uses it to find
+    # the image inside a record; 0 elsewhere.
+    "image_code_bytes": 0,
 }
 
 
@@ -453,7 +474,34 @@ def shape_for_run(args, size_presets, argv=None):
     return shape
 
 
+OBJECTIVES = ("next_byte", "masked_grid")
+OBJECTIVE_IMAGE = "masked_grid"
+TRAINING_KIND_IMAGE = "image"
+
 HOOK_MODES = ("full", "light", "off")
+
+
+def check_objective(args):
+    """Resolve and validate the training objective. Returns (objective, image_code_bytes).
+
+    masked_grid needs the record geometry build_image_corpus reported and a trunk that
+    does not gather on text byte boundaries; getting either wrong trains a model that
+    silently sees half an image."""
+    objective = getattr(args, "objective", "next_byte") or "next_byte"
+    if objective not in OBJECTIVES:
+        raise ValueError("unknown objective: " + str(objective) + " (valid: " + ", ".join(OBJECTIVES) + ")")
+    image_codes = int(getattr(args, "image_code_bytes", 0) or 0)
+    if objective != OBJECTIVE_IMAGE:
+        return objective, image_codes
+    if image_codes <= 0:
+        raise ValueError("objective=masked_grid needs --image_code_bytes, reported by build_image_corpus")
+    if image_codes > args.seq:
+        raise ValueError("image_code_bytes " + str(image_codes) + " exceeds seq " + str(args.seq)
+                         + "; the objective cannot see a whole image")
+    if (getattr(args, "trunk", "dense") or "dense") != "dense":
+        raise ValueError("objective=masked_grid runs on trunk=dense; the patched trunks gather on "
+                         "text byte boundaries, which an image code stream has none of")
+    return objective, image_codes
 
 
 def hook_plan(args, step):
@@ -584,15 +632,24 @@ CHATML_IM_START       = b"<|im_start|>"
 CHATML_IM_END         = b"<|im_end|>"
 
 
-def val_rose_past_best(v, best_val, tolerance):
-    """Consolidation stop rule: True when this val reading exceeds the run's BEST by
-    more than `tolerance` (fractional). A consolidation run has no useful fixed
-    length -- it must run while it helps and stop when it starts costing more than it
-    buys. Zero tolerance disables the rule, leaving ordinary runs unaffected."""
+def val_rose_past_start(vals, tolerance):
+    """Consolidation stop rule over a run's val readings, oldest first: True when the
+    latest TWO readings both exceed the FIRST by more than `tolerance` (fractional).
+    The first reading is the weights the run started from (an armed resume scores
+    them before its first step), so the rule asks "is the model worse than when it
+    began", never "is it past its own best": wren1_12 (2026-08-26) improved both chat
+    corpora at every checkpoint and was halted for wobbling 3.4% above its best. Two
+    readings, not one, because fitting a drill corpus moves the yardstick up before
+    replay brings it back: exp_fastsleep_0902 (2026-09-02, AdamW 1e-5) read +12.0% at
+    step 20 and +1.9% at step 40 while binding its first facts, and a one-reading rule
+    stops that run with nothing to publish. The price is one more checkpoint
+    interval of a run that really is damaged, which the publish gate still holds
+    back. Zero tolerance disables the rule, leaving ordinary runs unaffected."""
     tolerance = float(tolerance or 0.0)
-    if tolerance <= 0.0 or best_val in (None, float("inf")):
+    if tolerance <= 0.0 or len(vals) < 3:
         return False
-    return v > best_val * (1.0 + tolerance)
+    line = vals[0] * (1.0 + tolerance)
+    return vals[-1] > line and vals[-2] > line
 
 
 def _keep_assistant(row_bytes):
@@ -789,13 +846,18 @@ def load_resume_state(model, name, step, device, require_complete=False):
 
 @torch.no_grad()
 def evaluate(model, val_draw, n_iters, seq, amp_dtype, bptt_window, device_type="cuda",
-             state_carry="off"):
+             state_carry="off", objective="next_byte"):
     model.eval()
     losses = []
     for _ in range(n_iters):
         toks, tgts = val_draw()
         toks = toks.to(next(model.parameters()).device, non_blocking=True)
         tgts = tgts.to(next(model.parameters()).device, non_blocking=True)
+        if objective == OBJECTIVE_IMAGE:
+            loss = image_grid.masked_step(model, toks, tgts, amp_dtype, device_type)
+            if loss is not None:
+                losses.append(float(loss))
+            continue
         loss = chunked_step(model, toks, tgts, seq, amp_dtype,
                             bptt_window=bptt_window, device_type=device_type,
                             state_carry=state_carry)
@@ -803,6 +865,25 @@ def evaluate(model, val_draw, n_iters, seq, amp_dtype, bptt_window, device_type=
             losses.append(float(loss))
     model.train()
     return float(np.mean(losses)) if losses else None
+
+
+def freeze_below(model, n_blocks):
+    """Freeze every parameter below block n_blocks: both embeddings and blocks[:n_blocks].
+    Returns (trainable, total) parameter counts."""
+    if n_blocks >= len(model.blocks):
+        raise ValueError("freeze_blocks " + str(n_blocks) + " leaves no block trainable: the model has "
+                         + str(len(model.blocks)) + " blocks")
+    below = tuple("blocks." + str(i) + "." for i in range(n_blocks))
+    if n_blocks > 0:
+        for name, p in model.named_parameters():
+            if name.startswith(("tok_emb.", "pos_emb.", "slot_pos_emb.")) or name.startswith(below):
+                p.requires_grad_(False)
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return trainable, sum(p.numel() for p in model.parameters())
+
+
+def trainable_params(model):
+    return [p for p in model.parameters() if p.requires_grad]
 
 
 def build_optimizer(params, args, device, plan=None, state_dir=None, model=None):
@@ -960,6 +1041,7 @@ def run(plugin_id, here):
         raise ValueError("unknown size: " + str(args.size) + " (valid: " + ", ".join(size_presets) + ")")
     if args.precision not in PRECISIONS:
         raise ValueError("unknown precision: " + str(args.precision))
+    objective, image_codes = check_objective(args)
     if args.lr_schedule not in LR_SCHEDULES:
         raise ValueError("unknown lr_schedule: " + str(args.lr_schedule))
     if args.lr_schedule == "wsd":
@@ -1000,7 +1082,8 @@ def run(plugin_id, here):
         val_path, val_warning = resolve_val_path(_corpus_mix, getattr(args, "val_bin", "") or "")
         print(("corpus val:   " + val_path) if val_path else val_warning, flush=True)
         require_loss_mask_decision(args, _corpus_mix, sys.argv)
-        args.training_kind = detect_training_kind(_corpus_mix)
+        args.training_kind = (TRAINING_KIND_IMAGE if objective == OBJECTIVE_IMAGE
+                              else detect_training_kind(_corpus_mix))
         if args.training_kind:
             print("training kind: " + args.training_kind
                   + " (config.json records the framing this model expects)", flush=True)
@@ -1098,6 +1181,7 @@ def run(plugin_id, here):
         ffn=shape["ffn"], heads=shape["heads"], seq=args.seq,
         activation=activation,
         capture_l1=(l1_lambda > 0.0),
+        **({"causal": False} if objective == OBJECTIVE_IMAGE else {}),
         **model_kwargs,
     )
     print(f"activation: {activation}  l1_lambda: {l1_lambda}  trunk: {trunk}"
@@ -1176,20 +1260,37 @@ def run(plugin_id, here):
         write_config(name, args, shape, n_params, corpus_hash, plugin_id=plugin_id)
         print("wrote: " + paths.config_path(name), flush=True)
 
+    freeze_n = int(getattr(args, "freeze_blocks", 0) or 0)
+    if freeze_n > 0:
+        trainable, total = freeze_below(veritate_model, freeze_n)
+        print("freeze_blocks " + str(freeze_n) + ": embeddings + blocks[:" + str(freeze_n) + "] frozen, "
+              + str(trainable) + " of " + str(total) + " params train", flush=True)
+
     total_chunk_len = args.seq * args.n_chunks
-    train_draw, train_n = multicorpus.make_mixed_loader(_corpus_mix, args.batch_size, total_chunk_len, args.seed)
     val_draw = None
-    if val_path:
-        val_draw, _ = make_data_loader(val_path, total_chunk_len, args.batch_size, args.seed + 1)
+    if objective == OBJECTIVE_IMAGE:
+        train_path = next(_iter_mix_paths(_corpus_mix))[2]
+        train_draw, train_n = image_grid.make_record_loader(
+            train_path, args.seq, args.batch_size, image_codes, image_codec.MASK_BYTE, args.seed)
+        if val_path:
+            val_draw, _ = image_grid.make_record_loader(
+                val_path, args.seq, args.batch_size, image_codes, image_codec.MASK_BYTE, args.seed + 1)
+        print("objective: masked_grid  image_code_bytes: " + str(image_codes)
+              + "  records: " + str(train_n), flush=True)
+    else:
+        train_draw, train_n = multicorpus.make_mixed_loader(_corpus_mix, args.batch_size,
+                                                            total_chunk_len, args.seed)
+        if val_path:
+            val_draw, _ = make_data_loader(val_path, total_chunk_len, args.batch_size, args.seed + 1)
     print("train corpus bytes: " + str(train_n) + "  per-step chunk: " + str(total_chunk_len)
           + "  batch: " + str(args.batch_size), flush=True)
 
     if _MEM_PAGING:
-        opt = build_optimizer(veritate_model.parameters(), args, device, plan=mem_plan,
+        opt = build_optimizer(trainable_params(veritate_model), args, device, plan=mem_plan,
                               state_dir=os.path.join(paths.model_dir(name), PAGED_STATE_DIR),
                               model=veritate_model)
     else:
-        opt = build_optimizer(veritate_model.parameters(), args, device, model=veritate_model)
+        opt = build_optimizer(trainable_params(veritate_model), args, device, model=veritate_model)
     if resume_opt_state is not None:
         try:
             opt.load_state_dict(resume_opt_state)
@@ -1202,6 +1303,18 @@ def run(plugin_id, here):
     best_val, best_val_step, stop_now = float("inf"), 0, False
     has_grown   = False
     t0 = time.time()
+    stop_rise = float(getattr(args, "stop_on_val_rise", 0.0) or 0.0)
+    if val_draw is not None and stop_rise > 0.0 and resume_mode:
+        # the rule measures against the weights the run started from; score them now
+        # or its first reading would already be eval_every steps of its own progress
+        ref = evaluate(veritate_model, val_draw, args.eval_iters, args.seq, amp_dtype,
+                       args.bptt_window, device_type=device, state_carry=state_carry, objective=objective)
+        if ref is not None:
+            print("step " + str(resume_step) + "  val_loss " + format(ref, ".4f")
+                  + "  (starting weights)", flush=True)
+            append_train_row(name, resume_step, "val", ref, lr=0.0,
+                             wall_s=time.time() - t0, seed=args.seed)
+            val_hist.append(ref)
     last_log = t0
     last_log_step = resume_step
     start_step = resume_step + 1
@@ -1215,18 +1328,21 @@ def run(plugin_id, here):
             g["lr"] = lr
 
         toks, tgts = train_draw()
-        if getattr(args, "loss_mask", "off") == "assistant":
+        if objective != OBJECTIVE_IMAGE and getattr(args, "loss_mask", "off") == "assistant":
             tgts = apply_role_mask(toks, tgts)
         toks = toks.to(device, non_blocking=True)
         tgts = tgts.to(device, non_blocking=True)
 
         veritate_model.train()
         opt.zero_grad(set_to_none=True)
-        loss = chunked_step(veritate_model, toks, tgts, args.seq, amp_dtype,
-                            backward=True, bptt_window=args.bptt_window,
-                            device_type=device, l1_lambda=l1_lambda,
-                            slm_ref=slm_ref, slm_keep=float(getattr(args, "slm_keep", 0.6)),
-                            state_carry=state_carry, carry_grad_clip=args.grad_clip)
+        if objective == OBJECTIVE_IMAGE:
+            loss = image_grid.masked_step(veritate_model, toks, tgts, amp_dtype, device, backward=True)
+        else:
+            loss = chunked_step(veritate_model, toks, tgts, args.seq, amp_dtype,
+                                backward=True, bptt_window=args.bptt_window,
+                                device_type=device, l1_lambda=l1_lambda,
+                                slm_ref=slm_ref, slm_keep=float(getattr(args, "slm_keep", 0.6)),
+                                state_carry=state_carry, carry_grad_clip=args.grad_clip)
         if loss is None:
             skipped_nonfinite += 1
             if skipped_nonfinite % args.log_every == 0 or skipped_nonfinite == 1:
@@ -1263,7 +1379,7 @@ def run(plugin_id, here):
 
         if val_draw is not None and step % args.eval_every == 0:
             v = evaluate(veritate_model, val_draw, args.eval_iters, args.seq, amp_dtype,
-                         args.bptt_window, device_type=device, state_carry=state_carry)
+                         args.bptt_window, device_type=device, state_carry=state_carry, objective=objective)
             if v is not None:
                 print("step " + str(step) + "  val_loss " + format(v, ".4f"), flush=True)
                 append_train_row(name, step, "val", v, lr=lr,
@@ -1271,13 +1387,12 @@ def run(plugin_id, here):
                 val_hist.append(v)
                 if v < best_val:
                     best_val, best_val_step = v, step
-                stop_rise = float(getattr(args, "stop_on_val_rise", 0.0) or 0.0)
-                if val_rose_past_best(v, best_val, stop_rise):
+                if val_rose_past_start(val_hist, stop_rise):
                     print("STOP step " + str(step) + "  val " + format(v, ".4f")
-                          + " rose past best " + format(best_val, ".4f")
-                          + " (step " + str(best_val_step) + ") by more than "
-                          + format(stop_rise * 100, ".1f") + "%; best weights are "
-                          + "step_" + str(best_val_step) + ".pt", flush=True)
+                          + " and the reading before it rose past the starting " + format(val_hist[0], ".4f")
+                          + " by more than " + format(stop_rise * 100, ".1f")
+                          + "%; best weights are step_" + str(best_val_step) + ".pt",
+                          flush=True)
                     stop_now = True
                 # Growth only nets compute if the cheap stage stops the moment its
                 # curve flattens (successes.md 2026-07-25); a fixed step count
@@ -1286,7 +1401,7 @@ def run(plugin_id, here):
                         and grow_to_ffn > veritate_model.ffn
                         and grow_mod.val_has_flattened(val_hist)):
                     widened = grow_mod.widen_model(veritate_model, grow_to_ffn)
-                    opt = build_optimizer(veritate_model.parameters(), args, device,
+                    opt = build_optimizer(trainable_params(veritate_model), args, device,
                                           model=veritate_model)
                     has_grown = True
                     args.ffn = grow_to_ffn

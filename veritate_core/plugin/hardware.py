@@ -221,6 +221,20 @@ def unified_memory_bytes():
     return int(page) * int(count)
 
 
+def available_memory_bytes():
+    """RAM free for a new process right now, in bytes: the pool less every other
+    tenant (served engines, a neighbour's download, a suspended sleep child that
+    keeps its RSS). Falls back to the total where the probe is unavailable."""
+    try:
+        import psutil
+        avail = int(psutil.virtual_memory().available)
+        if avail > 0:
+            return avail
+    except (ImportError, ValueError):
+        pass
+    return unified_memory_bytes()
+
+
 def process_peak_rss_bytes():
     """Peak resident memory of this process in bytes: the high-water mark since
     start. Monotonic, no OS reset exists. Windows exposes peak_wset via psutil;

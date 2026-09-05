@@ -405,6 +405,12 @@ def _generate_local_mri(cfg, model, backend, messages, system, gen=None):
     return _trim(bytes(out).decode("utf-8", "replace")), frames
 
 
+class ModelNotFound(Exception):
+    """A named model that is neither `cloud`, a teacher id, nor a local model. Never
+    routed anywhere: a typo or a missing checkpoint must not send a conversation to
+    the public endpoint (50 fact statements went there on 2026-09-02)."""
+
+
 class ChatUnavailable(Exception):
     """An expected, user-safe completion failure (bad key, unreachable host,
     nothing configured). The /v1 routes map it to a 503."""
@@ -455,6 +461,11 @@ def fit_chat_history(messages, system, seq, max_new=MAX_NEW):
     return [*kept, last]
 
 
+def _model_not_found(e):
+    return ({"error": {"message": str(e), "type": "invalid_request_error",
+                       "code": "model_not_found"}}, 404)
+
+
 def _resolve_route(cfg, model, backend):
     """Pick the completion route for the selected chat model. Returns
     (complete, label, resp_backend, kind). complete(messages, system) -> text and
@@ -502,6 +513,9 @@ def _resolve_route(cfg, model, backend):
                 _ensure_pytorch(cfg, model)
             return _generate_local(cfg, backend, _render_local(messages, system))
         return complete, model, backend, "local", context_limit_chars("local", "", model)
+
+    if model != CLOUD_ID:
+        raise ModelNotFound(f"model not found: {model}")
 
     from runtime import ai_assist
 
@@ -848,7 +862,10 @@ def register(app):
         model = (body.get("model") or CLOUD_ID).strip()
         mri = bool(body.get(MRI_KEY))
         gen = _gen_params_in(body)
-        complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, _default_local_backend(model))
+        try:
+            complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, _default_local_backend(model))
+        except ModelNotFound as e:
+            return _model_not_found(e)
         if kind == "local":
             conv = fit_chat_history(conv, system, _local_seq(model), gen.get("max_new", MAX_NEW))
         if bool(body.get("stream")):
@@ -890,7 +907,10 @@ def register(app):
             return ({"error": {"message": str(e), "type": "invalid_request_error"}}, 400)
         model = (body.get("model") or CLOUD_ID).strip()
         gen = _gen_params_in(body)
-        _complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, _default_local_backend(model))
+        try:
+            _complete, _label, resp_backend, kind, _limit = _resolve_route(cfg, model, _default_local_backend(model))
+        except ModelNotFound as e:
+            return _model_not_found(e)
         if kind != "local":
             return ({"error": {"message": "mri is available only for local Veritate models",
                                "type": "invalid_request_error"}}, 400)

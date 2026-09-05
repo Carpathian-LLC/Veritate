@@ -1442,3 +1442,123 @@ cardinal trainer killed clean, user pushed + updated cardinal. wren2 at
 step 17,160/144,000, val 0.7432 falling, healthy. CRITICAL for next session:
 re-arm the wren2 checkpoint prune watcher (policy in handoff item 1) — it
 died with the session and the disk fills in ~6 days without it.
+
+2026-09-02 — FAST CONSOLIDATION ON CARDINAL (lab/2026-09-02-fast-consolidation-on-cardinal.md).
+User directive: get sleep working end to end, make it fast on old hardware, make small
+models efficient; wren2 on mirach (pid 83227) must not be touched, so every measurement
+runs on cardinal-01. Deployed the 2026-09-02 sleep stack to cardinal (34 files: sleep.py
+with sleep_state_carry + fail-closed gate + extraction lanes, settings, val_eval, fuse,
+study tools, trainer) and restarted its dashboard 14:48 EDT (pid 182810, port 8001).
+Staged exp_fastsleep_0902 = wren1_3/step_0 (== wren1_0@1250) by hardlink and the E4
+fact_sft bins (md5 b20d4809...). Step benchmark on the idle box, batch 7, 7 threads:
+AdamW 92 s/step (fwd+bwd 91, opt 1.2), Muon 108 s/step (opt 20.3) -> AdamW -15%;
+activation checkpointing off is -12%/sample and fits at batch 7 (~1.3 GB/sample). The
+forward+backward IS the step; the optimizer was never the wall. ARM 1 LAUNCHED 15:04:44
+EDT via POST /trainers/run: exp_fastsleep_0902, fact_sft:0.75,mixed_chat:0.25, AdamW lr
+1e-4 constant, warmup 5, batch 7, 100 steps, ckpt+eval every 20 on veritate_chat
+(eval_iters 4), stop_on_val_rise 0 (whole curve wanted), hooks off; trainer pid 185533
+nice 10, log ~/Veritate/.plugin_run.log. "optimizer state restore skipped" confirmed:
+AdamW over a Muon checkpoint resumes with fresh moments. /tmp/arm_eval.sh (pid via
+pgrep arm_eval) quizzes each checkpoint closed-book at 2 threads as it lands
+(/tmp/arm1/quiz_<step>.json, contended wall time) then runs val_eval on both chat
+corpora vs step 0. Pre-committed falsifier: fwd+rev >= 60/100 at some step <= 100 with
+val <= +2% = recipe found; every step < 40/100 or > +2% = lr cannot replace samples.
+Repo changes this session (uncommitted): stop_on_val_rise now measures against the run's
+STARTING weights (armed resume scores them before step 1; val_rose_past_start + 7 tests),
+sleep_optimizer setting (default adamw, test), ideas.md pruned of finished ideas (IDEA 22,
+E1/E1b/E1c, E3, E4 core, IDEA 7 arm-1 results, IDEA 19 mech 1, IDEA 2 re-ranker), IDEA 22
+ledgered in successes.md, documentation.md updated (sleep_state_carry, sleep_optimizer,
+val_eval/fuse, stop rule, optimizer-switch resume).
+2026-09-02 ~15:45 — E2E STAGING + INCIDENT. Other agent removed wren1_0/wren1_0_int8 from
+cardinal (~15:26) and installed wren2; warm_models now ["wren_base"]. My first e2e fork
+therefore hit a missing checkpoint, the model dir was empty, and /v1/chat/completions
+routed 50 fact statements to the PUBLIC Carpathian endpoint (unknown model name falls
+through to cloud). Nothing recorded or trained on it. Route fixed: unknown model -> 404.
+Re-forked exp_e2e_0902 from exp_fastsleep_0902/step_0 (= wren1_0@1250), exported bin,
+told it the 50 facts locally (123 s): 51 records attributed, extract_facts 50/50 with 6
+correct rejections of the model's own hallucinations. Arm 1 reached step 20 at 15:44:39
+(loss 0.68); val 1.6627 on veritate_chat at step 20 (reference pending).
+2026-09-02 15:57 — ARM 1 STOPPED at step 20 by the pre-committed +5% safety line:
+veritate_chat 1.006792 -> 1.662663 on identical windows (+65.1%), recall fwd 0/50 rev 1/50.
+AdamW 1e-4 with fresh moments is a different regime from Muon 5e-6, not a hotter one.
+step_20.pt deleted. ARM 2 launched: AdamW 3e-5, 60 steps, ckpt/eval every 20, same corpus,
+same step 0; /tmp/arm2/ collects quizzes (quiz_0 reused). Stop rule for arm 2: >+5% at 20
+-> arm 3 at 1e-5.
+2026-09-02 15:57 — RUNNER RACE, two trainers. /trainers/stop marks the state "stopped" the
+instant it signals the child; start() only checks that status, so a launch a few seconds
+later was accepted while arm 1's child was still exiting. When that child was reaped, its
+_run thread wrote status=failed/exit -15 over the NEW run and nulled _PROC, so the state
+read "failed" while arm 2 was alive; a second relaunch then produced two arm-2 trainers
+(pids 197599, 198132) on one model dir. Both killed, state settled, relaunched once at
+15:56 EDT: one trainer, step 1 at 93 s. Fix + test in trainer_runner (start refuses while
+a child handle is alive; the reaper only writes the terminal status of its own run).
+2026-09-02 16:28 — ARM 2 STOPPED at step 20 by the same rule: veritate_chat 1.113589
+(+10.6%), recall fwd 1/50 rev 1/50, replies fact-shaped with wrong bindings. step_20 deleted.
+Corpus measured on the builder: 50 facts -> 1000 exchanges, 500 unique; assistant bytes 28%
+of the stream, subject/object mentions 13%, so ~41 of cardinal's 313 B/s are binding signal.
+2026-09-02 16:32-16:55 — FREEZE BENCHMARK on the idle box (AdamW, batch 7, act-ckpt on):
+full 94.5 s; blocks-only freeze 10/15 = 83.3/78.5 s (pos_emb still trainable, backward walked
+every block for dX); embeddings + blocks frozen: freeze 5 = 70.5 s, 10 = 58.6 s, 15 = 47.5 s
+(66M of 270M train, 4.8 GB RSS), 15 + act-ckpt off = 40.0 s. SHIPPED `--freeze_blocks N`
+(trainer, `sleep_freeze_blocks` setting, Training-form advanced field, test_freeze_blocks.py,
+documentation `freeze_blocks`). Deployed to cardinal twice (deploy2 16:40: trainer stop rule,
+sleep_optimizer, runner race, 404 route, planner budget; deploy3 16:48: freeze lever);
+dashboard restarted each time, 404 verified live, pid 203827.
+2026-09-02 16:52 — ARM 3 launched (AdamW 1e-5, 60 steps, full params, pid 204310, 94 s/step).
+Step 20: val 1.127872 (+12.0%, HIGHER than arm 2 at 3x the rate), quiz 0/50 0/50. Step 40:
+val 1.025540 (+1.9%), quiz fwd 2/50 rev 0/50 — the rise is a TRANSIENT (templates fit, then
+recovery under replay), and the first bindings arrive at 1.15 MB of drill against E4's 59 MB.
+2026-09-02 18:25 — STOP RULE FIXED: `val_rose_past_start` needs two consecutive readings
+above the start line (one reading is the transient; the old rule would have stopped arm 3 at
+step 20 with nothing to publish). Tests updated, docs updated, trainer file deployed to
+cardinal without a restart (the trainer is spawned per run).
+2026-09-02 18:30 — ARM 4 = THE OVERNIGHT, chained to launch after arm 3's val_eval:
+`--freeze_blocks 15`, AdamW 3e-5 constant, 500 steps (14.3 MB, 125 epochs), ckpt/eval every
+50, val_bin mixed_chat (E4's yardstick) with stop_on_val_rise 0.10, engine quiz at every
+checkpoint into /tmp/arm4/, val_eval on both corpora after. ETA ~01:30 EDT 2026-09-03.
+Falsifier: fwd+rev >= 60/100 at some checkpoint with mixed_chat <= +2% = nightly recipe on
+cardinal at half the step cost; then the e2e path on exp_e2e_0902 through /sleep/now.
+2026-09-02 19:36 — ARM 4 step 50: quiz fwd 4/50 rev 4/50, mixed_chat 0.571804 (-3.2% vs the
+0.590527 start), 49 s/step, tok/s 610. Better than all of arm 3 at fewer bytes, yardstick below start.
+2026-09-02 20:20 — ARM 4 step 100: quiz fwd 15/50 rev 14/50 (29/100), mixed_chat 0.572572
+(-3.0%). Knee of the curve at 2.9 MB of drill; E4 needed 79 MB for 26/27.
+2026-09-02 21:03 — ARM 4 step 150: quiz fwd 26/50 rev 23/50 (49/100), mixed_chat 0.554772
+(-6.1% vs start, still falling). 4.3 MB of drill. 60/100 expected by step 200.
+2026-09-02 21:46 — ARM 4 step 200: quiz fwd 35/50 rev 37/50 (72/100), mixed_chat 0.556883
+(-5.7%). FALSIFIER CLEARED: 60/100 inside the budget at 2.7 h on cardinal, 5.7 MB of drill
+(E4: 79-98 MB on a Mac). Recipe = freeze_blocks 15 + AdamW 3e-5 + 200 steps. Run continues to 500.
+2026-09-02 22:30-23:18 — ARM 4 step 250: quiz 35/36 (71/100), mixed_chat 0.600150 (+1.6%);
+step 300: quiz 36/43 (79/100), mixed_chat 0.552857 (-6.4%). The 250 reading was a wobble of the
+4-draw trainer val, not forgetting. e2e chain re-armed at the 200-step dose (72/100, 2.7 h).
+2026-09-03 02:12 — ARM 4 COMPLETE (500/500, 6.8 h): quiz 0/8/29/49/72/71/79/86/87/91/87 of 100 at
+steps 0..500; mixed_chat (trainer) never above +1.6%, final 0.565822 = -4.2% vs 0.590527 start.
+Ceiling ~90/100 from step 400 at 11.5-14.3 MB (E4: 92/100 at 118 MB). val_eval then e2e chain.
+2026-09-03 02:40 — E2E SLEEP launched through /sleep/now on exp_e2e_0902 (51 own exchanges ->
+110,606 B experience_fact_sft, 200 steps, freeze 15, AdamW 3e-5, mixed_chat yardstick). ETA ~05:30.
+Post-run val_eval of arm 4 (8x4) disagrees with the trainer's 4x7 rows on mixed_chat (+1..+4.6% vs
+-4%): window-sampling noise ~7%. 32-draw val on steps 200/300/450/500 chained after the e2e.
+2026-09-03 05:27 — E2E SLEEP DONE: awake event served=true held=false, val_first 0.584803 ->
+val_last 0.521239; closed-book quiz through the served bin fwd 38/50 rev 31/50 (69/100). Facts told
+over the API at 15:41 the day before are answered from the weights after one 2 h 43 min sleep.
+2026-09-03 08:25 — INCIDENT: after the e2e quiz, the still-enabled controller auto-launched a
+second sleep on exp_e2e_0902 at 05:34 (151 exchanges incl. the 100 quiz answers, 126 KB drill,
+200->400 steps). Unnoticed for 2 h 50 min beside the VAL32 val_eval. Model dir deleted at 08:24
+before checking for a live trainer (my error); run stopped via /trainers/stop, dir removed again.
+VAL32 mixed_chat: +2.36/+2.64/+0.83/+3.52% at 200/300/450/500 (at the +2% line). Sleep disabled,
+enrollment cleared, recipe kept in cardinal's settings.
+2026-09-03 09:05 — CLOSEOUT: VAL32 veritate_chat +6.55/+7.81/+4.57/+4.91% at 200/300/450/500.
+exp_fastsleep_0902 and exp_e2e_0902 deleted (numbers in the ledgers). Cardinal: sleep disabled,
+recipe kept in settings, dashboard pid 203827 on the deployed tree. 1173 tests pass, ruff clean.
+2026-09-03 09:30-11:54 — ENFORCEMENT: guard_bash.py (deletion under models/ needs a liveness check in
+the same command; wren* deletions ask) + four rules in the research skill. WORKING-MEMORY PROBE
+(lab 2026-09-03-working-memory-from-carried-state): wren1_3@512 0/6 everywhere; wren2@70000 in-window
+3/6, pending 3/6 (byte-identical), committed state 0/6, leaks 0. The carried state steers topic, not
+content; the abstention SFT blocks half the in-window items. Next: in-context recall SFT, then re-read C.
+2026-09-03 12:01 — RECALL SFT launched on exp_recall_0903 (wren2@70000 fork): 200 steps, freeze 21/28,
+AdamW 3e-5, recall_chat:0.5,mixed_chat:0.5 (new --recall mode of build_fact_chats, 1,000 conversations),
+state_carry chunks. Probe chained after. Falsifier: in-window A >= 5/6 with mixed_chat <= +2%.
+2026-09-05 01:25 — WORKING MEMORY PROGRAM (user: item 5 is the goal). Ladder pre-registered in
+lab/2026-09-05-working-memory-program.md: rung 1 = recall objective across the chunk seam on the
+existing GLA state (recall_far corpus, gap 2.2 KB, freeze 14/28 so the upper recurrent gates move);
+rung 2 delta rule; rung 3 surprise-gated branch. Probe of exp_recall_0903@70200 running; recall_far
+built (2.6 MB). Rung 1 launches on the probe's verdict.
