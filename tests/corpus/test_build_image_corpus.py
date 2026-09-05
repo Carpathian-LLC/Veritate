@@ -57,3 +57,53 @@ def test_a_record_without_a_caption_is_just_the_image():
     codec = _codec()
     record = build_image_corpus.pack_record(codec, torch.rand(3, H, W))
     assert len(record) == codec.code_bytes(H, W) + len(build_image_corpus.RECORD_SEP)
+
+
+def test_the_streaming_build_reads_cached_frames_and_decodes_the_rest(tmp_path):
+    """The trainer's path: the codec was fitted on a sample (in the cache); the corpus
+    must hold every picture, with cached and freshly decoded frames encoding alike."""
+    import json
+    import types
+
+    import numpy as np
+    from PIL import Image
+    from tools import fit_image_codec
+
+    images = tmp_path / "images" / "set"
+    images.mkdir(parents=True)
+    names = [f"{i:08x}_p.png" for i in range(5)]
+    for i, n in enumerate(names):
+        Image.new("RGB", (H * 2, W * 2), (40 * i, 10, 200 - 30 * i)).save(str(images / n))
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    fake = types.SimpleNamespace(
+        image_set_dir=lambda name: str(tmp_path / "images" / name),
+        image_cache_path=lambda name, h, w: str(cache_dir / f"{name}_{h}x{w}.u8"),
+        image_cache_index_path=lambda name, h, w: str(cache_dir / f"{name}_{h}x{w}.index.json"),
+        codec_path=lambda name: str(tmp_path / f"{name}.codec.pt"),
+        corpus_dir=lambda: str(tmp_path / "corpus"),
+    )
+    codec = _codec()
+    image_codec.save(codec, fake.codec_path("c"))
+    # cache holds the first two pictures only
+    frames = np.stack([fit_image_codec._decode((str(images / n), H, W)) for n in names[:2]])
+    mm = np.memmap(fake.image_cache_path("set", H, W), dtype=np.uint8, mode="w+", shape=frames.shape)
+    mm[:] = frames
+    mm.flush()
+    del mm
+    with open(fake.image_cache_index_path("set", H, W), "w", encoding="utf-8") as handle:
+        json.dump({"names": names[:2]}, handle)
+
+    seen = []
+    rep = build_image_corpus.build_streaming(fake, "set", "c", "img", H, W, val_every=2,
+                                             device="cpu", verbose=False,
+                                             progress=lambda d, t: seen.append((d, t)))
+    assert rep["images"] == 5 and rep["from_cache"] == 2 and rep["decoded"] == 3
+    assert rep["train_records"] + rep["val_records"] == 5
+    assert seen[-1] == (5, 5)
+    data = (tmp_path / "corpus" / "img_train.bin").read_bytes() + (tmp_path / "corpus" / "img_val.bin").read_bytes()
+    assert data.count(build_image_corpus.RECORD_SEP) == 5
+    # a freshly decoded picture encodes exactly as it would have from the cache
+    frame = fit_image_codec._decode((str(images / names[4]), H, W))
+    image = torch.from_numpy(np.array(frame)).permute(2, 0, 1).float().div(255.0)
+    assert build_image_corpus.pack_record(codec, image) in data

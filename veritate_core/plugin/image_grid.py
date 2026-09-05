@@ -18,6 +18,10 @@
 #   an almost complete image, and generation walks that schedule backwards.
 # - Loss lands only on masked code positions. Everything else is -1, which the model's
 #   cross_entropy already ignores.
+# - A record closer to the start of its bin than `seq` bytes has less history than the
+#   window; its window is LEFT-PADDED with PAD_BYTE so the picture still trains. The
+#   alternative -- dropping it -- silently loses the first pictures of every corpus and
+#   makes a small val bin unusable outright.
 # veritate_core/plugin/image_grid.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -33,6 +37,9 @@ import torch
 RECORD_SEP   = b"<|endoftext|>"
 IGNORE_INDEX = -1
 MIN_MASKED   = 1
+# Fills the front of a window whose record has less history than seq. Context only:
+# the image occupies a fixed slice at the end of the window and is never padded.
+PAD_BYTE     = 0
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -58,23 +65,26 @@ def make_record_loader(bin_path, seq, batch_size, code_bytes, mask_byte, seed):
     """Record-aligned masked draws. Returns (draw, usable_records).
 
     Every window is `seq` bytes ending at a code block's last byte, so positions
-    [seq - code_bytes, seq) are always the image and everything before is context."""
+    [seq - code_bytes, seq) are always the image and everything before is context. A
+    record with less than `seq` bytes of history is left-padded with PAD_BYTE, so every
+    record in the bin is a training example."""
     if code_bytes > seq:
         raise ValueError("image_code_bytes " + str(code_bytes) + " exceeds seq " + str(seq)
                          + "; the objective cannot see a whole image")
     arr = np.memmap(bin_path, dtype=np.uint8, mode="r")
     ends = code_block_ends(bin_path)
-    ends = ends[ends >= seq]
+    ends = ends[ends >= code_bytes]
     if ends.size == 0:
-        raise ValueError("no whole record fits seq " + str(seq) + " in " + str(bin_path))
+        raise ValueError("no image records in " + str(bin_path))
     rng = np.random.RandomState(seed)
     first_code = seq - code_bytes
 
     def draw():
         picks = ends[rng.randint(0, ends.size, size=batch_size)]
-        window = np.empty((batch_size, seq), dtype=np.int64)
+        window = np.full((batch_size, seq), PAD_BYTE, dtype=np.int64)
         for b, end in enumerate(picks):
-            window[b] = arr[end - seq:end]
+            start = max(0, int(end) - seq)
+            window[b, seq - (end - start):] = arr[start:end]
         tokens = torch.from_numpy(window)
         targets = torch.full_like(tokens, IGNORE_INDEX)
         ratios = cosine_mask_ratio(rng, batch_size)

@@ -15,6 +15,7 @@ import json
 from flask import Response
 from readers import checkpoints, models
 from readers import corpus as corpus_reader
+from readers import images as images_reader
 from training import train_stream as train_stream_mod
 
 # ------------------------------------------------------------------------------------
@@ -34,8 +35,10 @@ def register(app):
             out_models.append({"name": name, "steps": steps})
         out_models.sort(key=lambda r: r["name"])
         return {
-            "corpora": corpus_reader.list_stems(),
-            "models":  out_models,
+            "corpora":    corpus_reader.list_stems(),
+            "models":     out_models,
+            "image_sets": images_reader.list_sets(),
+            "codecs":     images_reader.list_codecs(),
         }
 
     @app.route("/corpus/<path:stem>/usage")

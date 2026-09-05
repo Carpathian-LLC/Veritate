@@ -289,6 +289,11 @@ SCHEMA_IGNORED_FLAGS = frozenset({
     # build: `variant`/`alpha`/`rope_base` belong to the attention variants,
     # `init_from` to the plugins that seed weights from a foreign checkpoint.
     "variant", "alpha", "rope_base", "init_from",
+    # The Images flow (TRAINER_SCHEMA.image) is served by training/image_trainer.py and
+    # never renders for this trainer, but the guard's property is that NO dashboard
+    # field can refuse a launch, so they are ignorable here rather than fatal.
+    "image_set", "codec", "height", "width", "planes", "patch", "caption_bytes",
+    "codec_epochs", "codec_batch_size", "codec_lr", "codec_images",
 })
 
 # Shape fields the dashboard renders. This trainer does NOT take shape from

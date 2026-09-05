@@ -117,6 +117,74 @@ def all_size_defaults():
 
 NATIVE_SIZES = load_native_sizes()
 
+# The canonical image trainer, shipped beside the text trainer. Same runner, same
+# save contract, same size table (its trunk is dense, which every size supports);
+# its own flow ("image") so the Training tab renders picture fields, not text knobs.
+# The trainer script imports this manifest: one owner for what the form shows and
+# what the process parses, so the two cannot drift.
+IMAGE_TRAINER_ID   = "native/image_trainer"
+IMAGE_TRAINER_PATH = os.path.normpath(
+    os.path.join(paths.REPO_ROOT, "veritate_mri", "training", "image_trainer.py"))
+IMAGE_TRAINER_FLOW = "image"
+IMAGE_TRAINER_DEFAULTS = {
+    # what to train on
+    "image_set":     "",
+    "codec":         "",        # blank = fit a new codec named after the model
+    "height":        320,
+    "width":         320,
+    "planes":        4,
+    "patch":         20,
+    "caption_bytes": 128,       # context budget ahead of the image; seq = auto from it
+    "seq":           0,         # 0 = image_code_bytes + caption_bytes, rounded to 64
+    # codec fit (stage 1, skipped when `codec` names an existing one)
+    "codec_epochs":     8,
+    "codec_batch_size": 32,
+    "codec_lr":         3e-4,
+    "codec_images":     8192,   # pictures the codec is fitted on (a hash-ordered sample); 0 = all
+    # the run
+    "size":          "20m",
+    "precision":     "bf16",
+    "total_steps":   5000,
+    "batch_size":    16,
+    "base_lr":       3e-4,
+    "min_lr":        3e-5,
+    "warmup_steps":  200,
+    "lr_schedule":   "wsd",
+    "wsd_decay_frac": 0.1,
+    "wsd_decay_kind": "sqrt",
+    "weight_decay":  0.1,
+    "beta1":         0.9,
+    "beta2":         0.95,
+    "grad_clip":     1.0,
+    "optimizer":     "muon",
+    "use_8bit_adam": False,
+    "ckpt_every":    500,
+    "eval_every":    250,
+    "eval_iters":    8,
+    "log_every":     25,
+    "seed":          0,
+    # fixed by what an image model is; declared so the parser knows them
+    "trunk":         "dense",
+    "objective":     "masked_grid",
+    "hooks":         "off",     # the checkpoint probes are text probes
+    "version":       "v1",
+}
+IMAGE_TRAINER_MANIFEST = {
+    "name":        "Image trainer (pictures in, pictures out)",
+    "description": "Train an image model from a folder of your own photos. Fits the image codec, "
+                   "builds the corpus and trains the masked-grid model in one run; captions are "
+                   "free (folder names or .txt sidecars).",
+    "kind":        "trainer",
+    "bench":       False,
+    "teaches":     "image generation",
+    "flow":        [IMAGE_TRAINER_FLOW],
+    "sizes":       NATIVE_SIZES,
+    "defaults":    dict(IMAGE_TRAINER_DEFAULTS),
+    # Deliberately empty: the text table's per-size tuning (seq 512 at 10m, QAT on)
+    # would override image geometry. Sizes contribute their shape and nothing else.
+    "size_defaults": {},
+}
+
 NATIVE_TRAINER_MANIFEST = {
     "name":        "Native trainer (no plugin)",
     "description": "Train, continue, or refine any size from the dashboard. Canonical Veritate (GELU FFN + "
@@ -209,6 +277,20 @@ def _native_record():
     }
 
 
+def _image_record():
+    """The image trainer's entry, shaped exactly like the native one so the runner,
+    the picker and update_defaults treat it as any other trainer."""
+    return {
+        "id":                IMAGE_TRAINER_ID,
+        "file":              os.path.basename(IMAGE_TRAINER_PATH),
+        "path":              IMAGE_TRAINER_PATH,
+        "manifest":          dict(IMAGE_TRAINER_MANIFEST),
+        "bundle_dir":        None,
+        "bundle_corpus_dir": None,
+        "native":            True,
+    }
+
+
 SIZE_UNITS = {"m": 1_000_000, "b": 1_000_000_000}
 
 
@@ -232,6 +314,8 @@ def scan():
     # Native trainer first: surfaces "no plugin needed" at the top of the picker.
     if os.path.isfile(NATIVE_TRAINER_PATH):
         out.append(_native_record())
+    if os.path.isfile(IMAGE_TRAINER_PATH):
+        out.append(_image_record())
     if not os.path.isdir(PLUGINS_ROOT):
         return out
     plugins = []

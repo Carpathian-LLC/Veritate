@@ -71,6 +71,27 @@ def test_a_seed_replays_the_same_batch(corpus):
     assert torch.equal(batches[0][1], batches[1][1])
 
 
+def test_a_record_at_the_start_of_the_bin_still_trains(tmp_path):
+    """One record, shorter than seq: the window is left-padded, the image is where the
+    objective expects it, and the loss still lands only there. Dropping it would make a
+    small val bin unusable and lose the first pictures of every corpus."""
+    path = tmp_path / "one_val.bin"
+    codes = bytes(range(1, CODE_BYTES + 1))
+    path.write_bytes(b"hi" + codes + image_grid.RECORD_SEP)
+    draw, usable = image_grid.make_record_loader(str(path), SEQ, 2, CODE_BYTES, MASK_BYTE, seed=0)
+    assert usable == 1
+    tokens, targets = draw()
+    assert tokens.shape == (2, SEQ)
+    history = 2 + CODE_BYTES
+    assert bool((tokens[:, :SEQ - history] == image_grid.PAD_BYTE).all())
+    assert bytes(tokens[0, SEQ - history:SEQ - CODE_BYTES].tolist()) == b"hi"
+    supervised = (targets != image_grid.IGNORE_INDEX).nonzero()[:, 1]
+    assert int(supervised.min()) >= SEQ - CODE_BYTES
+    unmasked = targets[0] == image_grid.IGNORE_INDEX
+    assert bytes(tokens[0, SEQ - CODE_BYTES:][unmasked[SEQ - CODE_BYTES:]].tolist()) == bytes(
+        c for c, keep in zip(codes, unmasked[SEQ - CODE_BYTES:].tolist(), strict=True) if keep)
+
+
 def test_an_image_wider_than_the_window_is_refused(corpus):
     """Training on a window that cannot hold a whole image is silently wrong, so it raises."""
     with pytest.raises(ValueError, match="exceeds seq"):

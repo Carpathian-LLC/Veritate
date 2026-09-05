@@ -92,6 +92,42 @@
 <!-- ============================ GENERATION TAB ============================ -->
 <div class="tab-body active" data-tab="generation">
 
+<details id="imgGenPanel" style="margin-bottom:14px;background:#0a0c12;border:1px solid var(--line);border-radius:4px">
+  <summary style="cursor:pointer;padding:8px 12px;font-weight:600;color:var(--text)">Images &mdash; generate from an image model <span id="imgGenCount" style="font-weight:400;color:var(--dim);font-size:11px"></span></summary>
+  <div style="padding:6px 12px 12px;display:flex;flex-direction:column;gap:8px;font-size:11.5px">
+    <div class="meta" style="color:var(--dim);line-height:1.5">One model, every mode. <b>Text to image</b>: describe it. <b>Variation</b>: your photo, partly regenerated. <b>Inpaint</b>: your photo, one region redrawn. <b>Expand</b>: your photo in the centre, the model paints the margin. Words steer only as far as the captions the model trained on.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <label>model <select id="imgGenModel" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px;min-width:180px"><option value="">- no image models yet -</option></select></label>
+      <label>step <select id="imgGenStep" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"></select></label>
+      <label>mode <select id="imgGenMode" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
+        <option value="text">text to image</option>
+        <option value="variation">variation (image to image)</option>
+        <option value="inpaint">inpaint a region</option>
+        <option value="expand">expand (outpaint)</option>
+        <option value="unconditional">unconditional</option>
+      </select></label>
+    </div>
+    <textarea id="imgGenPrompt" rows="2" placeholder="describe the picture (used by every mode except unconditional)" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 6px;font:inherit;border-radius:3px;resize:vertical"></textarea>
+    <div id="imgGenSourceRow" style="display:none;gap:8px;flex-wrap:wrap;align-items:center">
+      <label>source photo <input id="imgGenSource" type="file" accept="image/*" style="font:inherit"></label>
+      <label id="imgGenStrengthWrap">regenerate <input id="imgGenStrength" type="number" value="0.6" min="0" max="1" step="0.05" style="width:56px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"> of the cells</label>
+      <label id="imgGenExpandWrap">photo occupies <input id="imgGenExpand" type="number" value="0.6" min="0.1" max="1" step="0.05" style="width:56px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"> of the frame</label>
+      <span id="imgGenRectWrap">region (fractions) x0 <input id="imgGenX0" type="number" value="0.25" min="0" max="1" step="0.05" style="width:52px"> y0 <input id="imgGenY0" type="number" value="0.25" min="0" max="1" step="0.05" style="width:52px"> x1 <input id="imgGenX1" type="number" value="0.75" min="0" max="1" step="0.05" style="width:52px"> y1 <input id="imgGenY1" type="number" value="0.75" min="0" max="1" step="0.05" style="width:52px"></span>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <label>passes <input id="imgGenPasses" type="number" value="8" min="1" max="64" step="1" style="width:52px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"></label>
+      <label>temperature <input id="imgGenTemp" type="number" value="1.0" min="0" max="3" step="0.1" style="width:56px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"></label>
+      <label>seed <input id="imgGenSeed" type="number" value="0" step="1" style="width:72px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"></label>
+      <button id="imgGenRun" type="button" style="background:var(--data-pos);color:#000;font-weight:600">generate</button>
+      <span id="imgGenStatus" class="meta" style="color:var(--dim)"></span>
+    </div>
+    <div id="imgGenOutWrap" style="display:none;gap:12px;align-items:flex-start;flex-wrap:wrap">
+      <img id="imgGenOut" alt="generated picture" style="max-width:100%;image-rendering:auto;border:1px solid var(--line);border-radius:3px">
+      <a id="imgGenSave" download="veritate.png" style="font-size:11px;color:var(--accent)">save PNG</a>
+    </div>
+  </div>
+</details>
+
   <div class="panel" style="margin-bottom: 10px;">
     <h2>prompt <em id="promptModeHint">ask the model a question. the conversation builds up above the box.</em></h2>
     <div class="body">
@@ -657,6 +693,8 @@
     <p class="desc">Pick a model to scrub through its training. Each model's checkpoints carry a per-step <code>hooks/step_&lt;N&gt;/</code> folder with probe, lens, classroom, grades, concepts, surprise, quant_kl, and generation captures. These are written automatically at every checkpoint by the unified save helper. If a model has no hooks, train one first.</p>
   </div>
 
+  <div id="imgMri" style="display:none"></div>
+
   <div class="panel collapsible collapsed">
     <h2>output evolution <em id="outputEvolutionSubtitle">snapshots of the same brain learning to write</em></h2>
     <div class="body">
@@ -1141,8 +1179,10 @@
       </div>
 
     </div>
-    <p class="desc" title="The trainer is veritate_mri/training/veritate_trainer.py. It reads a corpus from data/corpus/ and writes to models/<name>/."><code>veritate_trainer.py</code> &rarr; <code>data/corpus/</code> &rarr; <code>models/&lt;name&gt;/</code> (hover for full layout)</p>
+    <p class="desc" id="trainDescLine" title="The trainer is veritate_mri/training/veritate_trainer.py. It reads a corpus from data/corpus/ and writes to models/<name>/."><code>veritate_trainer.py</code> &rarr; <code>data/corpus/</code> &rarr; <code>models/&lt;name&gt;/</code> (hover for full layout)</p>
   </div>
+
+  <div id="imgLive" style="display:none"></div>
 
   <div id="trainMetricsSection">
   <div class="panel" style="margin-bottom: 10px;">
@@ -2488,6 +2528,10 @@
         <button class="train-flow-card" data-flow="continue" type="button">
           <span class="train-flow-card-title">Continue a saved model</span>
           <span class="train-flow-card-desc">Resume training or add the next stage.</span>
+        </button>
+        <button class="train-flow-card" data-flow="image" type="button">
+          <span class="train-flow-card-title">Train an image model</span>
+          <span class="train-flow-card-desc">Pictures in, pictures out. Point it at a folder of your own photos.</span>
         </button>
         <button class="train-flow-card" data-flow="rag" type="button">
           <span class="train-flow-card-title">Answer from context (RAG)</span>

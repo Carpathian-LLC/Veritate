@@ -142,7 +142,7 @@ class ImageCodec(nn.Module):
         """Training path: reconstruction in [0, 1] plus the losses fit_step sums."""
         latent = self.encoder(images).permute(0, 2, 3, 1)
         codes, quantized, commitment = self.vq.quantize(latent)
-        recon = torch.stack([self.decoder(quantized[b]) for b in range(quantized.shape[0])])
+        recon = self.decoder(quantized)
         target = images.permute(0, 2, 3, 1)
         return recon, {"recon": F.l1_loss(recon, target), "commit": commitment, "codes": codes}
 

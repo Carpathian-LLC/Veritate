@@ -1,6 +1,95 @@
 # handoff
 
-## LIVE STATE 2026-09-03 08:45 - read this first, everything below is older
+## LIVE STATE 2026-09-05 - image training from the GUI - read this first
+
+**This box is `exponentallium` (Apple M2, 8 cores), NOT the M3 Ultra the 2026-09-03 block describes.**
+Fresh checkout: `models/` empty, no `data/corpus/`, no codecs. Nothing below about wren2, the
+facts pipeline or cardinal applies to this machine. `tests/hooks/test_guards.py` (20 tests) fails
+here because `.claude/hooks/` is not in this checkout; every other test passes.
+
+**2026-09-05 09:30 - FIRST REAL LAUNCH, STOPPED; FIXES SHIPPED.** The user ingested set `images`
+(139,719 pictures, chosen through the folder picker; folder-name captions such as `1-10`, useless
+as text) and launched `test-image-gen` at size 800m, **height 1920 x width 1080**, patch 20 ->
+20,736 code bytes/picture. The trainer started a 869 GB pixel cache (139,719 x 1920x1080x3) on a
+disk with 850 GB free, decoding at ~55 img/s on the CPU (JPEG decode is CPU work; `device: mps`
+was already the training device). The user hit Stop at 3,800 decoded (exit -15); the 23 GB
+`.u8.tmp` was removed. Causes and what shipped:
+- The GUI let any frame size through -> one *picture size* select (160/240/320/400/480/640);
+  height+width are hidden data-args it drives; a pair it does not offer snaps to 320. The trainer
+  refuses > 1024 px (`MAX_EDGE`).
+- Cache = whole set -> the codec is fitted on a sample (`codec_images` 8,192, new advanced flag);
+  the corpus is streamed for the whole set (`build_image_corpus.build_streaming`: cached frames
+  from the memmap, the rest decoded one batch ahead of the codec). Disk guard: a cache above 85%
+  of the free disk is refused up front. `_decode` uses JPEG `draft` (DCT downscale) + EXIF
+  transpose; `DECODE_WORKERS` = cores. Measured on the `images` set, one thread: 22 -> 70 img/s at
+  320 px (3.1x); at 1920x1080 only 15 -> 19. With 8,192 sampled pictures the decode stage is well
+  under a minute at 320 px, against ~42 min for the whole set at 1920x1080.
+- `data/trainer_tuning.json`: height/width reset to 320 by hand (the trainer refuses 1920x1080).
+- No visibility before train.csv -> `veritate_core/plugin/image_progress.py` writes
+  `models/<name>/progress.json` (stages decode/codec/encode/train, device, notes, run state);
+  `GET /images/live/<name>`; the Training tab's `#imgLive` view replaces the byte panels for image
+  runs (`_imgLiveTick` off the 3 s `/trainers` poll): GPU chip, stage bars with rate/ETA, a
+  *model saved* line, KPIs, loss curve, latest samples + fill test, run-log tail. Stop (SIGTERM)
+  now saves the step in flight and exits 0 with `stopped`; a failure records `failed` + reason.
+- `data/trainer_tuning.json` still holds that launch's args for `native/image_trainer` (height
+  1920, size 800m). The select snaps the size; `size` stays 800m until the user picks another.
+- Captions: `caption_from_folder` defaults True, so a crawled set gets folder names as captions.
+  For text-to-image run the Captions stage (vision teacher) first, or accept unconditional output.
+- Tests added: fit_image_codec (disk guard, sample cap, EXIF, stop), build_image_corpus (streaming
+  with a partial cache), image_trainer (progress through stages, stop saves a checkpoint, MAX_EDGE,
+  failed state), image routes (`/images/live`). Full suite 1800 passed (hooks excluded).
+
+**IMAGE MODELS (IDEA 24) - trainable from the dashboard as of 2026-09-05.** User decision, after the
+one-trainer pushback (rule 17-30): a SEPARATE canonical image trainer. Shipped:
+- `training/image_trainer.py`, registered as `native/image_trainer` (`readers/trainers.py`
+  `IMAGE_TRAINER_MANIFEST`, flow `image`). One launch does cache -> codec fit -> corpus -> masked_grid
+  run. Shares parser/sizes/lr/optimizer/config/resume/eval/save with the text trainer by import.
+  Fixed: trunk dense, objective masked_grid, causal=False, hooks off. seq derived from geometry.
+- Training tab: **Train an image model** card (flow `image`, `TRAINER_SCHEMA.image`), picture fields
+  only, *add photos* panel inside the pictures field -> `POST /images/ingest` (background thread,
+  `/images/ingest/status`), `/images/sets`, discovery carries `image_sets` + `codecs`.
+  `_corePluginsArgs()` now returns {} off the scratch flow (a stale list could inject `trunk`).
+- Tools: `tools/ingest_images.py` (content-addressed, hardlinks, min-edge, folder captions),
+  `tools/fit_image_codec.py` (F1 driver: decode-once uint8 memmap cache, append-only, hash-stable
+  split, MPS, held-out PSNR), `build_image_corpus.build_from_cache` + CLI. Batched
+  `PatchDecoder.forward`: 1.84x on the fit path, bitwise identical, `render()` untouched.
+- Docs: `documentation.md` `## image models` -> `### trainer`, settings reference entries.
+- Tests: tests/training/test_image_trainer.py (in-process end to end), test_ingest_images,
+  test_fit_image_codec, test_readers_images, test_image_routes_ingest, trainers reader additions.
+
+**How the user trains one**: restart the dashboard (the running server predates this code) ->
+Training tab -> Choose action -> Train an image model -> Choose folder… -> pick the set -> name +
+size + picture size -> start training. The Training tab then shows the stages live and says when
+the model was last saved. HEIC needs `pip install pillow-heif`.
+
+- **Generation SHIPPED same day**: `veritate_core/plugin/image_sample.py` (MaskGIT parallel fill; text /
+  variation / inpaint / expand / unconditional through one mechanism), `POST /images/generate`,
+  `GET /images/models`, and an **Images** panel at the top of the Generation tab. Pictures field
+  now opens the OS folder chooser (`POST /images/pick_folder`, osascript on macOS).
+
+- **Captioning stage SHIPPED**: `tools/caption_images.py` (vision teacher -> `<image>.txt`; provider
+  adapter, downscale-to-JPEG, resumable, stop, progress) + `/images/caption/*` + a **Captions** block
+  in the pictures field (teacher, vision model + list models, style/custom prompt, max words, send
+  size, parallel, redo; try one picture; caption all with progress bar). The corpus sidecar now
+  carries the caption count, so captions added later rebuild the corpus on the next launch.
+
+- **Image probe + Models-tab view SHIPPED**: `veritate_core/plugin/image_probe.py` writes
+  `hooks/step_N/image/` (samples same-seed, fill test, codec recon, attention maps, metrics: fill acc
+  per plane, loss by hidden fraction, codes used, attention spread) after every checkpoint;
+  `/images/mri/<model>` + file route; Models tab hides the byte panels for `training: image` and
+  renders the image view (strip, KPIs, charts), polling while training. Images training panel is
+  now three cards (Pictures / Captions / Model + Advanced) with minimal copy; the trainer picker
+  step is skipped on the image flow; ingest reports done/total while hashing.
+- **GPU**: verified on this box `pick_device("auto") -> mps`, bf16 supported, `device_preference`
+  auto; the runner forces CPU only on Intel Macs. A GUI-launched image run trains on the M2 GPU.
+
+**OPEN**: (1) resume an image model from the GUI (trainer takes `--resume`; the form has no resume
+field yet); (2) F1 is still unmeasured on real photographs - the first real fit has not completed;
+LPIPS is not computed (PSNR proxy); (3) codec quality at the 8,192-picture sample x 8 epochs is
+unverified on real photos - watch the codec stage's held-out PSNR in the live view; (4) the
+`images` set carries folder-name captions; the user's own photos remain the intended corpus.
+
+## LIVE STATE 2026-09-03 08:45 - older, applies to the M3 Ultra, not this box
 
 **wren2 training**: pid 83227, healthy, step 76,000 of 144,000 (52.8%), ~6,000 B/s, 0 skipped steps
 across the last 50, ETA ~8.6 days. val has been flat-to-improving overnight in a 0.705-0.740 band:

@@ -74,6 +74,7 @@ ignore = [
 # The trainer sets sys.path before importing veritate_core (it is a standalone entry point), and
 # its stdout IS the persisted run log the dashboard tails.
 "veritate_mri/training/veritate_trainer.py" = ["E402", "T20"]
+"veritate_mri/training/image_trainer.py"    = ["E402", "T20"]  # same contract: standalone entry point, stdout is the run log
 "veritate_mri/training/rag_sft.py"          = ["T20"]  # rag sft subprocess; stdout is .rag_run.log
 "veritate_mri/training/builders/**"         = ["T20"]  # standalone eval-set builders; stdout is the build report
 "veritate_mri/training/checkpoint_probe.py" = ["T20"]  # CLI probe entry; main() lists written artifacts on stdout

@@ -258,7 +258,7 @@ All builders are deterministic from a fixed seed, write to `data/corpus/`, and s
 - Study recall (`tools/study_recall.py`): the PRIMARY closed-book recall metric, measured by likelihood rather than by generation. "Does the model know this chunk?" is a likelihood question: teacher-forced NLL over the chunk's bytes, given only its label, is how strongly the weights expect that content. One forward pass instead of N sequential decode steps -- measured on cardinal 2026-08-25, generation-based scoring cost ~90 s a chunk and four checkpoints would have taken four hours, while the likelihood pass scores all 64 chunks in under five minutes. The assistant role mask does the span selection, so loss lands only on the chunk bytes and never on the prompt that names them: the prompt contains the label, and without that mask a model could score well by predicting its own question. Reported signal is the GAP between studied and held-out chunks; held-out NLL falls too as the model gets better at the domain, so only the gap isolates memorization. **Caveat, measured:** teacher-forced NLL averages over the whole chunk and is dominated by continuing code once started, so it can look excellent while label->content retrieval is absent. wren1_8@10 scored a 0.66 gap while free-running generation produced only whitespace. Always confirm a recall claim with `study_exam` before reporting it.
 - Study exam (`tools/study_exam.py`): closed-book exam over study chunks, the generalization of `e4_retention_quiz` from facts to documents. No context, no retrieval. Scoring is graded rather than exact, because a byte-level model will not reproduce a 1 KB body verbatim: sequence similarity, common-prefix share (for code, the signature), and whether the label is recovered from an excerpt. Similarity is measured against the first `--max-new` bytes of the chunk, identically for both splits, so a decode budget is never reported as a memory failure. The reported signal is the GAP between studied and held-out chunks, not the studied score: a model merely good at code scores well on recite without having memorized anything.
 - Capability probe (`tools/val_eval.py`): next-byte val loss for any checkpoints of any model on one NAMED corpus (`--val-bin mixed_chat`, a stem, filename, or path), with `--baseline <model>:<step>` scored first on the same bytes and every row reporting its delta against it. The draw is seeded as the trainer seeds it (`seed + 1`) through the trainer's own loader, so the Nth iteration reads byte-identical windows across models and a same-iteration comparison is exact; the role mask is not applied, matching `evaluate()`. Validated by reproducing a `train.csv` val row to six decimals. A consolidation run's own val rows cannot answer "did this cost general ability": left without `val_bin` the trainer validates on the heaviest mix member, which for a study run is the study material. Measure a consolidation run against its STARTING weights, not the run's best: the 2026-08-26 code-QA run improved both chat corpora 2.4-6.0% at every checkpoint while `stop_on_val_rise` halted it for rising 3.4% above its own best (successes.md). `training/fuse.py` (CLI `tools/fuse_checkpoints.py`) interpolates a checkpoint toward another (`theta <- alpha*tuned + (1-alpha)*base`); measured inert on a run that does not degrade, so it is the repair for a damaging run, never a default.
-- Image corpus (`tools/build_image_corpus.py`): encodes a directory of images through a trained codec into `<stem>_{train,val}.bin`. Records are `caption bytes + code block + <|endoftext|>`; the code block is a FIXED length for a given codec and geometry, so the image is the last `image_code_bytes` bytes before each separator and everything before it is the caption. Fixed length is what removes the need for a marker inside a record that image bytes could collide with, and the builder refuses any record whose code block contains the separator anyway. Captions come from a `<image>.txt` sidecar and are optional; without them the corpus is unconditional. `build()` returns `image_code_bytes`, which the run needs. Reading image files needs Pillow; the packing path does not.
+- Image corpus (`tools/build_image_corpus.py`): encodes a directory of images through a trained codec into `<stem>_{train,val}.bin`. Records are `caption bytes + code block + <|endoftext|>`; the code block is a FIXED length for a given codec and geometry, so the image is the last `image_code_bytes` bytes before each separator and everything before it is the caption. Fixed length is what removes the need for a marker inside a record that image bytes could collide with, and the builder refuses any record whose code block contains the separator anyway. Captions come from a `<image>.txt` sidecar and are optional; without them the corpus is unconditional. `build()` returns `image_code_bytes`, which the run needs. Reading image files needs Pillow; the packing path does not. `build_streaming()` (alias `build_from_cache`) is the trainer's path: frames in the decoded-pixel cache `fit_image_codec` wrote are read from it, the rest are decoded by a thread pool one batch ahead of the codec, encoding runs in batches of 64 on the device, and train/val is split by the content hash in each filename (so a picture keeps its side of the split as the set grows). CLI: `python -m tools.build_image_corpus <stem> <codec> --set <set>`.
 - Bigram index: `<stem>_train_bigrams.npz` sidecars for the writing-health PMI probe; on-demand builds are capped and cover only the head of a large corpus — capped and `--all` (uncapped) PMI values are not comparable. Tokens are lowercase `[a-z][a-z']*` only.
 - Corpus library: catalog merge order local → remote → user sources, later wins. Five install formats (raw_bytes, raw_bytes_zip, zip_bundle, hf_dataset, native); `coming_soon` gates unpublished tiers; `uninstall()` removes only `data/corpus/` copies. Size ladders were retired 2026-08-20: one entry per corpus, and `recommended_min_params` / `recommended_max_params` are null on every entry. The chat/agent/mcp ladders that motivated them were withdrawn as dead data in the same change (see acceptance gate below); behavior data scales with task diversity, not parameter count, and Chinchilla governs knowledge volume separately. Tiers over GitHub's 100MB limit ship as `zip_bundle` on Carpathian COS.
 
@@ -325,7 +325,7 @@ Third-party dashboard extensions (distinct from trainer plugins — never relabe
 
 ### internal (dashboard surface)
 
-One route module per concern in `veritate_mri/routes/`. High-traffic groups: `/trainers` + `/trainers/run|stop|tune_defaults|sysprobe`, `/runs/*` (incl. timelines and eval-deep), `/models/*`, `/corpus/*` (incl. `/corpus/mix/plan`), `/settings` + `/settings/notices`, `/sys_metrics`, `/backends`, `/wiki*`, `/addons`, `/atlas/*` (concept/neuron/lifetime/circuit/concepts_inverted — pure derivations over hook dumps), `/teacher/*`, `/mesh/*` (machine-to-machine), `/models/git/*` (models repo sync), `/app/*` (updater). `/images/decode_bench` (POST) is the image-decoder benchmark described under image decoding. `/teacher/target_status` (GET) answers where distillation calls will land and whether that machine is already training: `{provider, model, kind, host, targets_this_machine, training_active, run, contention, contention_kind, reason}`. A hosted-API teacher never contends. A local teacher on this box contends while `trainer_runner.state()` reports running. A local teacher pointed at another box reports `training_active: null` — unknowable from here, and reporting `false` would be a guess dressed as a fact. The route never raises: a guard that 500s would block the start it is meant to advise.
+One route module per concern in `veritate_mri/routes/`. High-traffic groups: `/trainers` + `/trainers/run|stop|tune_defaults|sysprobe`, `/runs/*` (incl. timelines and eval-deep), `/models/*`, `/corpus/*` (incl. `/corpus/mix/plan`), `/settings` + `/settings/notices`, `/sys_metrics`, `/backends`, `/wiki*`, `/addons`, `/atlas/*` (concept/neuron/lifetime/circuit/concepts_inverted — pure derivations over hook dumps), `/teacher/*`, `/mesh/*` (machine-to-machine), `/models/git/*` (models repo sync), `/app/*` (updater). `/images/decode_bench` (POST) is the image-decoder benchmark described under image decoding; `/images/sets` (GET) lists the picture sets and fitted codecs, `/images/ingest` (POST, body `{set, sources:[paths], min_edge?, caption_from_folder?, copy?}`) collects photos from folders on this machine into `data/images/<set>/` in a background thread (400 on a bad set name or a missing folder, 409 while one runs), and `/images/ingest/status` (GET) reports it; `/images/pick_folder` (POST) opens the operating system's folder chooser on the dashboard's machine and returns the chosen path (`{ok, path}`, or `cancelled`, or `unavailable` on a headless box so the form falls back to a typed path). `/train/discovery` also returns `image_sets` and `codecs`. `/images/models` (GET) lists image models; `/images/generate` (POST) generates a PNG from one in any mode (see image models, generation). `/images/caption/options` (GET), `/images/caption/preview` (POST), `/images/caption` (POST, background), `/images/caption/status` (GET), `/images/caption/stop` (POST) are the captioning stage. `/images/mri/<model>` (GET) and `/images/mri/<model>/<step>/<file>` (GET) serve the image probe to the Models tab; `/images/live/<model>` (GET) is the Training tab's live view of an image run (progress.json, checkpoints, latest probe, run-log tail; 404 when there is no such run directory). `/teacher/target_status` (GET) answers where distillation calls will land and whether that machine is already training: `{provider, model, kind, host, targets_this_machine, training_active, run, contention, contention_kind, reason}`. A hosted-API teacher never contends. A local teacher on this box contends while `trainer_runner.state()` reports running. A local teacher pointed at another box reports `training_active: null` — unknowable from here, and reporting `false` would be a guess dressed as a fact. The route never raises: a guard that 500s would block the start it is meant to advise.
 
 The authoritative settings-key list is `DEFAULTS` in `veritate_mri/runtime/settings.py` — treat the code as the reference; notable keys beyond the obvious: `speculative_enabled`, `speculative_bytes`, `speculative_chunk_bytes`, `speculative_pause_ms`, `read_ahead_enabled`, `api_read_ahead_enabled`, `api_generate_ahead_enabled`, `corpus_compose_chunk_bytes`, `corpus_compose_val_ratio`, `corpus_compose_seed`, `trainer_sizes_path`, `corpus_mix_max_epochs`, `pytorch_load_mode`, `warm_models`, `device_preference`, `api_key`.
 
@@ -386,6 +386,140 @@ frame edge (`MAX_EDGE`), so a mistyped resolution cannot allocate the box out fr
 run. The route is synchronous, like `/trainers/sysprobe`: the caller sizes the cost through arms,
 reps and resolution.
 
+### trainer
+
+`veritate_mri/training/image_trainer.py` is the canonical image trainer, registered as
+`native/image_trainer` beside the text trainer and shown in the Training tab under **Train an image
+model**. It owns the whole image pipeline in one launch: decode a sample of the set into the pixel
+cache (`data/image_cache/`), fit the codec if none is named, stream the whole set into a corpus if
+it is missing or stale, then train. The dashboard needs one field filled in: which set of pictures.
+Every stage reports to `models/<name>/progress.json` (`veritate_core/plugin/image_progress.py`:
+stage, done/total, rate, ETA, device, notes such as the last checkpoint) from the first second, and
+the Training tab reads it (see *live view*, below). Stop is a request: SIGTERM (the Stop button)
+sets a flag, the stage in progress raises `StopRequested`, the training loop saves a checkpoint of
+the step in flight first, and the process exits 0 with `progress.json` saying `stopped`. A failure
+leaves `failed` and the message, so a refused cache or a missing set is readable in the tab.
+
+Shared with the text trainer by import, never by copy: the flag parser and its unknown-flag policy,
+the size table (`trainer_sizes.json`; the trunk is dense, so every size applies), the lr schedule,
+the optimizer builder, `config.json`, resume, evaluation, the checkpoint/save contract and the
+`train.csv` rows the dashboard plots. Owned here: geometry, the codec, the corpus, and a loop with
+one objective and no chunking. Fixed by what an image model is rather than offered as knobs:
+`trunk=dense`, `objective=masked_grid`, `causal=False`, `hooks=off` (the checkpoint probes are text
+probes). The manifest the form renders and the flags the process parses are one dict
+(`readers/trainers.IMAGE_TRAINER_MANIFEST`), so they cannot drift; its `size_defaults` is
+deliberately empty because the text table's per-size tuning (seq 512 at 10m, QAT on) would override
+the geometry.
+
+Stages, each skipped when its output already exists:
+
+1. **Pictures.** `data/images/<set>/`, filled by `tools/ingest_images.py` or the form's **Choose
+   folder…** button, which opens the OS folder chooser (`POST /images/pick_folder`), names the set
+   after the folder and collects it (`POST /images/ingest`). Content-addressed and hardlinked: one copy per picture however many
+   folders hold it, originals never moved, pictures under `--min-edge` (512) rejected rather than
+   upscaled, `<image>.txt` sidecars or folder names as captions. Re-running ingests only what is new.
+1b. **Captions** (optional, its own stage). `tools/caption_images.py` or the form's *Captions* block:
+   a vision teacher (any configured provider; the model must be a vision model, e.g. `llava:13b`
+   on Ollama, `gpt-4o`, `claude-sonnet-4-6`) describes every picture into `<image>.txt`. Style
+   `sentence` / `tags` / `detailed` / `custom` prompt, `max_words`, `max_edge` (pictures are
+   downscaled to this and sent as JPEG; tokens are what a caption costs), `concurrency`,
+   `overwrite`. *Try on one picture* (`POST /images/caption/preview`) writes nothing; *caption all*
+   (`POST /images/caption`, status/stop beside it) skips pictures that already have a caption and is
+   resumable. The corpus sidecar records the caption count, so the next launch rebuilds the corpus
+   and the words reach the model. Without this stage captions are folder names.
+2. **Codec.** `codec` blank fits `<model>_codec` with `fit_image_codec` on a SAMPLE of the set:
+   `codec_images` (8,192) pictures in content-hash order, which is a random draw; 0 fits on all.
+   A codec does not improve past ~10k pictures, and the sample is all that is decoded into the
+   pixel cache (8,192 x 320x320 is 2.5 GB; the whole of a 140k-picture library at 1920x1080 would
+   have been 869 GB, which is what a typed frame size produced on 2026-09-05). The cache is refused
+   before it starts when it would exceed 85% of the free disk. Decoding is the one CPU stage, by
+   nature of JPEG: JPEGs decode at the coarsest DCT scale that still covers the frame
+   (`Image.draft`), EXIF orientation is applied, `DECODE_WORKERS` (= cores) threads run it.
+   `codec_epochs`, `codec_batch_size`, `codec_lr` as before; held-out L1 and PSNR per epoch. A
+   named codec is reused and a `patch`/`planes` mismatch refused, because a corpus is unreadable
+   under a different codec.
+3. **Corpus.** `<model>_img_{train,val}.bin` for the WHOLE set (`build_image_corpus.build_streaming`):
+   frames in the cache are read from it, every other picture is decoded by a thread pool one batch
+   ahead of the codec, so Pillow and the GPU overlap and no picture is decoded twice; the sidecar
+   `<stem>.image.json` records set, codec, geometry, image and caption counts and `image_code_bytes`.
+   A re-launch whose sidecar matches skips the encode; a grown or newly captioned set rebuilds.
+4. **Run.** `seq` = `image_code_bytes + caption_bytes` rounded up to 64 unless set explicitly (a value
+   below the image is refused, not clipped). A frame above 1024 px on either side is refused
+   (`MAX_EDGE`); the form's single *picture size* control offers 160-640 px squares and sets
+   `height` and `width` together, snapping a pair it does not offer back to 320. Logs `img/s` beside `tok/s`; `config.json` carries
+   `training: image`, the codec name, the set and the geometry, which is everything decoding a
+   sample later needs.
+
+Measured on the fit path (M2, CPU forward, batch 16): decoding the batch in one pass instead of one
+image per Python iteration is 1.84x, bitwise identical (`PatchDecoder.forward` accepts a batch;
+`render`, the F0 bench path, is untouched). Pillow decode is the dominant cost of a fit over a photo
+library and is paid once per (set, geometry). Measured 2026-09-05 on the user's set (1200-2400 px
+JPEGs, M2, one thread): full decode 22 img/s at a 320 frame, `draft` + EXIF decode 70 img/s, 3.1x;
+at 1920x1080 the DCT scale cannot drop and it is 15 vs 19 img/s, which is why the frame size, not
+the decoder, decides the cost of this stage.
+
+### generation
+
+`veritate_core/plugin/image_sample.py`; `POST /images/generate`; the **Images** panel at the top of
+the Generation tab. One mechanism serves every mode, because the model was trained to fill masked
+cells given the bytes before them: **text** (all cells masked, caption in front), **variation**
+(encode the source photo, regenerate a `strength` share of cells), **inpaint** (regenerate the cells
+under a rectangle given as frame fractions), **expand** (the source shrunk to `expand` of the frame
+in the centre, the model paints the margin), **unconditional** (no caption). Decoding is MaskGIT's
+parallel refinement: one forward per pass predicts every masked position, the most confident commit,
+and the count still masked follows the cosine schedule the trainer sampled from -- `passes` is the
+knob F2 measures (4 should match causal AR; more than 8 fails the CPU budget). `MASK_BYTE` cannot be
+emitted (its logit is -inf); cells are kept or regenerated across all planes at once so kept content
+stays coherent; the window is laid out as training saw it (pad, separator, caption, image). Output
+is the model's training frame. `temperature` 0 is greedy; a `seed` replays. The last model loaded
+stays resident. `/images/models` lists what can generate (models whose `config.json` says
+`training: image`).
+
+Words steer only as far as the captions the model trained on: with folder-name captions the model
+learns those names, not open vocabulary. Describe-anything generation needs a caption per picture
+(the captioning stage, above, writes those sidecars from a vision teacher).
+
+### probe and the Models tab
+
+`veritate_core/plugin/image_probe.py` runs at every checkpoint of an image run and writes
+`hooks/step_<N>/image/`: `samples.png` (eight pictures from nothing, the SAME seeds at every step so
+the timeline shows one draw evolving, plus pictures from held-out captions when the set has any),
+`fill.png` (four held-out pictures: original / half the cells hidden / the model's completion),
+`recon.png` (the codec's own reconstruction of those pictures -- the ceiling the model cannot beat,
+so blur is attributed to the right stage), `attention.png` (where the centre cell attends, one map
+per layer, recovered from the qkv projection with a forward hook) and `metrics.json`: fill accuracy
+overall and per plane (plane 0 is coarse structure, the last plane is fine detail -- a model learns
+them in that order), loss at 25/50/75/100% hidden, codes in use out of 255 and their entropy (a
+collapse shows as a handful), attention spread per layer (0 focused, 1 uniform), and the held-out
+count. `GET /images/mri/<model>` returns every step's metrics with the files present;
+`GET /images/mri/<model>/<step>/<file>` serves a picture.
+
+The Models tab detects an image model from `config.json` (`training: image`), hides the byte-level
+panels, and shows this instead: a strip of every probed checkpoint's samples (click to select), the
+KPIs for the selected step, the fill test, the attention maps with per-layer spread, and charts over
+training of fill accuracy (all and per plane), loss by hidden fraction, and codes in use. It polls
+while a run is training that model.
+
+### live view on the Training tab
+
+`GET /images/live/<model>` returns `progress.json`, the checkpoints on disk with the last one's time,
+the latest probe's metrics and files, whether the runner is on this model, and the tail of the run
+log; it works before `config.json` exists, which is most of a first run's wall clock. The Training
+tab shows it whenever the running trainer is `native/image_trainer`, the run picked in *live
+training* is an image model, or the Images action is open with a last run known, and hides the
+byte-model panels (register fluency, comprehension, concepts, lens drift) meanwhile. The view: a
+GPU/CPU chip with the device, the four stages as bars (done with duration, reused, running with
+done/total, rate and time left, pending), the trainer's message, a *model saved* line (checkpoints
+on disk, last step and age, steps to the next save), KPIs once training (step, loss, held-out loss,
+pictures/s, lr, time left, fill accuracy, parameters, pictures), the loss curve from `train.csv`,
+the latest checkpoint's samples and fill test with a link to the full Models-tab view, and the run
+log tail. A failed run shows its reason in red above the stages.
+
+Not yet: resume from the GUI (the trainer accepts `--resume`, the Images form does not offer it),
+output beyond the training frame, and F1 itself -- no codec has finished fitting on real
+photographs yet (the first real launch, 2026-09-05, was stopped in its decode stage at 1920x1080);
+the pipeline is proven on synthetic frames end to end.
+
 
 ## settings reference
 
@@ -409,7 +543,60 @@ Bytes of encoded image at the end of each corpus record, reported by `build_imag
 Read only under `objective=masked_grid`, which uses it to locate the image inside a record. Draws are
 record-aligned: every window is `seq` bytes ending at a code block's last byte, so the image always
 occupies `[seq - image_code_bytes, seq)` and whatever caption fits precedes it. The next-byte loader's
-uniform draws would cut images in half.
+uniform draws would cut images in half. A record with less than `seq` bytes of history (the first
+pictures in a bin, or a small val bin) is left-padded with `PAD_BYTE` (0) rather than dropped, so
+every picture trains.
+
+### image_set
+
+Which set of pictures an image run trains on: a directory name under `data/images/`. Sets are made by
+`tools/ingest_images.py` or the form's *add photos* panel; the trainer refuses a set that does not
+exist or holds no pictures. Only pictures the codec and corpus stages can read count
+(`png jpg jpeg webp bmp`; HEIC needs `pillow-heif`).
+
+### codec
+
+The image <-> bytes codec for the run. Blank fits a new one named `<model>_codec` on the set before
+training; a name reuses that codec. A corpus is only readable under the codec that wrote it, so a
+named codec whose `patch` or `planes` differ from the form is refused rather than silently producing
+a corpus the model cannot decode.
+
+### height_width
+
+Training frame in pixels. Every picture is cover-scaled and center-cropped to it, so nothing is
+stretched or padded. Both must be multiples of `patch`. `image_code_bytes = planes x (height/patch)
+x (width/patch)`; at the defaults (320x320, patch 20, 4 planes) that is 1,024 bytes, inside IDEA 24's
+2,048-code F1 budget.
+
+### planes
+
+Residual VQ depth of the codec. Each plane adds one byte per patch and quantizes what the planes
+above it missed; planes are emitted coarse to fine, so a prefix of the byte string decodes to a valid
+lower-fidelity picture (anytime output). Costs bytes per image linearly.
+
+### patch
+
+Pixels per code cell, on both the encoder and the decoder (they share the grid). Smaller means more
+detail and more bytes per image. Must divide both `height` and `width`.
+
+### caption_bytes
+
+Context budget ahead of the image. `seq` is derived as `image_code_bytes + caption_bytes` rounded up
+to 64 when `seq` is 0; a caption longer than the budget is simply cut from the front of the window,
+never the image.
+
+### codec_epochs
+
+Passes over the set when fitting a new codec (ignored when `codec` names an existing one). Pictures
+are decoded once into `data/image_cache/`, so epochs after the first are pure tensor work; the fit
+reports held-out L1 and PSNR per epoch and saves after each.
+
+### codec_images
+
+Pictures the codec is fitted on when `codec` is blank: the first `codec_images` names in content-hash
+order, which is a random sample, so the pixel cache holds that many frames and no more (8,192 x
+320x320 = 2.5 GB). 0 fits on the whole set. A codec does not improve past ~10k pictures; the corpus
+still holds every picture, streamed past the fitted codec.
 
 ### recipe
 

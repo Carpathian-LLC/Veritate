@@ -143,13 +143,34 @@ class PatchDecoder(nn.Module):
         tiles = self.fc2(F.gelu(self.fc1(neigh))).reshape(r1 - r0, gw, self.patch, self.patch, RGB)
         return tiles.permute(0, 2, 1, 3, 4).reshape((r1 - r0) * self.patch, gw * self.patch, RGB)
 
+    def _padded_batch(self, features):
+        return F.pad(features.permute(0, 3, 1, 2), (1, 1, 1, 1), mode="replicate")
+
+    def _band_batch(self, padded, r0, r1, gw):
+        n = padded.shape[0]
+        neigh = F.unfold(padded[:, :, r0:r1 + 2, :], kernel_size=3).transpose(1, 2)
+        tiles = self.fc2(F.gelu(self.fc1(neigh))).reshape(n, r1 - r0, gw, self.patch,
+                                                          self.patch, RGB)
+        return tiles.permute(0, 1, 3, 2, 4, 5).reshape(n, (r1 - r0) * self.patch,
+                                                       gw * self.patch, RGB)
+
     def forward(self, features):
-        """Float frame in [0, 1]. The path the codec trains through."""
-        gh, gw, _ = features.shape
-        padded = self._padded(features)
-        bands = [self._band(padded, r0, min(r0 + self.band, gh), gw)
+        """Float frame(s) in [0, 1]. The path the codec trains through; `render` is the
+        uint8 path the bench and serving take, and it is deliberately left alone.
+
+        Accepts one frame [gh, gw, C] or a batch [B, gh, gw, C]. The batch runs one
+        matmul per band for the whole batch instead of one per image: same arithmetic,
+        but a matmul large enough to saturate the machine rather than B small ones
+        (IDEA 12/14 measured 6-48% of peak on the small shapes, 85-87% on the large).
+        Bands still bound the working set, which is the reason they exist."""
+        single = features.dim() == 3
+        batch = features.unsqueeze(0) if single else features
+        gh, gw = batch.shape[1], batch.shape[2]
+        padded = self._padded_batch(batch)
+        bands = [self._band_batch(padded, r0, min(r0 + self.band, gh), gw)
                  for r0 in range(0, gh, self.band)]
-        return torch.sigmoid(torch.cat(bands, dim=0))
+        out = torch.sigmoid(torch.cat(bands, dim=1))
+        return out.squeeze(0) if single else out
 
     def render(self, features):
         """uint8 frame written band by band, so no float tensor spans the frame."""

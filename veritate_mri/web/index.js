@@ -3991,6 +3991,12 @@ function setTimelineActive(name) {
   if (!name) return;
   learningTimelineName = name;
   learningTimelinePathPrefix = `/timeline/${encodeURIComponent(name)}/`;
+  // An image model gets its own view; the byte-level panels below mean nothing
+  // for a model whose output is pixels. Decide from config.json, then continue.
+  _imgMriDecide(name).then(isImage => { if (!isImage) _setTimelineActiveText(name); });
+}
+
+function _setTimelineActiveText(name) {
   // stop any running replay and invalidate any in-flight selectCheckpoint awaits
   // before clearing the cache (otherwise stale frames could publish into the new timeline).
   setReplayModeL("ready");
@@ -4013,6 +4019,7 @@ function setTimelineActive(name) {
 }
 
 async function ensureLearningLoaded() {
+  if (imgMriState.active) return;
   if (learningState.loaded) return;
   // make sure timelines list is fresh and we have a selection
   if (!learningTimelineName) {
@@ -8349,6 +8356,17 @@ function _trBuildInput(a) {
       .join("");
     return `<select data-arg="${_trEsc(name)}" style="${inputBase}">${opts}</select>`;
   }
+  if (t === "image_set") {
+    return `<div class="imgf-sets" data-img-sets>${_imgSetRowsHtml(trainState.discovery.image_sets || [], def)}</div>` +
+           `<input type="hidden" data-arg="${_trEsc(name)}" data-arg-kind="image_set" value="${_trEsc(def)}">`;
+  }
+  if (t === "codec") {
+    const codecs = trainState.discovery.codecs || [];
+    const opts = [`<option value="" ${!def ? "selected" : ""}>fit a new codec on these pictures (recommended)</option>`]
+      .concat(codecs.map(c => `<option value="${_trEsc(c.name)}" ${c.name === def ? "selected" : ""}>${_trEsc(c.name)}</option>`))
+      .join("");
+    return `<select data-arg="${_trEsc(name)}" data-arg-kind="codec" style="${inputBase}">${opts}</select>`;
+  }
   if (t === "corpus") {
     const all = trainState.discovery.corpora || [];
     const source = a.source || "any";
@@ -8602,6 +8620,44 @@ const TRAINER_SCHEMA = {
     { name: "quant_mode",   type: "str", advanced: true,        label: "weight quant mode",     help: "active only when QAT enabled. int8 (default), int4, or ternary (BitNet 1.58).", choices: ["int8","int4","ternary"] },
     // ---- checkboxes (all together at the end; qat_enabled is up top with resume) ----
   ],
+  // The Images flow. Picture fields, not text knobs: the trainer fixes trunk, objective
+  // and attention itself, and derives seq from the geometry. Field names match
+  // readers/trainers.IMAGE_TRAINER_DEFAULTS, which is also what the trainer parses.
+  image: [
+    { name: "name",          type: "str",       required: true, label: "model name",            help: "your name for this model; the size is auto-appended to make the on-disk folder." },
+    { name: "image_set",     type: "image_set", required: true, label: "your pictures",         help: "the photos to train on. Click 'Choose folder…' and pick the folder holding them; every picture under it (subfolders included) is collected into a set named after the folder, under data/images/. Originals are never moved, duplicates are stored once, folder names become captions." },
+    { name: "size",          type: "str",       required: true, label: "model size",            help: "bigger = better pictures, slower, more memory. The trunk is dense; every size works.", choices: _trSizeOrder },
+    { name: "codec",         type: "codec",     advanced: true, label: "image codec",           help: "the image <-> bytes codec. Blank fits a new one on these pictures first (recommended for a new set); or reuse a codec you fitted before. A corpus is only readable under the codec that wrote it." },
+    { name: "height",        type: "int",       required: true, label: "picture height (px)",   help: "every photo is scaled and center-cropped to this size for training. Must be a multiple of the patch size (20)." },
+    { name: "width",         type: "int",       required: true, label: "picture width (px)",    help: "must be a multiple of the patch size (20). image bytes = planes x (height/patch) x (width/patch); keep that under ~2,048 for interactive decode (IDEA 24 F1)." },
+    { name: "precision",     type: "str",       required: true, label: "number precision",      help: "bf16 = half memory; fp32 = double.", choices: ["bf16","fp32"] },
+    { name: "description",   type: "text",                      label: "what this model is for", help: "saved into the model config. If blank, auto-filled." },
+    { name: "total_steps",   type: "int",       required: true, label: "total training steps",  help: "the loop stops here. More = better pictures, more wall-clock and disk." },
+    { name: "batch_size",    type: "int",       required: true, label: "batch size",            help: "pictures per step. Higher = faster and smoother, more memory." },
+    { name: "planes",        type: "int",       advanced: true, label: "codec planes",          help: "residual VQ depth. Each plane adds one byte per patch and refines the picture; a prefix of planes still decodes (anytime output)." },
+    { name: "patch",         type: "int",       advanced: true, label: "codec patch (px)",      help: "pixels per code cell. Smaller = more detail and more bytes per image." },
+    { name: "caption_bytes", type: "int",       advanced: true, label: "caption budget (bytes)", help: "context ahead of the image the model can see. seq = image bytes + this, rounded up to 64." },
+    { name: "seq",           type: "int",       advanced: true, label: "sequence length",       help: "0 = derive from geometry + caption budget (recommended). An explicit value below the image bytes is refused." },
+    { name: "codec_epochs",  type: "int",       advanced: true, label: "codec fit epochs",      help: "only when fitting a new codec. Pictures are decoded once into a cache; later epochs are pure GPU." },
+    { name: "codec_images",  type: "int",       advanced: true, label: "codec fit pictures",    help: "how many pictures the codec is fitted on: a sample in content-hash order, which is a random draw. 0 = the whole set. A codec does not improve past ~10k pictures, and the sample is what is decoded into the pixel cache." },
+    { name: "codec_batch_size", type: "int",    advanced: true, label: "codec fit batch",       help: "pictures per codec step." },
+    { name: "codec_lr",      type: "float",     advanced: true, label: "codec fit lr",          help: "AdamW lr for the codec fit." },
+    { name: "optimizer",     type: "str",       advanced: true, label: "optimizer",             help: "muon = measured 1.60x fewer training bytes to equal quality on this platform; adamw = classic.", choices: ["adamw","muon"] },
+    { name: "base_lr",       type: "float",     advanced: true, label: "learning rate",         help: "peak lr." },
+    { name: "min_lr",        type: "float",     advanced: true, label: "final learning rate",   help: "lr at the end of the schedule." },
+    { name: "lr_schedule",   type: "str",       advanced: true, label: "lr schedule",           help: "wsd = warmup, stable, decay (default). cosine, linear, constant.", choices: ["wsd","cosine","linear","constant"] },
+    { name: "wsd_decay_frac", type: "float",    advanced: true, label: "WSD decay fraction",    help: "share of steps spent decaying." },
+    { name: "wsd_decay_kind", type: "str",      advanced: true, label: "WSD decay shape",       help: "sqrt, linear or cosine.", choices: ["sqrt","linear","cosine"] },
+    { name: "warmup_steps",  type: "int",       advanced: true, label: "warmup steps",          help: "steps to ramp lr from 0 to peak." },
+    { name: "weight_decay",  type: "float",     advanced: true, label: "weight decay",          help: "L2 regularization strength." },
+    { name: "grad_clip",     type: "float",     advanced: true, label: "gradient clip",         help: "max grad norm; a non-finite norm skips the step." },
+    { name: "ckpt_every",    type: "int",       advanced: true, label: "checkpoint every (steps)", help: "how often weights are saved." },
+    { name: "eval_every",    type: "int",       advanced: true, label: "validate every (steps)", help: "how often held-out masked-fill loss is measured." },
+    { name: "eval_iters",    type: "int",       advanced: true, label: "validation batches",    help: "batches per validation." },
+    { name: "log_every",     type: "int",       advanced: true, label: "log every (steps)",     help: "how often a train row is written." },
+    { name: "seed",          type: "int",       advanced: true, label: "seed",                  help: "random seed for draws, masks and init." },
+    { name: "hooks",         type: "str",       advanced: true, label: "checkpoint probes",     help: "off (default): the checkpoint probe suite is text probes and means nothing on an image model.", choices: ["off","light","full"] },
+  ],
 };
 
 // Settings with a "learn more" page (documentation.md settings reference). Field
@@ -8611,6 +8667,8 @@ const WIKI_SETTING_PAGES = {
   batch_size: "batch_size", seq: "seq", n_chunks: "n_chunks", bptt_window: "bptt_window", freeze_blocks: "freeze_blocks",
   base_lr: "base_lr", min_lr: "min_lr", lr_schedule: "lr_schedule", warmup_steps: "warmup_steps",
   weight_decay: "weight_decay", grad_clip: "grad_clip", label_smoothing: "label_smoothing",
+  image_set: "image_set", codec: "codec", height: "height_width", width: "height_width",
+  planes: "planes", patch: "patch", caption_bytes: "caption_bytes", codec_epochs: "codec_epochs",
 };
 
 // Build the per-render arg list for a plugin. Render order = required fields
@@ -9599,7 +9657,8 @@ function _trApplyRecipe(name) {
 // stay behind the "show all settings" toggle (research-validated recipes carry
 // the hidden knobs). Required fields always render.
 const SIMPLE_FIELDS = new Set(["name", "corpus", "size", "precision", "description",
-                               "model_type", "recipe", "resume", "total_steps"]);
+                               "model_type", "recipe", "resume", "total_steps",
+                               "image_set", "height", "width"]);
 
 function _trShowAll() {
   return localStorage.getItem("tr_show_all") === "1";
@@ -10297,6 +10356,10 @@ function _corePluginsToggle(id) {
 }
 
 function _corePluginsArgs() {
+  // Core plugins render on the scratch flow only (see _coreTrainersLoad). A list left
+  // over from a previous flow would inject trunk/QAT args into a run that never
+  // showed them; the image trainer fixes its trunk and must not receive them.
+  if ((trainState.flow || "scratch") !== "scratch") return {};
   const items = coreTrainersState.list || [];
   const out = {};
   for (const p of items) {
@@ -10370,6 +10433,173 @@ function _trRenderManifestSummary(m) {
   return head + row + full;
 }
 
+// ---------------------------------------------------------------
+// Images flow: a guided panel instead of the settings grid. Three cards --
+// pictures, captions, model -- with every other knob behind Advanced. The data
+// contract is unchanged: every field is a [data-arg] element inside #trainArgs.
+// ---------------------------------------------------------------
+const IMGF_STYLE = `<style>
+  .imgf { display:flex; flex-direction:column; gap:10px; font-size:11.5px; }
+  .imgf-card { background:#0a0c12; border:1px solid var(--line); border-radius:5px; padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+  .imgf-card > summary { cursor:pointer; list-style:none; display:flex; align-items:center; gap:10px; }
+  .imgf-card > summary::-webkit-details-marker { display:none; }
+  .imgf-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .imgf-num { display:inline-flex; width:20px; height:20px; border-radius:50%; background:var(--accent); color:#fff; font-weight:700; font-size:11px; align-items:center; justify-content:center; flex:none; }
+  .imgf-title { font-weight:600; font-size:12.5px; color:var(--text); }
+  .imgf-sub { color:var(--dim); font-size:11px; margin-left:auto; }
+  .imgf-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .imgf-field { display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .imgf-field > label { color:var(--dim); font-size:10.5px; }
+  .imgf-field input[type=text], .imgf-field input[type=number], .imgf-field select, .imgf-field textarea, .imgf input.imgf-in { background:#11141d; border:1px solid var(--line); color:var(--text); padding:5px 7px; font:inherit; border-radius:3px; box-sizing:border-box; min-width:0; }
+  .imgf-hint { color:var(--dim); font-size:10.5px; line-height:1.4; }
+  .imgf-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:8px 14px; }
+  .imgf-sets { display:flex; flex-direction:column; gap:4px; }
+  .imgf-set { display:grid; grid-template-columns:16px minmax(80px,1fr) auto minmax(60px,110px) auto; gap:10px; align-items:center; padding:6px 8px; border:1px solid var(--line); border-radius:4px; cursor:pointer; background:#11141d; }
+  .imgf-set:hover { border-color:var(--cool); }
+  .imgf-set.on { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .imgf-set input { margin:0; }
+  .imgf-set-name { color:var(--text); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .imgf-set-n, .imgf-set-cap { color:var(--dim); font-size:10.5px; white-space:nowrap; }
+  .imgf-bar { height:6px; background:#0a0c12; border:1px solid var(--line); border-radius:3px; overflow:hidden; }
+  .imgf-bar i { display:block; height:100%; background:var(--accent); }
+  .imgf-empty { color:var(--dim); padding:14px; border:1px dashed var(--line); border-radius:4px; text-align:center; }
+  .imgf-primary { border-color:var(--accent) !important; color:var(--accent) !important; font-weight:600; }
+  .imgf-radios { display:flex; gap:12px; flex-wrap:wrap; }
+  .imgf-radios label { display:flex; gap:5px; align-items:center; color:var(--text); cursor:pointer; }
+  .imgf-adv > summary { cursor:pointer; color:var(--dim); font-size:11px; }
+  .imgf-progress { height:6px; background:#11141d; border:1px solid var(--line); border-radius:3px; overflow:hidden; }
+  .imgf-progress i { display:block; height:100%; width:0; background:var(--accent); transition:width .3s; }
+  .imgf-preview { display:flex; gap:10px; align-items:flex-start; }
+  .imgf-preview img { width:110px; height:auto; border:1px solid var(--line); border-radius:3px; }
+  .imgf-status { font-size:11px; color:var(--dim); }
+</style>`;
+
+function _imgSetRowsHtml(sets, current) {
+  if (!sets.length) return `<div class="imgf-empty">No pictures yet &mdash; <b>Choose folder&hellip;</b></div>`;
+  return sets.map(x => {
+    const pct = x.images ? Math.round(100 * x.captions / x.images) : 0;
+    const on = x.name === current;
+    return `<label class="imgf-set${on ? " on" : ""}"><input type="radio" name="imgf_set" value="${_trEsc(x.name)}" ${on ? "checked" : ""}>` +
+      `<span class="imgf-set-name">${_trEsc(x.name)}</span><span class="imgf-set-n">${Number(x.images).toLocaleString()} photos</span>` +
+      `<span class="imgf-bar" title="${pct}% captioned"><i style="width:${pct}%"></i></span><span class="imgf-set-cap">${Number(x.captions).toLocaleString()} captions</span></label>`;
+  }).join("");
+}
+
+function _imgfSizeHint(size) {
+  const sh = _trSizeShape(size);
+  if (!sh || !sh.params) return "";
+  const m = sh.params / 1e6;
+  const n = m >= 1000 ? (m / 1000).toFixed(1) + "B" : Math.round(m) + "M";
+  if (m <= 10)  return `${n} &middot; minutes, rough`;
+  if (m <= 30)  return `${n} &middot; a good first model here`;
+  if (m <= 100) return `${n} &middot; hours`;
+  if (m <= 300) return `${n} &middot; a day or more here`;
+  return `${n} &middot; needs a big GPU`;
+}
+
+// Square frames the model trains on. A multiple of the codec patch (20 px), and
+// small: at 320 a picture is 1,024 bytes, at 640 it is 4,096 and generation slows.
+// A typed 1920x1080 once meant an 869 GB decode cache; the select is the guard.
+const IMGF_SIZES = [160, 240, 320, 400, 480, 640];
+const IMGF_SIZE_DEFAULT = 320;
+
+function _imgfSetSize(px) {
+  for (const n of ["height", "width"]) {
+    const el = _trArgEl(n);
+    if (!el || String(el.value) === String(px)) continue;
+    el.value = String(px);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  const sel = document.querySelector("#trainArgs [data-imgf-size]");
+  if (sel) sel.value = String(px);
+}
+
+// The select follows height/width (defaults, a resumed run); a pair the select does
+// not offer (an old 1920x1080 launch left in the tuning store) snaps to the default.
+function _imgfSyncSize() {
+  const sel = document.querySelector("#trainArgs [data-imgf-size]");
+  const h = _trArgEl("height"), w = _trArgEl("width");
+  if (!sel || !h || !w) return;
+  const cur = parseInt(h.value, 10);
+  if (IMGF_SIZES.includes(cur) && String(w.value) === String(cur)) { sel.value = String(cur); return; }
+  _imgfSetSize(IMGF_SIZE_DEFAULT);
+}
+
+let _trDescLineDefault = null;
+function _imgfDescLine(image) {
+  const el = _trEl("trainDescLine");
+  if (!el) return;
+  if (_trDescLineDefault === null) _trDescLineDefault = { html: el.innerHTML, title: el.title };
+  el.innerHTML = image
+    ? `<code>image_trainer.py</code> &rarr; <code>data/images/&lt;set&gt;/</code> &rarr; <code>data/codecs/</code> + <code>data/corpus/</code> &rarr; <code>models/&lt;name&gt;/</code> (hover for full layout)`
+    : _trDescLineDefault.html;
+  el.title = image
+    ? "The image trainer is veritate_mri/training/image_trainer.py. It decodes a sample of the set into data/image_cache/, fits the codec into data/codecs/, encodes every picture into data/corpus/ and writes the model to models/<name>/."
+    : _trDescLineDefault.title;
+}
+
+function _imgfUpdateHints() {
+  _imgfSyncSize();
+  const sizeHint = document.querySelector("#trainArgs [data-size-hint]");
+  if (sizeHint) sizeHint.innerHTML = _imgfSizeHint(_trArgVal("size"));
+  const geom = document.querySelector("#trainArgs [data-geom-hint]");
+  if (!geom) return;
+  const h = parseInt(_trArgVal("height"), 10), w = parseInt(_trArgVal("width"), 10);
+  const patch = parseInt(_trArgVal("patch"), 10) || 20, planes = parseInt(_trArgVal("planes"), 10) || 4;
+  if (!h || !w) { geom.textContent = ""; return; }
+  if (h % patch || w % patch) { geom.innerHTML = `<span style="color:var(--hot)">multiples of ${patch} only</span>`; return; }
+  const bytes = planes * (h / patch) * (w / patch);
+  geom.innerHTML = `${bytes.toLocaleString()} bytes per picture${bytes > 2048 ? ` <span style="color:var(--warm)">&middot; slow to generate</span>` : ""}`;
+}
+
+function _imgfIntro(current) {
+  const intro = _trEl("trainFormIntro");
+  if (!intro) return;
+  intro.innerHTML = current
+    ? `<b>${_trEsc(current.name)}</b> &middot; ${Number(current.images).toLocaleString()} pictures &middot; ${Number(current.captions).toLocaleString()} captions`
+    : "";
+}
+
+function _trRenderImageForm(p, argsEl) {
+  const fields = _trArgsForPlugin(p);
+  const byName = Object.fromEntries(fields.map(a => [a.name, a]));
+  const input = (n) => byName[n] ? _trBuildInput(byName[n]) : "";
+  const placed = new Set(["name", "image_set", "size", "height", "width", "description"]);
+  const advanced = fields.filter(a => !placed.has(a.name) && !a.uiOnly);
+  const advGrid = advanced.map(a => `<div class="imgf-field" title="${_trEsc(a.help || "")}"><label>${_trEsc(a.label || a.name)}</label>${_trBuildInput(a)}</div>`).join("");
+  const sets = trainState.discovery.image_sets || [];
+  const current = sets.find(x => x.name === _trArgVal("image_set")) || null;
+
+  argsEl.innerHTML = IMGF_STYLE + `<div class="imgf">
+    <div class="imgf-card img-ingest">
+      <div class="imgf-head"><span class="imgf-title">Pictures</span>
+        <button type="button" class="action imgf-primary" data-img-pick>Choose folder&hellip;</button>
+        <span class="imgf-status" data-img-status></span></div>
+      <div data-img-manual style="display:none" class="imgf-row"><input type="text" class="imgf-in" data-img-src placeholder="folder path" style="flex:1"><button type="button" class="action" data-img-ingest>add</button></div>
+      ${input("image_set")}
+      <div class="imgf-hint">Subfolders included. Originals untouched. HEIC needs <code>pip install pillow-heif</code>.</div>
+    </div>
+    <details class="imgf-card img-captions">
+      <summary><span class="imgf-title">Captions</span><span class="imgf-sub" data-cap-summary></span></summary>
+      ${_capBlockHtml()}
+    </details>
+    <div class="imgf-card">
+      <div class="imgf-head"><span class="imgf-title">Model</span></div>
+      <div class="imgf-grid">
+        <div class="imgf-field"><label>name</label>${input("name")}</div>
+        <div class="imgf-field"><label>size</label>${input("size")}<div class="imgf-hint" data-size-hint></div></div>
+        <div class="imgf-field"><label>picture size</label><span style="display:none">${input("height")}${input("width")}</span><select data-imgf-size>${IMGF_SIZES.map(px => `<option value="${px}">${px} &times; ${px}</option>`).join("")}</select><div class="imgf-hint" data-geom-hint></div></div>
+      </div>
+      <div class="imgf-field"><label>notes (optional)</label>${input("description")}</div>
+      <details class="imgf-adv"><summary>Advanced</summary><div class="imgf-grid" style="margin-top:10px">${advGrid}</div></details>
+    </div>
+  </div>`;
+  const sizeSel = argsEl.querySelector("[data-imgf-size]");
+  if (sizeSel) sizeSel.addEventListener("change", () => { _imgfSetSize(parseInt(sizeSel.value, 10)); _imgfUpdateHints(); });
+  _imgfIntro(current);
+}
+
 function _trRenderForm() {
   const p      = trainState.selected;
   const wrap   = _trEl("trainFormWrap");
@@ -10383,11 +10613,28 @@ function _trRenderForm() {
     if (argsEl) argsEl.innerHTML = "";
     return;
   }
+  if (trainState.flow === "image" && argsEl) {
+    if (descEl) descEl.innerHTML = "";
+    _trRenderImageForm(p, argsEl);
+    _imgfDescLine(true);
+    if (wrap)   wrap.style.display = "block";
+    if (runRow) runRow.style.display = "flex";
+    _trWireArgListeners();
+    _trApplyDefaults();
+    _trUpdateComposedName();
+    _trUpdateVramEstimate();
+    _imgfUpdateHints();
+    _capLoadOptions();
+    return;
+  }
   if (descEl) descEl.innerHTML = _trRenderManifestSummary(p.manifest);
+  _imgfDescLine(false);
   const introEl = _trEl("trainFormIntro");
   if (introEl) {
     const ideal = _trEsc(_trIdealFor(p.manifest));
-    introEl.innerHTML = `ideal for <b>${ideal}</b> &middot; <span style="color:var(--hot)">*</span> required`;
+    introEl.innerHTML = trainState.flow === "image"
+      ? `Three things to fill in: <b>your pictures</b>, a <b>model name</b> and a <b>model size</b>. Everything else has a working default &mdash; tick <i>show all settings</i> to see it. <span style="color:var(--hot)">*</span> required &middot; hover <b>?</b> for help`
+      : `ideal for <b>${ideal}</b> &middot; <span style="color:var(--hot)">*</span> required`;
   }
   // Responsive grid: small fields auto-pack into columns; wide types (text/path/tools)
   // and bool span the full row. Help text is condensed to a hoverable blue ? badge so
@@ -10574,13 +10821,328 @@ function _trFiltered() {
   return trainState.list.filter(p => p.manifest && p.manifest.kind === "trainer" && _trMatchesFlow(p.manifest, trainState.flow));
 }
 
+// ---------------------------------------------------------------
+// Images flow: "add photos" panel inside the pictures field. Posts a folder on
+// this machine to /images/ingest, polls the status, then refreshes the set list
+// in place so the new set can be picked without re-rendering the form.
+// ---------------------------------------------------------------
+const IMG_INGEST_POLL_MS = 1500;
+let _imgIngestTimer = null;
+
+function _imgSay(box, msg, color) {
+  const status = box.querySelector("[data-img-status]");
+  if (status) { status.textContent = msg; status.style.color = color || "var(--dim)"; }
+}
+
+// A set is named after the folder it came from: "Iceland 2024" -> "Iceland_2024".
+function _imgSetNameFor(path) {
+  const base = String(path || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "photos";
+  return (base.replace(/[^A-Za-z0-9_.-]+/g, "_").replace(/^[_.-]+/, "") || "photos").slice(0, 64);
+}
+
+function _imgPickFolder(btn) {
+  const box = btn.closest(".img-ingest");
+  if (!box) return;
+  btn.disabled = true;
+  _imgSay(box, "a folder window is open on this machine \u2014 pick the folder with your photos", "var(--warm)");
+  fetch("/images/pick_folder", { method: "POST" })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok && d.path) { _imgIngestPath(box, btn, d.path); return; }
+      btn.disabled = false;
+      if (d.cancelled) { _imgSay(box, "no folder chosen"); return; }
+      const manual = box.querySelector("[data-img-manual]");
+      if (manual) manual.style.display = "flex";
+      _imgSay(box, (d.error || "could not open a folder window") + " \u2014 type the path instead", "var(--hot)");
+    })
+    .catch(e => { btn.disabled = false; _imgSay(box, "folder window failed: " + e, "var(--hot)"); });
+}
+
+function _imgIngestStart(btn) {
+  const box = btn.closest(".img-ingest");
+  if (!box) return;
+  const src = ((box.querySelector("[data-img-src]") || {}).value || "").trim();
+  if (!src) { _imgSay(box, "type the folder path first", "var(--hot)"); return; }
+  _imgIngestPath(box, btn, src);
+}
+
+function _imgIngestPath(box, btn, path) {
+  const set = _imgSetNameFor(path);
+  btn.disabled = true;
+  _imgSay(box, `collecting photos from ${path} into "${set}" \u2026`, "var(--warm)");
+  fetch("/images/ingest", { method: "POST", headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ set, sources: [path], caption_from_folder: true }) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) { btn.disabled = false; _imgSay(box, d.error || "could not start", "var(--hot)"); return; }
+      _imgIngestPoll(box, btn, set);
+    })
+    .catch(e => { btn.disabled = false; _imgSay(box, "start failed: " + e, "var(--hot)"); });
+}
+
+function _imgIngestPoll(box, btn, set) {
+  const say = (msg, color) => _imgSay(box, msg, color);
+  if (_imgIngestTimer) clearTimeout(_imgIngestTimer);
+  fetch("/images/ingest/status").then(r => r.json()).then(d => {
+    if (d.status === "running") {
+      say(d.total ? `${Number(d.done).toLocaleString()} / ${Number(d.total).toLocaleString()} pictures` : "scanning\u2026", "var(--warm)");
+      _imgIngestTimer = setTimeout(() => _imgIngestPoll(box, btn, set), IMG_INGEST_POLL_MS);
+      return;
+    }
+    btn.disabled = false;
+    if (d.status === "failed") { say("failed: " + (d.error || "see logs"), "var(--hot)"); return; }
+    const r = d.report || {};
+    const bits = [`added ${r.added || 0}`];
+    if (r.duplicates)  bits.push(`${r.duplicates} duplicates`);
+    if (r.too_small)   bits.push(`${r.too_small} too small`);
+    if (r.captions)    bits.push(`${r.captions} captions`);
+    if (r.heif_blocked) bits.push(`${r.heif_blocked} HEIC skipped (install pillow-heif)`);
+    say(`${set}: ${r.total_in_set || 0} photos (${bits.join(", ")})`, "var(--data-pos)");
+    _imgRefreshSets(set);
+  }).catch(e => { btn.disabled = false; say("status failed: " + e, "var(--hot)"); });
+}
+
+function _imgRefreshSets(pick) {
+  fetch("/train/discovery").then(r => r.json()).then(disc => {
+    trainState.discovery = disc || trainState.discovery;
+    const hidden = _trArgEl("image_set");
+    const list = document.querySelector("#trainArgs [data-img-sets]");
+    if (!hidden || !list) return;
+    const sets = trainState.discovery.image_sets || [];
+    const cur = (pick && sets.some(x => x.name === pick)) ? pick : (sets.some(x => x.name === hidden.value) ? hidden.value : "");
+    list.innerHTML = _imgSetRowsHtml(sets, cur);
+    if (hidden.value !== cur) { hidden.value = cur; hidden.dispatchEvent(new Event("change", { bubbles: true })); }
+    _imgfIntro(sets.find(x => x.name === cur) || null);
+    const cap = _capBox();
+    if (cap) _capSummary(cap);
+  }).catch(() => {});
+}
+
+// ---------------------------------------------------------------
+// Captions: the stage between collecting pictures and training. A vision teacher
+// describes every picture into <image>.txt; the corpus builder reads those, and the
+// trainer rebuilds the corpus when it sees new captions. Preview on one picture
+// first, then caption the set with live progress and a stop.
+// ---------------------------------------------------------------
+const CAP_POLL_MS = 1500;
+const capState = { options: null, timer: null };
+const CAP_INPUT = "background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:2px;box-sizing:border-box;min-width:0";
+
+function _capBlockHtml() {
+  const inp = "background:#11141d;border:1px solid var(--line);color:var(--text);padding:5px 7px;font:inherit;border-radius:3px;box-sizing:border-box;min-width:0";
+  const small = inp + ";width:64px";
+  return `<div class="imgf-hint">A vision model describes each picture. Without captions the model only knows folder names.</div>
+    <div class="imgf-grid">
+      <div class="imgf-field"><label>teacher</label><select data-cap-provider style="${inp}"></select></div>
+      <div class="imgf-field"><label>vision model</label><div class="imgf-row" style="gap:6px;flex-wrap:nowrap"><input type="text" data-cap-model list="capModelList" placeholder="llava:13b, gpt-4o, claude-sonnet-4-6" style="${inp};flex:1"><button type="button" class="action" data-cap-list-models>list</button></div><datalist id="capModelList"></datalist></div>
+    </div>
+    <div class="imgf-field"><label>style</label><div class="imgf-radios" data-cap-styles></div>
+      <textarea data-cap-prompt rows="2" placeholder="your instructions for the teacher" style="display:none;${inp};resize:vertical;margin-top:4px"></textarea></div>
+    <details class="imgf-adv"><summary>Advanced</summary>
+      <div class="imgf-row" style="margin-top:8px;gap:14px">
+        <label class="imgf-hint" style="display:flex;gap:5px;align-items:center;color:var(--text)">max words <input type="number" data-cap-words value="40" min="3" max="200" style="${small}"></label>
+        <label class="imgf-hint" style="display:flex;gap:5px;align-items:center;color:var(--text)" title="pictures are downscaled to this before they are sent">send at <input type="number" data-cap-edge value="768" min="128" max="2048" step="64" style="${small}"> px</label>
+        <label class="imgf-hint" style="display:flex;gap:5px;align-items:center;color:var(--text)">parallel <input type="number" data-cap-conc value="4" min="1" max="32" style="${small}"></label>
+        <label class="imgf-hint" style="display:flex;gap:5px;align-items:center;color:var(--text)"><input type="checkbox" data-cap-overwrite style="margin:0"> redo existing</label>
+      </div>
+    </details>
+    <div class="imgf-row">
+      <button type="button" class="action" data-cap-preview>Try one</button>
+      <button type="button" class="action imgf-primary" data-cap-start>Caption all</button>
+      <button type="button" class="action" data-cap-stop disabled>stop</button>
+      <span class="imgf-status" data-cap-status></span>
+    </div>
+    <div class="imgf-progress" data-cap-progress style="display:none"><i data-cap-bar></i></div>
+    <div class="imgf-preview" data-cap-preview-out style="display:none"><img data-cap-thumb alt=""><div data-cap-preview-text class="imgf-hint" style="color:var(--text)"></div></div>
+    <div data-cap-samples class="imgf-hint"></div>`;
+}
+
+function _capBox() { return document.querySelector("#trainArgs .img-captions"); }
+function _capSay(box, msg, color) {
+  const el = box && box.querySelector("[data-cap-status]");
+  if (el) { el.textContent = msg; el.style.color = color || "var(--dim)"; }
+}
+function _capSet() { const el = _trArgEl("image_set"); return el ? el.value : ""; }
+
+function _capSummary(box) {
+  const el = box && box.querySelector("[data-cap-summary]");
+  if (!el) return;
+  const set = (trainState.discovery.image_sets || []).find(x => x.name === _capSet());
+  if (!set) { el.textContent = "optional"; el.style.color = "var(--dim)"; return; }
+  const pct = set.images ? Math.round(100 * set.captions / set.images) : 0;
+  el.textContent = `${Number(set.captions).toLocaleString()} / ${Number(set.images).toLocaleString()} captioned (${pct}%)`;
+  el.style.color = set.captions === set.images && set.images ? "var(--data-pos)" : "var(--dim)";
+}
+
+function _capLoadOptions() {
+  const box = _capBox();
+  if (!box) return;
+  _capSummary(box);
+  fetch("/images/caption/options").then(r => r.json()).then(d => {
+    if (!d || !d.ok) return;
+    capState.options = d;
+    const prov = box.querySelector("[data-cap-provider]");
+    const styles = box.querySelector("[data-cap-styles]");
+    const model = box.querySelector("[data-cap-model]");
+    if (prov && !prov.options.length) {
+      prov.innerHTML = d.providers.map(p => `<option value="${_trEsc(p.id)}">${_trEsc(p.name)}${p.kind === "local" ? " (local)" : ""}</option>`).join("");
+      if (d.current.provider) prov.value = d.current.provider;
+    }
+    if (styles && !styles.children.length) {
+      styles.innerHTML = d.styles.map(x => `<label title="${_trEsc(x.prompt)}"><input type="radio" name="cap_style" data-cap-style value="${_trEsc(x.id)}" ${x.id === d.defaults.style ? "checked" : ""}>${_trEsc(x.label)}</label>`).join("");
+    }
+    if (model && !model.value && d.current.model) model.placeholder = `configured: ${d.current.model} (needs a VISION model)`;
+    if (d.state && d.state.status === "running") _capPoll(box);
+  }).catch(() => {});
+}
+
+function _capBody(box) {
+  const v = (sel) => { const el = box.querySelector(sel); return el ? el.value : ""; };
+  return {
+    set: _capSet(),
+    provider: v("[data-cap-provider]") || undefined,
+    model: v("[data-cap-model]") || undefined,
+    style: ((box.querySelector("[data-cap-style]:checked") || {}).value) || "sentence",
+    prompt: v("[data-cap-prompt]") || undefined,
+    max_words: parseInt(v("[data-cap-words]"), 10) || 40,
+    max_edge: parseInt(v("[data-cap-edge]"), 10) || 768,
+    concurrency: parseInt(v("[data-cap-conc]"), 10) || 4,
+    overwrite: !!(box.querySelector("[data-cap-overwrite]") || {}).checked,
+  };
+}
+
+function _capListModels(box) {
+  const body = _capBody(box);
+  const list = document.getElementById("capModelList");
+  _capSay(box, "asking the provider for its models ...", "var(--warm)");
+  fetch("/teacher/models", { method: "POST", headers: { "Content-Type": "application/json" },
+                             body: JSON.stringify({ provider: body.provider }) })
+    .then(r => r.json())
+    .then(d => {
+      const models = (d && d.models) || [];
+      if (list) list.innerHTML = models.map(m => `<option value="${_trEsc(typeof m === "string" ? m : (m.id || m.name || ""))}">`).join("");
+      _capSay(box, models.length ? `${models.length} models listed - start typing in the model box` : (d && d.error) || "no models returned", models.length ? "var(--data-pos)" : "var(--hot)");
+    })
+    .catch(e => _capSay(box, "could not list models: " + e, "var(--hot)"));
+}
+
+function _capPreview(box) {
+  const body = _capBody(box);
+  if (!body.set) { _capSay(box, "pick a set first", "var(--hot)"); return; }
+  _capSay(box, "describing one picture\u2026", "var(--warm)");
+  fetch("/images/caption/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) { _capSay(box, d.error || "preview failed", "var(--hot)"); return; }
+      const out = box.querySelector("[data-cap-preview-out]");
+      const img = box.querySelector("[data-cap-thumb]");
+      const txt = box.querySelector("[data-cap-preview-text]");
+      if (img) img.src = d.thumbnail;
+      if (txt) txt.innerHTML = `${_trEsc(d.caption)}<br><span style="color:var(--dim)">${_trEsc(d.model || "")} &middot; ${d.seconds}s &middot; preview only</span>`;
+      if (out) out.style.display = "flex";
+      _capSay(box, "one picture described", "var(--data-pos)");
+    })
+    .catch(e => _capSay(box, "preview failed: " + e, "var(--hot)"));
+}
+
+function _capStart(box) {
+  const body = _capBody(box);
+  if (!body.set) { _capSay(box, "pick a set first", "var(--hot)"); return; }
+  fetch("/images/caption", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) { _capSay(box, d.error || "could not start", "var(--hot)"); return; }
+      _capPoll(box);
+    })
+    .catch(e => _capSay(box, "start failed: " + e, "var(--hot)"));
+}
+
+function _capStop(box) {
+  fetch("/images/caption/stop", { method: "POST" }).then(() => _capSay(box, "stopping after the pictures in flight ...", "var(--warm)")).catch(() => {});
+}
+
+function _capPoll(box) {
+  if (capState.timer) clearTimeout(capState.timer);
+  const start = box.querySelector("[data-cap-start]");
+  const stop = box.querySelector("[data-cap-stop]");
+  const prog = box.querySelector("[data-cap-progress]");
+  const bar = box.querySelector("[data-cap-bar]");
+  const samples = box.querySelector("[data-cap-samples]");
+  fetch("/images/caption/status").then(r => r.json()).then(d => {
+    const running = d.status === "running";
+    if (start) start.disabled = running;
+    if (stop) stop.disabled = !running;
+    if (prog) prog.style.display = (running || d.total) ? "block" : "none";
+    if (bar && d.total) bar.style.width = `${Math.round(100 * d.done / d.total)}%`;
+    if (samples && d.samples && d.samples.length) {
+      samples.innerHTML = d.samples.slice(-3).map(x => `<div><span style="color:var(--text)">${_trEsc(x.name)}</span>: ${_trEsc(x.caption)}</div>`).join("");
+    }
+    if (running) {
+      const rate = d.started_at && d.done ? (d.done / Math.max(1, (Date.now() / 1000) - d.started_at)) : 0;
+      const eta = rate ? Math.round((d.total - d.done) / rate) : null;
+      _capSay(box, `${d.done} of ${d.total} described${d.failed ? `, ${d.failed} failed` : ""}${eta !== null ? ` - about ${eta}s left` : ""}`, "var(--warm)");
+      capState.timer = setTimeout(() => _capPoll(box), CAP_POLL_MS);
+      return;
+    }
+    if (d.status === "failed") { _capSay(box, "failed: " + (d.error || "see logs"), "var(--hot)"); }
+    else if (d.status === "ok" || d.status === "stopped") {
+      const r = d.report || {};
+      if (!r.done && !r.failed && r.already_captioned) {
+        _capSay(box, `all ${r.already_captioned} already captioned (folder names count) \u2014 tick "redo existing" to replace them`, "var(--warm)");
+      } else {
+        _capSay(box, `${d.status === "stopped" ? "stopped - " : ""}${r.done || 0} captioned, ${r.failed || 0} failed, ${r.already_captioned || 0} already had one (${r.seconds || 0}s)`, d.status === "ok" ? "var(--data-pos)" : "var(--warm)");
+      }
+    }
+    if (d.status !== "idle") _imgRefreshSets(_capSet());
+  }).catch(() => {});
+}
+
+document.addEventListener("change", (e) => {
+  if (!e.target || !e.target.matches) return;
+  if (e.target.matches('input[name="imgf_set"]')) {
+    const hidden = _trArgEl("image_set");
+    document.querySelectorAll("#trainArgs .imgf-set").forEach(row => row.classList.toggle("on", row.contains(e.target)));
+    if (hidden) { hidden.value = e.target.value; hidden.dispatchEvent(new Event("change", { bubbles: true })); }
+    _imgfIntro((trainState.discovery.image_sets || []).find(x => x.name === e.target.value) || null);
+    const cap = _capBox();
+    if (cap) _capSummary(cap);
+    return;
+  }
+  if (e.target.matches('[data-arg="size"], [data-arg="height"], [data-arg="width"], [data-arg="patch"], [data-arg="planes"]')) _imgfUpdateHints();
+  const box = _capBox();
+  if (!box) return;
+  if (e.target.matches("[data-cap-style]")) {
+    const ta = box.querySelector("[data-cap-prompt]");
+    if (ta) ta.style.display = e.target.value === "custom" ? "block" : "none";
+  }
+});
+
+document.addEventListener("click", (e) => {
+  if (!e.target || !e.target.closest) return;
+  const box = _capBox();
+  if (!box) return;
+  const hit = (sel) => e.target.closest(sel);
+  if (hit("[data-cap-list-models]")) { e.preventDefault(); _capListModels(box); }
+  else if (hit("[data-cap-preview]")) { e.preventDefault(); _capPreview(box); }
+  else if (hit("[data-cap-start]")) { e.preventDefault(); _capStart(box); }
+  else if (hit("[data-cap-stop]")) { e.preventDefault(); _capStop(box); }
+});
+
+document.addEventListener("click", (e) => {
+  if (!e.target || !e.target.closest) return;
+  const pick = e.target.closest("[data-img-pick]");
+  if (pick) { e.preventDefault(); _imgPickFolder(pick); return; }
+  const add = e.target.closest("[data-img-ingest]");
+  if (add) { e.preventDefault(); _imgIngestStart(add); }
+});
+
 function _trRenderPicker() {
   const sel  = _trEl("trainPicker");
   const row  = _trEl("trainPickerRow");
   const hint = _trEl("trainEmptyHint");
   const flowLabel = _trEl("trainFlowCurrent");
   if (flowLabel) {
-    const labels = { scratch: "start a new model", continue: "continue a saved model", rag: "answer from context (RAG)", export: "export to .bin" };
+    const labels = { scratch: "start a new model", continue: "continue a saved model", image: "train an image model", rag: "answer from context (RAG)", export: "export to .bin" };
     if (trainState.flow) {
       flowLabel.textContent = labels[trainState.flow] || trainState.flow;
       flowLabel.style.color = "var(--accent)";
@@ -10594,6 +11156,17 @@ function _trRenderPicker() {
   // inline panels. None of them use the trainer picker.
   const NO_PICKER = ["export", "rag"];
   if (!trainState.flow || NO_PICKER.includes(trainState.flow)) { row.style.display = "none"; return; }
+  // One image trainer: choosing it is not a step. Select it and show the form.
+  if (trainState.flow === "image") {
+    row.style.display = "none";
+    const only = _trFiltered();
+    if (!trainState.selected && only.length) {
+      trainState.selected = only[0];
+      _trRenderForm();
+      _trRenderStatus();
+    }
+    return;
+  }
   row.style.display = "flex";
   const list = _trFiltered();
   const cur  = sel.value;
@@ -10623,7 +11196,7 @@ function _trPoll() {
     trainState.loaded    = true;
     trainState.list      = plug.trainers || [];
     trainState.running   = plug.running || { status: "idle" };
-    trainState.discovery = disc || { corpora: [], models: [] };
+    trainState.discovery = disc || { corpora: [], models: [], image_sets: [], codecs: [] };
     // Only treat the selected trainer as "gone" if the scan returned a non-empty
     // list. A transient empty response would otherwise null trainState.selected
     // and collapse the form + run row, locking the user out of stopping a run.
@@ -10634,6 +11207,7 @@ function _trPoll() {
     _trRenderPicker();
     if (selectedGone) _trRenderForm();
     _trRenderStatus();
+    _imgLiveTick();
     _trToggleMetrics(trainState.flow);
     _exRender();
   }).catch(() => { _trRenderStatus(); });
@@ -10692,7 +11266,7 @@ const authorState = { spec: null, jobId: null, pollTimer: null, rate: null };
 // on the same action with its live status reattached.
 const TRAIN_FLOW_STORE = "vt:training:flow";
 const SYNTH_JOB_STORE = "vt:training:synth_job";
-const TRAIN_VALID_FLOWS = ["scratch", "continue", "rag", "export"];
+const TRAIN_VALID_FLOWS = ["scratch", "continue", "image", "rag", "export"];
 
 // Per-flow job descriptors: one place owns how to stop each running job type.
 // Consumed by the per-panel stop buttons (all confirm-gated).
@@ -10765,10 +11339,253 @@ function _synthSyncStartLabel() {
 
 // Hide the training metrics/charts for actions that don't produce a training
 // run. Synth shows live teacher output instead; export is a one-shot.
-const TRAIN_METRICS_FLOWS = ["scratch", "continue", "rag"];
+const TRAIN_METRICS_FLOWS = ["scratch", "continue", "image", "rag"];
+// ---------------------------------------------------------------
+// Images flow: the live view of an image run on the Training tab. The byte-model
+// panels below (register fluency, comprehension, concepts, lens drift) mean nothing
+// for a model whose output is pixels, so they are hidden and this replaces them.
+// Reads /images/live/<name>: progress.json (which stage the trainer is in, how far,
+// on which device; written from the first second, long before train.csv has a row),
+// the checkpoints on disk, the latest probe, and the run log tail.
+// ---------------------------------------------------------------
+const imgLiveState = { active: false, name: null, data: null, csv: null, busy: false, lastFetch: 0 };
+const IMG_LIVE_TRAINER_ID = "native/image_trainer";
+const IMG_LIVE_POLL_RUNNING_MS = 2500;
+const IMG_LIVE_POLL_IDLE_MS = 10000;
+const IMG_LIVE_STAGES = [["decode", "decode pictures"], ["codec", "fit codec"], ["encode", "encode corpus"], ["train", "train"]];
+const IMG_LIVE_STYLE = `<style>
+  .imgl { display:flex; flex-direction:column; gap:10px; }
+  .imgl .panel .body { display:flex; flex-direction:column; gap:10px; }
+  .imgl-right { margin-left:auto; display:flex; gap:10px; align-items:center; font-size:11px; }
+  .imgl-chip { font-size:10px; font-weight:700; padding:2px 7px; border-radius:3px; letter-spacing:.04em; }
+  .imgl-gpu { background:rgba(93,255,155,.15); color:var(--data-pos); border:1px solid var(--data-pos); }
+  .imgl-cpu { background:rgba(255,93,143,.15); color:var(--hot); border:1px solid var(--hot); }
+  .imgl-stages { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px; }
+  .imgl-stage { background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:8px 10px; display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .imgl-stage-h { display:flex; justify-content:space-between; gap:8px; font-size:11px; color:var(--dim); white-space:nowrap; overflow:hidden; }
+  .imgl-stage-h b { color:var(--text); }
+  .imgl-stage-h span { overflow:hidden; text-overflow:ellipsis; }
+  .imgl-stage.running { border-color:var(--warm); }
+  .imgl-stage.running .imgl-stage-h b { color:var(--warm); }
+  .imgl-stage.done .imgl-stage-h span, .imgl-stage.skipped .imgl-stage-h span { color:var(--data-pos); }
+  .imgl-stage.failed { border-color:var(--hot); }
+  .imgl-bar { height:5px; background:#11141d; border-radius:3px; overflow:hidden; }
+  .imgl-bar i { display:block; height:100%; background:var(--accent); transition:width .4s; }
+  .imgl-stage.done .imgl-bar i, .imgl-stage.skipped .imgl-bar i { background:var(--data-pos); opacity:.7; }
+  .imgl-stage.running .imgl-bar i { background:var(--warm); }
+  .imgl-msg { font-size:12px; color:var(--text); }
+  .imgl-fail { font-size:12px; color:var(--hot); background:rgba(255,93,143,.08); border:1px solid var(--hot); border-radius:4px; padding:8px 10px; white-space:pre-wrap; }
+  .imgl-saved { font-size:11px; color:var(--dim); }
+  .imgl-kpis { display:flex; gap:10px; flex-wrap:wrap; }
+  .imgl-kpi { background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:8px 12px; min-width:120px; }
+  .imgl-kpi .v { font-size:18px; font-weight:700; color:var(--text); }
+  .imgl-kpi .k { font-size:10.5px; color:var(--dim); }
+  .imgl-of { font-size:11px; color:var(--dim); font-weight:400; }
+  .imgl-chart svg { width:100%; height:170px; display:block; background:#0a0c12; border:1px solid var(--line); border-radius:3px; }
+  .imgl-legend { display:flex; gap:12px; font-size:10.5px; color:var(--dim); }
+  .imgl-legend i { display:inline-block; width:10px; height:3px; vertical-align:middle; margin-right:4px; }
+  .imgl-figs { display:flex; flex-direction:column; gap:6px; }
+  .imgl-figs img { max-width:100%; border:1px solid var(--line); border-radius:3px; background:#0a0c12; }
+  .imgl-figs h4 { margin:0; font-size:11px; color:var(--dim); font-weight:600; }
+  .imgl-log { margin:0; font:11px monospace; color:var(--dim); background:#0a0c12; border:1px solid var(--line); border-radius:3px; padding:8px; max-height:220px; overflow:auto; white-space:pre-wrap; }
+</style>`;
+
+// Mirrors save.compose_name(name, size) so the view can find the run's model dir
+// from the runner's args before config.json exists.
+function _imgLiveRunName(args) {
+  if (!args) return null;
+  if (args.resume) return String(args.resume);
+  if (!args.name || !args.size) return null;
+  const slug = _trSlugify(String(args.name)), size = String(args.size);
+  if (!slug) return null;
+  return (slug === size || slug.endsWith("_" + size) || slug.endsWith(size)) ? slug : slug + "_" + size;
+}
+
+function _imgLiveTick() {
+  const run = trainState.running || {};
+  const isImgRun = run.plugin_id === IMG_LIVE_TRAINER_ID && !!run.args;
+  const cfgImage = !!(trainModelCfg && trainModelCfg.training === "image" && trainSelectedRun && trainModelCfgName === trainSelectedRun);
+  let name = isImgRun ? _imgLiveRunName(run.args) : null;
+  if (!name && cfgImage) name = trainSelectedRun;
+  if (!name && trainState.flow === "image" && run.status !== "running") name = imgLiveState.name;
+  const on = !!name && (isImgRun || cfgImage || (trainState.flow === "image" && run.status !== "running"));
+  _imgLiveSetActive(on, name);
+  if (on) _imgLiveLoad();
+}
+
+function _imgLiveSetActive(on, name) {
+  const box = $("imgLive");
+  if (!box) return;
+  if (on && name !== imgLiveState.name) {
+    imgLiveState.name = name; imgLiveState.data = null; imgLiveState.csv = null; imgLiveState.lastFetch = 0;
+    _imgLiveRender();
+  }
+  if (on === imgLiveState.active) return;
+  imgLiveState.active = on;
+  box.style.display = on ? "block" : "none";
+  const sec = $("trainMetricsSection");
+  if (sec) sec.style.display = on ? "none" : "";
+  if (!on) { imgLiveState.name = null; imgLiveState.data = null; imgLiveState.csv = null; }
+}
+
+function _imgLiveLoad() {
+  const name = imgLiveState.name;
+  if (!name || imgLiveState.busy) return;
+  const now = Date.now();
+  const hot = !imgLiveState.data || imgLiveState.data.running;
+  if (now - imgLiveState.lastFetch < (hot ? IMG_LIVE_POLL_RUNNING_MS : IMG_LIVE_POLL_IDLE_MS)) return;
+  imgLiveState.busy = true; imgLiveState.lastFetch = now;
+  Promise.all([
+    fetch(`/images/live/${encodeURIComponent(name)}?` + now, { cache: "no-store" }).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch(`/run/${encodeURIComponent(name)}/csv?` + now, { cache: "no-store" }).then(r => r.ok ? r.text() : "").catch(() => ""),
+  ]).then(([d, csv]) => {
+    imgLiveState.busy = false;
+    if (!imgLiveState.active || imgLiveState.name !== name) return;
+    if (d && d.ok) imgLiveState.data = d;
+    imgLiveState.csv = _imgLiveParseCsv(csv);
+    _imgLiveRender();
+  }).catch(() => { imgLiveState.busy = false; });
+}
+
+function _imgLiveParseCsv(text) {
+  const out = { train: [], val: [] };
+  if (!text) return out;
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return out;
+  const ix = Object.fromEntries(lines[0].split(",").map((h, i) => [h.trim(), i]));
+  for (const ln of lines.slice(1)) {
+    const c = ln.split(",");
+    const step = parseInt(c[ix.step], 10), loss = parseFloat(c[ix.loss]);
+    if (!isFinite(step) || !isFinite(loss)) continue;
+    const row = { step, loss, lr: parseFloat(c[ix.lr]), gn: parseFloat(c[ix.grad_norm]), tps: parseFloat(c[ix.tok_per_s]) };
+    if ((c[ix.split] || "").trim().endsWith("val")) out.val.push(row); else out.train.push(row);
+  }
+  // an older run's rows may sit ahead in the same file; keep the last run (steps restart)
+  let start = 0;
+  for (let i = 1; i < out.train.length; i++) if (out.train[i].step < out.train[i - 1].step) start = i;
+  out.train = out.train.slice(start);
+  if (out.train.length) out.val = out.val.filter(r => r.step >= out.train[0].step);
+  return out;
+}
+
+function _imgLiveFmtDur(s) {
+  if (s == null || !isFinite(s)) return "";
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s";
+  return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+}
+
+function _imgLiveFmtRate(r) { return r >= 10 ? Math.round(r).toLocaleString() : r.toFixed(1); }
+
+function _imgLiveRender() {
+  const box = $("imgLive");
+  if (!box) return;
+  const name = imgLiveState.name || "";
+  const d = imgLiveState.data;
+  if (!d) {
+    box.innerHTML = IMG_LIVE_STYLE + `<div class="imgl"><div class="panel"><h2>image run <em>${_trEsc(name)}</em></h2><div class="body"><div class="meta">waiting for the run to report&hellip;</div></div></div></div>`;
+    return;
+  }
+  const p = d.progress || null;
+  const state = p ? p.state : (d.running ? "running" : "idle");
+  const stateColor = { running: "var(--warm)", done: "var(--data-pos)", stopped: "var(--dim)", failed: "var(--hot)" }[state] || "var(--dim)";
+  const device = p && p.device;
+  const devChip = !device ? "" : device === "cpu"
+    ? `<span class="imgl-chip imgl-cpu" title="no GPU was available to this run">CPU</span>`
+    : `<span class="imgl-chip imgl-gpu" title="codec fit, corpus encode and training run on the GPU. Decoding JPEGs is CPU work by nature; it is the first stage only.">GPU &middot; ${_trEsc(device)}</span>`;
+  const elapsed = p ? _imgLiveFmtDur((p.ended || Date.now() / 1000) - p.started) : "";
+
+  const stages = IMG_LIVE_STAGES.map(([key, label]) => {
+    const s = (p && p.stages && p.stages[key]) || { state: "pending" };
+    let detail = "&mdash;", fill = 0, cls = s.state;
+    if (s.state === "done") { detail = `&#10003; ${_imgLiveFmtDur(s.seconds)}`; fill = 100; }
+    else if (s.state === "skipped") { detail = "reused"; fill = 100; }
+    else if (s.state === "running") {
+      fill = s.total ? 100 * s.done / s.total : 0;
+      detail = `${Number(s.done || 0).toLocaleString()} / ${Number(s.total || 0).toLocaleString()}`
+        + (s.rate ? ` &middot; ${_imgLiveFmtRate(s.rate)}/s` : "")
+        + (s.eta_s != null && state === "running" ? ` &middot; ${_imgLiveFmtDur(s.eta_s)} left` : "");
+      if (state !== "running") cls = state === "failed" ? "failed" : "pending";
+    }
+    return `<div class="imgl-stage ${cls}"><div class="imgl-stage-h"><b>${label}</b><span>${detail}</span></div><div class="imgl-bar"><i style="width:${fill.toFixed(1)}%"></i></div></div>`;
+  }).join("");
+
+  const tr = (p && p.stages && p.stages.train) || {};
+  const notes = (p && p.notes) || {};
+  const csv = imgLiveState.csv || { train: [], val: [] };
+  const last = csv.train.length ? csv.train[csv.train.length - 1] : null;
+  const lastVal = csv.val.length ? csv.val[csv.val.length - 1] : null;
+  const seq = notes.seq || (d.geometry && d.geometry.seq) || 0;
+  const kpi = (v, k, title) => `<div class="imgl-kpi" title="${_trEsc(title || "")}"><div class="v">${v}</div><div class="k">${k}</div></div>`;
+  const training = tr.state && tr.state !== "pending";
+  let kpis = "";
+  if (training) {
+    kpis += kpi(`${Number(tr.done || 0).toLocaleString()}<span class="imgl-of"> / ${Number(tr.total || 0).toLocaleString()}</span>`, "step", "training steps done");
+    if (last) kpis += kpi(last.loss.toFixed(3), "loss", "masked-fill loss on the training batch. Lower is better; it should fall steadily.");
+    if (lastVal) kpis += kpi(lastVal.loss.toFixed(3), `val loss<span class="imgl-of"> @ ${lastVal.step.toLocaleString()}</span>`, "the same loss on held-out pictures");
+    if (last && seq) kpis += kpi(_imgLiveFmtRate(last.tps / seq), "pictures / s", "training throughput");
+    if (last && isFinite(last.lr)) kpis += kpi(last.lr.toExponential(1), "learning rate", "");
+    if (tr.eta_s != null && state === "running") kpis += kpi(_imgLiveFmtDur(tr.eta_s), "time left", "from the current step rate");
+    if (notes.fill_accuracy != null) kpis += kpi((100 * notes.fill_accuracy).toFixed(1) + "%", `fill accuracy<span class="imgl-of"> @ ${Number(notes.probe_step).toLocaleString()}</span>`, "of hidden cells the model fills in exactly, on held-out pictures (the checkpoint probe)");
+    if (notes.params) kpis += kpi(_trFmtParams(notes.params), "parameters", "");
+    if (notes.records) kpis += kpi(Number(notes.records).toLocaleString(), "training pictures", "records in the corpus");
+  }
+
+  const ck = d.checkpoint_steps || [];
+  const runArgs = (trainState.running && trainState.running.plugin_id === IMG_LIVE_TRAINER_ID && trainState.running.args) || {};
+  const ckEvery = parseInt(runArgs.ckpt_every, 10) || 0;
+  const nextIn = ckEvery && training ? ckEvery - ((tr.done || 0) % ckEvery) : 0;
+  const ago = d.last_checkpoint_at ? _imgLiveFmtDur(Date.now() / 1000 - d.last_checkpoint_at) + " ago" : "";
+  const saved = ck.length
+    ? `<b style="color:var(--data-pos)">model saved</b> &middot; ${ck.length} checkpoint${ck.length === 1 ? "" : "s"} in models/${_trEsc(name)}/ &middot; last at step ${Number(ck[ck.length - 1]).toLocaleString()}${ago ? ` (${ago})` : ""}${state === "running" && nextIn ? ` &middot; next save in ${nextIn.toLocaleString()} steps` : ""}`
+    : training ? `<b style="color:var(--warm)">not saved yet</b>${ckEvery ? ` &middot; first checkpoint at step ${ckEvery.toLocaleString()}` : ""}` : `<span>nothing to save yet &middot; the model is created after the corpus is encoded</span>`;
+
+  let panels = "";
+  if (training) {
+    const svg = _imriSvgLine([
+      { name: "train", color: IMRI_COLORS[1], points: csv.train.map(r => [r.step, r.loss]) },
+      { name: "val", color: IMRI_COLORS[3], points: csv.val.map(r => [r.step, r.loss]) },
+    ]);
+    const lp = d.latest_probe;
+    let probe = `<div class="meta">the first pictures appear at the first checkpoint${ckEvery ? ` (step ${ckEvery.toLocaleString()})` : ""}.</div>`;
+    if (lp && lp.step != null) {
+      const u = f => `/images/mri/${encodeURIComponent(name)}/${lp.step}/${f}?${lp.step}`;
+      probe = `<div class="imgl-figs">`
+        + ((lp.files || []).includes("samples.png") ? `<h4>drawn from nothing &middot; same seeds every checkpoint</h4><img src="${u("samples.png")}" alt="samples">` : "")
+        + ((lp.files || []).includes("fill.png") ? `<h4>held-out pictures: original &middot; half hidden &middot; the model's fill</h4><img src="${u("fill.png")}" alt="fill test">` : "")
+        + `<div class="meta">checkpoint ${Number(lp.step).toLocaleString()}${lp.fill_accuracy != null ? ` &middot; fill accuracy ${(100 * lp.fill_accuracy).toFixed(1)}%` : ""}${lp.codes_used != null ? ` &middot; ${lp.codes_used} / 255 codes in use` : ""} &middot; <a href="#" data-imgl-open>full brain view &rsaquo;</a></div></div>`;
+    }
+    panels = `<div class="grid r2">
+      <div class="panel"><h2>loss <em>train and held-out, by step</em></h2><div class="body"><div class="imgl-chart">${svg}</div><div class="imgl-legend"><span><i style="background:${IMRI_COLORS[1]}"></i>train</span><span><i style="background:${IMRI_COLORS[3]}"></i>held-out</span></div></div></div>
+      <div class="panel"><h2>what it draws now <em>${lp && lp.step != null ? "checkpoint " + Number(lp.step).toLocaleString() : "waiting for a checkpoint"}</em></h2><div class="body">${probe}</div></div>
+    </div>`;
+  }
+  const tail = (d.log_tail || []);
+  const log = tail.length ? `<div class="panel"><h2>run log <em>last lines</em></h2><div class="body"><pre class="imgl-log">${_trEsc(tail.join("\n"))}</pre></div></div>` : "";
+
+  box.innerHTML = IMG_LIVE_STYLE + `<div class="imgl">
+    <div class="panel">
+      <h2>image run <em>${_trEsc(name)}</em><span class="imgl-right">${devChip}<b style="color:${stateColor}">${_trEsc(state)}</b>${elapsed ? `<span class="meta">${elapsed}</span>` : ""}</span></h2>
+      <div class="body">
+        ${state === "failed" ? `<div class="imgl-fail">${_trEsc(p.message || "the run failed; see the run log")}</div>` : ""}
+        <div class="imgl-stages">${stages}</div>
+        ${p && p.message && state !== "failed" ? `<div class="imgl-msg">${_trEsc(p.message)}</div>` : ""}
+        <div class="imgl-saved">${saved}</div>
+        ${kpis ? `<div class="imgl-kpis">${kpis}</div>` : ""}
+      </div>
+    </div>
+    ${panels}
+    ${log}
+  </div>`;
+  const open = box.querySelector("[data-imgl-open]");
+  if (open) open.addEventListener("click", e => { e.preventDefault(); activateTab("learning"); setTimelineActive(name); });
+}
+
 function _trToggleMetrics(flow) {
   const sec = $("trainMetricsSection");
   if (!sec) return;
+  if (imgLiveState.active) { sec.style.display = "none"; return; }
   const running = trainState.running && trainState.running.status === "running";
   sec.style.display = (running || TRAIN_METRICS_FLOWS.includes(flow)) ? "" : "none";
 }
@@ -17549,3 +18366,342 @@ document.addEventListener("DOMContentLoaded", () => {
     _ivPollStart();
   });
 });
+
+// ============================================================
+// GENERATION TAB: IMAGES PANEL
+// ============================================================
+// Generates from a trained image model through POST /images/generate. One
+// endpoint, every mode; the source photo (variation / inpaint / expand) is read
+// in the browser and sent as base64, the answer is a PNG shown in place.
+
+const imgGenState = { models: [], busy: false };
+
+function _imgGenEl(id) { return document.getElementById(id); }
+
+function _imgGenLoadModels() {
+  return fetch("/images/models").then(r => r.json()).then(d => {
+    imgGenState.models = (d && d.models) || [];
+    const sel = _imgGenEl("imgGenModel");
+    const count = _imgGenEl("imgGenCount");
+    if (!sel) return;
+    const cur = sel.value;
+    if (!imgGenState.models.length) {
+      sel.innerHTML = '<option value="">- no image models yet: train one in the Training tab -</option>';
+    } else {
+      sel.innerHTML = imgGenState.models.map(m =>
+        `<option value="${_trEsc(m.name)}">${_trEsc(m.name)} (${m.height}x${m.width})</option>`).join("");
+      if (cur && imgGenState.models.some(m => m.name === cur)) sel.value = cur;
+    }
+    if (count) count.textContent = imgGenState.models.length ? `${imgGenState.models.length} model${imgGenState.models.length === 1 ? "" : "s"}` : "";
+    _imgGenFillSteps();
+  }).catch(() => {});
+}
+
+function _imgGenFillSteps() {
+  const sel = _imgGenEl("imgGenModel");
+  const steps = _imgGenEl("imgGenStep");
+  if (!sel || !steps) return;
+  const m = imgGenState.models.find(x => x.name === sel.value);
+  const list = m ? m.steps.slice().sort((a, b) => b - a) : [];
+  steps.innerHTML = list.map((s, i) => `<option value="${s}">${s}${i === 0 ? " (latest)" : ""}</option>`).join("");
+}
+
+function _imgGenModeChanged() {
+  const mode = (_imgGenEl("imgGenMode") || {}).value || "text";
+  const row = _imgGenEl("imgGenSourceRow");
+  const needsSource = ["variation", "inpaint", "expand"].includes(mode);
+  if (row) row.style.display = needsSource ? "flex" : "none";
+  const show = (id, on) => { const el = _imgGenEl(id); if (el) el.style.display = on ? "" : "none"; };
+  show("imgGenStrengthWrap", mode === "variation");
+  show("imgGenExpandWrap", mode === "expand");
+  show("imgGenRectWrap", mode === "inpaint");
+  const prompt = _imgGenEl("imgGenPrompt");
+  if (prompt) prompt.disabled = mode === "unconditional";
+}
+
+function _imgGenReadSource() {
+  const input = _imgGenEl("imgGenSource");
+  const file = input && input.files && input.files[0];
+  if (!file) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("could not read the photo"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function _imgGenRun() {
+  if (imgGenState.busy) return;
+  const status = _imgGenEl("imgGenStatus");
+  const say = (msg, color) => { if (status) { status.textContent = msg; status.style.color = color || "var(--dim)"; } };
+  const model = (_imgGenEl("imgGenModel") || {}).value;
+  if (!model) { say("train an image model first (Training tab -> Train an image model)", "var(--hot)"); return; }
+  const mode = (_imgGenEl("imgGenMode") || {}).value || "text";
+  const num = (id, dflt) => { const v = parseFloat((_imgGenEl(id) || {}).value); return isFinite(v) ? v : dflt; };
+  _imgGenReadSource().then(source => {
+    if (["variation", "inpaint", "expand"].includes(mode) && !source) {
+      say("pick a source photo for this mode", "var(--hot)"); return;
+    }
+    const body = {
+      model, mode,
+      step: parseInt((_imgGenEl("imgGenStep") || {}).value, 10) || undefined,
+      caption: (_imgGenEl("imgGenPrompt") || {}).value || "",
+      image: source || undefined,
+      strength: num("imgGenStrength", 0.6),
+      expand: num("imgGenExpand", 0.6),
+      rect: [num("imgGenX0", 0.25), num("imgGenY0", 0.25), num("imgGenX1", 0.75), num("imgGenY1", 0.75)],
+      passes: Math.round(num("imgGenPasses", 8)),
+      temperature: num("imgGenTemp", 1.0),
+      seed: Math.round(num("imgGenSeed", 0)),
+    };
+    imgGenState.busy = true;
+    const btn = _imgGenEl("imgGenRun");
+    if (btn) btn.disabled = true;
+    say(`generating (${body.passes} passes) ...`, "var(--warm)");
+    return fetch("/images/generate", { method: "POST", headers: { "Content-Type": "application/json" },
+                                       body: JSON.stringify(body) })
+      .then(r => r.json())
+      .then(d => {
+        if (!d.ok) { say(d.error || "generation failed", "var(--hot)"); return; }
+        const src = "data:image/png;base64," + d.png;
+        const img = _imgGenEl("imgGenOut");
+        const wrap = _imgGenEl("imgGenOutWrap");
+        const save = _imgGenEl("imgGenSave");
+        if (img) img.src = src;
+        if (save) { save.href = src; save.download = `${d.model}_step${d.step}_${d.mode}_seed${body.seed}.png`; }
+        if (wrap) wrap.style.display = "flex";
+        say(`${d.height}x${d.width} in ${d.seconds}s on ${d.device} - ${d.regenerated} of ${d.code_bytes} cells generated over ${d.passes} passes`, "var(--data-pos)");
+      });
+  }).catch(e => say("failed: " + (e && e.message || e), "var(--hot)"))
+    .finally(() => { imgGenState.busy = false; const btn = _imgGenEl("imgGenRun"); if (btn) btn.disabled = false; });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const panel = _imgGenEl("imgGenPanel");
+  if (!panel) return;
+  const model = _imgGenEl("imgGenModel");
+  const mode = _imgGenEl("imgGenMode");
+  const run = _imgGenEl("imgGenRun");
+  if (model) model.addEventListener("change", _imgGenFillSteps);
+  if (mode) mode.addEventListener("change", _imgGenModeChanged);
+  if (run) run.addEventListener("click", _imgGenRun);
+  panel.addEventListener("toggle", () => { if (panel.open) _imgGenLoadModels(); });
+  _imgGenModeChanged();
+  _imgGenLoadModels();
+});
+
+// ============================================================
+// MODELS TAB: IMAGE MODEL VIEW
+// ============================================================
+// Replaces the byte-level panels when the picked model is an image model. Data is
+// image_probe's per-checkpoint dump (GET /images/mri/<model>): samples from the
+// same seeds at every step, a fill test on real pictures, fill accuracy per plane,
+// loss by how much is hidden, codebook usage, attention focus per layer, and the
+// pictures behind each. Polls while a run is training this model.
+
+const imgMriState = { active: false, model: null, data: null, step: null, timer: null, running: false };
+const IMG_MRI_POLL_MS = 4000;
+const IMG_MRI_STYLE = `<style>
+  .imri { display:flex; flex-direction:column; gap:10px; }
+  .imri .panel .body { display:flex; flex-direction:column; gap:10px; }
+  .imri-head { display:flex; gap:14px; flex-wrap:wrap; align-items:center; font-size:11.5px; color:var(--dim); }
+  .imri-head b { color:var(--text); }
+  .imri-live { color:var(--warm); font-weight:600; }
+  .imri-strip { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; }
+  .imri-strip button { flex:none; background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:4px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:3px; }
+  .imri-strip button.on { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .imri-strip img { height:52px; width:auto; image-rendering:auto; display:block; }
+  .imri-strip span { font-size:10px; color:var(--dim); }
+  .imri-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:12px; }
+  .imri-fig { display:flex; flex-direction:column; gap:5px; }
+  .imri-fig img { max-width:100%; border:1px solid var(--line); border-radius:3px; background:#0a0c12; image-rendering:auto; }
+  .imri-fig h4 { margin:0; font-size:11.5px; color:var(--text); font-weight:600; }
+  .imri-fig .cols { display:flex; gap:0; font-size:10px; color:var(--dim); }
+  .imri-fig .cols span { flex:1; text-align:center; }
+  .imri-kpis { display:flex; gap:10px; flex-wrap:wrap; }
+  .imri-kpi { background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:8px 12px; min-width:130px; }
+  .imri-kpi .v { font-size:18px; font-weight:700; color:var(--text); }
+  .imri-kpi .k { font-size:10.5px; color:var(--dim); }
+  .imri-chart svg { width:100%; height:150px; display:block; background:#0a0c12; border:1px solid var(--line); border-radius:3px; }
+  .imri-legend { display:flex; gap:10px; flex-wrap:wrap; font-size:10.5px; color:var(--dim); }
+  .imri-legend i { display:inline-block; width:10px; height:3px; vertical-align:middle; margin-right:4px; }
+</style>`;
+const IMRI_COLORS = ["#5dff9b", "#5db8ff", "#ffae5d", "#ff5d8f", "#c77dff", "#ffe45d", "#5dffe4", "#ff7a5d"];
+
+function _imriSvgLine(series, opts) {
+  // series: [{name, color, points: [[x, y], ...]}]; one shared x (step) axis.
+  const W = 600, H = 150, L = 42, R = 10, T = 10, B = 22;
+  const pts = series.flatMap(s => s.points);
+  if (!pts.length) return `<svg viewBox="0 0 ${W} ${H}"><text x="${W / 2}" y="${H / 2}" fill="#6f7480" font-size="11" text-anchor="middle">no data yet</text></svg>`;
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let y0 = opts && opts.y0 !== undefined ? opts.y0 : Math.min(...ys), y1 = opts && opts.y1 !== undefined ? opts.y1 : Math.max(...ys);
+  if (y1 === y0) { y1 = y0 + 1; }
+  const sx = x => x1 === x0 ? (L + (W - L - R) / 2) : L + (x - x0) / (x1 - x0) * (W - L - R);
+  const sy = y => T + (1 - (y - y0) / (y1 - y0)) * (H - T - B);
+  const fmt = v => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+  let out = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
+  for (const f of [0, 0.5, 1]) {
+    const y = T + f * (H - T - B);
+    out += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="#1e2330" stroke-width="1"/>`;
+    out += `<text x="${L - 4}" y="${y + 3}" fill="#6f7480" font-size="9" text-anchor="end">${fmt(y1 - f * (y1 - y0))}</text>`;
+  }
+  out += `<text x="${L}" y="${H - 6}" fill="#6f7480" font-size="9">step ${x0.toLocaleString()}</text>`;
+  out += `<text x="${W - R}" y="${H - 6}" fill="#6f7480" font-size="9" text-anchor="end">${x1.toLocaleString()}</text>`;
+  for (const s of series) {
+    if (!s.points.length) continue;
+    const d = s.points.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ");
+    out += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
+    const last = s.points[s.points.length - 1];
+    out += `<circle cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="3" fill="${s.color}"/>`;
+  }
+  return out + `</svg>`;
+}
+
+function _imriBars(values, labels, color) {
+  const W = 600, H = 150, L = 10, B = 22, T = 10;
+  if (!values || !values.length) return `<svg viewBox="0 0 ${W} ${H}"><text x="${W / 2}" y="${H / 2}" fill="#6f7480" font-size="11" text-anchor="middle">no data yet</text></svg>`;
+  const max = Math.max(1e-9, ...values);
+  const bw = (W - 2 * L) / values.length;
+  let out = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
+  values.forEach((v, i) => {
+    const h = (v / max) * (H - T - B);
+    out += `<rect x="${(L + i * bw + 2).toFixed(1)}" y="${(H - B - h).toFixed(1)}" width="${(bw - 4).toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" opacity="0.85"/>`;
+    out += `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${H - 7}" fill="#6f7480" font-size="9" text-anchor="middle">${labels[i]}</text>`;
+    out += `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${(H - B - h - 3).toFixed(1)}" fill="#a6b0bf" font-size="9" text-anchor="middle">${v.toFixed(2)}</text>`;
+  });
+  return out + `</svg>`;
+}
+
+async function _imgMriDecide(name) {
+  let isImage = false;
+  try {
+    const r = await fetch(`/run/${encodeURIComponent(name)}/config?` + Date.now(), { cache: "no-store" });
+    const cfg = r.ok ? await r.json() : null;
+    isImage = !!(cfg && cfg.training === "image");
+  } catch (_e) { isImage = false; }
+  if (learningTimelineName !== name) return true;      // a newer pick won; do nothing here
+  _imgMriSetActive(isImage, name);
+  return isImage;
+}
+
+function _imgMriSetActive(on, name) {
+  const body = document.querySelector('.tab-body[data-tab="learning"]');
+  const box = document.getElementById("imgMri");
+  if (!body || !box) return;
+  const first = body.querySelector(".panel");
+  Array.from(body.children).forEach(child => {
+    if (child === first || child === box) return;
+    child.style.display = on ? "none" : "";
+  });
+  box.style.display = on ? "block" : "none";
+  imgMriState.active = on;
+  if (imgMriState.timer) { clearTimeout(imgMriState.timer); imgMriState.timer = null; }
+  if (!on) { imgMriState.model = null; imgMriState.data = null; return; }
+  if (imgMriState.model !== name) { imgMriState.model = name; imgMriState.data = null; imgMriState.step = null; }
+  const status = $("learningStatus");
+  if (status) status.innerHTML = `<span class="meta">image model &mdash; showing what it draws, what it can complete, and what it is learning, at every checkpoint.</span>`;
+  _imgMriLoad();
+}
+
+function _imgMriLoad() {
+  const name = imgMriState.model;
+  if (!name || !imgMriState.active) return;
+  Promise.all([
+    fetch(`/images/mri/${encodeURIComponent(name)}?` + Date.now(), { cache: "no-store" }).then(r => r.json()),
+    fetch("/trainers").then(r => r.json()).catch(() => null),
+  ]).then(([d, tr]) => {
+    if (!imgMriState.active || imgMriState.model !== name) return;
+    imgMriState.data = d && d.ok ? d : null;
+    const run = tr && tr.running;
+    imgMriState.running = !!(run && run.status === "running" && run.args && run.args.name &&
+      (`${String(run.args.name).toLowerCase().replace(/[^a-z0-9]+/g, "_")}_${run.args.size}` === name || run.args.resume === name));
+    _imgMriRender();
+    if (imgMriState.running) imgMriState.timer = setTimeout(_imgMriLoad, IMG_MRI_POLL_MS);
+  }).catch(() => {});
+}
+
+function _imgMriRender() {
+  const box = document.getElementById("imgMri");
+  const d = imgMriState.data;
+  if (!box) return;
+  if (!d) { box.innerHTML = IMG_MRI_STYLE + `<div class="panel"><div class="body meta">could not load this model's image probe.</div></div>`; return; }
+  const steps = d.steps || [];
+  const name = d.model;
+  if (!steps.length) {
+    box.innerHTML = IMG_MRI_STYLE + `<div class="imri"><div class="panel"><h2>${_trEsc(name)} <em>image model</em></h2><div class="body meta">` +
+      `${d.checkpoint_steps && d.checkpoint_steps.length ? `${d.checkpoint_steps.length} checkpoints, none probed yet` : "no checkpoints yet"} &mdash; the probe runs at every checkpoint from now on${imgMriState.running ? " (training now)" : ""}.</div></div></div>`;
+    return;
+  }
+  if (imgMriState.step === null || !steps.some(s => s.step === imgMriState.step)) imgMriState.step = steps[steps.length - 1].step;
+  const cur = steps.find(s => s.step === imgMriState.step) || steps[steps.length - 1];
+  const g = d.geometry || {};
+  const planes = cur.planes || g.planes || 1;
+  const url = (step, f) => `/images/mri/${encodeURIComponent(name)}/${step}/${f}?${step}`;
+  const has = (s, f) => (s.files || []).includes(f);
+
+  const acc = steps.map(s => [s.step, s.fill_accuracy]).filter(p => typeof p[1] === "number");
+  const perPlane = Array.from({ length: planes }, (_, p) => ({
+    name: `plane ${p}${p === 0 ? " (structure)" : p === planes - 1 ? " (detail)" : ""}`, color: IMRI_COLORS[(p + 1) % IMRI_COLORS.length],
+    points: steps.map(s => [s.step, (s.fill_accuracy_per_plane || [])[p]]).filter(q => typeof q[1] === "number"),
+  }));
+  const ratios = ["0.25", "0.5", "0.75", "1.0"];
+  const byRatio = ratios.map((r, i) => ({ name: `${Math.round(parseFloat(r) * 100)}% hidden`, color: IMRI_COLORS[i % IMRI_COLORS.length],
+    points: steps.map(s => [s.step, (s.loss_by_hidden_fraction || {})[r]]).filter(q => typeof q[1] === "number") }));
+  const codes = steps.map(s => [s.step, s.codes_used]).filter(p => typeof p[1] === "number");
+  const ent = cur.attention_entropy_per_layer || [];
+  const kpi = (v, k) => `<div class="imri-kpi"><div class="v">${v}</div><div class="k">${k}</div></div>`;
+  const pct = v => typeof v === "number" ? (v * 100).toFixed(1) + "%" : "&mdash;";
+
+  box.innerHTML = IMG_MRI_STYLE + `<div class="imri">
+    <div class="panel">
+      <h2>${_trEsc(name)} <em>image model &middot; ${g.height || "?"}&times;${g.width || "?"} px &middot; ${g.image_code_bytes || "?"} bytes/picture &middot; ${planes} planes${imgMriState.running ? ' &middot; <span class="imri-live">training now</span>' : ""}</em></h2>
+      <div class="body">
+        <div class="imri-head"><span>pictures: <b>${_trEsc(d.image_set || "?")}</b></span><span>codec: <b>${_trEsc(d.codec || "?")}</b></span><span>checkpoints probed: <b>${steps.length}</b></span><span>showing step <b>${cur.step.toLocaleString()}</b></span></div>
+        <div class="imri-strip" data-imri-strip>${steps.map(s => `<button type="button" data-imri-step="${s.step}" class="${s.step === cur.step ? "on" : ""}" title="step ${s.step}">${has(s, "samples.png") ? `<img src="${url(s.step, "samples.png")}" alt="">` : ""}<span>${s.step.toLocaleString()}</span></button>`).join("")}</div>
+        <div class="imri-kpis">
+          ${kpi(pct(cur.fill_accuracy), "fill accuracy (half hidden)")}
+          ${kpi(typeof cur.codes_used === "number" ? `${cur.codes_used}<span style="font-size:11px;color:var(--dim)">/255</span>` : "&mdash;", "codes in use")}
+          ${kpi(typeof cur.code_entropy_bits === "number" ? cur.code_entropy_bits.toFixed(2) : "&mdash;", "code entropy (bits)")}
+          ${kpi(ent.length ? (ent.reduce((a, b) => a + b, 0) / ent.length).toFixed(2) : "&mdash;", "attention spread (0 focused &ndash; 1 uniform)")}
+          ${kpi(typeof cur.val_records === "number" ? cur.val_records.toLocaleString() : "&mdash;", "held-out pictures")}
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>what it draws <em>same seeds at every checkpoint${(cur.caption_samples || []).length ? " &middot; right-hand tiles from held-out captions" : ""}</em></h2>
+      <div class="body"><div class="imri-fig">${has(cur, "samples.png") ? `<img src="${url(cur.step, "samples.png")}" alt="samples">` : `<span class="meta">not written at this step</span>`}
+      ${(cur.caption_samples || []).length ? `<div class="imri-legend">${cur.caption_samples.map(c => `<span>&ldquo;${_trEsc(c)}&rdquo;</span>`).join("")}</div>` : ""}</div></div>
+    </div>
+    <div class="imri-grid">
+      <div class="panel"><h2>can it complete a real picture <em>half the cells hidden</em></h2>
+        <div class="body"><div class="imri-fig"><div class="cols"><span>original</span><span>hidden</span><span>filled</span></div>${has(cur, "fill.png") ? `<img src="${url(cur.step, "fill.png")}" alt="fill test">` : `<span class="meta">needs held-out pictures</span>`}</div></div></div>
+      <div class="panel"><h2>where it looks <em>attention from the centre cell, one map per layer</em></h2>
+        <div class="body"><div class="imri-fig">${has(cur, "attention.png") ? `<img src="${url(cur.step, "attention.png")}" alt="attention">` : `<span class="meta">needs held-out pictures</span>`}
+        ${ent.length ? `<div class="imri-chart">${_imriBars(ent, ent.map((_, i) => "L" + i), "#5db8ff")}</div><div class="imri-legend"><span>attention spread per layer &mdash; lower is more focused</span></div>` : ""}</div></div></div>
+    </div>
+    <div class="imri-grid">
+      <div class="panel"><h2>fill accuracy over training <em>per plane: structure first, detail last</em></h2>
+        <div class="body"><div class="imri-chart">${_imriSvgLine([{ name: "all", color: IMRI_COLORS[0], points: acc }, ...perPlane], { y0: 0, y1: 1 })}</div>
+        <div class="imri-legend"><span><i style="background:${IMRI_COLORS[0]}"></i>all</span>${perPlane.map(p => `<span><i style="background:${p.color}"></i>${_trEsc(p.name)}</span>`).join("")}</div></div></div>
+      <div class="panel"><h2>loss by how much is hidden <em>lower is better</em></h2>
+        <div class="body"><div class="imri-chart">${_imriSvgLine(byRatio)}</div>
+        <div class="imri-legend">${byRatio.map(p => `<span><i style="background:${p.color}"></i>${p.name}</span>`).join("")}</div></div></div>
+      <div class="panel"><h2>codes in use <em>a collapse shows as a handful</em></h2>
+        <div class="body"><div class="imri-chart">${_imriSvgLine([{ name: "codes", color: IMRI_COLORS[2], points: codes }], { y0: 0, y1: 255 })}</div></div></div>
+      <div class="panel"><h2>codec ceiling <em>the codec's own reconstruction of the same pictures</em></h2>
+        <div class="body"><div class="imri-fig">${has(cur, "recon.png") ? `<img src="${url(cur.step, "recon.png")}" alt="codec reconstruction">` : `<span class="meta">needs held-out pictures</span>`}
+        <div class="imri-legend"><span>the model cannot draw sharper than this; blur here is the codec's, not the model's</span></div></div></div></div>
+    </div>
+  </div>`;
+}
+
+document.addEventListener("click", (e) => {
+  if (!e.target || !e.target.closest) return;
+  const btn = e.target.closest("[data-imri-step]");
+  if (!btn || !imgMriState.active) return;
+  imgMriState.step = parseInt(btn.dataset.imriStep, 10);
+  _imgMriRender();
+});
+

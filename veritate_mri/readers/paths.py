@@ -38,6 +38,17 @@ PG_CACHE_ROOT   = os.path.join(CORPUS_ROOT, "_pg_cache")
 # Trained image codecs. Not run checkpoints: a codec is the image <-> bytes contract a
 # corpus was built under, and a bin is unreadable without the one that wrote it.
 CODEC_ROOT      = os.path.join(LOCAL_DATA_ROOT, "codecs")
+# Source images, one directory per named set: data/images/<set>/. The one place a
+# person puts pictures. Bulk local data, so it sits beside the corpus rather than
+# under veritate_mri/, and the updater's skip list keeps it across app updates.
+# ingest_images collects into it; fit_image_codec and build_image_corpus read it.
+IMAGES_ROOT     = os.path.join(LOCAL_DATA_ROOT, "images")
+# Decoded pixels for one set at one geometry, cached as a flat uint8 memmap plus a
+# JSON sidecar naming the files in order. Pillow decode is the whole cost of a codec
+# fit over personal photos, so it is paid once per geometry and never again: every
+# later epoch, and the corpus build after it, read this instead. The corpus is then
+# built from exactly the pixels the codec was fitted on, which no re-decode can promise.
+IMAGE_CACHE_ROOT = os.path.join(LOCAL_DATA_ROOT, "image_cache")
 # The experience log: one JSONL file per local day recording every serving
 # exchange (bytes in/out + params). The substrate for sleep consolidation
 # (IDEA 20 T3) — the model trains on its own thought and actions. Bulk local
@@ -130,6 +141,9 @@ AUTHORING_SPEC_NAME = "corpus_spec.json"
 CORPUS_TRAIN_SUFFIX = "_train.bin"
 CORPUS_VAL_SUFFIX   = "_val.bin"
 CODEC_SUFFIX        = ".codec.pt"
+IMAGE_CACHE_SUFFIX  = ".u8"
+IMAGE_INDEX_SUFFIX  = ".index.json"
+IMAGE_CORPUS_META_SUFFIX = ".image.json"
 GRADE_EVAL_PREFIX   = "grade_"
 GRADE_EVAL_SUFFIX   = "_eval.bin"
 
@@ -195,6 +209,29 @@ def corpus_val_path(stem):
 
 def codec_path(name):
     return os.path.join(CODEC_ROOT, f"{name}{CODEC_SUFFIX}")
+
+
+def image_set_dir(name):
+    """Where a named set of source images lives. Created by ingest_images."""
+    return os.path.join(IMAGES_ROOT, name)
+
+
+def image_cache_path(name, height, width):
+    """The decoded-pixel memmap for one set at one geometry. Geometry is in the
+    filename because a cache at the wrong crop is a silently wrong corpus."""
+    return os.path.join(IMAGE_CACHE_ROOT, f"{name}_{height}x{width}{IMAGE_CACHE_SUFFIX}")
+
+
+def image_cache_index_path(name, height, width):
+    """The sidecar naming the cached frames in order, so captions still resolve."""
+    return os.path.join(IMAGE_CACHE_ROOT, f"{name}_{height}x{width}{IMAGE_INDEX_SUFFIX}")
+
+
+def image_corpus_meta_path(stem):
+    """What an image corpus was built from: set, codec, geometry, image count and
+    image_code_bytes. The image trainer reads it to skip a rebuild that would produce
+    the same bins, and to recover image_code_bytes on resume."""
+    return os.path.join(CORPUS_ROOT, f"{stem}{IMAGE_CORPUS_META_SUFFIX}")
 
 
 def native_corpus_train_path(stem):
