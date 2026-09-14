@@ -155,6 +155,7 @@ class StopOnConstraint(Constraint):
 #                 'frac_dot' (just saw '.'; need at least one digit),
 #                 'frac_digits' (one or more digits after '.'),
 #                 'exp_sign' (saw 'e'/'E', awaiting sign or digit),
+#                 'exp_sign_after' (saw the exponent's sign, awaiting a digit),
 #                 'exp_digits' (digits of the exponent).
 #   literal     : if we're partway through 'true'/'false'/'null', this is
 #                 the bytes we still need to match, e.g. b'rue'. None
@@ -378,6 +379,11 @@ class JSONConstraint(Constraint):
             # Just consumed 'e'/'E'. Allow '+', '-', or a digit.
             m[ord('+')] = True
             m[ord('-')] = True
+            for d in _DIGITS:
+                m[d] = True
+            return m
+        if ns == 'exp_sign_after':
+            # Just consumed the exponent's sign. Need a digit.
             for d in _DIGITS:
                 m[d] = True
             return m
@@ -641,16 +647,3 @@ class JSONConstraint(Constraint):
             return
         self.stack.pop()
         self._close_value()
-
-
-# Override _mask_number for the exp_sign_after sub-state (added in step impl).
-# We patch the method dispatch by extending the if-chain:
-_orig_mask_number = JSONConstraint._mask_number
-def _mask_number_extended(self):
-    if self.number_state == 'exp_sign_after':
-        m = _empty_mask()
-        for d in _DIGITS:
-            m[d] = True
-        return m
-    return _orig_mask_number(self)
-JSONConstraint._mask_number = _mask_number_extended

@@ -126,6 +126,22 @@ def test_a_source_mode_without_a_source_is_a_400(client):
     assert res.status_code == 400
 
 
+def test_a_traced_generation_returns_the_passes_and_the_maps(client):
+    """trace: true adds a PNG per pass plus the commit-pass and confidence maps; without it the
+    answer carries no trace."""
+    body = {"model": NAME, "mode": "text", "caption": "sky", "passes": 3, "seed": 2}
+    assert "trace" not in client.post("/images/generate", json=body).get_json()
+    out = client.post("/images/generate", json={**body, "trace": True}).get_json()
+    tr = out["trace"]
+    gh, gw = H // PATCH, W // PATCH
+    assert tr["grid"] == [gh, gw]
+    assert 1 <= len(tr["passes"]) <= 3
+    assert all(Image.open(io.BytesIO(base64.b64decode(p["png"]))).size == (W, H) for p in tr["passes"])
+    assert sum(p["committed"] for p in tr["passes"]) == PLANES * gh * gw
+    assert len(tr["commit_pass_map"]) == gh * gw and len(tr["confidence_map"]) == gh * gw
+    assert base64.b64decode(tr["passes"][-1]["png"]) == base64.b64decode(out["png"])
+
+
 def test_the_loaded_model_stays_resident(client):
     client.post("/images/generate", json={"model": NAME, "mode": "text", "passes": 1})
     assert len(image_routes._MODEL_CACHE) == 1

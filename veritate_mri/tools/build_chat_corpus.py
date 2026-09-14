@@ -165,18 +165,9 @@ DEFINITION_QA = [
                                                         "force of gravity on that mass."),
 ]
 
-WRITING_NUMS = ["one","two","three","four","five","six","seven","eight","nine","ten",
-                "eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen",
-                "eighteen","nineteen","twenty"]
-
-
 # ------------------------------------------------------------------------------------
 # Functions
 
-def _spell(n):
-    if 0 <= n < len(WRITING_NUMS): return WRITING_NUMS[n]
-    if n == 100: return "one hundred"
-    return str(n)
 
 def _math_qa(rng, count):
     out = []

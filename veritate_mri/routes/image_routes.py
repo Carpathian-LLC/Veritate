@@ -23,7 +23,9 @@
 #   unconditional) through image_sample against a trained image model, and returns a
 #   PNG. Synchronous: a few forward passes on one window. The last model loaded stays
 #   resident so a second picture does not pay the load again. /images/models lists what
-#   can generate.
+#   can generate. `trace: true` adds the picture forming pass by pass (a PNG per pass,
+#   the pass each cell was decided in, each cell's confidence): the Generation tab's MRI
+#   of one picture, the way the byte panels are the MRI of one reply.
 # - /images/caption/* is the captioning stage: a vision teacher describes every picture
 #   in a set into <image>.txt sidecars, in a background thread with live progress, a
 #   stop, and a one-picture preview so the prompt and model are checked before the
@@ -252,16 +254,23 @@ def generate_image(body):
         model, codec, geometry, step = _resident_model(name, body.get("step"), device)
     except (OSError, ValueError, KeyError, RuntimeError) as e:
         return {"ok": False, "error": type(e).__name__ + ": " + str(e)}, 400
+    trace = [] if body.get("trace") else None
     png, info = image_sample.generate(
         model, codec, geometry, mode=mode, caption=str(body.get("caption") or ""), source=source,
         strength=float(body.get("strength", image_sample.DEFAULT_STRENGTH)),
         rect=tuple(rect) if rect else None,
         expand=float(body.get("expand", image_sample.DEFAULT_EXPAND)),
         passes=int(body.get("passes", image_sample.DEFAULT_PASSES)),
-        temperature=float(body.get("temperature", 1.0)), seed=int(body.get("seed", 0)), device=device)
+        temperature=float(body.get("temperature", 1.0)), seed=int(body.get("seed", 0)), device=device,
+        trace=trace)
     info.update({"ok": True, "model": name, "step": step, "device": device,
                  "seconds": round(time.time() - started, 3),
                  "png": base64.b64encode(png).decode("ascii")})
+    if trace:
+        report = image_sample.trace_report(codec, trace, geometry["height"], geometry["width"])
+        for entry in report["passes"]:
+            entry["png"] = base64.b64encode(entry["png"]).decode("ascii")
+        info["trace"] = report
     return info, 200
 
 

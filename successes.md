@@ -7,6 +7,12 @@ Validated results with the evidence that proved them. Entries move here from `id
 **Eager PyTorch cannot rank decode architectures: ~20 us per op at batch=1 regardless of work**
 Measured on cardinal (i7-9700T, 7 threads): `x*2` on a 320-vector 20.3 us; a 320x320 matmul doing 102,400 MACs 38.0 us. 102k multiply-adds cost 17.7 us more than doing nothing, so op COUNT sets batch-1 cost, not FLOPs. Dense FFN wins in PyTorch because it is 3 fat ops; any sparse/gated/conditional design needs more ops and loses regardless of merit. Same product-key-memory algorithm: **4.9x slower in eager PyTorch, 3.90x faster in C** (both arms AVX2 int8). Rank batch-1 architectures in C, never in eager. (2026-08-03)
 
+**A dedicated training run should not carry the sleep controller's reserved core: 8.7%**
+Measured on cardinal (200M shape, freeze 15, act-ckpt on): step 42.34 s on 8 threads, 46.03 s on 7,
+50.78 s on 6, 67.98 s on 4 — monotone, 80% scaling efficiency across the 4->8 doubling. The default
+`sleep_reserve_cores` of 1 is right while the box serves and costs 8.7% when it does not; the rung
+1b experiment paid it on a box serving nothing. (2026-09-09)
+
 ## serving on weak hardware
 
 **Preemptive sleep: background training costs a served request nothing (2.5x throughput, ~200x first byte)**
@@ -168,7 +174,7 @@ Simulating a typist (prefix request every 40 bytes) against the 200m hybrid trun
 1.5x the ~23ms bandwidth floor; the gap is an ~11-12ms/position serial floor (recurrent stack + rmsnorm), not a defect. The ≤1.3 ms/byte aspiration needs a BIOS unclamp (~4x) or second RAM DIMM (~2x).
 
 **Split-precision split-device training: 58% peak-VRAM drop at QAT-parity convergence**
-bf16 master on CPU, INT8 fake-quant copy shipped per forward, STE grad return. Converges within noise of standard QAT on a 25M model; 1B-class training on 12 GB VRAM feasible with grad-ckpt. Cost: per-forward H2D weight traffic. Mechanism lives in `veritate_core/qat.py`.
+bf16 master on CPU, INT8 fake-quant copy shipped per forward, STE grad return. Converges within noise of standard QAT on a 25M model; 1B-class training on 12 GB VRAM feasible with grad-ckpt. Cost: per-forward H2D weight traffic. The mechanism was never wired to a trainer path and its code was removed from `veritate_core/qat.py` on 2026-09-08 (rule 27); the version history holds it if the lever is ever needed.
 
 ## chat model milestones
 
@@ -250,6 +256,10 @@ Campaign complete in three nights on wren1_5 (wren1_3@3000 fork; fact_sft:0.75,m
 
 **wren1_5@700 is the ship result**: 94/100 directional recalls from weights alone, ladder loop 0.17 / closure 0.97 / median 161 B / identity 1.00; only grounded (0.25 vs 0.38 anchor) remains off-baseline. The per-checkpoint tripwire (val bpb after each sleep checkpoint, auto `/trainers/stop` past the kill line) fired at 800 exactly as designed — the campaign was ended by its pre-registered safety rule, not by judgment in the moment.
 Rules: (1) at lr 5e-6 the forgetting budget binds at ~700 consolidation steps — recall plateaus (45→46) while bpb keeps climbing, so past the sigmoid body, more dose buys forgetting, not memory. (2) A consolidation campaign needs the tripwire *per checkpoint*, not per night: nights 1-2 both passed while the cumulative slope pointed at the ceiling a half-night away. (3) Retention ≠ acquisition: the repo tool `tools/e4_retention_quiz.py` (facts: `veritate_mri/data/eval/e4_facts.json`) re-examines the untouched checkpoint at 7/30 days — 2026-08-27 and 2026-09-19 (handoff).
+
+**The abstention was the blocker on in-window recall: 200 steps of recall SFT took wren2 from 3/6 to 6/6 (2026-09-05)**
+exp_recall_0903 = wren2@70000 + 200 steps of `recall_chat:0.5,mixed_chat:0.5` (`tools/build_fact_chats --recall`: fact told, small talk, asked back, answered from the conversation, half first person), freeze 21 of 28 blocks, AdamW 3e-5, batch 7 x 4096, state carry chunks, 96 s/step on cardinal. Five-condition probe (lab 2026-09-03-working-memory-from-carried-state, six personal facts, three reps, greedy): in-window **3/6 -> 6/6**, pending buffer 6/6 byte-identical, committed state past the window 0/6 -> 0/6, leaks 0. mixed_chat trainer draw -9.0% (32-draw owed). Side effect: where the state holds nothing the model now invents a value in the corpus's form instead of drifting (ask-without-tell window draws) — read D/E before believing any later recall number. Lab: 2026-09-03-in-context-recall-sft.
+Rule: measure the model's willingness to answer from context before measuring its memory; a refusal profile masks both.
 
 **Tell-it-once works on weak hardware in one night: freeze the lower blocks and raise the rate (IDEA 20 E4 on cardinal, 2026-09-02/03)**
 cardinal-01 (i7-9700T, 7 threads), exp_fastsleep_0902 = wren1_0@1250 (200M hybrid, 20 blocks), `fact_sft:0.75,mixed_chat:0.25`, batch 7, assistant mask, `--freeze_blocks 15` (embeddings + blocks[:15] frozen, 66M of 270M train, 49 s/step vs 94.5 full), AdamW 3e-5 constant, warmup 5. Closed-book through the C engine (greedy): **fwd+rev 0 → 8 → 29 → 49 → 72 → 71 → 79 → 86 → 87 → 91 → 87 of 100 at steps 0..500** (50-step spacing). 72/100 at step 200 = 2.7 h and 5.7 MB of drill; E4 needed 79-98 MB at Muon 5e-6 on a Mac for the same recall. Product path on the same parent (exp_e2e_0902): 50 facts told over `/v1/chat/completions`, `/sleep/now`, the controller's own filter → extract → render → train → gate → export → respawn, 200 steps in 2 h 43 min, served not held, **38/50 fwd 31/50 rev from the served bin**. Forgetting (32-draw val_eval, 524 KB of windows): replayed mixed_chat **+2.4% at step 200, +0.8% at 450, +3.5% at 500** — at E4's +2% line, read to about ±1% (the trainer's own 4×7 rows said −4% and are the outlier); veritate_chat, not replayed, +6.6% at 200 and +4.9% at 500 (32-draw) after a +16% transient at step 50. Lab: 2026-09-02-fast-consolidation-on-cardinal.

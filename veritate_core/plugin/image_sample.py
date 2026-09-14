@@ -47,6 +47,7 @@ DEFAULT_STRENGTH = 0.6      # variation: share of cells regenerated
 DEFAULT_EXPAND   = 0.6      # expand: side of the inner box the source occupies
 RGB_MAX          = 255.0
 TRAINING_IMAGE   = "image"
+MASK_GREY        = (90, 90, 90)   # painted over cells a traced pass has not decided yet
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -158,7 +159,8 @@ def fill(model, window, first_code, keep=None, passes=DEFAULT_PASSES, temperatur
          device="cpu", trace=None):
     """Parallel masked decode. Returns uint8 codes [code_bytes]. A `trace` list receives
     one entry per pass -- the codes so far, which positions are still unknown, how many
-    were committed and their mean confidence -- so a caller can show the picture forming."""
+    were committed, their mean confidence and every position's confidence at the pass it
+    was committed in (0 while unknown) -- so a caller can show the picture forming."""
     code_bytes = len(window) - first_code
     keep = np.zeros(code_bytes, dtype=bool) if keep is None else np.asarray(keep, dtype=bool)
     tokens = torch.from_numpy(np.asarray(window, dtype=np.int64).copy()).unsqueeze(0).to(device)
@@ -168,6 +170,7 @@ def fill(model, window, first_code, keep=None, passes=DEFAULT_PASSES, temperatur
         return tokens[0, first_code:].to(torch.uint8).cpu().numpy()
     passes = max(1, min(int(passes), MAX_PASSES))
     gen = torch.Generator(device="cpu").manual_seed(int(seed))
+    cell_conf = torch.zeros(code_bytes, device=device)
     for t in range(1, passes + 1):
         out = model(tokens)
         logits = (out[0] if isinstance(out, (tuple, list)) else out)[0, first_code:, :].float()
@@ -187,6 +190,7 @@ def fill(model, window, first_code, keep=None, passes=DEFAULT_PASSES, temperatur
             commit[torch.topk(-conf, remain).indices] = False
         image = tokens[0, first_code:]
         image[commit] = sampled[commit]
+        cell_conf[commit] = conf[commit]
         unknown = unknown & ~commit
         if trace is not None:
             committed = conf[commit]
@@ -194,35 +198,100 @@ def fill(model, window, first_code, keep=None, passes=DEFAULT_PASSES, temperatur
                           "codes": tokens[0, first_code:].to(torch.uint8).cpu().numpy().copy(),
                           "unknown": unknown.cpu().numpy().copy(),
                           "committed": int(commit.sum()),
-                          "confidence": float(committed.mean()) if committed.numel() else None})
+                          "confidence": float(committed.mean()) if committed.numel() else None,
+                          "cell_confidence": cell_conf.cpu().numpy().copy()})
         if not bool(unknown.any()):
             break
     return tokens[0, first_code:].to(torch.uint8).cpu().numpy()
 
 
+def decode_frame(codec, codes, height, width, planes=None):
+    """uint8 codes -> uint8 RGB frame [h, w, 3] at the codec's output scale; `planes` renders a
+    coarser picture from the first k planes only."""
+    return codec.decode(codec.from_bytes(bytes(np.asarray(codes, dtype=np.uint8).tolist()), height, width),
+                        planes=planes).cpu().numpy()
+
+
+def frame_png(frame):
+    buf = io.BytesIO()
+    Image.fromarray(np.asarray(frame, dtype=np.uint8), "RGB").save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def decode_png(codec, codes, height, width):
     """uint8 codes -> PNG bytes at the model's frame."""
-    frame = codec.decode(codec.from_bytes(bytes(np.asarray(codes, dtype=np.uint8).tolist()), height, width))
-    image = Image.fromarray(frame.cpu().numpy(), "RGB")
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    return buf.getvalue()
+    return frame_png(decode_frame(codec, codes, height, width))
+
+
+def grey_cells(frame, cells, patch):
+    """Paint MASK_GREY over the cells (gh x gw bool, True = grey) of a decoded frame."""
+    out = frame.copy()
+    gh, gw = cells.shape
+    for gy in range(gh):
+        for gx in range(gw):
+            if cells[gy, gx]:
+                out[gy * patch:(gy + 1) * patch, gx * patch:(gx + 1) * patch] = MASK_GREY
+    return out
+
+
+def formation_order(trace, code_bytes):
+    """The decode pass in which each code position was committed, from a fill() trace."""
+    order = np.zeros(code_bytes, dtype=np.int64)
+    still_unknown = np.ones(code_bytes, dtype=bool)
+    for entry in trace:
+        newly = still_unknown & ~np.asarray(entry["unknown"], dtype=bool)
+        order[newly] = int(entry["pass"])
+        still_unknown = np.asarray(entry["unknown"], dtype=bool).copy()
+    order[still_unknown] = int(trace[-1]["pass"]) if trace else 0
+    return order
+
+
+def trace_frames(codec, trace, height, width):
+    """One decoded frame per pass of a fill() trace, the cells still unknown painted grey
+    (a cell is unknown while its plane-0 code is)."""
+    gh, gw = height // codec.patch, width // codec.patch
+    paint = codec.patch * getattr(codec, "out_scale", 1)
+    frames = []
+    for entry in trace:
+        shown = entry["codes"].copy()
+        shown[entry["unknown"]] = 0
+        grey = entry["unknown"][:gh * gw].reshape(gh, gw)
+        frames.append(grey_cells(decode_frame(codec, shown, height, width), grey, paint))
+    return frames
+
+
+def trace_report(codec, trace, height, width):
+    """What a viewer needs to show one generation forming: a PNG per pass with the count and
+    mean confidence of the cells it committed, the pass each cell was decided in (plane 0),
+    each cell's confidence at commit averaged over its planes, the grid, and the codes used."""
+    gh, gw = height // codec.patch, width // codec.patch
+    cell, planes = gh * gw, codec.planes
+    code_bytes = cell * planes
+    order = formation_order(trace, code_bytes)
+    conf = np.asarray(trace[-1]["cell_confidence"], dtype=np.float64).reshape(planes, cell).mean(axis=0)
+    return {"passes": [{"pass": e["pass"], "committed": e["committed"], "confidence": e["confidence"],
+                        "png": frame_png(f)} for e, f in zip(trace, trace_frames(codec, trace, height, width),
+                                                              strict=True)],
+            "commit_pass_map": [int(v) for v in order[:cell]],
+            "confidence_map": [round(float(v), 4) for v in conf],
+            "grid": [gh, gw],
+            "codes_used": len(np.unique(trace[-1]["codes"]))}
 
 
 def generate(model, codec, geometry, mode="text", caption=b"", source=None, strength=DEFAULT_STRENGTH,
              rect=None, expand=DEFAULT_EXPAND, passes=DEFAULT_PASSES, temperature=1.0, seed=0,
-             device="cpu"):
+             device="cpu", trace=None):
     """Every mode through one fill. `source` is PIL image bytes (any format PIL reads).
-    Returns (png_bytes, info)."""
+    Returns (png_bytes, info); a `trace` list is filled as fill() fills it."""
     codes, info = generate_codes(model, codec, geometry, mode=mode, caption=caption, source=source,
                                  strength=strength, rect=rect, expand=expand, passes=passes,
-                                 temperature=temperature, seed=seed, device=device)
+                                 temperature=temperature, seed=seed, device=device, trace=trace)
     return decode_png(codec, codes, geometry["height"], geometry["width"]), info
 
 
 def generate_codes(model, codec, geometry, mode="text", caption=b"", source=None, strength=DEFAULT_STRENGTH,
                    rect=None, expand=DEFAULT_EXPAND, passes=DEFAULT_PASSES, temperature=1.0, seed=0,
-                   device="cpu"):
+                   device="cpu", trace=None):
     """generate() before the decode: the uint8 codes and the info dict. What a probe that
     compares two generations (with and without the words) needs."""
     if mode not in MODES:
@@ -259,7 +328,7 @@ def generate_codes(model, codec, geometry, mode="text", caption=b"", source=None
                 keep = cells_to_positions(cells, planes)
     window = build_window(seq, code_bytes, caption, codes, keep)
     out = fill(model, window, seq - code_bytes, keep, passes=passes, temperature=temperature,
-               seed=seed, device=device)
+               seed=seed, device=device, trace=trace)
     info = {"mode": mode, "height": h, "width": w, "code_bytes": code_bytes, "passes": passes,
             "regenerated": code_bytes if keep is None else int((~keep).sum()),
             "caption_bytes": len(caption)}

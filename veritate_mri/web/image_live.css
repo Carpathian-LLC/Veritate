@@ -1,0 +1,42 @@
+/* Developed by Carpathian, LLC. Distribution Not Authorized. */
+/* veritate_mri/web/image_live.css: the Training tab's live view of an image run
+   (image_live.js). */
+
+.imgl { display:flex; flex-direction:column; gap:10px; }
+.imgl .panel .body { display:flex; flex-direction:column; gap:10px; }
+.imgl-right { margin-left:auto; display:flex; gap:10px; align-items:center; font-size:11px; }
+.imgl-chip { font-size:10px; font-weight:700; padding:2px 7px; border-radius:3px; letter-spacing:.04em; }
+.imgl-gpu { background:rgba(93,255,155,.15); color:var(--data-pos); border:1px solid var(--data-pos); }
+.imgl-cpu { background:rgba(255,93,143,.15); color:var(--hot); border:1px solid var(--hot); }
+.imgl-note { background:rgba(93,184,255,.12); color:var(--accent); border:1px solid var(--accent); font-weight:600; }
+.imgl-row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
+.imgl-row > div { display:flex; flex-direction:column; gap:6px; }
+.imgl-stages { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px; }
+.imgl-stage { background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:8px 10px; display:flex; flex-direction:column; gap:6px; min-width:0; }
+.imgl-stage-h { display:flex; justify-content:space-between; gap:8px; font-size:11px; color:var(--dim); white-space:nowrap; overflow:hidden; }
+.imgl-stage-h b { color:var(--text); }
+.imgl-stage-h span { overflow:hidden; text-overflow:ellipsis; }
+.imgl-stage.running { border-color:var(--warm); }
+.imgl-stage.running .imgl-stage-h b { color:var(--warm); }
+.imgl-stage.done .imgl-stage-h span, .imgl-stage.skipped .imgl-stage-h span { color:var(--data-pos); }
+.imgl-stage.failed { border-color:var(--hot); }
+.imgl-bar { height:5px; background:#11141d; border-radius:3px; overflow:hidden; }
+.imgl-bar i { display:block; height:100%; background:var(--accent); transition:width .4s; }
+.imgl-stage.done .imgl-bar i, .imgl-stage.skipped .imgl-bar i { background:var(--data-pos); opacity:.7; }
+.imgl-stage.running .imgl-bar i { background:var(--warm); }
+.imgl-msg { font-size:12px; color:var(--text); }
+.imgl-fail { font-size:12px; color:var(--hot); background:rgba(255,93,143,.08); border:1px solid var(--hot); border-radius:4px; padding:8px 10px; white-space:pre-wrap; }
+.imgl-saved { font-size:11px; color:var(--dim); display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.imgl-continue { background:#0a0c12; border:1px solid var(--accent); color:var(--accent); border-radius:4px; padding:4px 10px; cursor:pointer; font:inherit; font-size:11px; font-weight:600; }
+.imgl-kpis { display:flex; gap:10px; flex-wrap:wrap; }
+.imgl-kpi { background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:8px 12px; min-width:120px; }
+.imgl-kpi .v { font-size:18px; font-weight:700; color:var(--text); }
+.imgl-kpi .k { font-size:10.5px; color:var(--dim); }
+.imgl-of { font-size:11px; color:var(--dim); font-weight:400; }
+.imgl-chart svg { width:100%; height:170px; display:block; background:#0a0c12; border:1px solid var(--line); border-radius:3px; }
+.imgl-legend { display:flex; gap:12px; font-size:10.5px; color:var(--dim); }
+.imgl-legend i { display:inline-block; width:10px; height:3px; vertical-align:middle; margin-right:4px; }
+.imgl-figs { display:flex; flex-direction:column; gap:6px; }
+.imgl-figs img { max-width:100%; border:1px solid var(--line); border-radius:3px; background:#0a0c12; }
+.imgl-figs h4 { margin:0; font-size:11px; color:var(--dim); font-weight:600; }
+.imgl-log { margin:0; font:11px monospace; color:var(--dim); background:#0a0c12; border:1px solid var(--line); border-radius:3px; padding:8px; max-height:220px; overflow:auto; white-space:pre-wrap; }

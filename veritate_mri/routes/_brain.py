@@ -17,7 +17,7 @@ import os
 # routes that only touch resolve_*/list helpers do not pay the torch tax. In
 # minimal mode the brain never loads, so torch never imports.
 from readers import bin as binr
-from readers import checkpoints, engine, models, paths, train_csv
+from readers import checkpoints, models, paths, train_csv
 from runtime import logs as logmod
 
 # ------------------------------------------------------------------------------------
@@ -116,9 +116,3 @@ def resolve_c_model_bin(name):
     return candidates[0][1] if candidates else None
 
 
-def resolve_c_engine_exe(explicit):
-    if explicit and os.path.isfile(explicit): return explicit
-    for e in engine.engines():
-        ap = os.path.abspath(e["path"])
-        if os.path.isfile(ap): return ap
-    return None

@@ -12,7 +12,7 @@
 # - Math matches qat.py bit-for-bit at the scalar level: same INT8 levels, same
 #   per-tensor symmetric maxabs scheme, same STE backward with the clamp gate.
 # - Bit-for-bit kernel-vs-reference parity is required by preflight rule 24.
-#   Verified by veritate_mri/tests/test_qat_triton_parity.py.
+#   Verified by tests/core/test_qat_triton.py (the parity cases skip without CUDA).
 # - Activation: fixed scale (ACT_INT8_SCALE = 32). Weight: per-tensor maxabs
 #   scale, computed on device via .amax() and passed as a 0-d tensor so no
 #   host sync is incurred.

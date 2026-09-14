@@ -8,7 +8,6 @@
 #   rule 11a, decoders never branch on model variant; they call the canonical
 #   contract methods.
 # - kv_cache.py    : O(1) per-step decode via cached K/V.
-# - mtp_decode.py  : MTP-head-aware decoding.
 # - constraints.py : Constraint primitives consumed by Brain.stream(constraint=...).
 # veritate_mri/inference/decode/__init__.py
 # ------------------------------------------------------------------------------------
@@ -21,7 +20,6 @@ from .constraints import (
     VocabConstraint,
 )
 from .kv_cache import KVCachedDecoder
-from .mtp_decode import MTPDecoder
 from .repetition import (
     NO_REPEAT_NGRAM_DEFAULT,
     REP_PENALTY_DEFAULT,
@@ -39,7 +37,6 @@ __all__ = [
     "Constraint",
     "JSONConstraint",
     "KVCachedDecoder",
-    "MTPDecoder",
     "RepetitionController",
     "StopOnConstraint",
     "VocabConstraint",

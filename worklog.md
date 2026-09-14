@@ -1562,3 +1562,294 @@ lab/2026-09-05-working-memory-program.md: rung 1 = recall objective across the c
 existing GLA state (recall_far corpus, gap 2.2 KB, freeze 14/28 so the upper recurrent gates move);
 rung 2 delta rule; rung 3 surprise-gated branch. Probe of exp_recall_0903@70200 running; recall_far
 built (2.6 MB). Rung 1 launches on the probe's verdict.
+2026-09-05 02:15 — RECALL SFT PROBE (exp_recall_0903@70200): in-window 5/5 through item 4 (parent 3/6);
+committed state 0 and now fact-shaped inventions. Parent chosen; exp_wm_0905 forked; rung 1 chained.
+2026-09-05 02:21 — RECALL SFT PROBE FINAL: A 6/6 B 6/6 C 0/6 D 0 E 0 (parent A 3/6). Abstention cleared;
+committed state still empty and now invents values (ask-without-tell). Ledgered. RUNG 1 LAUNCHED 02:21:
+exp_wm_0905 70200->70400, freeze 14/28 (295M train), recall_far:0.35,recall_chat:0.15,mixed_chat:0.5,
+carry chunks, bptt 2, AdamW 3e-5, mixed_chat yardstick, stop 0.10; probe at 70400 chained.
+2026-09-05 08:40-09:10 — RUNG 1 done (rows -10.7%); probe items 0-1 show the pre-registered failure:
+in-window regressed, inventions in every empty-state condition (random windows show questions without
+their tellings). Shipped --align_stride + --pad-to (whole-conversation windows), built the 4k corpora,
+pre-registered rung 1b from the clean 70200 checkpoint.
+2026-09-05 09:43-09:51 — RUNG 1 probe: A 5/6 B 5/6 C 0/6 D 0 E 0, inventions in 9/18 empty readings
+(void as a state reading). 1b launch 1 failed (trainer import of the other session's image modules,
+deployed), launch 2 refused by the planner (dashboard held 11.7 GB post-probe), dashboard restarted,
+launch 3 RUNNING 09:49 with align_stride 4096 and the padded corpora.
+2026-09-08 07:37-08:00 — RESUMED after a 2.5-day gap. Rung 1b (exp_wm_0905 70200->70400, whole-conversation
+windows) had finished 2026-09-05 (rows 0.4280->0.3828, -10.5%) with its probe never run; probe launched
+07:38 on cardinal (monitor b2in06kab, /tmp/t1/exp_wm1b.json). At 08:10 mirach lost the route to
+192.168.0.43 (mirach on 192.168.2.x); the monitor's existing ssh session kept delivering: item 0 biscuit
+A1 B1 C0 D0 E0 (C/E invent "Samuel", D "Papa"); item 1 lisbon A1 B1 C0 D0 E0 (C "Larkfell", D
+"contractor", both E4 vocabulary). Inventions persist with the draw artifact removed.
+2026-09-08 07:45-08:35 (all entries below are one sitting; clock read at 08:34) — USER DIRECTIVE: forget wren2, focus cardinal + tests; faster training; clean up,
+test everything, fix the generation tab (image generation = a selector that swaps the whole layout with
+its own MRI); consider splitting index.js; no agents. ENFORCEMENT: .claude/hooks/guard_agents.py blocks
+Agent and Workflow (wired in settings.json, tests in tests/hooks); the user's code bar added to
+veritate-code SKILL.md. ENV: pillow was missing from .veritate_venv (declared in requirements.txt) and
+8 image test files failed at collection; installed; suite 1882 passed / 12 skipped / 8 xfailed.
+SHIPPED: `trace: true` on POST /images/generate (per-pass PNGs, commit-pass map, per-cell confidence,
+codes used; fill() traces now carry cell_confidence; trace helpers moved into image_sample and shared
+with image_probe). FRONTEND: veritate_mri/web/image_mri.js (+css) = the image-model MRI as a factory
+(ImageMri.create(host)), extracted from index.js (830 lines out); generation_images.js (+css) = the
+Generation tab's `text | images` switch and the image layout: draw composer, the MRI of the picture
+just drawn from the trace, and the checkpoint MRI of the model drawing. tests/mri/test_web_modules.py
+pins assets, syntax (node --check), module isolation and the extraction. Smoke-tested in headless Chrome
+over the DevTools protocol against the live 8001 dashboard: no exceptions, swap works both ways.
+documentation.md updated (frontend modules, kind switch, trace contract, image_mri.js).
+lab/2026-09-08-cpu-step-time-levers.md pre-registers the cardinal profiling + compile/thread arms.
+2026-09-08 (same sitting) — CLEANUP: grep-based scan for module-level functions with no reference anywhere
+(source, tests, web) found 20; 16 deleted (image_probe._png_bytes, capabilities.highest_trained,
+corpus.has_val, paths.native_corpus_*_path, _brain.resolve_c_engine_exe, backends_routes._is_chatml_prompt,
+build_chat_corpus._spell + WRITING_NUMS, corpus_filters.filter_stream, study_exam.ask_text,
+export.quantize_activation, grow.stage_compute + widen_state_dict, sync_common.action_is_destructive +
+sha256_bytes, and qat.py's whole split-precision block: 155 lines never wired to a trainer; successes.md
+entry notes the removal). Kept: app._route_exception_to_log (decorator-registered), oom_recovery (documented
+plugin surface). DEFECT FOUND AND FIXED: the Training tab's QAT "weight quant mode" (int8/int4/ternary)
+was in the trainer's SCHEMA_IGNORED_FLAGS and never applied, so every QAT run rounded to int8. Now a
+reserved str flag validated at launch and applied with qat.set_quant_mode after set_qat;
+tests/training/test_quant_mode.py; documentation.md gained ### qat_enabled and ### quant_mode.
+Rung 1b probe item 2 teal: A1 B1 C0 D0 E0, drift, no invention. Suite after the deletions: 1899 passed.
+2026-09-08 (same sitting) — TESTS for previously untested modules (rule 31, each pins behavior a stub of the
+module would fail): routes lifecycle / logs (SSE incl. unsubscribe on close) / atlas / engine (c-config
+respawn contract) / sys / pruning+export (tests/mri/test_*_routes.py, 35 tests); training train_stream,
+paged_optimizer (step-for-step equal to torch AdamW; moments survive a reopen), oom_recovery (re-exec argv
+and counter); decode constraints (JSON grammar walked byte by byte over five documents, state probes);
+tools jsonl_to_bin; agent calculator. DEFECTS FOUND BY THE TESTS: PagedAdamW.__del__ raised on a
+construction its own checks refused (guarded); constraints.py carried a module-bottom monkey patch of
+JSONConstraint._mask_number for the exp_sign_after state (folded into the method, patch deleted);
+calculator kept an ast.Num branch (dead since 3.8, gone in 3.14) and accepted 9**9**9 from a
+model-written expression (would stall the dashboard; exponent capped at 1000). Rung 1b probe item 3
+lighthouse: A1 B1 C0 D0 E0, C/E invent "farrier", D "clockmaker". Four items in: A 4/4, C 0/4.
+2026-09-08 (same sitting) — RETIRED THE MULTI-BYTE (MTP) DECODE PATH end to end in Python/JS: every current
+model class reports supports_mtp_decode False and the only classes that had heads (Veritate800M/85M)
+left with trainers/ on 2026-08-18, so veritate_core/load.py's MTP branches could only crash on a missing
+import. Now: the loader refuses a checkpoint with mtp.transforms.* up front with a message naming the
+export-and-C-engine path (the one that still serves it; user-data compat, rule 18);
+inference/decode/mtp_decode.py deleted (278 lines); pytorch.py lost the mtp / mtp-verify fast modes,
+their two stream methods and the constraint snapshot helpers (265 lines); the route's allowed fast
+modes are kv / adaptive / stream; the Generation tab's fast picker lost the two options; the Training
+tab lost the n_predict / mtp_aux_weight controls (the trainer keeps them in SCHEMA_IGNORED_FLAGS labelled
+as compat for older data/trainer_tuning.json). The C engine's MTP code is untouched (bin-format contract,
+no arch verification here). Tests: tests/core/test_load_retired_checkpoints.py, a route/backend fast-mode
+test, a picker assertion in test_web_modules. Rung 1b probe item 4 marisol: A1 B1 C0 D0 E0 (drift).
+Five items in: A 5/5, C 0/5, inventions on 3 of 5.
+2026-09-08 (same sitting) — MORE TESTS: models_sync (provenance, files/check over a stubbed tree, unreachable
+remote), eval hellaswag/mmlu (scoring stubbed per prompt; ties go to the first choice), teacher
+test_connection (two-stage probe, every failure class), training/atlas (five aggregations incl. the
+circuit graph on a tiny model). Second orphan sweep after the deletions: grow.ffn_widths and
+qat.set_engine_faithful (both orphaned by the earlier cuts) and 13 unreferenced module constants removed;
+a regex cut left a stray brace in checkpoint_probe.py, caught by ruff before any run. Suite 2020 passed
+before these four test files.
+2026-09-08 (same sitting, clock 08:37) — TESTS for the grade-eval builders (grammar / reasoning pairs seeded and
+self-consistent; main() writes one JSONL per type) and the Flesch-Kincaid instrument in build_grade_evals;
+eval run_eval dispatch; rag_sft pieces. run_eval.py's header no longer names the retired MTP models.
+Worklog time labels for this sitting corrected: the earlier entries carried estimated ranges (11:00-15:30)
+that did not match the wall clock; everything since 07:37 is one sitting. Rung 1b probe: item 5 (saab)
+not yet in at 08:37 (t ~3500 s; items land every ~550 s).
+2026-09-08 08:34 — RUNG 1b PROBE FINAL (exp_wm_0905@70400): A 6/6 B 6/6 C 0/6 D 0/6 E 0/6. Inventions on
+4/6 items (biscuit Samuel/Papa, lisbon Larkfell/contractor, lighthouse farrier/clockmaker, saab cooper)
+with whole-conversation windows: not a draw artifact. Ledgered in failures.md; lab entry carries the table,
+the verdict (the corpus's answer distribution fits the objective without reading the state) and the
+pre-registered next entry: a contrastive far corpus with untold questions answered by abstention. Rung 2
+does not run on this evidence. Cardinal still unreachable from mirach; raw JSON and the owed 32-draw
+val_eval wait for the link.
+2026-09-08 08:45 — CONTRASTIVE CORPUS LEVER: `build_fact_chats --recall --untold-share S` (that share of
+conversations ask without the telling; the assistant answers "You haven't told me ..."; ABSTAIN_TEMPLATES and a
+first-person abstain form). Tests in tests/corpus/test_build_fact_chats_recall.py (8 pass); documented in the
+corpus builders bullet. Built `recall_contrast4k` (gap 2200, pad 4096, untold 0.5, per-fact 20) into
+data/corpus on mirach for scp to cardinal; probe-word leak check below.
+2026-09-08 08:55 — MORE BUILDER TESTS: comprehension probe (seeded items, bounded prefix, length-matched
+distractors absent from the recent window, short/missing passage skipped) and the curriculum corpus (four-way
+event statement, held-out pairs declarative-only with matching test verbs, seeded stream, val split).
+Final suite of the sitting below.
+2026-09-08 09:05 — CLOSEOUT of the sitting: the Training tab's image live view no longer injects a <style>
+block per render (38 .imgl rules moved into index.css; index.css header path corrected). Headless-Chrome
+smoke over generation (text and images), models and training tabs against the live 8001 dashboard: no
+exceptions, the moved rules resolve. Suite before the style move: 2069 passed / 12 skipped / 8 xfailed;
+ruff clean. Cardinal still unreachable from mirach (192.168.2.x -> 192.168.0.43, no route) since ~08:10.
+
+2026-09-09 09:20-10:00 — cardinal was never down; the ssh alias was stale. `~/.ssh/config` sends
+`cardinal-01` to 192.168.0.43, which the box has not held since its 2026-08-24 boot (NetworkManager
+has leased it 192.168.2.43 all along), so yesterday's "no route since 08:10" was a config artifact:
+cardinal's sshd logged the monitor connecting every four minutes through that window. The working
+path is the reverse tunnel `ssh -p 2222 cardinal-01@127.0.0.1` (dashboard on 8011), a 16-day-old
+`ssh -N` on mirach pid 44424. That process is now the only way in: mirach cannot open a connection
+to ANY host on the LAN (192.168.2.43, the gateway, every other host: EHOSTUNREACH) while reaching
+the internet fine, and cardinal reaches mirach fine, so the tunnel cannot be rebuilt from this side
+if it drops. Rebuilding it would have to start on cardinal. The ssh-config fix itself was refused by
+the permission classifier, so the alias stays stale and the tunnel form is what handoff.md records.
+
+Clocks checked while the box was in hand. `base_frequency` reads 2000000 with all eight cores at
+2.0 GHz under load: the 800 MHz firmware clamp lifted on 2026-08-24 is still off, which
+documentation.md already records - this confirms it rather than finding it, and the correction is
+noted here because the first draft of this entry claimed otherwise. The consequence that does
+matter: cardinal numbers older than 2026-08-24 are stale by up to 2.5x, while the working-memory
+program's own timings (111 s/step) are post-clamp and current. The untried lever is `no_turbo`,
+still 1: turbo is 65% of the p-state range under a 35 W long-term RAPL limit, and there is no
+passwordless sudo, so it needs the user.
+
+Owed measurement launched: `tools.val_eval exp_wm_0905 70200 70400 --iters 32 --batch 4` over
+mixed_chat then veritate_chat, backgrounded on cardinal into /tmp/t1/val32_*.json. First number:
+**70200 mixed_chat 0.406325** (32 draws). Timing measured first rather than guessed: a 2-iteration
+pass costs 65 s wall including the model load, so the four numbers cost ~40 min, not the hours a
+step-time extrapolation would have implied.
+
+Contrastive corpus shipped to cardinal ahead of the launch: `recall_contrast4k_{train,val}.bin`
+(md5 verified both ends) plus the `--untold-share` builder.
+
+Two defects found by reading the run's own record, both fixed with tests and deployed to cardinal
+before the next launch. (1) `save.RUN_ARG_KEYS` - the allowlist that stamps a resumed run's args
+over its fork source's - held the corpus, schedule, optimization shape, cadence and memory regime
+but NONE of the levers the working-memory program turns, so exp_wm_0905's config.json still reads
+`state_carry: "off"` (its August ancestor's value) for a run whose log says `chunks`, and carries
+no `freeze_blocks` or `align_stride` at all. Added those seven keys; tests in
+test_config_provenance.py. (2) The trainer never logged where its windows opened, so a finished
+alignment experiment left no evidence of the one thing it changed - the run header now prints
+`window align: stride N B | user turn | none` (test_window_align.py). Consequence recorded in the
+lab entry and as a caveat on the failures.md rung-1b entry: whether rung 1b actually ran with
+`--align_stride 4096` cannot be established from any artifact on the box.
+
+Frontend, same sitting: the Training tab's image run live view left index.js for
+`veritate_mri/web/image_live.js` + `.css` (`window.ImageLive`, 239 lines out; index.js 18,671 ->
+18,432), the caller keeping only the decision of which run is live and passing five callbacks in.
+index.js now touches ImageMri through `create()` alone. Headless-Chrome smoke against the live
+dashboard: module and stylesheet load, host present, `_imgLiveTick()` runs, no console errors across
+five tabs. Suite 2071 passed / 12 skipped / 8 xfailed, ruff clean.
+
+2026-09-09 10:00-10:25 — the owed yardstick, and what it says. All four 32-draw numbers on
+exp_wm_0905: mixed_chat (half the training mix) 0.40632517 -> 0.40632701, veritate_chat (not in the
+mix at all) 0.94568636 -> 0.97029605. So the rung 1b run bought +0.00005% where it was training and
+cost 2.60% where it was not, while its own 4-draw val rows reported a 10.7% improvement throughout.
+Before treating that as a result it was checked as a possible instrument failure: the two
+checkpoints differ in 145 of 293 tensors (every one from blocks.14 up, which is what freeze 14
+implies), the model val_eval builds has 28 blocks and loads both with 0 missing and 0 unexpected
+tensors, and scoring them at 2 draws separates them (0.43927145 vs 0.43939391). The instrument
+reads the weights; the effect is real, tiny, and averages down with more draws. Recorded in
+failures.md, the lab entry, and as IDEA 25 (a witness corpus outside the mix, scored during the run
+instead of discovered after it).
+
+Pre-flight on the bytes before committing hours of training: all three 4k recall corpora on cardinal
+are exactly 3,891,200 B, an exact multiple of the 4096 stride, and 950 of 950 stride-aligned windows
+open on `<|im_start|>user` and end on a newline. So with --align_stride 4096 a window really is one
+whole conversation. mixed_chat is unaligned (99 of 53,296), as intended.
+
+Queued next on the box, in order: the carry-chunks repeat of the mixed_chat yardstick (running, it
+separates sample size from regime as the cause of the contradiction above), the profile arm of
+lab/2026-09-08-cpu-step-time-levers.md, deleting 70250-70400, then the contrastive launch.
+
+2026-09-09 10:45-11:00 — the contradiction was a platform defect, not an experiment result. The
+carry-chunks repeat came back 0.39638374 at 70200 and 0.39655164 at 70400 (+0.042%), so the regime
+was not the explanation either. The decisive step was reproducing the trainer's OWN sampling: 4
+draws at batch 7 gives **0.42795906960964203** at 70200 against the run's logged starting row
+0.427959 — every digit — while the same sampling at 70400 gives 0.428165 against the 0.382096 the
+run logged there. The weights are not the difference, the windows are.
+
+`make_data_loader` closes over one RandomState and the generator advances with every draw, so the
+starting-weights pass consumed draws 1-4, the pass at 70250 draws 5-8, and the one at 70400 draws
+17-20. Every val row in every run scored a different sample. On this corpus the spread between
+samples is 12%, which is how a run whose true effect was +0.04% reported a 10.7% improvement, and it
+is the same defect as the "unexplained 12% discrepancy" recorded on 2026-09-05 from the other side.
+Every stop rule, sleep publish gate and ledger number read off a within-run val curve inherits it;
+the 32-draw val_eval protocol never did, because it builds a fresh loader per checkpoint.
+
+Fixed in one line with the reason next to it: `evaluate()` re-seeds the loader before each pass
+(`draw.reset`, added to make_data_loader; loaders without the hook, meaning the image record loader,
+draw as before). Four tests pin it including the one that would have caught it — two evaluations of
+unchanged weights must agree. documentation.md updated under the sleep yardstick, failures.md entry
+written, lab entry closed out. Deployed to cardinal, md5 matched, and the reset verified on the box
+against the real val bin. Suite 2210 passed, ruff clean.
+
+Also this stretch: behaviour tests for the dashboard's javascript (node evaluates a module behind a
+stub window, pytest asserts on the values, no framework and no dependency), which immediately caught
+a defect in the train.csv parser extracted this morning — a resumed model's file keeps the previous
+run's rows ahead of the new ones, and filtering val rows by "at or after the first train step" kept
+the OLD run's val rows (higher step numbers) while dropping the new run's starting-weights row. Both
+fixed by truncating the ordered stream at the last step decrease. And the python slug rule was made
+ASCII-only to match the dashboard's: `str.isalnum` is true for 'e' and for a CJK character, so a
+name with an accent composed one directory name in the form and a different one in the trainer; a
+cross-language test now runs both over the same inputs and compares.
+
+2026-09-09 11:00-11:25 — the speed question, answered with numbers instead of a hunch. Profiled the
+200M shape cardinal actually trains (270M params, freeze 15, activation checkpointing on, batch 7 x
+1024 x 4, 8 threads): step 41.65 s, and **66.7% of it is `aten::mm`** already inside oneDNN, with
+attention 10.8%, the recurrent scan's pointwise chain ~12%, and the optimizer under 1% (it does not
+reach the top 22 rows). Both pre-committed falsifiers fired: the scan is under the 15% line so the
+torch.compile arm does not run, and the optimizer is nowhere near 20% so the paged optimizer is not
+the lever. Both pre-registered levers were aimed at the 13% that is not matmul.
+
+Then the arithmetic, which I got wrong first and corrected in place. The entry's own
+`2 x params x tokens` estimate gives 38.61 TFLOP/step, implying 0.927 TFLOPS — above this chip's
+theoretical fp32 peak of 0.512 TFLOPS, so the estimate was wrong, not the box: it assumes every
+parameter does a MAC per token, and a frozen lower half is neither recomputed nor backpropagated.
+Measured exactly instead with FlopCounterMode: **13.196 TFLOP/step**. Box ceiling measured on an
+IDLE machine: **418.3 GFLOP/s** (a first reading of 147.6 was taken while the sweep was running and
+is contended). So the step runs at **311.7 GFLOP/s = 74.5% of the box's matmul ceiling**, and with
+every non-matmul op free and the matmuls at the ceiling it would be 31.5 s against 42.34 s measured
+— **1.34x is the entire software budget here, as an unreachable bound**. Cardinal is an 8-core 35 W
+2019 desktop part and the platform already uses about three quarters of it; real speedups come from
+doing less work or from different silicon. failures.md entry written.
+
+One free lever did come out of it. Thread sweep, same shape: **42.34 s at 8 threads, 46.03 at 7,
+50.78 at 6, 67.98 at 4**, monotone, 80% scaling across the 4->8 doubling. The sleep controller's
+`sleep_reserve_cores` (default 1) is what makes a run take 7 — correct while the box serves,
+**8.7%** when it does not, and rung 1b paid it on a box serving nothing because it was launched with
+the sleep modifiers. In successes.md, and documentation.md now carries the measured cost next to the
+setting. The contrastive launch carries neither modifier.
+
+Method note for the next session: two measurements were briefly run at once and the second was
+contended, so it was killed and re-run rather than reported. Same for the first CPU probe. On a
+single 8-core box, one measurement at a time.
+
+2026-09-09 11:28-11:55 — cleared the measured checkpoints and launched the contrastive entry.
+70250/70300/70350/70400 deleted with a liveness check in the same command once every number was
+written down (165 GB free, 70200 kept as the parent). The first launch planned a DIFFERENT memory
+tier than the arm it is compared against — `checkpoint+bf16_optimizer` with the optimizer paged to
+NVMe and the log itself warning "step time is disk-bound" — because the dashboard process had 6.7 GB
+resident from a model it had loaded days earlier, leaving a 14.5 GB budget against rung 1b's 19.8.
+Stopped it, unloaded through /backends/pytorch (which frees logically but not to the OS), restarted
+the dashboard, and relaunched: available 10 -> 21 GB and the plan came back identical to rung 1b's.
+A long-lived dashboard silently changes the tier a run gets.
+
+Running since 11:37 at **101 s/step against rung 1b's 110 s**, which is the 8.4% the thread sweep
+predicted for 8 cores against 7. Header now records what the run actually does, including
+`window align: stride 4096B`. ETA about 17:40 EDT.
+
+The starting-weights row is the day's diagnosis confirming itself. train.csv now holds three of
+them at step 70200: rung 1's and rung 1b's both read **0.427959** to six decimals, because a fresh
+process's first evaluation always consumes draws 1-4 and the drift only began at the second
+evaluation within a run — precisely the defect fixed today. This run's, at 16 draws instead of 4,
+reads **0.399066** against the 32-draw record of 0.396384: the estimate's error falls from 8.0% to
+0.7%, which is what makes the armed stop rule's baseline worth comparing against.
+
+2026-09-13 14:25-16:15 — picked the session back up four days on; the contrastive run had finished
+2026-09-09 18:01 on its own. 200 steps, median **99.10 s/step** at 289 tok/s against rung 1b's 110
+(9.8% faster, from 8 cores at normal priority instead of 7 at nice 10). Its own val curve, the first
+on this platform that can be read as a trend because every evaluation now scores the same windows:
+0.399066 start, 0.4067, 0.4013, 0.3995, **0.3998** — flat, +0.1% end to end, the lift-then-return
+shape the two-reading stop rule was written for. Against rung 1b's reported -10.7% on a moving
+sample for a run whose true effect was +0.04%, the fix is doing exactly what it was meant to.
+
+Probe on 70400, same six items and same 2,853 B filler as rung 1b so the two are comparable
+(lab/exp_wm2_raw.json): in-window 6/6, state-with-nothing-over-it 6/6, committed state **0/6**, leak
+0/6. **Falsifier failed**: D and E were to abstain >= 5/6 and read 0/6 and 1/6. Abstention did appear
+for the first time, 0 -> 3 of 18 empty-state answers, but indiscriminately — two of the three sit in
+the condition where the model HAS been told, and one answers "where was I born" with the `lives`
+abstention template, which is topic matching rather than a read.
+
+The value of the negative is that it spends an objection. Rung 1b blocked rung 2 on "no training
+window ever asks a question whose answer is you have not told me"; 35% of this run's data did, the
+run fit it (train loss 0.718 -> 0.142), and C is 0/6 for the third rung running. Put B 6/6 next to C
+0/6 and the bottleneck names itself: the state carries the fact perfectly until 2,853 bytes of
+unrelated conversation are written over it. That is retention under interference — the write rule,
+which is what rung 2's delta rule targets. Recorded in failures.md and the lab entry.
+
+Running now, and it costs inference only: the retention curve, same setup at 0 / 951 / 1,902 /
+2,853 bytes of filler. Pre-committed reading is in the lab entry — near zero already at 951 B means
+the state is not a memory at this size and rung 2 should be skipped for a mechanism with explicit
+capacity; gradual decay means the write rule is the lever and rung 2 runs. Measuring on the
+checkpoint that already exists rather than spending another six-hour run to find out.
+
+Also noted for the user: wren2 on mirach is at step 144,000 and still running, launched before
+today's validation fix, so its process holds the old code and ITS val curve has the moving-sample
+defect too. Not touched; restarting is the user's call.

@@ -12,6 +12,7 @@
 # Imports:
 
 import io
+import itertools
 
 import numpy as np
 import pytest
@@ -140,6 +141,65 @@ def test_the_trace_shows_the_picture_forming_pass_by_pass(rig):
     assert sum(e["committed"] for e in trace) == CODE_BYTES
     assert np.array_equal(trace[-1]["codes"], codes)
     assert all(e["confidence"] is None or 0.0 <= e["confidence"] <= 1.0 for e in trace)
+
+
+def test_formation_order_reads_the_pass_each_cell_was_decided_in():
+    """A position committed in pass k reads k; one never committed reads the last pass."""
+    trace = [{"pass": 1, "unknown": np.array([True, False, True, True])},
+             {"pass": 2, "unknown": np.array([True, False, False, True])},
+             {"pass": 3, "unknown": np.array([False, False, False, True])}]
+    assert image_sample.formation_order(trace, 4).tolist() == [3, 1, 2, 3]
+
+
+def test_the_trace_carries_each_cells_confidence_at_the_pass_it_was_committed(rig):
+    """cell_confidence is 0 while a position is unknown, its commit-time probability after, and it
+    never changes once set."""
+    model, _codec, _g = rig
+    trace = []
+    image_sample.fill(model, image_sample.build_window(SEQ, CODE_BYTES), SEQ - CODE_BYTES, passes=4, seed=3,
+                      device="cpu", trace=trace)
+    for e in trace:
+        c = e["cell_confidence"]
+        assert c.shape == (CODE_BYTES,)
+        assert (c[e["unknown"]] == 0).all() and (c[~e["unknown"]] > 0).all() and (c <= 1).all()
+    for a, b in itertools.pairwise(trace):
+        done = ~a["unknown"]
+        assert np.array_equal(a["cell_confidence"][done], b["cell_confidence"][done])
+
+
+def test_trace_frames_paint_undecided_cells_grey_and_end_with_the_picture(rig):
+    """One frame per pass; a cell still unknown is MASK_GREY; the last frame is the decoded result."""
+    model, codec, _g = rig
+    trace = []
+    codes = image_sample.fill(model, image_sample.build_window(SEQ, CODE_BYTES), SEQ - CODE_BYTES, passes=4,
+                              seed=3, device="cpu", trace=trace)
+    frames = image_sample.trace_frames(codec, trace, H, W)
+    assert len(frames) == len(trace)
+    gh, gw = H // PATCH, W // PATCH
+    for e, f in zip(trace, frames, strict=True):
+        assert f.shape == (H, W, 3)
+        for cell in np.flatnonzero(e["unknown"][:gh * gw]):
+            gy, gx = divmod(int(cell), gw)
+            assert (f[gy * PATCH:(gy + 1) * PATCH, gx * PATCH:(gx + 1) * PATCH] == image_sample.MASK_GREY).all()
+    assert np.array_equal(frames[-1], image_sample.decode_frame(codec, codes, H, W))
+
+
+def test_trace_report_is_what_a_viewer_shows_for_one_generation(rig):
+    """A PNG per pass with its commit count and confidence, the commit-pass map and the confidence
+    map over the plane-0 grid, the grid, and the codes used."""
+    model, codec, _g = rig
+    trace = []
+    image_sample.fill(model, image_sample.build_window(SEQ, CODE_BYTES), SEQ - CODE_BYTES, passes=4, seed=3,
+                      device="cpu", trace=trace)
+    r = image_sample.trace_report(codec, trace, H, W)
+    gh, gw = H // PATCH, W // PATCH
+    assert r["grid"] == [gh, gw]
+    assert len(r["passes"]) == len(trace)
+    assert all(Image.open(io.BytesIO(e["png"])).size == (W, H) for e in r["passes"])
+    assert [e["committed"] for e in r["passes"]] == [e["committed"] for e in trace]
+    assert len(r["commit_pass_map"]) == gh * gw and all(1 <= v <= len(trace) for v in r["commit_pass_map"])
+    assert len(r["confidence_map"]) == gh * gw and all(0 < v <= 1 for v in r["confidence_map"])
+    assert 1 <= r["codes_used"] <= CODE_BYTES
 
 
 def test_generate_codes_is_generate_before_the_decode(rig):

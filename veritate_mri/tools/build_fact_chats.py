@@ -33,8 +33,12 @@
 #   trainer's state carry on and a seq shorter than N the only path from fact to
 #   answer is the carried recurrent state: the loss then trains the state to hold
 #   the fact past the window (lab 2026-09-05-working-memory-program).
+# - --pad-to N pads every conversation with newlines to exactly N bytes (a conversation
+#   longer than N is dropped and counted), so a loader aligned to the stride N reads
+#   one whole conversation per window: the question is never drawn without the
+#   telling, which is what trained invented facts (lab 2026-09-05-working-memory-program).
 # - usage: python -m tools.build_fact_chats <facts.json> [--stem fact_chat]
-#          [--per-fact 20] [--seed 0] [--recall] [--gap-bytes N]
+#          [--per-fact 20] [--seed 0] [--recall] [--gap-bytes N] [--pad-to N]
 # veritate_mri/tools/build_fact_chats.py
 # ------------------------------------------------------------------------------------
 # Imports:
@@ -95,15 +99,24 @@ ANSWER_TEMPLATES = {
     "lives": ["{subj} lives in {obj}. You told me earlier.", "You said {subj} is in {obj} now."],
     "job":   ["{subj} works as {obj_art}. You mentioned it earlier.", "You said {subj} is {obj_art} now."],
 }
+# --untold-share: the same question asked in a conversation where the fact was never
+# told; the only right answer is to say so. Trains the read of "was it said" over the
+# guess of "what is usually said" (lab 2026-09-05-working-memory-program, rung 1b).
+ABSTAIN_TEMPLATES = {
+    "lives": ["You haven't told me where {subj} lives.", "You haven't said where {subj} lives."],
+    "job":   ["You haven't told me what {subj} does for work.", "You haven't said what {subj}'s job is."],
+}
 FIRST_PERSON = {
     "lives": {"tell": ["I live in {obj} these days.", "I've moved to {obj}."],
               "echo": ["{obj}. I'll remember that you live in {obj}.", "So you're in {obj} now. Noted."],
               "ask": ["Where do I live?", "Remind me, where did I say I live?"],
-              "answer": ["You live in {obj}. You told me a moment ago.", "You said you live in {obj}."]},
+              "answer": ["You live in {obj}. You told me a moment ago.", "You said you live in {obj}."],
+              "abstain": ["You haven't told me where you live.", "You haven't said where you live yet."]},
     "job":   {"tell": ["I work as {obj_art} now.", "I make my living as {obj_art}."],
               "echo": ["{obj_art_cap}. I'll remember that you work as {obj_art}.", "So you're {obj_art} now. Noted."],
               "ask": ["What do I do for work?", "Remind me, what did I say my job is?"],
-              "answer": ["You work as {obj_art}. You told me a moment ago.", "You said you work as {obj_art}."]},
+              "answer": ["You work as {obj_art}. You told me a moment ago.", "You said you work as {obj_art}."],
+              "abstain": ["You haven't told me what you do for work.", "You haven't said what your job is yet."]},
 }
 RECALL_REVERSE_SHARE = 3   # one recall question in this many is asked from the object side
 # longer small-talk turns for --gap-bytes: enough bytes between the telling and the
@@ -210,14 +223,18 @@ def _turn_bytes(u, a):
     return len(f"{IM_S}user\n{u}{IM_E}\n{IM_S}assistant\n{a}{IM_E}\n".encode())
 
 
-def render_recall_conversation(fact, rng, first_person, gap_bytes=0):
+def render_recall_conversation(fact, rng, first_person, gap_bytes=0, untold=False):
     """One conversation in which the fact is told, small talk follows, and the user asks
     for the fact back; the assistant answers from the conversation. gap_bytes pads the
-    small talk until the question sits at least that many bytes after the telling."""
+    small talk until the question sits at least that many bytes after the telling.
+    untold: the telling never happens (a distractor turn takes its place) and the
+    assistant answers the same question by saying so."""
     kind = fact.get("kind", "lives")
     kind = kind if kind in ASK_TEMPLATES else "lives"
     turns = [rng.choice(DISTRACTORS)]
-    if first_person:
+    if untold:
+        turns.append(rng.choice(DISTRACTORS))
+    elif first_person:
         fp = FIRST_PERSON[kind]
         turns.append((_fmt(rng.choice(fp["tell"]), fact), _fmt(rng.choice(fp["echo"]), fact)))
     else:
@@ -233,7 +250,11 @@ def render_recall_conversation(fact, rng, first_person, gap_bytes=0):
         f = fillers.pop()
         turns.append(f)
         gap += _turn_bytes(*f)
-    if not first_person and rng.randrange(RECALL_REVERSE_SHARE) == 0:
+    if untold:
+        ask = FIRST_PERSON[kind]["ask"] if first_person else ASK_TEMPLATES[kind]
+        answer = FIRST_PERSON[kind]["abstain"] if first_person else ABSTAIN_TEMPLATES[kind]
+        turns.append((_fmt(rng.choice(ask), fact), _fmt(rng.choice(answer), fact)))
+    elif not first_person and rng.randrange(RECALL_REVERSE_SHARE) == 0:
         q, a = REV_TEMPLATES[kind]
         turns.append((_fmt(q, fact), _fmt(a, fact)))
     elif first_person:
@@ -244,7 +265,8 @@ def render_recall_conversation(fact, rng, first_person, gap_bytes=0):
     return "".join(f"{IM_S}user\n{u}{IM_E}\n{IM_S}assistant\n{a}{IM_E}\n" for u, a in turns)
 
 
-def build(facts_path, stem="fact_chat", per_fact=20, seed=0, out_dir=None, recall=False, gap_bytes=0):
+def build(facts_path, stem="fact_chat", per_fact=20, seed=0, out_dir=None, recall=False, gap_bytes=0, pad_to=0,
+          untold_share=0.0):
     out_dir = out_dir or CORPUS_ROOT
     os.makedirs(out_dir, exist_ok=True)
     with open(facts_path) as f:
@@ -254,10 +276,17 @@ def build(facts_path, stem="fact_chat", per_fact=20, seed=0, out_dir=None, recal
     for fact in facts:
         for i in range(per_fact):
             if recall:
-                exchanges.append(render_recall_conversation(fact, rng, first_person=(i % 2 == 0), gap_bytes=gap_bytes))
+                exchanges.append(render_recall_conversation(fact, rng, first_person=(i % 2 == 0), gap_bytes=gap_bytes,
+                                                            untold=rng.random() < untold_share))
             else:
                 exchanges.append(render_conversation(fact, rng, reverse=(i % 3 == 2)))
     rng.shuffle(exchanges)
+    if pad_to:
+        kept = [ex + "\n" * (pad_to - len(ex.encode())) for ex in exchanges if len(ex.encode()) <= pad_to]
+        dropped = len(exchanges) - len(kept)
+        exchanges = kept
+        if dropped:
+            print(f"pad_to {pad_to}: dropped {dropped} conversations longer than the stride", flush=True)
     tp = os.path.join(out_dir, f"{stem}_train.bin")
     vp = os.path.join(out_dir, f"{stem}_val.bin")
     tb = vb = 0
@@ -285,9 +314,15 @@ def main():
                     help="in-context recall conversations: told, small talk, asked back, answered from context")
     ap.add_argument("--gap-bytes", type=int, default=0,
                     help="with --recall: small talk between the telling and the asking spans at least this many bytes")
+    ap.add_argument("--pad-to", type=int, default=0,
+                    help="pad every conversation to exactly this many bytes; pair with the trainer's align stride")
+    ap.add_argument("--untold-share", type=float, default=0.0,
+                    help="with --recall: this share of conversations ask the question without the telling and the "
+                         "assistant says it was never told")
     args = ap.parse_args()
     nf, ne, tb, vb = build(args.facts_json, stem=args.stem, per_fact=args.per_fact, seed=args.seed,
-                           recall=args.recall, gap_bytes=args.gap_bytes)
+                           recall=args.recall, gap_bytes=args.gap_bytes, pad_to=args.pad_to,
+                           untold_share=args.untold_share)
     print(f"{nf} facts -> {ne} conversations: {args.stem}_train.bin {tb}B / val {vb}B")
 
 

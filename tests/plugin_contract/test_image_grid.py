@@ -154,3 +154,16 @@ def test_a_scaled_backward_scales_the_gradient_and_not_the_reported_loss():
     g_half = torch.cat([p.grad.flatten() for p in model.parameters() if p.grad is not None])
     assert torch.allclose(half, full)
     assert torch.allclose(g_half, 0.5 * g_full, atol=1e-6)
+
+
+def test_the_val_loader_can_be_returned_to_its_first_records(corpus):
+    """Validation must score the same records under the same masks at every evaluation; the
+    generator advances with each draw, so evaluate() re-seeds it first (failures.md
+    2026-09-09, where a moving sample read 12% apart on unchanged weights)."""
+    draw, _n = image_grid.make_record_loader(corpus, SEQ, 2, CODE_BYTES, MASK_BYTE, seed=5)
+    first_tokens, first_targets = draw()
+    draw(), draw()
+    draw.reset()
+    again_tokens, again_targets = draw()
+    assert torch.equal(again_tokens, first_tokens)
+    assert torch.equal(again_targets, first_targets)

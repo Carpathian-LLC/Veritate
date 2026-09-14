@@ -9,6 +9,9 @@
 <meta charset="utf-8">
 <title>Veritate</title>
 <link rel="stylesheet" href="/static/index.css">
+<link rel="stylesheet" href="/static/image_mri.css">
+<link rel="stylesheet" href="/static/generation_images.css">
+<link rel="stylesheet" href="/static/image_live.css">
 <link rel="stylesheet" href="/static/tutorial.css">
 <link rel="stylesheet" href="/static/prune.css">
 <link rel="stylesheet" href="/static/rag_train.css">
@@ -92,41 +95,59 @@
 <!-- ============================ GENERATION TAB ============================ -->
 <div class="tab-body active" data-tab="generation">
 
-<details id="imgGenPanel" style="margin-bottom:14px;background:#0a0c12;border:1px solid var(--line);border-radius:4px">
-  <summary style="cursor:pointer;padding:8px 12px;font-weight:600;color:var(--text)">Images &mdash; generate from an image model <span id="imgGenCount" style="font-weight:400;color:var(--dim);font-size:11px"></span></summary>
-  <div style="padding:6px 12px 12px;display:flex;flex-direction:column;gap:8px;font-size:11.5px">
-    <div class="meta" style="color:var(--dim);line-height:1.5">One model, every mode. <b>Text to image</b>: describe it. <b>Variation</b>: your photo, partly regenerated. <b>Inpaint</b>: your photo, one region redrawn. <b>Expand</b>: your photo in the centre, the model paints the margin. Words steer only as far as the captions the model trained on.</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <label>model <select id="imgGenModel" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px;min-width:180px"><option value="">- no image models yet -</option></select></label>
-      <label>step <select id="imgGenStep" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"></select></label>
-      <label>mode <select id="imgGenMode" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
-        <option value="text">text to image</option>
-        <option value="variation">variation (image to image)</option>
-        <option value="inpaint">inpaint a region</option>
-        <option value="expand">expand (outpaint)</option>
-        <option value="unconditional">unconditional</option>
-      </select></label>
-    </div>
-    <textarea id="imgGenPrompt" rows="2" placeholder="describe the picture (used by every mode except unconditional)" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:4px 6px;font:inherit;border-radius:3px;resize:vertical"></textarea>
-    <div id="imgGenSourceRow" style="display:none;gap:8px;flex-wrap:wrap;align-items:center">
-      <label>source photo <input id="imgGenSource" type="file" accept="image/*" style="font:inherit"></label>
-      <label id="imgGenStrengthWrap">regenerate <input id="imgGenStrength" type="number" value="0.6" min="0" max="1" step="0.05" style="width:56px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"> of the cells</label>
-      <label id="imgGenExpandWrap">photo occupies <input id="imgGenExpand" type="number" value="0.6" min="0.1" max="1" step="0.05" style="width:56px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"> of the frame</label>
-      <span id="imgGenRectWrap">region (fractions) x0 <input id="imgGenX0" type="number" value="0.25" min="0" max="1" step="0.05" style="width:52px"> y0 <input id="imgGenY0" type="number" value="0.25" min="0" max="1" step="0.05" style="width:52px"> x1 <input id="imgGenX1" type="number" value="0.75" min="0" max="1" step="0.05" style="width:52px"> y1 <input id="imgGenY1" type="number" value="0.75" min="0" max="1" step="0.05" style="width:52px"></span>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <label>passes <input id="imgGenPasses" type="number" value="8" min="1" max="64" step="1" style="width:52px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"></label>
-      <label>temperature <input id="imgGenTemp" type="number" value="1.0" min="0" max="3" step="0.1" style="width:56px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"></label>
-      <label>seed <input id="imgGenSeed" type="number" value="0" step="1" style="width:72px;background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px"></label>
-      <button id="imgGenRun" type="button" style="background:var(--data-pos);color:#000;font-weight:600">generate</button>
-      <span id="imgGenStatus" class="meta" style="color:var(--dim)"></span>
-    </div>
-    <div id="imgGenOutWrap" style="display:none;gap:12px;align-items:flex-start;flex-wrap:wrap">
-      <img id="imgGenOut" alt="generated picture" style="max-width:100%;image-rendering:auto;border:1px solid var(--line);border-radius:3px">
-      <a id="imgGenSave" download="veritate.png" style="font-size:11px;color:var(--accent)">save PNG</a>
-    </div>
+<!-- what to generate: the text surface below (index.js) or the image layout (generation_images.js) -->
+<div class="gen-kind">
+  <span class="gen-kind-label">generate</span>
+  <div class="mode-seg" id="genKindRow">
+    <label title="Talk to a byte-level model: chat, agent, autocomplete, with the MRI of every byte it writes."><input type="radio" name="genKind" value="text" checked> text</label>
+    <label title="Draw with an image model: text to image, variation, inpaint, expand, with the MRI of every pass it takes."><input type="radio" name="genKind" value="images"> images</label>
   </div>
-</details>
+  <span id="genKindHint" class="meta"></span>
+</div>
+
+<div id="imgGenView">
+  <div class="panel">
+    <h2>draw <em>describe a picture; the model draws it at its training frame.</em></h2>
+    <div class="body">
+      <div class="gen-bar">
+        <label class="gen-model">model <select id="imgGenModel"><option value="">- no image models yet -</option></select></label>
+        <label>step <select id="imgGenStep"></select></label>
+        <label>mode <select id="imgGenMode">
+          <option value="text">text to image</option>
+          <option value="variation">variation (image to image)</option>
+          <option value="inpaint">inpaint a region</option>
+          <option value="expand">expand (outpaint)</option>
+          <option value="unconditional">unconditional</option>
+        </select></label>
+        <span id="imgGenCount" class="stat gen-chip"></span>
+      </div>
+      <div class="composer">
+        <textarea id="imgGenPrompt" rows="2" placeholder="describe the picture (every mode but unconditional)"></textarea>
+        <div id="imgGenSourceRow" class="composer-actions imgg-source">
+          <label>source photo <input id="imgGenSource" type="file" accept="image/*"></label>
+          <label id="imgGenStrengthWrap">regenerate <input id="imgGenStrength" type="number" value="0.6" min="0" max="1" step="0.05"> of the cells</label>
+          <label id="imgGenExpandWrap">photo occupies <input id="imgGenExpand" type="number" value="0.6" min="0.1" max="1" step="0.05"> of the frame</label>
+          <span id="imgGenRectWrap">region (fractions) x0 <input id="imgGenX0" type="number" value="0.25" min="0" max="1" step="0.05"> y0 <input id="imgGenY0" type="number" value="0.25" min="0" max="1" step="0.05"> x1 <input id="imgGenX1" type="number" value="0.75" min="0" max="1" step="0.05"> y1 <input id="imgGenY1" type="number" value="0.75" min="0" max="1" step="0.05"></span>
+        </div>
+        <div class="composer-actions">
+          <button id="imgGenRun" class="go">generate</button>
+          <span class="composer-sep"></span>
+          <label title="Forward passes. Each commits the cells the model is surest of; 4 should match one-byte-at-a-time decoding, more than 8 costs time for little.">passes <input id="imgGenPasses" type="number" value="8" min="1" max="64" step="1"></label>
+          <label title="0 is greedy; 1 samples as trained.">temperature <input id="imgGenTemp" type="number" value="1.0" min="0" max="3" step="0.1"></label>
+          <label title="The same seed replays the same picture.">seed <input id="imgGenSeed" type="number" value="0" step="1"></label>
+          <span id="imgGenStatus" class="composer-hint"></span>
+        </div>
+      </div>
+      <div id="imgGenOutWrap" class="imgg-out">
+        <img id="imgGenOut" alt="generated picture">
+        <div class="imgg-out-side"><div id="imgGenKpis" class="imri-kpis"></div><a id="imgGenSave" download="veritate.png">save PNG</a></div>
+      </div>
+    </div>
+    <p class="desc">One model, every mode. <b>Text to image</b>: describe it. <b>Variation</b>: your photo, partly regenerated. <b>Inpaint</b>: your photo, one region redrawn. <b>Expand</b>: your photo in the centre, the model paints the margin. <b>Unconditional</b>: no words. Words steer only as far as the captions the model trained on.</p>
+  </div>
+  <div id="imgGenTrace"></div>
+  <div id="imgGenMri"></div>
+</div>
 
   <div class="panel" style="margin-bottom: 10px;">
     <h2>prompt <em id="promptModeHint">ask the model a question. the conversation builds up above the box.</em></h2>
@@ -272,8 +293,6 @@
           <select id="genFastMode" style="background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:3px">
             <option value="off">off</option>
             <option value="kv">kv cache</option>
-            <option value="mtp">multi-byte head</option>
-            <option value="mtp-verify">verified multi-byte</option>
             <option value="adaptive">adaptive depth</option>
             <option value="stream">stream (carried state)</option>
           </select>
@@ -2805,6 +2824,9 @@
 </footer>
 
 <script src="/static/index.js"></script>
+<script src="/static/image_mri.js"></script>
+<script src="/static/generation_images.js"></script>
+<script src="/static/image_live.js"></script>
 <script src="/static/tutorial.js"></script>
 <script src="/static/prune.js"></script>
 <script src="/static/rag_train.js"></script>

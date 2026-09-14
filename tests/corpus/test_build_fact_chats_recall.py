@@ -76,6 +76,45 @@ def test_gap_bytes_pushes_the_question_past_the_window():
     assert len(set(far.split(IM_S))) == len(far.split(IM_S))
 
 
+def test_pad_to_makes_every_conversation_exactly_the_stride(tmp_path):
+    """pad_to pads each conversation with newlines to the stride and drops the ones that do not fit,
+    so an aligned loader reads one whole conversation per window."""
+    facts = tmp_path / "facts.json"
+    facts.write_text(json.dumps([FACT_LIVES, FACT_JOB]))
+    build(str(facts), stem="pd", per_fact=6, seed=0, out_dir=str(tmp_path), recall=True, gap_bytes=600, pad_to=1024)
+    body = (tmp_path / "pd_train.bin").read_bytes() + (tmp_path / "pd_val.bin").read_bytes()
+    assert len(body) % 1024 == 0 and len(body) > 0
+    for i in range(0, len(body), 1024):
+        rec = body[i:i + 1024]
+        assert rec.startswith(IM_S.encode())
+        assert rec.rstrip(b"\n").endswith(IM_E.encode())
+
+
+def test_an_untold_conversation_asks_the_same_question_and_says_it_was_never_told():
+    """untold: no telling turn, the object never appears, the assistant abstains in the same form the
+    told conversations answer in; the gap and the fillers are unchanged."""
+    for first_person in (True, False):
+        text = render_recall_conversation(FACT_JOB, random.Random(9), first_person, gap_bytes=600, untold=True)
+        turns = _turns(text)
+        assert "engraver" not in text and "don't know" not in text
+        assert turns[-1][0].endswith("?") and "haven't" in turns[-1][1]
+        assert ("Petra" in turns[-1][0]) != first_person
+        assert len(text.encode()) >= 600
+
+
+def test_untold_share_mixes_told_and_untold_conversations(tmp_path):
+    facts = tmp_path / "facts.json"
+    facts.write_text(json.dumps([FACT_LIVES, FACT_JOB]))
+    build(str(facts), stem="mx", per_fact=100, seed=0, out_dir=str(tmp_path), recall=True, untold_share=0.5)
+    body = (tmp_path / "mx_train.bin").read_bytes().decode() + (tmp_path / "mx_val.bin").read_bytes().decode()
+    convs = [c for c in body.split(IM_S + "user\nHi") if c]
+    untold = sum("haven't" in c for c in body.split(IM_S + "user\n") if c)
+    told = body.count("You told me") + body.count("You said") + body.count("you told me") + body.count("That's ")
+    assert 60 <= untold <= 140 and told >= 60 and len(convs) >= 1
+    build(str(facts), stem="all", per_fact=10, seed=0, out_dir=str(tmp_path), recall=True)
+    assert "haven't" not in (tmp_path / "all_train.bin").read_bytes().decode()
+
+
 def test_recall_flag_renders_recall_conversations_into_the_bins(tmp_path):
     """--recall swaps the renderer for the whole build; the default build is untouched."""
     facts = tmp_path / "facts.json"

@@ -30,7 +30,6 @@ import os
 DEFAULT_SEPARATOR = b"<|endoftext|>"
 DEFAULT_TRACE_KEY = "trace_bytes"
 SUPPORTED_KEYS    = ("trace_bytes", "bytes", "text", "trace_text")
-VALID_SPLITS      = ("train", "val", "test")
 DEFAULT_VAL_FRAC  = 0.02
 
 

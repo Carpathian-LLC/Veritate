@@ -587,8 +587,8 @@ def test_the_viewer_escapes_every_record_it_prints():
     """Records are teacher output: unescaped, one of them eventually closes a tag."""
     body = JS[JS.index("function _distViewCard"):]
     body = body[:body.index("\nfunction ")]
-    assert "_trEsc(t.text" in body and "_trEsc(t.role" in body
-    assert "_trEsc(r.text" in body and "_trEsc(r.id" in body
+    assert "esc(t.text" in body and "esc(t.role" in body
+    assert "esc(r.text" in body and "esc(r.id" in body
 
 
 def test_the_viewer_can_be_dismissed_three_ways():

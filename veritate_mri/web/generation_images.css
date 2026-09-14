@@ -1,0 +1,29 @@
+/* Developed by Carpathian, LLC. Distribution Not Authorized. */
+/* veritate_mri/web/generation_images.css: the Generation tab's image layout
+   (generation_images.js). `is-images` on the tab body swaps the text layout out. */
+
+.gen-kind { display:flex; align-items:center; gap:10px; margin:10px 0 0; }
+.gen-kind-label { font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); font-weight:600; }
+.gen-kind .meta { font-size:10.5px; color:var(--dim); }
+#imgGenView { display:none; flex-direction:column; gap:10px; margin-top:10px; }
+.tab-body[data-tab="generation"].is-images > :not(.gen-kind):not(#imgGenView) { display:none; }
+.tab-body[data-tab="generation"].is-images #imgGenView { display:flex; }
+
+#imgGenView .gen-bar label { display:inline-flex; align-items:center; gap:6px; margin:0; font-size:11px; color:var(--dim); }
+#imgGenView .gen-bar select, #imgGenView .composer input[type=number] { background:#0a0c12; border:1px solid var(--line); color:var(--text); padding:3px 6px; font:inherit; border-radius:3px; }
+#imgGenView .composer input[type=number] { width:60px; }
+#imgGenView .composer textarea { width:100%; box-sizing:border-box; background:transparent; border:0; color:var(--text); padding:2px 0; font:inherit; min-height:52px; resize:vertical; }
+#imgGenView .composer textarea:focus { outline:none; }
+#imgGenView .composer-actions label { display:inline-flex; align-items:center; gap:6px; margin:0; font-size:11px; color:var(--dim); }
+.imgg-source { display:none; }
+.imgg-source.on { display:flex; }
+.imgg-source .off { display:none; }
+.imgg-out { display:none; gap:16px; align-items:flex-start; flex-wrap:wrap; margin-top:12px; }
+.imgg-out.on { display:flex; }
+.imgg-out img { max-width:min(100%, 640px); border:1px solid var(--line); border-radius:3px; background:#0a0c12; }
+.imgg-out-side { display:flex; flex-direction:column; gap:10px; }
+.imgg-out-side a { font-size:11px; color:var(--accent); }
+.imgg-passes { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
+.imgg-passes figure { margin:0; flex:none; display:flex; flex-direction:column; gap:3px; align-items:center; }
+.imgg-passes img { width:128px; height:auto; border:1px solid var(--line); border-radius:3px; background:#0a0c12; }
+.imgg-passes figcaption { font-size:10px; color:var(--dim); }

@@ -234,14 +234,6 @@ def image_corpus_meta_path(stem):
     return os.path.join(CORPUS_ROOT, f"{stem}{IMAGE_CORPUS_META_SUFFIX}")
 
 
-def native_corpus_train_path(stem):
-    return os.path.join(NATIVE_CORPUS_ROOT, f"{stem}{CORPUS_TRAIN_SUFFIX}")
-
-
-def native_corpus_val_path(stem):
-    return os.path.join(NATIVE_CORPUS_ROOT, f"{stem}{CORPUS_VAL_SUFFIX}")
-
-
 def mix_profiles_path():
     return os.path.join(DATA_ROOT, MIX_PROFILES_NAME)
 

@@ -103,12 +103,20 @@ def resolve_and_weight(spec, resolver_fn):
     return out
 
 
-def make_mixed_loader(paths_with_weights, batch_size, seq, seed):
+def make_mixed_loader(paths_with_weights, batch_size, seq, seed, align=None):
     """Build a draw callable that returns (toks, tgts) torch int64 tensors of
     shape [batch_size, seq]. Each sample is independently drawn from one of N
     corpora with the supplied weights.
 
     paths_with_weights: list of (train_path, val_path_unused, weight)
+    align: None, a bytes marker, or an int stride. With a marker, a drawn window
+    slides forward to the first occurrence of it inside the window, so a chat window
+    opens on a turn boundary instead of mid-conversation. With a stride, a window
+    opens on a multiple of it, so a corpus whose records are padded to the stride is
+    read one whole record per window. A window that lands on a question whose answer
+    was told before the window began trains a guess; on a recall corpus that guess
+    becomes an invented fact (lab 2026-09-05-working-memory-program). Windows with no
+    marker in reach, and corpora without markers, draw as before.
     """
     if not paths_with_weights:
         raise ValueError("no corpora provided")
@@ -130,6 +138,12 @@ def make_mixed_loader(paths_with_weights, batch_size, seq, seed):
             i = int(which[b])
             arr = arrays[i]
             s = int(rng.randint(0, sizes[i] - seq - 1, dtype=np.int64))
+            if isinstance(align, int) and align > 0:
+                s -= s % align
+            elif align:
+                k = bytes(arr[s:s + seq]).find(align)
+                if k > 0 and s + k <= sizes[i] - seq - 1:
+                    s += k
             toks[b] = arr[s:s + seq]
             tgts[b] = arr[s + 1:s + 1 + seq]
         # CRITICAL: torch.tensor(np) copies, decoupling from the prefetcher's

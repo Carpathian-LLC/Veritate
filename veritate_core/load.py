@@ -12,8 +12,6 @@
 # ------------------------------------------------------------------------------------
 # Imports:
 
-import importlib.util
-import os
 
 # ------------------------------------------------------------------------------------
 # Constants
@@ -23,8 +21,6 @@ TOK_EMB_KEY     = "tok_emb.weight"
 MTP_PREFIX      = "mtp.transforms."
 BLOCK_PREFIX    = "blocks."
 DEFAULT_HEADS_DIVISOR = 64
-N_PREDICT_DEFAULT_800M = 4
-N_PREDICT_DEFAULT_85M  = 2
 ROPE_BASE_DEFAULT      = 10000.0
 TRUNK_DENSE      = "dense"
 TRUNK_RECURRENT  = "recurrent"
@@ -32,12 +28,7 @@ TRUNK_PATCHED    = "patched"
 TRUNK_HYBRID     = "hybrid"
 TRUNK_HYBRID_MOE = "hybrid_moe"
 TRUNK_LOOPED     = "looped"
-TRAINERS_SUBDIR = "trainers"
-TRAINER_800M_DIR = "veritate_800m"
-TRAINER_85M_DIR  = "veritate_85m"
-PLUGIN_MODULE_FILENAME = "trainer.py"
 
-_TRAINER_CLASS_CACHE = {}
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -67,23 +58,6 @@ def shape_from_state_dict(sd, cfg):
             break
     return {"vocab": vocab, "hidden": hidden, "layers": layers,
             "ffn": ffn, "heads": heads, "seq": seq}
-
-
-def _import_trainer_model(trainer_dirname, class_name):
-    key = (trainer_dirname, class_name)
-    cached = _TRAINER_CLASS_CACHE.get(key)
-    if cached is not None:
-        return cached
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.normpath(os.path.join(here, ".."))
-    plugin_path = os.path.join(repo_root, TRAINERS_SUBDIR, trainer_dirname, PLUGIN_MODULE_FILENAME)
-    mod_name = f"veritate_trainer_{trainer_dirname}"
-    spec = importlib.util.spec_from_file_location(mod_name, plugin_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    cls = getattr(mod, class_name)
-    _TRAINER_CLASS_CACHE[key] = cls
-    return cls
 
 
 def _load_variant_trunk(sd, cfg, trunk, shape):
@@ -142,37 +116,19 @@ def load_from_state_dict(sd, cfg, strict_canonical=True):
         raise RuntimeError(
             "state_dict has no tok_emb.weight; not a Veritate checkpoint."
         )
+    if any(k.startswith(MTP_PREFIX) for k in sd):
+        # user-data compat: checkpoints from the retired veritate_800m / veritate_85m
+        # trainers carry multi-byte heads; their model classes left with trainers/ on
+        # 2026-08-18. They still export (training/export.py, v12) and serve on the C engine.
+        raise RuntimeError(
+            "this checkpoint carries multi-byte prediction heads (mtp.transforms.*) from the "
+            "retired veritate_800m / veritate_85m trainers and cannot be loaded in PyTorch; "
+            "export it to a .bin and serve it on the C engine instead")
     shape = shape_from_state_dict(sd, cfg)
     trunk = str((cfg or {}).get("trunk") or TRUNK_DENSE)
     if trunk != TRUNK_DENSE:
         return _load_variant_trunk(sd, cfg, trunk, shape)
-    has_pos_emb = POS_EMB_KEY in sd
-    has_mtp = any(k.startswith(MTP_PREFIX) for k in sd)
-
-    if not has_pos_emb and has_mtp:
-        Veritate800M = _import_trainer_model(TRAINER_800M_DIR, "Veritate800M")
-        n_predict = int(cfg.get("n_predict") or N_PREDICT_DEFAULT_800M)
-        rope_base = float(cfg.get("rope_base") or ROPE_BASE_DEFAULT)
-        model = Veritate800M(
-            vocab=shape["vocab"], hidden=shape["hidden"], layers=shape["layers"],
-            ffn=shape["ffn"], heads=shape["heads"], seq=shape["seq"],
-            n_predict=n_predict, rope_base=rope_base,
-        )
-        model.load_state_dict(sd, strict=False)
-        return model
-
-    if has_pos_emb and has_mtp:
-        Veritate85M = _import_trainer_model(TRAINER_85M_DIR, "Veritate85M")
-        n_predict = int(cfg.get("n_predict") or N_PREDICT_DEFAULT_85M)
-        model = Veritate85M(
-            vocab=shape["vocab"], hidden=shape["hidden"], layers=shape["layers"],
-            ffn=shape["ffn"], heads=shape["heads"], seq=shape["seq"],
-            n_predict=n_predict,
-        )
-        model.load_state_dict(sd, strict=True)
-        return model
-
-    if not has_pos_emb and not has_mtp:
+    if POS_EMB_KEY not in sd:
         from veritate_core.model_rope import VeritateRoPE
         rope_base = float(cfg.get("rope_base") or ROPE_BASE_DEFAULT)
         model = VeritateRoPE(

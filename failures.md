@@ -167,6 +167,53 @@ base vs +aux val nll Δ+0.0004; ascii OOD nll 5.912→6.040. Small n, low confid
 Inductor `aten.convolution_backward` stride assertion (2026-07-13). ~33% win on dense only. Re-tested torch 2.12 on 2026-08-03: IDENTICAL crash, same op, same assertion. Still dead whole-model.
 Partial workaround measured (successes.md): compiling only `blk.ff` and the local-attention submodules, leaving the recurrent blocks eager, does not crash and buys **1.10x** at 593M. The conv is the only blocker, so a compile-safe short conv would unlock the rest.
 
+**Teaching abstention did not make the carried state readable either — the bottleneck is retention, not the objective (2026-09-13)**
+Contrastive entry: exp_wm_0905 70200 -> 70400, `recall_contrast4k:0.35` (47.7% of its conversations
+ask a question that was never answered and reply "You haven't told me ..."), rung 1b recipe
+otherwise, 200 steps, train loss 0.718 -> 0.142. Probe, same six items and same 2,853 B filler:
+in-window **6/6**, state-with-nothing-over-it **6/6**, committed state **0/6**, leak 0/6. Abstention
+did appear for the first time (0 -> 3 of 18 empty-state answers) but indiscriminately: **two of the
+three are in the condition where the model HAS been told**, and one answers a "where was I born"
+question with the `lives` abstention template. Kill-line: D and E abstain 0/6 and 1/6 against the
+pre-committed >= 5/6, and C is 0/6 for the third rung running. What it settles: rung 1b blocked rung
+2 on "no window ever asks a question whose answer is you have not told me"; 35% of this run's data
+did, and nothing changed, so that objection is spent. B 6/6 against C 0/6 says the state holds a
+fact perfectly until 2.8 KB of unrelated text is written over it — retention under interference,
+which is the write rule. Retry: measure the retention curve against filler length on the existing
+checkpoint (inference only) before any further training. lab 2026-09-05-working-memory-program.
+
+**Recall objective across the chunk seam does not make the GLA state hold a fact, even with whole-conversation windows (rung 1b, 2026-09-08)**
+exp_wm_0905@70200 -> 70400 (wren2 fork, freeze 14/28, AdamW 3e-5, 200 steps, `recall_far4k:0.35,recall_chat4k:0.15,mixed_chat:0.5`, `--align_stride 4096` so every window is one whole conversation with the telling in chunk 1 and the question in chunk 2, carry chunks, bptt 2). Five-condition probe: in-window **6/6**, pending buffer 6/6, committed state past the window **0/6**, leaks 0; the empty-state conditions still invent corpus-vocabulary values on 4/6 items. Kill-line: C 0/6 twice (rung 1 and 1b) with A 6/6, so the objective is fit by the answer distribution, not by reading the state; no window ever asks a question whose answer is "you have not told me". Retry: the contrastive corpus (untold questions with an abstention answer) pre-registered in lab 2026-09-05-working-memory-program before any write-rule change. **Checked 2026-09-09:** the run log confirms `state_carry chunks` and `freeze_blocks 14` but not the alignment; the live dashboard's `/trainers` state still holds the launch args and shows `align_stride: 4096`, so the run is as described. That record dies with the process and never reached config.json, now fixed (save.RUN_ARG_KEYS, the trainer's `window align:` header line).
+
+**A run's own val curve scored a different sample at every evaluation (2026-09-09)**
+`make_data_loader` returns a closure over one `RandomState`, so the generator advanced between
+validation passes and each val row measured different windows. Reproduced exactly: `val_eval` at the
+trainer's own sampling (4 draws x batch 7) reads **0.42795906960964203** at exp_wm_0905@70200,
+matching the run's logged starting row 0.427959 to every digit, while the same sampling at 70400
+reads 0.428165 against the 0.382096 the run logged there. Same weights, different windows, **12%
+apart**. Kill-line: two evaluations of unchanged weights must agree and did not. Every stop rule,
+sleep publish gate and ledger number read off a within-run val curve before this date inherits it.
+Fixed: `evaluate()` re-seeds the loader first (`draw.reset`), tests/training/test_val_sample_is_fixed.py.
+
+**A 200-step recall entry cost 2.6% of held-out chat and bought nothing on its own yardstick (2026-09-09)**
+exp_wm_0905 70200 -> 70400 (595M, freeze 14/28, `recall_far4k:0.35,recall_chat4k:0.15,mixed_chat:0.5`).
+32-draw val_eval: mixed_chat, half the mix, 0.40632517 -> 0.40632701 (**+0.00005%**, nothing);
+veritate_chat, not in the mix, 0.94568636 -> **0.97029605 (+2.60%)**. Kill-line: an entry that moves
+its in-mix yardstick by 5e-5 while costing 2.6% out of mix is paying for nothing. The run's own
+4-draw val rows read -10.7% throughout, so the trainer's rows cannot referee this. Retry: score both
+corpora at 32 draws before and after every entry; lab 2026-09-05-working-memory-program.
+
+**Software cannot make cardinal train much faster: the step is already at 74.5% of the box (2026-09-09)**
+Profiled at the 200M shape (270M params, freeze 15, act-ckpt on, batch 7 x 1024 x 4): **66.7% of the
+step is `aten::mm`** inside oneDNN, attention 10.8%, the recurrent scan's pointwise ops ~12%, the
+optimizer under 1%. Exact count 13.196 TFLOP/step (FlopCounterMode) at 42.34 s = **311.7 GFLOP/s**
+against a measured idle-box ceiling of **418.3 GFLOP/s** (82% of this chip's 512 GFLOP/s theoretical
+peak). Kill-line: with every non-matmul op free AND the matmuls at the ceiling the step would be
+31.5 s, so the whole software budget is **1.34x as an unreachable bound** against the 1.2x bar this
+entry set. torch.compile is dead here (the fusable ops are 12%), the paged optimizer is dead here
+(under 1%), and int8/bf16 have no hardware behind them on a chip with no AVX-512 and no AMX. Retry:
+only on a box with different silicon, or by doing less work. lab/2026-09-08-cpu-step-time-levers.md.
+
 ## training recipe kills
 
 **Late-phase recall-SFT at 25% dose collapses out-of-distribution recall (121M)**

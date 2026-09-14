@@ -35,7 +35,6 @@ torch = None
 F     = None
 
 FFN_BUCKET_TARGET = 256
-ATTN_TOP_POS      = 6
 NEXT_CANDIDATES   = 12
 NEURON_TOP_K      = 8
 MEMORY_TOP_N      = 5
@@ -57,17 +56,12 @@ REP_WINDOW_OFF      = 0
 REP_PENALTY_OFF     = 0.0
 NO_REPEAT_NGRAM_OFF = 0
 
-# Fast-decode modes exposed by stream_fast. MTP_MODES need a model that
-# supports multi-token-prediction decode.
+# Fast-decode modes exposed by stream_fast.
 FAST_MODE_KV         = "kv"
-FAST_MODE_MTP        = "mtp"
-FAST_MODE_MTP_VERIFY = "mtp-verify"
 FAST_MODE_ADAPTIVE   = "adaptive"
 FAST_MODE_LOOKAHEAD  = "lookahead"
 FAST_MODE_STREAM     = "stream"
-FAST_MTP_MODES   = (FAST_MODE_MTP, FAST_MODE_MTP_VERIFY)
-FAST_VALID_MODES = (FAST_MODE_KV, FAST_MODE_MTP, FAST_MODE_MTP_VERIFY,
-                    FAST_MODE_ADAPTIVE, FAST_MODE_LOOKAHEAD, FAST_MODE_STREAM)
+FAST_VALID_MODES = (FAST_MODE_KV, FAST_MODE_ADAPTIVE, FAST_MODE_LOOKAHEAD, FAST_MODE_STREAM)
 
 # prompt/n-gram lookahead decode: suffix-match length to trigger a draft, and the
 # max bytes drafted per step. A longer match keeps false drafts (novel text) rare;
@@ -785,11 +779,11 @@ class Brain:
     # ----------------------------------------------------------------------
     # Fast-decode path.
     #
-    # Skips the rich per-byte brain-scan telemetry so KV-cache or MTP-head
-    # decoding can run at their advertised speed. Emits {kind: "meta"} once
+    # Skips the rich per-byte brain-scan telemetry so KV-cache decoding can run at
+    # its advertised speed. Emits {kind: "meta"} once
     # and {kind: "fast_byte", byte, ms_per_byte, accepted_extra?} per byte.
     # The default stream() above is still the canonical path the dashboard
-    # uses; this is opt-in via /generate?fast=kv|mtp.
+    # uses; this is opt-in via /generate?fast=kv.
 
     def stream_fast(self, prompt, mode=FAST_MODE_KV, temperature=TEMPERATURE_DEFAULT,
                     top_k_sample=TOP_K_DEFAULT, max_new=MAX_NEW_DEFAULT, addons_chain=None,
@@ -820,11 +814,6 @@ class Brain:
                 for _b in prompt_bytes:
                     constraint.step(int(_b) & 0xff)
 
-        has_mtp = m.supports_mtp_decode()
-        if mode in FAST_MTP_MODES and not has_mtp:
-            yield {"kind": "error",
-                   "message": f"fast={mode} requires a model with multi-token-prediction decode support"}
-            return
         if mode == FAST_MODE_STREAM:
             if not getattr(m, "supports_streaming", lambda: False)():
                 yield {"kind": "error",
@@ -859,12 +848,6 @@ class Brain:
             yield from self._stream_fast_adaptive(prompt_bytes, temperature, top_k_sample,
                                                   max_new, addons_chain, constraint, rep,
                                                   threshold=adaptive_threshold)
-        elif mode == FAST_MODE_MTP:
-            yield from self._stream_fast_mtp(prompt_bytes, temperature, top_k_sample,
-                                             max_new, addons_chain, constraint, rep)
-        elif mode == FAST_MODE_MTP_VERIFY:
-            yield from self._stream_fast_mtp_verify(prompt_bytes, temperature, top_k_sample,
-                                                    max_new, addons_chain, constraint, rep)
         elif mode == FAST_MODE_LOOKAHEAD:
             yield from self._stream_fast_lookahead(prompt_bytes, temperature, top_k_sample,
                                                    max_new, addons_chain, constraint, rep)
@@ -1074,215 +1057,6 @@ class Brain:
             if state_path is not None:
                 self._save_stream_state(state_path, states, buf, total)
 
-    def _stream_fast_mtp(self, prompt_bytes, temperature, top_k_sample, max_new,
-                         addons_chain, constraint, rep=None):
-        from inference.decode import MTPDecoder
-
-        m = self.model
-        dec = MTPDecoder(m, k=int(getattr(m, "n_predict", 4)))
-        # MTPDecoder.decode runs to completion internally and returns text +
-        # stats. We re-implement the verify loop here so we can stream bytes
-        # and apply addons / constraints between heads.
-        device = next(m.parameters()).device
-        ctx = list(prompt_bytes)
-        produced = 0
-        K = dec.k
-        seq_max = m.seq
-        while produced < max_new:
-            window = ctx[-seq_max:]
-            toks = torch.tensor([window], dtype=torch.long, device=device)
-            t0 = time.perf_counter()
-            with torch.no_grad():
-                all_logits = dec._forward_all_heads(toks)  # [B, T, N, vocab]
-            last = all_logits[0, -1]  # [N, vocab]
-            # Apply addons + constraint to head-0 only (the verified-canonical
-            # byte). Heads 1..K-1 still run greedy from raw logits.
-            head0 = last[0]
-            nxt0 = self._sample_one(head0, temperature, top_k_sample, addons_chain, constraint, rep)
-            if nxt0 is None:
-                yield {"kind": "stop", "reason": "constraint allowed no bytes"}
-                return
-            ctx.append(nxt0)
-            produced += 1
-            if addons_chain is not None:
-                addons_chain.observe(nxt0)
-            if rep is not None:
-                rep.observe(nxt0)
-            if constraint is not None:
-                constraint.step(nxt0)
-            step_ms = (time.perf_counter() - t0) * 1000
-            yield {"kind": "fast_byte", "byte": int(nxt0), "ms_per_byte": round(step_ms, 2),
-                   "head": 0, "k": K}
-            if constraint is not None and constraint.done():
-                yield {"kind": "stop", "reason": "constraint complete"}
-                return
-            # Speculative bytes from heads 1..K-1 are accepted greedily when
-            # they read as valid utf-8 continuation candidates AND the
-            # constraint allows them. This is the "accept_all" branch; the
-            # full byte-exact verify path needs two forwards and lives in the
-            # MTPDecoder._decode_verify standalone for offline use.
-            extras = []
-            for hi in range(1, K):
-                if produced >= max_new:
-                    break
-                row = last[hi]
-                nxt = self._sample_one(row, temperature, top_k_sample, addons_chain, constraint, rep)
-                if nxt is None:
-                    break
-                ctx.append(nxt)
-                produced += 1
-                if addons_chain is not None:
-                    addons_chain.observe(nxt)
-                if rep is not None:
-                    rep.observe(nxt)
-                if constraint is not None:
-                    constraint.step(nxt)
-                extras.append(int(nxt))
-                yield {"kind": "fast_byte", "byte": int(nxt), "ms_per_byte": 0.0,
-                       "head": int(hi), "k": K}
-                if constraint is not None and constraint.done():
-                    yield {"kind": "stop", "reason": "constraint complete"}
-                    return
-
-    def _stream_fast_mtp_verify(self, prompt_bytes, temperature, top_k_sample, max_new,
-                                addons_chain, constraint, rep=None):
-        """Byte-exact MTP-verify (Medusa-style self-speculative). Each outer
-        step does TWO forwards:
-          Pass 1: forward at context. Draft K bytes from K heads at last pos.
-          Pass 2: forward at context ++ drafts[:K-1]. For i=1..K-1, check if
-                  the head-0 prediction at the corresponding position equals
-                  the draft[i]. Accept the longest matching prefix. On
-                  mismatch, append the head-0 byte (this is what head0-only
-                  decode would have produced).
-        Output is byte-exact to single-byte head-0 decode. Cost per step: 2
-        forwards. Gain: 1..K bytes per step. Break-even at K=2 accepted.
-
-        Addons + constraint apply to head-0 only (the verified-canonical
-        path). Heads 1..K-1 sample under the same logit pipeline so their
-        proposals are still constraint-aware: but the verifier rejects them
-        if they don't match head-0's argmax. Greedy verification (argmax)
-        is used for the head-0 reference to preserve byte-exactness.
-        """
-        from inference.decode import MTPDecoder
-
-        m = self.model
-        dec = MTPDecoder(m, k=int(getattr(m, "n_predict", 4)))
-        device = next(m.parameters()).device
-        ctx = list(prompt_bytes)
-        K = dec.k
-        seq_max = m.seq
-        produced = 0
-        n_proposed = 0
-        n_accepted_extra = 0
-
-        while produced < max_new:
-            # ---- pass 1: draft K bytes ------------------------------------
-            window = ctx[-seq_max:]
-            toks = torch.tensor([window], dtype=torch.long, device=device)
-            t0 = time.perf_counter()
-            with torch.no_grad():
-                p1_logits = dec._forward_all_heads(toks)  # [1, T, N, V]
-            last = p1_logits[0, -1]                        # [N, V]
-
-            # Sample head-0 under the addons+constraint pipeline. This is the
-            # only byte we COMMIT from pass 1 (the rest are speculative).
-            head0_logits = last[0]
-            nxt0 = self._sample_one(head0_logits, temperature, top_k_sample,
-                                    addons_chain, constraint, rep)
-            if nxt0 is None:
-                yield {"kind": "stop", "reason": "constraint allowed no bytes"}
-                return
-
-            # Draft the next K-1 bytes from heads 1..K-1, also under the
-            # constraint+addons pipeline. These are SPECULATIVE: they're
-            # only committed if pass-2 head-0 agrees.
-            drafts = [nxt0]
-            if K > 1:
-                # We need to NOT mutate the constraint while sampling drafts:
-                # those bytes might not be accepted. Snapshot + restore.
-                snap = _snapshot_constraint(constraint)
-                # Temporarily step constraint forward by nxt0 so subsequent
-                # sampling sees the right state.
-                if constraint is not None:
-                    constraint.step(nxt0)
-                try:
-                    for hi in range(1, K):
-                        row = last[hi]
-                        nxt = self._sample_one(row, temperature, top_k_sample,
-                                               addons_chain, constraint, rep)
-                        if nxt is None:
-                            break
-                        drafts.append(int(nxt))
-                        if constraint is not None:
-                            constraint.step(nxt)
-                finally:
-                    _restore_constraint(constraint, snap)
-
-            # ---- pass 2: verify drafts 1..K-1 -----------------------------
-            verify_preds = []
-            if len(drafts) > 1:
-                verify_window = (window + drafts[:-1])[-seq_max:]
-                v_toks = torch.tensor([verify_window], dtype=torch.long, device=device)
-                with torch.no_grad():
-                    p2_logits = dec._forward_all_heads(v_toks)
-                T_v = p2_logits.size(1)
-                # The verifier is GREEDY (argmax) over head-0 at positions
-                # corresponding to "byte AFTER observing draft d_0..d_{i-1}".
-                # That's the last len(drafts)-1 positions of pass-2.
-                for i in range(1, len(drafts)):
-                    pos = T_v - len(drafts) + i
-                    if pos < 0 or pos >= T_v:
-                        break
-                    ref = int(p2_logits[0, pos, 0].argmax().item())
-                    verify_preds.append(ref)
-
-            # ---- accept longest matching prefix ---------------------------
-            accepted = [drafts[0]]      # head-0 sample always accepted
-            mismatch_at = None
-            for i, vp in enumerate(verify_preds, start=1):
-                if i < len(drafts) and drafts[i] == vp:
-                    accepted.append(drafts[i])
-                else:
-                    mismatch_at = i
-                    # Append the head-0 reference at the mismatch (free byte:
-                    # we already computed it). This preserves byte-exactness.
-                    accepted.append(vp)
-                    break
-
-            # Track speculation stats. "extra" = bytes accepted beyond byte-0.
-            n_proposed += max(0, K - 1)
-            extra_now = 0
-            if mismatch_at is None:
-                extra_now = max(0, len(accepted) - 1)   # all drafts matched
-            else:
-                extra_now = max(0, mismatch_at - 1)     # matched up to mismatch
-            n_accepted_extra += extra_now
-
-            step_ms = (time.perf_counter() - t0) * 1000
-            ms_each = step_ms / max(1, len(accepted))
-
-            # ---- emit ------------------------------------------------------
-            for idx, b in enumerate(accepted):
-                if produced >= max_new:
-                    break
-                ctx.append(int(b))
-                produced += 1
-                if addons_chain is not None:
-                    addons_chain.observe(int(b))
-                if rep is not None:
-                    rep.observe(int(b))
-                if constraint is not None:
-                    constraint.step(int(b))
-                yield {
-                    "kind": "fast_byte", "byte": int(b),
-                    "ms_per_byte": round(ms_each, 2),
-                    "head": int(idx), "k": K,
-                    "accepted_extra_so_far": int(n_accepted_extra),
-                    "acceptance_rate": round(n_accepted_extra / max(1, n_proposed), 3),
-                }
-                if constraint is not None and constraint.done():
-                    yield {"kind": "stop", "reason": "constraint complete"}
-                    return
 
     def _stream_fast_lookahead(self, prompt_bytes, temperature, top_k_sample, max_new,
                                addons_chain, constraint, rep=None):
@@ -1481,43 +1255,3 @@ def _ngram_draft(ctx, ngram, max_draft):
         return []
     start = j + ngram
     return list(buf[start:start + max_draft])
-
-
-# ------------------------------------------------------------------------------------
-# Constraint snapshot helpers (used by stream_fast mtp-verify)
-#
-# Speculative decoding samples K candidate bytes per outer step. The constraint
-# must see them while sampling (so masks update correctly), but only the
-# ACCEPTED prefix should leave a permanent mark. Verifier-rejected bytes are
-# unwound via snapshot/restore on the constraint's __dict__. All shipped
-# constraint classes (JSON / Vocab / StopOn / Combine) store plain Python state.
-
-def _snapshot_constraint(c):
-    if c is None:
-        return None
-    snap = {}
-    for k, v in c.__dict__.items():
-        if isinstance(v, list):
-            snap[k] = list(v)
-        elif isinstance(v, dict):
-            snap[k] = dict(v)
-        elif isinstance(v, bytearray):
-            snap[k] = bytearray(v)
-        else:
-            snap[k] = v
-    return snap
-
-
-def _restore_constraint(c, snap):
-    if c is None or snap is None:
-        return
-    for k, v in snap.items():
-        cur = getattr(c, k, None)
-        if isinstance(cur, list):
-            cur.clear(); cur.extend(v)
-        elif isinstance(cur, dict):
-            cur.clear(); cur.update(v)
-        elif isinstance(cur, bytearray):
-            cur.clear(); cur.extend(v)
-        else:
-            setattr(c, k, v)

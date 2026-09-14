@@ -103,3 +103,42 @@ def test_repo_root_is_the_directory_that_holds_models():
     at veritate_mri/models/, which does not exist."""
     assert os.path.basename(val_eval.REPO) != "veritate_mri"
     assert val_eval.REPO == REPO
+
+
+def test_the_score_runs_in_the_regime_the_config_records(tmp_path, monkeypatch):
+    """A recurrent model trained and served with state carried across chunks scores
+    differently without it, so the probe must take the regime from the model's own
+    training_args rather than defaulting. Measured case: exp_wm_0905's config recorded its
+    August fork source's `state_carry: off` for a run whose log says `chunks`, so the
+    number of record was taken in a regime the model is never used in."""
+    seen = {}
+
+    class _Model:
+        def eval(self): return self
+
+    monkeypatch.setattr(val_eval, "load_config", lambda name: {
+        "shape": {"hidden": 8, "layers": 2, "ffn": 16, "heads": 2},
+        "training_args": {"seq": 32, "n_chunks": 2, "state_carry": "chunks",
+                          "bptt_window": 2, "seed": 3},
+    })
+    monkeypatch.setattr(val_eval, "build_model", lambda cfg, seq: _Model())
+
+    import types
+    trainer = types.ModuleType("training.veritate_trainer")
+    trainer.load_resume_state = lambda *a, **k: None
+    trainer.make_data_loader = lambda path, window, batch, seed: (lambda: None, 0)
+
+    def _evaluate(model, draw, iters, seq, amp, bptt_window, device_type="cpu",
+                  state_carry="off", **kw):
+        seen.update(state_carry=state_carry, bptt_window=bptt_window, seq=seq)
+        return 0.5
+
+    trainer.evaluate = _evaluate
+    import training
+    monkeypatch.setitem(sys.modules, "training.veritate_trainer", trainer)
+    monkeypatch.setattr(training, "veritate_trainer", trainer, raising=False)
+
+    bin_path = tmp_path / "mixed_chat_val.bin"
+    bin_path.write_bytes(b"x" * 64)
+    assert val_eval.score("m", 10, str(bin_path), iters=1, batch=1) == 0.5
+    assert seen == {"state_carry": "chunks", "bptt_window": 2, "seq": 32}

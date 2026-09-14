@@ -79,7 +79,6 @@ C_BUILD_POLL_SEC     = 0.5
 C_FFN_BUCKET_TARGET  = 256
 DLA_TOP_K_CAND       = 12
 DLA_TOP_K_LENS       = 3
-ATTN_TOP_K           = 6
 INFO_FLOW_TOP_K      = 8
 PROMPT_PREFIX_CAP    = 8192
 RAG_K_MAX            = 16
@@ -143,10 +142,6 @@ CHATML_STOP_MARKERS   = (CHATML_IM_END, CHATML_IM_START)
 # starting a turn it was not asked for.
 CHAT_STOP_MARKERS = tuple(m[:-1] for m in CHATML_STOP_MARKERS + PLATFORM_STOP_MARKERS)
 
-def _is_chatml_prompt(prompt):
-    if not isinstance(prompt, str):
-        return False
-    return "<|im_start|>" in prompt
 
 def _chat_stop_seq(prompt):
     """Turn-stop markers for a framed chat prompt; plain prompts stream to max_new."""
@@ -1261,9 +1256,9 @@ def register(app):
                 logmod.error("constrained", f"build failed: {type(e).__name__}: {e}")
                 return ({"error": user_error(e, "constrained")}, 400)
 
-        if fast_mode and fast_mode not in ("kv", "mtp", "mtp-verify", "adaptive", "stream"):
+        if fast_mode and fast_mode not in ("kv", "adaptive", "stream"):
             return ({"error": f"unknown fast mode: {fast_mode!r}. "
-                              "Allowed: kv, mtp, mtp-verify, adaptive, stream."}, 400)
+                              "Allowed: kv, adaptive, stream."}, 400)
 
         # Per-conversation persisted streaming state (IDEA 20 T2). The id names a
         # file under data/stream_states/; the prompt is then ONLY the new bytes —

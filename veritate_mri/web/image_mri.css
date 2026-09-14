@@ -1,0 +1,64 @@
+/* Developed by Carpathian, LLC. Distribution Not Authorized. */
+/* veritate_mri/web/image_mri.css: the image-model MRI (image_mri.js) and the figure
+   helpers it shares with the Training tab's live view and the Generation tab. */
+
+.imri { display:flex; flex-direction:column; gap:10px; }
+.imri .panel .body { display:flex; flex-direction:column; gap:10px; }
+.imri-head { display:flex; gap:14px; flex-wrap:wrap; align-items:center; font-size:11.5px; color:var(--dim); }
+.imri-head b { color:var(--text); }
+.imri-live { color:var(--warm); font-weight:600; }
+.imri-continue { margin-left:auto; background:#0a0c12; border:1px solid var(--accent); color:var(--accent); border-radius:4px; padding:5px 12px; cursor:pointer; font:inherit; font-size:12px; font-weight:600; }
+.imri h2 { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.imri-strip { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; }
+.imri-strip button { flex:none; background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:4px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:3px; }
+.imri-strip button.on { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+.imri-strip img { height:52px; width:auto; image-rendering:auto; display:block; }
+.imri-strip span { font-size:10px; color:var(--dim); }
+.imri-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:12px; }
+.imri-grid-3 { grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); }
+.imri-fig { display:flex; flex-direction:column; gap:5px; }
+.imri-fig img { max-width:100%; border:1px solid var(--line); border-radius:3px; background:#0a0c12; image-rendering:auto; }
+.imri-fig h4 { margin:0; font-size:11.5px; color:var(--text); font-weight:600; }
+.imri-fig .cols { display:flex; gap:0; font-size:10px; color:var(--dim); }
+.imri-fig .cols span { flex:1; text-align:center; }
+.imri-kpis { display:flex; gap:10px; flex-wrap:wrap; }
+.imri-kpi { background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:8px 12px; min-width:130px; }
+.imri-kpi .v { font-size:18px; font-weight:700; color:var(--text); }
+.imri-kpi .k { font-size:10.5px; color:var(--dim); }
+.imri-chart svg { width:100%; height:150px; display:block; background:#0a0c12; border:1px solid var(--line); border-radius:3px; }
+.imri-chart.small svg { height:120px; }
+.imri-legend { display:flex; gap:10px; flex-wrap:wrap; font-size:10.5px; color:var(--dim); }
+.imri-legend i { display:inline-block; width:10px; height:3px; vertical-align:middle; margin-right:4px; }
+.imri-scrub { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:11px; color:var(--dim); }
+.imri-scrub input[type=range] { flex:1 1 200px; min-width:120px; }
+.imri-scrub button { background:#0a0c12; border:1px solid var(--line); color:var(--text); border-radius:3px; padding:3px 9px; cursor:pointer; font:inherit; }
+.imri-scrub button.on { border-color:var(--accent); color:var(--accent); }
+.imri-film { display:flex; flex-direction:column; gap:6px; }
+.imri-film canvas { max-width:100%; border:1px solid var(--line); border-radius:3px; background:#0e1016; cursor:pointer; display:block; }
+.imri-film .pick { display:flex; gap:10px; align-items:center; font-size:11px; color:var(--dim); flex-wrap:wrap; }
+.imri-film select { background:#11141d; border:1px solid var(--line); color:var(--text); padding:2px 6px; font:inherit; border-radius:3px; }
+.imri-prompt { display:flex; flex-direction:column; gap:8px; }
+.imri-prompt textarea { width:100%; box-sizing:border-box; background:#11141d; border:1px solid var(--line); color:var(--text); padding:6px 8px; font:inherit; border-radius:3px; resize:vertical; }
+.imri-prompt .ctl { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:11px; color:var(--dim); }
+.imri-prompt .ctl input[type=number] { width:64px; background:#11141d; border:1px solid var(--line); color:var(--text); padding:3px 6px; font:inherit; border-radius:3px; }
+.imri-prompt .ctl button { background:#0a0c12; border:1px solid var(--line); color:var(--text); border-radius:3px; padding:4px 10px; cursor:pointer; font:inherit; }
+.imri-prompt .ctl button.primary { border-color:var(--accent); color:var(--accent); font-weight:600; }
+.imri-prompt .results { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
+.imri-prompt .res { flex:none; display:flex; flex-direction:column; gap:3px; align-items:center; background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:5px; }
+.imri-prompt .res.on { border-color:var(--accent); }
+.imri-prompt .res img { width:120px; height:120px; display:block; border-radius:2px; }
+.imri-prompt .res img.small { width:60px; height:60px; }
+.imri-prompt .res span { font-size:10px; color:var(--dim); }
+.imri-section { font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin:8px 0 -4px 2px; font-weight:700; }
+.imri-section span { text-transform:none; letter-spacing:0; font-weight:400; margin-left:8px; }
+.imri-heatwrap { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
+.imri-side { display:flex; flex-direction:column; gap:6px; flex:1 1 160px; min-width:140px; font-size:10.5px; color:var(--dim); }
+
+/* shared figure helpers: photo tiles at a fixed size, heat maps that never stretch, the
+   click-to-enlarge overlay */
+.imri-photo { display:block; max-width:100%; height:auto; border:1px solid var(--line); border-radius:3px; background:#0a0c12; cursor:zoom-in; image-rendering:auto; }
+.imri-heat { display:block; flex:none; }
+.imri-scale { display:inline-flex; align-items:center; gap:6px; font-size:10px; color:var(--dim); }
+.imri-scale i { display:inline-block; width:72px; height:8px; border-radius:2px; }
+.imri-lightbox { position:fixed; inset:0; background:rgba(0,0,0,.86); display:flex; align-items:center; justify-content:center; z-index:9999; cursor:zoom-out; }
+.imri-lightbox img { max-width:96vw; max-height:96vh; image-rendering:auto; border:1px solid var(--line); border-radius:4px; background:#0a0c12; }

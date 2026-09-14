@@ -28,8 +28,6 @@ STATUS_IDLE     = "idle"
 STATUS_BUILDING = "building"
 STATUS_OK       = "ok"
 STATUS_FAILED   = "failed"
-STATUS_SKIPPED  = "skipped"
-
 # Translation units every build script on every OS is required to compile: the
 # portable shim plus the kernels shared by build.bat and build.sh. Per-arch
 # kernel dirs outside this set are intentionally excluded from the parity check

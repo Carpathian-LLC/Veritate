@@ -78,3 +78,12 @@ def test_meta_reports_pytorch_model_with_fresh_caps(monkeypatch):
     r = _client(brain_model="chat_model").get("/meta").get_json()
     assert r["pytorch_model"] == "chat_model"
     assert r["pytorch_capabilities"] == caps
+
+
+def test_the_fast_modes_are_the_ones_a_current_model_can_serve():
+    """Multi-byte-head decode left with the retired trainers: the route refuses it up front and
+    the backend no longer lists it."""
+    from inference.backends import pytorch as pt
+    assert "mtp" not in pt.FAST_VALID_MODES and "mtp-verify" not in pt.FAST_VALID_MODES
+    r = _client(brain=object()).get("/generate?backend=pytorch&prompt=hi&fast=mtp")
+    assert r.status_code == 400 and "kv, adaptive, stream" in r.get_json()["error"]

@@ -86,11 +86,6 @@ def quantize_matmul(w):
     return q, scale_q24
 
 
-def quantize_activation(w):
-    arr = np.asarray(w, dtype=np.float32) * ACT_INT8_SCALE
-    return np.round(arr).clip(-INT8_MAX, INT8_MAX).astype(np.int8)
-
-
 # ------------------------------------------------------------------------------------
 # Ternary (BitNet b1.58) quantization + 5-trits-per-byte packing.
 # Mirrors veritate_core.qat.fake_quant_weight_ternary EXACTLY: per-tensor mean-abs

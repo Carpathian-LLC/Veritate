@@ -200,6 +200,11 @@ RESERVED_BOOL_FLAGS = {
     "use_act_ckpt":  False,
     "use_8bit_adam": False,
     "qat_enabled":   False,
+    # chat windows open on a user turn: a drawn window slides forward to the next
+    # <|im_start|>user. Off, a window can open on a question whose answer was told
+    # before the window began, and the loss trains a guess; on a recall corpus the
+    # guess became invented facts (lab 2026-09-05-working-memory-program).
+    "align_windows": False,
 }
 
 # Knobs the dashboard's Core Plugins section may inject regardless of whether
@@ -208,6 +213,9 @@ RESERVED_BOOL_FLAGS = {
 RESERVED_STR_FLAGS = {
     "activation": "gelu",
     "optimizer": "adamw",
+    # weight rounding QAT trains against: int8, int4 or ternary (qat.QUANT_MODES). Only
+    # read when qat_enabled; the export scheme must match it.
+    "quant_mode": qat_helpers.QUANT_MODE_INT8,
     "trunk": "dense",
     "slm_ref": "",
     "state_rule": "gla",
@@ -263,6 +271,10 @@ RESERVED_INT_FLAGS = {
     # input gradient. 0 trains everything. Measured on cardinal (2026-09-02, 200M
     # hybrid, 20 blocks, batch 7, AdamW): see documentation.md `freeze_blocks`.
     "freeze_blocks": 0,
+    # every training window opens on a multiple of this many bytes; pair it with a
+    # corpus whose records are padded to the same stride (build_fact_chats --pad-to)
+    # so a window is one whole conversation. 0 off. Wins over align_windows.
+    "align_stride": 0,
     # Bytes of encoded image at the end of each corpus record, reported by
     # build_image_corpus. Only read when objective=masked_grid, which uses it to find
     # the image inside a record; 0 elsewhere.
@@ -271,15 +283,17 @@ RESERVED_INT_FLAGS = {
 
 
 # Dashboard TRAINER_SCHEMA fields that reach argv but that this trainer may
-# legitimately not implement for a given configuration: the MoE router knobs and
-# quantization mode are rendered for every plugin regardless of trunk, and
-# `recipe` is uiOnly (it expands into other flags client-side). Everything not
-# listed here and not an accepted flag is an error — see parse_args.
+# legitimately not implement for a given configuration: the MoE router knobs are
+# rendered for every plugin regardless of trunk, and `recipe` is uiOnly (it expands
+# into other flags client-side). Everything not listed here and not an accepted flag
+# is an error — see parse_args.
 SCHEMA_IGNORED_FLAGS = frozenset({
     "recipe",
-    "quant_mode",
     "n_experts", "router_topk", "router_aux_loss", "router_aux_loss_coef",
-    "inject_layer", "mtp_aux_weight", "n_predict",
+    "inject_layer",
+    # user-data compat: data/trainer_tuning.json written before 2026-09-08 may still carry
+    # the multi-byte-head knobs of the retired veritate_800m / 85m trainers
+    "mtp_aux_weight", "n_predict",
     "freeze_base",
     # Consumed by the runner as an environment variable (VERITATE_MODEL_TYPE) and
     # stamped into config.json by save(); it reaches argv too, and the trainer has
@@ -353,8 +367,8 @@ def parse_args(manifest):
         else:
             ap.add_argument("--" + k, type=str,   default=str(v))
     # The dashboard renders the full TRAINER_SCHEMA for every plugin, so schema
-    # flags this trainer does not implement (quant_mode on a non-MoE trunk, the
-    # MoE router knobs) legitimately arrive on argv. Those are ignorable.
+    # flags this trainer does not implement (the MoE router knobs) legitimately
+    # arrive on argv. Those are ignorable.
     #
     # Anything ELSE on argv is a mistake — a typo, or a flag carried over from a
     # trainer that no longer exists — and silently dropping it changes training
@@ -618,6 +632,13 @@ def make_data_loader(bin_path, total_chunk_len, batch_size, seed):
             tgts[b] = arr[s + 1:s + 1 + total_chunk_len]
         return torch.from_numpy(toks), torch.from_numpy(tgts)
 
+    # The generator advances with every draw, so a loader used for validation scores
+    # DIFFERENT windows at every evaluation and its rows are not comparable to each other.
+    # Measured on exp_wm_0905 (2026-09-09): the same weights read 0.427959 on the first
+    # evaluation's windows and 0.382096 on the fifth's, 12% apart, which is what the run
+    # reported as a 10.7% improvement over 200 steps whose true effect was +0.04%.
+    # evaluate() calls this first so every validation scores the same windows.
+    draw.reset = lambda: rng.seed(seed)
     return draw, N
 
 
@@ -630,6 +651,7 @@ TRAINING_KIND_CHAT      = "chat"   # stamped on config.json so the serve path kn
                                    # this model expects ChatML framing, instead of
                                    # guessing and mismatching what it was trained on
 CHATML_DENSITY_SFT      = 0.20     # marker-bearing sample windows / windows read
+CHAT_USER_OPEN          = b"<|im_start|>user\n"   # where --align_windows opens a window
 CHATML_PROBE_WINDOWS    = 64
 CHATML_PROBE_WINDOW_LEN = 8192
 
@@ -854,6 +876,12 @@ def load_resume_state(model, name, step, device, require_complete=False):
 def evaluate(model, val_draw, n_iters, seq, amp_dtype, bptt_window, device_type="cuda",
              state_carry="off", objective="next_byte"):
     model.eval()
+    # Score the same windows every time: a val curve whose sample moves under it measures
+    # the sample, not the model. Loaders without a reset (the image record loader) draw as
+    # before.
+    reset = getattr(val_draw, "reset", None)
+    if reset is not None:
+        reset()
     losses = []
     for _ in range(n_iters):
         toks, tgts = val_draw()
@@ -871,6 +899,24 @@ def evaluate(model, val_draw, n_iters, seq, amp_dtype, bptt_window, device_type=
             losses.append(float(loss))
     model.train()
     return float(np.mean(losses)) if losses else None
+
+
+def window_align(args):
+    """What make_mixed_loader aligns windows to: a byte stride, the user-turn marker, or nothing."""
+    stride = int(getattr(args, "align_stride", 0) or 0)
+    if stride > 0:
+        return stride
+    return CHAT_USER_OPEN if getattr(args, "align_windows", False) else None
+
+
+def window_align_label(args):
+    """How the run header names the alignment. Where a window opens decides what the loss
+    can see, so it belongs in the log: without it a finished run leaves no evidence of the
+    one thing an alignment experiment changed."""
+    align = window_align(args)
+    if isinstance(align, int):
+        return "stride " + str(align) + "B"
+    return "user turn" if align else "none"
 
 
 def freeze_below(model, n_blocks):
@@ -1047,6 +1093,9 @@ def run(plugin_id, here):
         raise ValueError("unknown size: " + str(args.size) + " (valid: " + ", ".join(size_presets) + ")")
     if args.precision not in PRECISIONS:
         raise ValueError("unknown precision: " + str(args.precision))
+    if args.quant_mode not in qat_helpers.QUANT_MODES:
+        raise ValueError("unknown quant_mode: " + str(args.quant_mode)
+                         + " (valid: " + ", ".join(qat_helpers.QUANT_MODES) + ")")
     objective, image_codes = check_objective(args)
     if args.lr_schedule not in LR_SCHEDULES:
         raise ValueError("unknown lr_schedule: " + str(args.lr_schedule))
@@ -1194,6 +1243,7 @@ def run(plugin_id, here):
           f"  state_carry: {state_carry}", flush=True)
     if qat_enabled:
         qat_helpers.set_qat(veritate_model, True)
+        qat_helpers.set_quant_mode(veritate_model, args.quant_mode)
         print("QAT: enabled (fake-quant matmuls + embeddings + RMSNorm + residual adds)", flush=True)
 
     if _MEM_PAGING and mem_plan is not None and mem_plan.tier in mem_executor.CHECKPOINT_TIERS:
@@ -1284,12 +1334,14 @@ def run(plugin_id, here):
         print("objective: masked_grid  image_code_bytes: " + str(image_codes)
               + "  records: " + str(train_n), flush=True)
     else:
-        train_draw, train_n = multicorpus.make_mixed_loader(_corpus_mix, args.batch_size,
-                                                            total_chunk_len, args.seed)
+        train_draw, train_n = multicorpus.make_mixed_loader(
+            _corpus_mix, args.batch_size, total_chunk_len, args.seed,
+            align=window_align(args))
         if val_path:
             val_draw, _ = make_data_loader(val_path, total_chunk_len, args.batch_size, args.seed + 1)
     print("train corpus bytes: " + str(train_n) + "  per-step chunk: " + str(total_chunk_len)
-          + "  batch: " + str(args.batch_size), flush=True)
+          + "  batch: " + str(args.batch_size)
+          + "  window align: " + window_align_label(args), flush=True)
 
     if _MEM_PAGING:
         opt = build_optimizer(trainable_params(veritate_model), args, device, plan=mem_plan,

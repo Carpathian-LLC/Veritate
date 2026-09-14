@@ -1,5 +1,264 @@
 # handoff
 
+## LIVE STATE 2026-09-13 16:15 EDT - mirach - read this first
+
+**WREN2 PRETRAIN FINISHED 2026-09-12 17:09 EDT, cleanly, at the full 144,000 steps.** pid 83227 ran
+13d19h and exited on its own; LR landed exactly on `min_lr` 3e-5, final train loss 0.6390, final val
+0.670143, `step_144000.pt` (4.4 G) written 16:58 with no `.part` files and no crash reports. **Best
+val 0.652879 @ step 143,500**, against ~0.7253 mean at step 40,000 - about 1.047 -> 0.942 bits per
+byte. The WSD decay tail (began step 129,660, confirmed from the `lr` column, not the schedule) is
+where the run earned it: flat-LR mean ~0.713 vs decay-tail mean 0.6794 over 58 rows, with six
+successive new lows 0.6883 -> 0.6764 -> 0.6722 -> 0.6667 -> 0.6606 -> 0.6592 -> 0.6529, the last one
+only 500 steps from the end, so it was still improving at the buzzer. Zero skipped steps across the
+whole watch. 14 checkpoints kept: milestones 115k/120k/125k/130k/135k/140k plus the final eight
+through 144,000; 714 Gi free. Earlier milestones below 115k do not exist - the user mass-deleted ~74
+checkpoints on 2026-09-08 during a disk cleanup, confirmed intentional.
+
+**The GPU is now free** - the "no model loads, no evals, no launches while wren2 trains" constraint
+that governed this box for two weeks no longer applies. NOT started, and per the standing wren2
+directives these are the user's to authorise: sleep-native recipe (validated E4), then PTQ int8 ->
+parity gate -> cardinal.
+
+**Facts pipeline is still PAUSED at zero spend** since 2026-09-03 (`facts_pipeline/expire_at` = 0;
+real value in `.expire_at.paused_backup`; launchd still fires and exits at the gate before any API
+call). DB last at 39,151 claims / 32,948 verified. The dashboard started 2026-09-05 is still serving
+on port 8001 (pid 51056, `warm_models` empty).
+
+**Directive (user, 2026-09-08):** forget wren2; focus on cardinal and getting the tests done; make
+training faster and small models efficient so a model can converse; clean up and test every aspect
+of the codebase; the Generation tab's image generation is a selector that swaps the whole layout
+with its own MRI; consider splitting index.js into modules; no agents; todo-driven work under the
+hooks and skills. Enforced: `.claude/hooks/guard_agents.py` blocks Agent/Workflow; the user's code
+bar is the first rule of `veritate-code`.
+
+**Running / to re-arm:**
+- **CONTRASTIVE ENTRY FINISHED on cardinal 2026-09-09 18:01** (200 steps, 22,995 s wall, **median
+  step 99.10 s** at 289 tok/s against rung 1b's 110 s: **9.8% faster**, from 8 cores at normal
+  priority instead of the sleep controller's 7 at nice 10 — the thread arm predicted 8.4% and the
+  niceness is the rest). exp_wm_0905 70200 -> 70400, mix
+  `recall_contrast4k:0.35,recall_chat4k:0.15,mixed_chat:0.5`, freeze 14, carry chunks, bptt 2,
+  align_stride 4096, AdamW 3e-5, batch 7 x 4096, eval_iters 16, stop_on_val_rise 0.10 (never fired).
+  **Its own val curve, on a FIXED sample for the first time: 0.3991 start, 0.4067, 0.4013, 0.3995,
+  0.3998 — flat, +0.1% end to end.** Compare rung 1b, which reported -10.7% on a moving sample for a
+  run whose true effect was +0.04%: the fix is doing exactly what it was meant to.
+- **PROBE DONE 16:09 EDT, falsifier FAILED, and it moves the diagnosis.** exp_wm_0905@70400, same
+  six items and same 2,853 B filler as rung 1b (raw JSON `lab/exp_wm2_raw.json`): in-window
+  **6/6**, state-with-nothing-over-it **6/6**, committed state **0/6**, leak 0/6. Abstention
+  appeared for the first time (0 -> 3 of 18 empty-state answers) but indiscriminately: **two of the
+  three are in the condition where the model HAS been told**, and one answers "where was I born"
+  with the `lives` template. Pre-committed line was D and E abstaining >= 5/6; they read 0/6 and
+  1/6. What it settles: rung 1b blocked rung 2 on "no window ever asks a question whose answer is
+  you have not told me"; 35% of this run's data did, the run fit it (train loss 0.718 -> 0.142),
+  and C is still 0/6 for the third rung. **That objection is spent.** B 6/6 against C 0/6 says the
+  state holds the fact perfectly until 2.8 KB is written over it: the bottleneck is retention under
+  interference, i.e. the write rule, which is what rung 2 targets. failures.md + lab entry written.
+- **RUNNING NOW: the retention curve** (`/tmp/t1_retention.py exp_wm_0905 70400 1,2,3`, output
+  `/tmp/t1/retention.json`, log `/tmp/t1/retention.log`, started 16:14 EDT, about 80 min). Same
+  told-then-asked setup at 0 / 951 / 1,902 / 2,853 bytes of filler, six items, greedy. **Inference
+  only, no training.** Pre-committed reading: near zero already at 951 B means the state is not a
+  memory at this size and rung 2 should be skipped for a mechanism with explicit capacity; a gradual
+  decay across the lengths means the write rule is the lever and rung 2 runs.
+- Still owed on 70400 once the box is free: the 32-draw `val_eval` on BOTH mixed_chat and
+  veritate_chat, the second being the one that showed rung 1b's 2.6% out-of-mix damage. One
+  measurement at a time on 8 cores; two concurrent runs contend and both are wasted.
+- wren2 pretrain on this box (pid 86229, **step 144,000**, val 0.670143, 1,193,594 s wall):
+  untouched, out of scope by directive. **One caveat the user should know:** it was launched before
+  today's validation fix and its process holds the old code, so ITS val curve has the moving-sample
+  defect — each val row scored different windows, and on cardinal that spread measured 12%. wren2's
+  val numbers are therefore not readable as a trend either. Restarting it would pick up the fix and
+  cost a 13-day run's momentum; that is the user's call, not mine. A resume after any future stop
+  gets the fix for free.
+- Rung 1b probe on cardinal: DONE 2026-09-08. **A 6/6, B 6/6, C 0/6, D 0/6, E 0/6**, inventions on
+  4/6 items, with every training window a whole conversation (the stride is confirmed, see below).
+  Verdict unchanged: the invention is the corpus's answer distribution, so rung 2 does not run and
+  the contrastive entry is next. Corpus and builder are ON cardinal, md5-verified, and the launch
+  payload is built and pre-checked at `/tmp/t1/launch.json`.
+- Cardinal, 2026-09-09: raw probe JSON fetched to `lab/exp_wm1b_raw.json`. The owed 32-draw
+  yardstick is in for mixed_chat: **70200 0.40632517, 70400 0.40632701 (+0.00005%)** — the rung 1b
+  run moved the held-out chat loss by nothing, against the -10.7% its own 4-draw val rows claimed.
+  Verified not to be a broken measurement: the two checkpoints differ in 145 of 293 tensors, both
+  load with 0 missing / 0 unexpected, and 2-draw scoring separates them. **veritate_chat, which is
+  NOT in the mix, went 0.94568636 -> 0.97029605 (+2.60%)**: the run bought nothing on the corpus
+  that was half its own mix and cost 2.6% on the one that was not. Recorded in failures.md and the
+  lab entry; raw JSON in `lab/val32_{mixed_chat,veritate_chat}.json`. Every entry from here is
+  scored on BOTH corpora at 32 draws, before and after, because the trainer's own rows called this
+  run a 10.7% improvement.
+- **THE FINDING OF THE DAY, and it is a platform defect, now fixed and deployed.** A run's own
+  validation curve scored a DIFFERENT sample at every evaluation: `make_data_loader` closes over one
+  `RandomState` and the generator advances with every draw, so the starting-weights pass consumed
+  draws 1-4, the next pass 5-8, and so on. Reproduced exactly - `val_eval` at the trainer's own
+  sampling (4 draws x batch 7) reads 0.42795906960964203 at 70200 against the run's logged
+  0.427959, every digit - while the same sampling at 70400 reads 0.428165 against the 0.382096 the
+  run logged. Same weights, different windows, **12% apart**, which is what turned a +0.04% run into
+  a reported -10.7% improvement. `evaluate()` now re-seeds the loader before each pass
+  (`draw.reset`), so every evaluation of a run scores the same windows.
+  tests/training/test_val_sample_is_fixed.py, documentation.md under the sleep yardstick,
+  failures.md, lab entry. **Deployed to cardinal and verified on the box.** Every within-run val
+  curve written before today is void as a trend; the 32-draw `val_eval` protocol was always immune
+  because it builds a fresh loader per checkpoint, which is why the two disagreed.
+- **Queued behind it on cardinal** (`/tmp/t1/val32_carry.log`, waiter keyed on the veritate_chat
+  JSON): the same 32-draw mixed_chat eval with `state_carry chunks`, to separate sample size from
+  regime as the cause of that contradiction. Pre-registered with both outcomes in the lab entry.
+  exp_wm_0905's config.json was repaired first from its own run log (`state_carry` off -> chunks,
+  `freeze_blocks` 14 added; `align_stride` left absent because only the live dashboard's memory
+  records it). **First number: 70200 reads 0.39638374 with the carry on against 0.40632517 with it
+  off — carrying the state across the chunk seam is worth 2.4% on held-out chat**, so the model
+  really uses it and every number this program took with the carry off understated it.
+- **Speed, the profile arm (lab/2026-09-08-cpu-step-time-levers.md), 200M shape on cardinal:** step
+  41.65 s, and **66.7% of the step's CPU time is `aten::mm`**, already inside oneDNN. Attention
+  10.8%, the recurrent scan's pointwise ops ~12%, the optimizer **under 1%** (it does not reach the
+  top 22 rows). Both pre-committed falsifiers fire: the scan is under the 15% line so the
+  torch.compile arm does not run at this shape, and the optimizer is nowhere near 20% so the paged
+  optimizer is not the lever either. The levers this entry pre-registered aim at the 13%, not the
+  67%. Exact count 13.196 TFLOP/step (`FlopCounterMode`) at 42.34 s = **311.7 GFLOP/s**, against a
+  measured idle-box ceiling of **418.3 GFLOP/s** (82% of this chip's 512 GFLOP/s theoretical peak),
+  so the step is at **74.5%** of what the box can do on nothing but matmul. With every non-matmul op
+  free AND the matmuls at the ceiling the step would be 31.5 s: **1.34x is the whole software budget
+  on this box, as an unreachable bound**. An earlier note here quoted 0.927 TFLOPS from the entry's
+  `2 x params x tokens` estimate, which exceeds the chip's peak and was wrong; the correction is in
+  the lab entry rather than deleted, because that estimate drove the entry's predictions.
+- Thread arm, same shape: **42.34 s on 8 threads, 46.03 on 7, 50.78 on 6, 67.98 on 4** - so the sleep
+  controller's one reserved core costs 8.7% on a box that serves nothing, which is what rung 1b paid.
+  In successes.md and documentation.md. A confirmation pass (8 and 7 repeated, plus interop 1) is
+  running; the pre-registration asks for two runs per arm.
+- Then: delete 70250-70400 with a liveness check in the same command; launch the contrastive entry
+  (payload built and pre-checked at cardinal `/tmp/t1/launch.json`, corpus and builder deployed and
+  md5-verified, `eval_iters` raised 4 -> 16 as a declared deviation). The trainer on cardinal now
+  carries the fixed validation sample, so this run's own curve will be readable for the first time.
+- Cardinal clocks, verified 2026-09-09: `base_frequency` 2000000 with all eight cores at 2.0 GHz
+  under load, so the 800 MHz clamp lifted on 2026-08-24 (already in documentation.md) is still off.
+  Cardinal timings older than that date are stale by up to 2.5x; the post-clamp ones (rung 1's
+  111 s/step, rung 1b's 110 s/step) are current. **Untried lever:** `no_turbo` is still 1. Turbo is
+  65% of the p-state range, bounded by a 35 W long-term RAPL limit, and needs the user:
+  `echo 0 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo` (no passwordless sudo on the
+  box). Worth an A/B on one training step before any code change.
+- **Network (corrected 2026-09-09):** cardinal was never down. `~/.ssh/config` still points
+  `cardinal-01` at 192.168.0.43, an address the box has not held since the 2026-08-24 boot; its
+  wlo1 lease has been **192.168.2.43** throughout (NetworkManager journal). The 2026-09-08 "no route
+  since 08:10" note was a stale-config artifact: cardinal's sshd logged the monitor connecting every
+  4 minutes right through that window. Direct IPv4 to 192.168.2.43 also fails (EHOSTUNREACH) and so
+  does every other LAN host including the gateway - mirach can reach the internet but cannot open a
+  connection to the LAN, while cardinal reaches mirach fine. **Use the reverse tunnel:**
+  `ssh -p 2222 cardinal-01@127.0.0.1`, dashboard at `http://127.0.0.1:8011` (mirach pid 44424,
+  `ssh -N -L 2222:127.0.0.1:22 -L 8011:127.0.0.1:8001 cardinal-01@cardinal-01.local`, up since
+  2026-08-24). That process is the only path in; new connections over its own route no longer
+  establish, so if it dies the link must be rebuilt from cardinal's side.
+
+**index.js split: where it stands and what comes next.** Three view concerns are out
+(`image_mri.js`, `generation_images.js`, `image_live.js`, ~1,700 lines), and
+`tests/mri/test_web_modules.py` enforces the pattern. index.js is still 18,432 lines / 707
+functions. The remaining bulk is NOT more of the same job: those three were self-contained views
+reachable through one entry point, while what is left is namespaced by prefix and shares state and
+helpers across tabs - `_tr*` 74 functions (Training), `corpus*` 52, `_dist*`/`_iv*`/`_synth*`/
+`teacher*` 124 (Distillation), `render*` 44 and `draw*` 22 (shared drawing helpers used by several
+tabs). Under the current module rule (a module reads no index.js symbol) extracting a tab means a
+20-plus callback injection surface, which trades one problem for a worse one. **The order that
+actually works:** first lift the shared helpers (`_trEsc`, `$`, the fetch/JSON wrapper, the drawer
+functions) into one module the others may read - modules already read each other's exports, as
+image_live reads ImageMri - then a tab extraction needs only its own state and two or three
+callbacks. Distillation is the best first tab afterwards (124 functions, one tab, its own routes).
+Not started; recorded here so the next session does not begin with the hard one.
+
+**Shipped 2026-09-09 (all local, uncommitted; git is the user's):**
+- `save.RUN_ARG_KEYS` now stamps the levers that decide what a window contains and what gradient
+  crosses it (`state_carry`, `carry_grad_clip`, `align_stride`, `align_windows`, `freeze_blocks`,
+  `objective`, `val_bin`) into a resumed run's `config.json`; the trainer's run header prints
+  `window align: stride N B | user turn | none`. Both were missing, which is why exp_wm_0905's
+  config still reads its August ancestor's `state_carry: off` for a run whose log says `chunks`.
+  rung 1b's alignment WAS eventually confirmed - the live dashboard's `/trainers` state still holds
+  the launch args and shows `align_stride: 4096` - but that record lives in one process's memory
+  and dies with it, which is the point. Tests: test_config_provenance.py, test_window_align.py.
+  Deployed to cardinal before the next launch.
+- `veritate_mri/web/image_live.js` + `.css` (`window.ImageLive`): the Training tab's image run live
+  view out of index.js (239 lines; index.js 18,432). index.js keeps only the decision of which run
+  is live and passes five callbacks. Smoke-tested headless against the live dashboard.
+- index.js had **five** HTML-escape helpers (`_trEsc`, `escapeHtml`, `escapeTape` and two nested
+  `_esc` shadowing an outer one), 237 call sites between them. Now one `esc`, and it is the
+  strongest of the five: quotes are escaped too, so the 11 `value="${esc(...)}"` and `title=` sites
+  are safe against a model name or caption containing a quote, which they were not.
+- The dashboard's javascript now has BEHAVIOUR tests, not only structural ones:
+  `tests/mri/test_web_module_behavior.py` evaluates a module in node behind a stub window and
+  asserts on what its functions compute (no framework, no dependency, skips without node). It
+  immediately found a defect in the train.csv parser I extracted this morning: a resumed model's
+  file holds the previous run's rows ahead of the new ones, and val rows were filtered by "at or
+  after the first train step", which KEPT the old run's val rows (their step numbers are higher)
+  and DROPPED the new run's starting-weights row (logged at the resume step, before its first
+  train row, and the baseline an armed stop rule compares against). Both now correct: the ordered
+  stream is truncated at the last step decrease, which is where the current run begins.
+- More index.js reduction, all smoke-tested in a real browser: the duplicate byte formatter
+  (`_trFmtBytes` / `_corpusFmtBytes`, identical bodies) folded into one `fmtBytes`, and five
+  functions nothing called deleted (`_highestPassingTier`, `fmtMtime`, `gradeIndex`,
+  `highestPassingGrade`, `showRagEmpty`). index.js **18,375 lines**, down from 18,682 at the start
+  of the day. A third formatter (`_fmtBytes`, the HUD's) is deliberately left: it reports TB and
+  rounds differently, so folding it would change what the system panel shows.
+- Tests for every module that had none: the two research trunks (`model_moe`, `model_memory`) and
+  `model_pkm`, the base and skills corpus builders, the retention quiz, the smartness reprobe, the
+  perf-trace harness and the fuse CLI. **Every tool under `veritate_mri/tools/` now has a test.**
+  Three defects the new tests found and fixed: the retention quiz divided by zero on an empty fact
+  file (after loading the model), perf_trace crashed rendering a run that produced no frames, and
+  its report ended with a fixed "Conclusion" paragraph quoting numbers from the run it was written
+  for rather than the run it had just measured.
+- **Every python module under `veritate_core/` and `veritate_mri/` is now referenced by a test.**
+  The last five: the train.csv reader (the layer under every loss curve and every val row a stop
+  rule reads), sysprobe, the Triton QAT kernels (`qat_triton.py` cited a parity test at a path that
+  does not exist; the real one is `tests/core/test_qat_triton.py`, its bitwise cases skipping
+  without CUDA, and the header now says so), the slot-table inference addon, and the eval harness
+  end to end. `veritate_mri/eval/_smoke.py` was deleted: a hand-run script (rule 22) whose checks
+  are now `tests/mri/test_eval_smoke.py` and run in 0.6 s with the rest.
+  Suite **2196 passed** / 17 skipped / 8 xfailed.
+
+**Shipped 2026-09-08 (all local, uncommitted; git is the user's):**
+- Backend: `POST /images/generate` takes `trace: true` and returns the picture forming (per-pass PNG,
+  commit-pass map, per-cell confidence, codes used). `image_sample.fill` traces carry
+  `cell_confidence`; `trace_frames` / `trace_report` / `formation_order` / `grey_cells` /
+  `decode_frame` / `frame_png` live in image_sample and image_probe uses them (no duplicate).
+- Frontend: `veritate_mri/web/image_mri.js` + `.css` (the image-model MRI as `ImageMri.create(host)`,
+  830 lines out of index.js, index.js now 18,682 lines); `generation_images.js` + `.css` (the
+  `text | images` switch, `is-images` on the tab body swaps the layout; draw composer; the MRI of the
+  picture just drawn; the checkpoint MRI of the drawing model). `tests/mri/test_web_modules.py`.
+  Smoke-tested headless (scratchpad `smoke_dashboard.mjs`, DevTools protocol against port 8001).
+- Env: pillow installed into `.veritate_venv` (was declared, not installed; 8 test files failed at
+  collection). Suite: 1882 passed before the frontend work; rerun at session end (see worklog).
+- Docs: documentation.md frontend section (module rule, kind switch), image models generation
+  (trace contract), probe/Models tab (view lives in image_mri.js).
+- The Training tab's image live view styles moved from an injected <style> block into index.css
+  (smoke-tested headless across generation / models / training tabs).
+- Cleanup: 16 unreferenced functions deleted, including qat.py's unwired split-precision block
+  (155 lines; successes.md entry annotated). Defect fixed: the QAT `quant_mode` control
+  (int8/int4/ternary) was ignored by the trainer; now a validated reserved flag applied via
+  `qat.set_quant_mode` (tests/training/test_quant_mode.py, docs `### quant_mode`).
+
+- Tests (rule 31) for previously untested modules: routes lifecycle / logs / atlas / engine / sys /
+  pruning+export, training train_stream / paged_optimizer / oom_recovery, decode constraints
+  (JSON grammar), tools jsonl_to_bin, agent calculator, core_plugins, sync_common, slm,
+  models_sync, eval hellaswag / mmlu / run_eval, teacher test_connection, training atlas,
+  rag_sft pieces, the loader's retired-checkpoint rejection. Suite:
+  **2069 passed / 12 skipped / 8 xfailed** (1882 at session start). Defects the tests found and
+  fixed: PagedAdamW destructor on a refused construction; constraints.py monkey patch folded in;
+  calculator `9**9**9` stall (exponent capped) and the dead `ast.Num` branch.
+
+- Retired the multi-byte (MTP) decode path in Python/JS (loader refuses `mtp.transforms.*`
+  checkpoints with the export-and-C-engine path named; mtp_decode.py, the two backend stream
+  methods, the two fast-mode options and the two Training-tab knobs are gone; C engine untouched).
+  Suite after: **2020 passed**.
+
+**Next, in order:**
+1. When cardinal is reachable: fetch `/tmp/t1/exp_wm1b.json`; the owed 32-draw val_eval on
+   exp_wm_0905 70200 / 70400; delete 70250-70400 (liveness check in the same command); scp
+   `recall_contrast4k_*` + deploy the builder; launch the contrastive entry (lab
+   2026-09-05-working-memory-program, last section) from exp_wm_0905@70200; probe; count
+   abstentions per condition (scratchpad `count_abstain.py` did not survive the session; it is
+   ten lines over the probe JSON: hits and "haven't" per condition).
+2. Cardinal speed: lab/2026-09-08-cpu-step-time-levers.md (profile first; compile and thread
+   arms only if the profile justifies them).
+3. Untested modules left: corpus builders (build_base_corpus, build_curriculum_corpus,
+   build_skills_corpus, build_comprehension_probe), model-loading tools (e4_retention_quiz,
+   reprobe_smartness, perf_trace, _smoke), sysprobe (benchmarks), the research trunks
+   (model_memory / moe / pkm). Everything route-, training- and decode-side now has tests.
+4. Split index.js further, one tab per module (the frontend section of documentation.md
+   states the rule); the Training tab's image live view (`_imgLive*`) is the next extraction.
+5. ideas.md: swept (finished ideas 5, 6, 22, 23 already gone); nothing further to delete today.
+
 ## LIVE STATE 2026-09-05 - image training from the GUI - read this first
 
 **This box is `exponentallium` (Apple M2, 8 cores), NOT the M3 Ultra the 2026-09-03 block describes.**
@@ -496,6 +755,39 @@ parent = exp_recall_0903@70200 if A >= 5/6 else wren2@70000; fork as exp_wm_0905
 --model exp_wm_0905 --corpus recall_far:0.35,recall_chat:0.15,mixed_chat:0.5 --extra '{"freeze_blocks": 14,
 "state_carry": "chunks", "val_bin": "mixed_chat", "stop_on_val_rise": 0.10, "ckpt_every": 50, "eval_every": 50}' --go`;
 then the five-condition probe on its final step. Working-memory number = condition C (committed state).
+02:15 EDT: exp_recall_0903@70200 probe reads A = 5/5 through item 4 (parent's 3/6): the abstention was the blocker.
+Committed state still 0, and it now INVENTS values there ("Scorpion", "farrier", "contractor") instead of abstaining:
+hallucination pressure from ask-without-tell draws, pre-registered. Forked exp_wm_0905 from exp_recall_0903@70200;
+rung 1 launch chained behind the probe's exit (background shell), monitor + auto-probe at 70400 armed.
+02:30 EDT: RUNG 1 RUNNING (exp_wm_0905 70200->70400, freeze 14/28, carry chunks, bptt 2, far+near recall mix); starting
+row 0.427959 (parent's final row 0.383314 for the same weights: unexplained, 32-draw val is the number of record).
+SHIPPED: `--align_windows` (loader opens chat windows on <|im_start|>user; tests, docs, deployed as files). 1,572 tests
+pass, ruff clean. If the session dies: probe `python3 /tmp/t1_recall.py exp_wm_0905 70400 3 /tmp/t1/exp_wm.json`
+after the trainer exits; falsifier in lab/2026-09-05-working-memory-program.md (C >= 3/6 with D = E = 0).
+111 s/step: rung 1 ends ~08:30 EDT 09-05, probe result ~09:30 (monitor bc6ctqsvo reports items and RESULT).
+09:10 EDT: rung 1 done (rows -10.7%); probe items 0-1: A 1,0 (regressed), C 0,0 with inventions everywhere. RUNG 1b
+pre-registered in the lab entry: padded whole-conversation windows. SHIPPED `--align_stride N` (trainer + loader int
+stride, tests/training/test_window_align.py) and `build_fact_chats --pad-to N`; corpora recall_far4k / recall_chat4k
+(950 records x 4096 B each) built on cardinal; deployed. 1,578 tests pass. After the RESULT: delete exp_wm_0905's
+70250-70400 (liveness check), then `launch_arm.py 3e-5 70400 --model exp_wm_0905 --corpus
+recall_far4k:0.35,recall_chat4k:0.15,mixed_chat:0.5 --extra '{"freeze_blocks": 14, "state_carry": "chunks",
+"align_stride": 4096, "val_bin": "mixed_chat", "stop_on_val_rise": 0.10, "ckpt_every": 50, "eval_every": 50}' --go`.
+09:50 EDT: rung 1 RESULT A 5/6 B 5/6 C 0/6 D 0 E 0, inventions in 9/18 empty-state readings (E4 vocabulary): VOID as a
+state reading (recorded). 70250-70400 deleted. First 1b launch FAILED at import: the deployed trainer now imports
+image_codec/image_grid (the other session's uncommitted plugin modules) which cardinal lacked; deployed
+veritate_core/plugin/{__init__,image_codec,image_grid,image_decode}.py and relaunched.
+Second launch died in the planner (need 11.1 GB, budget 10.6: the dashboard process held 11.7 GB after the probe's
+PyTorch backend unloaded). Restarted the dashboard 09:49 EDT (pid 290031, port 8001), 21 GB free, RUNG 1b
+RUNNING since 09:49: exp_wm_0905 70200->70400, freeze 14, align_stride 4096, recall_far4k:0.35,recall_chat4k:0.15,
+mixed_chat:0.5, carry chunks, tier checkpoint_activations (no paging). Monitor b9j1dqmj0 + auto-probe into
+/tmp/t1/exp_wm1b.json. ETA run ~16:00, probe ~17:00 EDT. Lesson for the research skill: a probe through the dashboard's
+PyTorch backend leaves the process holding the model's memory after unload; restart the dashboard before a launch
+that needs the budget, or the planner refuses.
+2026-09-08 07:40 EDT (session resumed after a 2.5-day gap; the 1b monitor died with the old process): rung 1b FINISHED
+on 09-05 (rows 0.4280 -> 0.3990 -> 0.3939 -> 0.3854 -> 0.3828 at 70200..70400, -10.5%); its probe never ran. Probe launched
+07:38 on exp_wm_0905@70400 (results /tmp/t1/exp_wm1b.json, ~1 h). Falsifier unchanged: C >= 3/6 with D = E = 0 and
+A >= 5/6 = working memory exists as an objective problem; C 0/6 with A >= 5/6 and no inventions = rung 2 (delta rule).
+wren2 on mirach at step 112,000, untouched. Cardinal idle otherwise.
 **Open for the user**: (1) whether extract_facts should take facts from assistant turns (see the incident: a wrong closed-
 book answer became next night's drill); (2) which cardinal model to enroll for sleep, and the dose clamp (min/max steps);
 (3) git -- everything is uncommitted; (4) the E4 levers left in ideas.md (compact fact forms, fuse, replay share).

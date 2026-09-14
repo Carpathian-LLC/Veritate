@@ -202,13 +202,19 @@ def render_markdown(result, agg, exe, model, prompt):
     if len(result['trace']) > 1:
         steady_ms = sum(f['t_read_pipe_ms'] + f['t_parse_ms'] for f in result['trace'][1:]) / (len(result['trace']) - 1)
         lines.append(f"- harness steady-state per token (no prefill): {steady_ms:.2f} ms")
-    lines.append(f"- frame 0 prefill cost: {result['trace'][0]['t_read_pipe_ms']:.1f} ms (one-shot, amortized)")
-    lines.append("- engine kernel-side decode (per workbook): ~0.9 ms p50")
-    lines.append(f"- python-side overhead per token: read+parse = {agg['read']['p50'] + parse_p50:.2f} ms p50")
+    prefill_ms = result["trace"][0]["t_read_pipe_ms"]
+    python_ms  = agg["read"]["p50"] + parse_p50
+    lines.append(f"- frame 0 prefill cost: {prefill_ms:.1f} ms (one-shot, amortized)")
+    lines.append(f"- python-side overhead per token: read+parse = {python_ms:.2f} ms p50")
     lines.append("")
-    lines.append("Conclusion: the user's 4 ms/byte browser wall is mostly the **prefill on frame 0** smeared")
-    lines.append("across 16 tokens (41 ms / 16 = ~2.6 ms/token contribution). Steady-state per-token is ~1.6 ms.")
-    lines.append("Flask/SSE/WS/render sit on top of that but are NOT the dominant cost, pipe + numpy parse is.")
+    # Say what THIS run measured. A fixed conclusion here would outlive the numbers it was
+    # written from and be read as current.
+    per_token = result["total_wall_ms"] / max(1, result["token_count"])
+    share = 100.0 * prefill_ms / result["total_wall_ms"] if result["total_wall_ms"] else 0.0
+    lines.append(f"Conclusion: {per_token:.2f} ms per token over {result['token_count']} token(s), "
+                 f"of which the one-shot prefill on frame 0 is {share:.0f}% of the run's wall.")
+    lines.append(f"Python-side pipe read plus parse accounts for {python_ms:.2f} ms of each token; "
+                 "the rest is the engine.")
     lines.append("")
     return "\n".join(lines)
 
@@ -241,6 +247,9 @@ def main():
     print()
 
     result = run_trace(exe, model, args.prompt, args.temperature, args.top_k, args.max_new, args.warmup)
+    if not result["trace"]:
+        print("error: the engine produced no frames; nothing to time")
+        return 2
     agg = aggregate(result)
 
     md = render_markdown(result, agg, exe, model, args.prompt)

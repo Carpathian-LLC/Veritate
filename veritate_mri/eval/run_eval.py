@@ -29,8 +29,8 @@
 #   --verbose
 #
 # Checkpoint loading uses the same logic as veritate_mri/backends/pytorch.py::Brain so
-# any Veritate-family ckpt (canonical, RoPE 85M, 800M MTP) is supported. Inference is
-# pure single-byte forward; the MTP head (if present) is loaded but unused.
+# every checkpoint the loader accepts (canonical, RoPE-only, the research trunks) is
+# supported. Inference is pure single-byte forward.
 # veritate_mri/eval/run_eval.py
 # ------------------------------------------------------------------------------------
 # Imports:

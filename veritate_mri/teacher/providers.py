@@ -26,7 +26,6 @@ DEFAULT_MAX_CONCURRENCY = 16
 # conversation run on a 32-core / 275 GB box. The ceiling is now the user's
 # choice; CONCURRENCY_CHOICES is what the dashboard offers.
 LOCAL_MAX_CONCURRENCY = 256
-MAX_CONCURRENCY = 256
 CONCURRENCY_CHOICES = (2, 4, 8, 16, 32, 64, 128, 256)
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_MAX_TOKENS = 2048

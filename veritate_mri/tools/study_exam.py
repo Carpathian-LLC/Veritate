@@ -64,10 +64,6 @@ def ask(brain, q, max_new):
     return text.strip(), len(text)
 
 
-def ask_text(brain, q, max_new):
-    return ask(brain, q, max_new)[0]
-
-
 def prefix_share(reply, target):
     """Share of the target's opening the reply reproduces exactly. For code this is
     the signature, which is the part a partial memory should get first."""

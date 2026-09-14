@@ -20,8 +20,6 @@ from readers import hooks
 
 ATLAS_DEFAULT_TOP_K   = 24
 ATLAS_CIRCUIT_TOP_K   = 16
-ATLAS_LIFETIME_DTYPE  = "fp32"
-
 # ------------------------------------------------------------------------------------
 # Functions
 

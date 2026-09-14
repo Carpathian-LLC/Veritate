@@ -140,15 +140,6 @@ def read(name):
     return _normalize(block)
 
 
-def highest_trained(block):
-    """Return the highest tier in TIERS order that has status=trained, else None."""
-    for t in reversed(TIERS):
-        entry = block.get(t)
-        if isinstance(entry, dict) and entry.get("status") == STATUS_TRAINED:
-            return t
-    return None
-
-
 def modes_for_corpus(spec):
     """Resolve a corpus spec (single stem or multicorpus mix) to the capability
     tiers its catalog entries declare via trained_modes. Returns a tuple in TIERS

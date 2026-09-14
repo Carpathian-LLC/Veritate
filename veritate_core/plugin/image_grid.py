@@ -109,6 +109,11 @@ def make_record_loader(bin_path, seq, batch_size, code_bytes, mask_byte, seed, c
             tokens[b, where] = mask_byte
         return tokens, targets
 
+    # Same contract as the byte loader's: validation re-seeds before each pass so every
+    # evaluation scores the same records under the same masks. Without it the generator
+    # advances between passes and a val curve measures its own sample (failures.md
+    # 2026-09-09). Training never calls it.
+    draw.reset = lambda: rng.seed(seed)
     return draw, int(ends.size)
 
 

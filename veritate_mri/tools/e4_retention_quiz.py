@@ -59,6 +59,8 @@ def run(model, step, threads=4, device="auto", out_path=None):
     from inference.backends.pytorch import Brain
     with open(FACTS_PATH, encoding="utf-8") as f:
         facts = json.load(f)
+    if not facts:
+        raise ValueError("no facts to quiz on: " + FACTS_PATH)
     ck = os.path.join(REPO, "models", model, "checkpoints", f"step_{step}.pt")
     brain = Brain(ck, threads=threads)
     fwd = rev = 0

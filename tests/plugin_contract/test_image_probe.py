@@ -152,12 +152,6 @@ def test_the_probe_paints_hidden_cells_at_the_codecs_output_scale(rig):
     assert m["thumb"] == image_probe.THUMB and m["gap"] == image_probe.GAP
 
 
-def test_formation_order_reads_the_pass_each_cell_was_decided_in():
-    trace = [{"pass": 1, "unknown": np.array([True, False, True, True])},
-             {"pass": 2, "unknown": np.array([True, False, False, True])},
-             {"pass": 3, "unknown": np.array([False, False, False, False])}]
-    assert image_probe._formation_order(trace, 4).tolist() == [3, 1, 2, 3]
-
 
 def test_the_probe_stores_the_sample_codes_and_maps_the_tab_derives_churn_from(rig):
     import base64

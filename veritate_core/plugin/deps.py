@@ -56,12 +56,9 @@ TORCH_ROCM_INDEX      = "https://download.pytorch.org/whl/rocm6.2"
 # `privateuseone:0` device string that trainers do NOT currently target. We
 # detect the hardware and surface it in status_snapshot so a future trainer
 # refactor can enable it without more probe work.
-TORCH_DIRECTML_PKG    = "torch-directml"
 # Intel XPU: Arc/Battlemage discrete GPUs and integrated Xe. Requires
 # intel-extension-for-pytorch + a matching torch build. Like DirectML, current
 # trainers do not target `xpu`: detection only for now.
-TORCH_INTEL_XPU_PKG   = "intel-extension-for-pytorch"
-
 # GPU probe surface. Linux reads PCI vendor ids out of the DRM sysfs tree and
 # the driver device nodes; Windows reads the driver DLL and the WMI adapter
 # names. Same table is mirrored by veritate.py's launcher and

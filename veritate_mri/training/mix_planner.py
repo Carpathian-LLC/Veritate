@@ -40,8 +40,6 @@ SETTING_CHUNK_BYTES   = "corpus_compose_chunk_bytes"
 SETTING_VAL_RATIO     = "corpus_compose_val_ratio"
 SETTING_COMPOSE_SEED  = "corpus_compose_seed"
 
-HASH_READ_BYTES = 1 << 20
-
 PROFILES_KEY   = "profiles"
 PROFILE_TOPICS = "topics"
 PROFILE_SHARE  = "unlisted_topic_share"

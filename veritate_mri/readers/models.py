@@ -32,12 +32,16 @@ def is_valid_name(name):
 
 
 def slugify_user_name(text):
-    """Lowercase, strip diacritics-ish, collapse whitespace/dashes to '_',
-    keep only [a-z0-9_], collapse repeats, trim leading/trailing '_'."""
+    """Lowercase, collapse whitespace/dashes/dots to '_', keep only [a-z0-9_], collapse
+    repeats, trim leading/trailing '_'. ASCII only: `str.isalnum` is true for 'e' and for
+    '中', so it kept characters the dashboard's own slugify (index.js `_trSlugify`, a-z0-9
+    only) drops, and the composed name the Training form showed did not match the directory
+    this function then created. tests/mri/test_slugify_matches_the_dashboard.py pins the two
+    against each other."""
     s = (text or "").strip().lower()
     out = []
     for ch in s:
-        if ch.isalnum():
+        if ("a" <= ch <= "z") or ("0" <= ch <= "9"):
             out.append(ch)
         elif ch in (" ", "-", "_", "."):
             out.append("_")

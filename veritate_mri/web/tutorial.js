@@ -1,5 +1,5 @@
 /* Developed by Carpathian, LLC. Distribution Not Authorized. */
-/* veritate_mri/static/tutorial.js */
+/* veritate_mri/web/tutorial.js */
 
 // Data-driven walkthrough overlay. Spotlights a real target element (darkening
 // everything else), shows a tooltip card with back/next/skip. Self-contained:

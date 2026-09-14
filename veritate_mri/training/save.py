@@ -361,7 +361,15 @@ RUN_ARG_KEYS = ("resume", "corpus", "loss_mask", "base_lr", "min_lr", "lr_schedu
                 "ckpt_every", "log_every", "eval_every", "eval_iters",
                 # Memory regime: changes throughput and peak footprint, so a bench or
                 # a repeat launched off this config needs the values the run used.
-                "use_act_ckpt", "use_8bit_adam")
+                "use_act_ckpt", "use_8bit_adam",
+                # What a window contains and what gradient crosses it. Measured case:
+                # exp_wm_0905 trained with state_carry=chunks, freeze_blocks=14 and
+                # align_stride=4096, and its config recorded the August fork source's
+                # state_carry=off with the other three absent — the whole manipulation of
+                # the experiment was missing from the only record of it
+                # (lab/2026-09-05-working-memory-program.md).
+                "state_carry", "carry_grad_clip", "align_stride", "align_windows",
+                "freeze_blocks", "objective", "val_bin")
 
 
 def _sync_run_args(name, args):

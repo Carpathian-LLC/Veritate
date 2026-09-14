@@ -282,27 +282,3 @@ class FilterStats:
         }
 
 
-def filter_stream(docs, deduper=None, stats=None):
-    for doc in docs:
-        if stats is not None:
-            stats.total += 1
-        text = clean_document(doc)
-        if text is None:
-            if stats is not None:
-                stats.note_reject(REASON_TOO_SHORT)
-            continue
-        reason = quality_reject_reason(text)
-        if reason is not None:
-            if stats is not None:
-                stats.note_reject(reason)
-            continue
-        text = strip_pii(text)
-        if deduper is not None:
-            if deduper.is_duplicate(text):
-                if stats is not None:
-                    stats.duplicates += 1
-                continue
-            deduper.add(text)
-        if stats is not None:
-            stats.kept += 1
-        yield text

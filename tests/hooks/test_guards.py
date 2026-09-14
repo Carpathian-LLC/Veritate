@@ -224,9 +224,22 @@ def test_croncreate_with_no_prompt_is_still_refused():
     assert hook("guard_schedule.py", {"tool_name": "CronCreate", "tool_input": {}})[0] == BLOCK
 
 
+def test_subagents_and_workflows_are_refused():
+    """All work happens in the main session, off a todo list (user, 2026-09-08)."""
+    for tool in ("Agent", "Workflow"):
+        code, msg = hook("guard_agents.py", {"tool_name": tool, "tool_input": {"prompt": "x"}})
+        assert code == BLOCK, tool
+        assert "todo" in msg
+
+
+def test_agent_guard_ignores_other_tools():
+    """The guard keys on Agent and Workflow alone."""
+    assert hook("guard_agents.py", {"tool_name": "Bash", "tool_input": {"command": "ls"}})[0] == ALLOW
+
+
 def test_every_guard_fails_open_on_unparseable_input():
     """Malformed stdin must never block work in any guard."""
-    for name in ("guard_write.py", "guard_schedule.py", "frustration_to_rule.py", "persist.py"):
+    for name in ("guard_write.py", "guard_schedule.py", "guard_agents.py", "frustration_to_rule.py", "persist.py"):
         p = subprocess.run([sys.executable, os.path.join(HOOKS, name)],
                            input="not json", capture_output=True, text=True,
                            env={**os.environ, "CLAUDE_PROJECT_DIR": REPO_ROOT}, cwd=REPO_ROOT)

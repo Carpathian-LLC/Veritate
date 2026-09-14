@@ -74,11 +74,6 @@ def list_stems():
     return out
 
 
-def has_val(stem):
-    _, val = resolve_paths(stem)
-    return val is not None
-
-
 def resolve_paths(stem):
     plugin_id, leaf = _split_namespace(stem)
     if plugin_id is None:

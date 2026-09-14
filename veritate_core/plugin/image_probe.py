@@ -39,7 +39,6 @@
 # Imports:
 
 import base64
-import io
 import itertools
 import json
 import math
@@ -62,13 +61,10 @@ N_FILL          = 4
 FILL_RATIO      = 0.5
 RATIOS          = (0.25, 0.5, 0.75, 1.0)
 SAMPLE_PASSES   = 8
-EVAL_BATCHES    = 2
-EVAL_BATCH      = 8
 SEED            = 1234
 THUMB           = 320         # px per tile: the frame itself at the default size, so nothing is resampled
 GAP             = 4           # away; the tab shows tiles at 160 css px (crisp on a 2x display), full size on click
 BG              = (14, 16, 22)
-MASK_GREY       = (90, 90, 90)
 CALIBRATION_BINS = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0001)
 COMMIT_AGREEMENT = 0.9        # a layer whose picture matches the final one this much has decided
 NOVELTY_RECORDS  = 16384      # training pictures compared against, a fixed random sample
@@ -109,29 +105,6 @@ def _grid(tiles, cols):
     return out
 
 
-def _png_bytes(image):
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _decode(codec, codes_u8, h, w, planes=None):
-    codes = codec.from_bytes(bytes(np.asarray(codes_u8, dtype=np.uint8).tolist()), h, w)
-    return codec.decode(codes, planes=planes).cpu().numpy()
-
-
-def _formation_order(trace, code_bytes):
-    """The decode pass in which each code position was committed, from a fill() trace."""
-    order = np.zeros(code_bytes, dtype=np.int64)
-    still_unknown = np.ones(code_bytes, dtype=bool)
-    for entry in trace:
-        newly = still_unknown & ~np.asarray(entry["unknown"], dtype=bool)
-        order[newly] = int(entry["pass"])
-        still_unknown = np.asarray(entry["unknown"], dtype=bool).copy()
-    order[still_unknown] = int(trace[-1]["pass"]) if trace else 0
-    return order
-
-
 def _sharpness(frames):
     """Mean absolute Laplacian of the grey picture: how much fine detail it holds."""
     vals = []
@@ -163,17 +136,6 @@ def _grid_distances(gh, gw):
     ys, xs = np.mgrid[0:gh, 0:gw]
     pts = np.stack([ys.ravel(), xs.ravel()], axis=1).astype(np.float32)
     return torch.from_numpy(np.linalg.norm(pts[:, None, :] - pts[None, :, :], axis=-1))
-
-
-def _grey_cells(frame, cells, patch):
-    """Paint MASK_GREY over the cells (gh x gw bool, True = grey)."""
-    out = frame.copy()
-    gh, gw = cells.shape
-    for gy in range(gh):
-        for gx in range(gw):
-            if cells[gy, gx]:
-                out[gy * patch:(gy + 1) * patch, gx * patch:(gx + 1) * patch] = MASK_GREY
-    return out
 
 
 def _heatmap(m, size=THUMB):
@@ -323,7 +285,7 @@ def depth_probe(model, codec, tokens, mask, first, h, w, device):
         pred = logits.argmax(-1).cpu()
         codes = truth.clone()
         codes[masked] = pred[masked]
-        tiles.append(_tile(_decode(codec, codes.numpy().astype(np.uint8), h, w)))
+        tiles.append(_tile(image_sample.decode_frame(codec, codes.numpy().astype(np.uint8), h, w)))
         agree.append(float((pred[masked] == final_pred[masked]).float().mean()))
         acc.append(float((pred[masked] == truth[masked]).float().mean()))
         norms.append(float(res[0, first:, :].float().norm(dim=-1).mean()))
@@ -431,23 +393,18 @@ def dump(model, codec, geometry, name, step, val_path, device, out_dir=None, cap
         trace = [] if i == 0 else None
         codes = image_sample.fill(model, win, first, passes=SAMPLE_PASSES, seed=SEED + i, device=device, trace=trace)
         used += np.bincount(codes, minlength=image_codec.CODEBOOK_ENTRIES)[:image_codec.CODEBOOK_ENTRIES]
-        frame = _decode(codec, codes, h, w)
+        frame = image_sample.decode_frame(codec, codes, h, w)
         tiles.append(_tile(frame))
         sample_codes.append(codes)
         sample_frames.append(frame)
         if trace:
-            pass_tiles = []
-            for entry in trace:
-                shown = entry["codes"].copy()
-                shown[entry["unknown"]] = 0                          # placeholder under the grey
-                grey = entry["unknown"][:cell].reshape(gh, gw)       # a cell is unknown while plane 0 is
-                pass_tiles.append(_tile(_grey_cells(_decode(codec, shown, h, w), grey, paint)))
+            pass_tiles = [_tile(f) for f in image_sample.trace_frames(codec, trace, h, w)]
             _grid(pass_tiles, len(pass_tiles)).save(os.path.join(out_dir, "passes.png"))
             metrics["pass_committed"] = [e["committed"] for e in trace]
             metrics["pass_confidence"] = [e["confidence"] for e in trace]
             # the order the picture formed: which pass decided each cell (plane 0), and how
             # early each plane commits on average -- structure should go first, detail last
-            order = _formation_order(trace, code_bytes)
+            order = image_sample.formation_order(trace, code_bytes)
             _heatmap(order[:cell].reshape(gh, gw).astype(np.float64), THUMB * 2).save(
                 os.path.join(out_dir, "formation.png"))
             metrics["commit_pass_map"] = [int(v) for v in order[:cell]]
@@ -455,8 +412,8 @@ def dump(model, codec, geometry, name, step, val_path, device, out_dir=None, cap
             metrics["formation_passes"] = len(trace)
         if i == 0:
             # coarse to fine: the same codes rendered from 1, 2, ... all planes
-            _grid([_tile(_decode(codec, codes, h, w, planes=k)) for k in range(1, planes + 1)], planes).save(
-                os.path.join(out_dir, "planes.png"))
+            coarse = [_tile(image_sample.decode_frame(codec, codes, h, w, planes=k)) for k in range(1, planes + 1)]
+            _grid(coarse, planes).save(os.path.join(out_dir, "planes.png"))
     metrics["codes_used"] = int((used > 0).sum())
     metrics["codes_used_fraction"] = float((used > 0).mean())
     # the same-seed samples' codes, so the tab can see which cells changed since the last
@@ -477,7 +434,7 @@ def dump(model, codec, geometry, name, step, val_path, device, out_dir=None, cap
                     win = image_sample.build_window(seq, code_bytes, cap.encode("utf-8"))
                     codes = image_sample.fill(model, win, first, passes=SAMPLE_PASSES,
                                               seed=SEED + 100 + i, device=device)
-                    tiles.append(_tile(_decode(codec, codes, h, w)))
+                    tiles.append(_tile(image_sample.decode_frame(codec, codes, h, w)))
                 metrics["caption_samples"] = [c for c in captions[:N_SAMPLES] if c]
             rng = np.random.RandomState(SEED)
             masks, filled_frames, originals = [], [], []
@@ -488,9 +445,10 @@ def dump(model, codec, geometry, name, step, val_path, device, out_dir=None, cap
                 masks.append(~np.asarray(keep, dtype=bool))
                 win = image_sample.build_window(seq, code_bytes, captions[b].encode("utf-8"), original, keep)
                 filled = image_sample.fill(model, win, first, keep, passes=SAMPLE_PASSES, seed=SEED + b, device=device)
-                orig_img = _decode(codec, original, h, w)
-                filled_img = _decode(codec, filled, h, w)
-                fill_rows += [_tile(orig_img), _tile(_grey_cells(orig_img, ~keep_cells, paint)), _tile(filled_img)]
+                orig_img = image_sample.decode_frame(codec, original, h, w)
+                filled_img = image_sample.decode_frame(codec, filled, h, w)
+                hidden_img = image_sample.grey_cells(orig_img, ~keep_cells, paint)
+                fill_rows += [_tile(orig_img), _tile(hidden_img), _tile(filled_img)]
                 recon_tiles.append(_tile(orig_img))
                 filled_frames.append(filled_img)
                 originals.append(orig_img)
@@ -520,9 +478,9 @@ def dump(model, codec, geometry, name, step, val_path, device, out_dir=None, cap
                 metrics["commit_layer"] = next((i + 1 for i, a in enumerate(agree) if a >= COMMIT_AGREEMENT), None)
 
             conf = confidence_probe(model, tokens, np.stack(masks), first, code_bytes, planes, gh, gw, device)
-            _grid([_tile(originals[0]), _tile(_grey_cells(originals[0], masks[0][:cell].reshape(gh, gw), paint)),
-                   _tile(filled_frames[0]), _heatmap(conf["confidence_map"])], 4).save(
-                os.path.join(out_dir, "confidence.png"))
+            hidden0 = image_sample.grey_cells(originals[0], masks[0][:cell].reshape(gh, gw), paint)
+            _grid([_tile(originals[0]), _tile(hidden0), _tile(filled_frames[0]), _heatmap(conf["confidence_map"])],
+                  4).save(os.path.join(out_dir, "confidence.png"))
             _heatmap(conf["loss_map"], THUMB * 2).save(os.path.join(out_dir, "cell_loss.png"))
             for k in ("mean_confidence", "calibration", "expected_calibration_error",
                       "centre_loss", "edge_loss", "centre_edge_loss_ratio"):
@@ -541,7 +499,7 @@ def dump(model, codec, geometry, name, step, val_path, device, out_dir=None, cap
         near = None
         metrics["novelty_error"] = type(e).__name__ + ": " + str(e)
     if near:
-        _grid([_tile(_decode(codec, n["nearest"], h, w)) for n in near], N_SAMPLES).save(
+        _grid([_tile(image_sample.decode_frame(codec, n["nearest"], h, w)) for n in near], N_SAMPLES).save(
             os.path.join(out_dir, "nearest.png"))
         metrics["novelty_per_sample"] = [n["novelty"] for n in near]
         metrics["novelty_mean"] = float(np.mean([n["novelty"] for n in near]))

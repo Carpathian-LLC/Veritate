@@ -12,7 +12,7 @@
 # - Supported calls: abs, round, min, max, sum, sqrt, log, log2, log10, exp,
 #   sin, cos, tan, asin, acos, atan, floor, ceil.
 # - Numbers: int + float literals only. No imaginary, no underscores.
-# veritate_mri/agent/tools/calculator.py
+# veritate_mri/inference/agent/tools/calculator.py
 # ------------------------------------------------------------------------------------
 # Imports:
 
@@ -67,6 +67,9 @@ _FUNCS = {
 }
 
 _MAX_EXPRESSION_LEN = 1024
+# 9**9**9 is a 370-million-digit integer; a model-written expression must not be able to
+# stall the dashboard. The bound is far above any arithmetic a reply needs.
+_MAX_EXPONENT = 1000
 
 # ------------------------------------------------------------------------------------
 # Functions
@@ -79,8 +82,6 @@ def _eval(node: ast.AST) -> Any:
         if isinstance(node.value, (int, float)):
             return node.value
         raise ValueError(f"unsupported constant: {type(node.value).__name__}")
-    if isinstance(node, ast.Num):
-        return node.n
     if isinstance(node, ast.Name):
         v = _NAMES.get(node.id)
         if v is None:
@@ -95,7 +96,10 @@ def _eval(node: ast.AST) -> Any:
         fn = _BINOPS.get(type(node.op))
         if fn is None:
             raise ValueError(f"unsupported binop: {type(node.op).__name__}")
-        return fn(_eval(node.left), _eval(node.right))
+        left, right = _eval(node.left), _eval(node.right)
+        if isinstance(node.op, ast.Pow) and isinstance(right, (int, float)) and abs(right) > _MAX_EXPONENT:
+            raise ValueError(f"exponent {right} is over the limit of {_MAX_EXPONENT}")
+        return fn(left, right)
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name):
             raise ValueError("only direct function calls allowed")

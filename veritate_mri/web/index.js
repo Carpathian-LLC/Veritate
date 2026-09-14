@@ -3,6 +3,12 @@
 
 const $ = id => document.getElementById(id);
 
+// One HTML escape for the whole dashboard. Quotes are escaped as well as angle brackets and
+// ampersands, so a value is safe interpolated into an attribute and not only into text.
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
 // Canonical canvas palette. Mirrors the CSS custom properties in index.css so
 // canvas drawing stays in sync with the rest of the dashboard. Drawing code
 // reaches for PALETTE.<token> instead of inlining hex; one place to edit a color.
@@ -351,10 +357,6 @@ function tapeChar(b) {
   return "·";
 }
 
-function escapeTape(s) {
-  return s.replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
-}
-
 function updateScrubTape(elId, frames, currentFrame, promptBytes) {
   const el = $(elId);
   if (!el) return;
@@ -371,11 +373,11 @@ function updateScrubTape(elId, frames, currentFrame, promptBytes) {
   const nextFrame = frames[currentFrame + 1];
   const nextByte = nextFrame ? nextFrame.byte : null;
   const ctxStr = beforeCurrent.map(tapeChar).join("");
-  let html = `<span class="tape-ctx">${escapeTape(ctxStr)}</span>` +
-             `<span class="tape-cur">${escapeTape(tapeChar(cur))}</span>`;
+  let html = `<span class="tape-ctx">${esc(ctxStr)}</span>` +
+             `<span class="tape-cur">${esc(tapeChar(cur))}</span>`;
   if (nextByte !== null) {
     html += `<span class="tape-arr">→</span>` +
-            `<span class="tape-next">${escapeTape(tapeChar(nextByte))}</span>`;
+            `<span class="tape-next">${esc(tapeChar(nextByte))}</span>`;
   } else {
     html += `<span class="tape-arr">→</span><span class="tape-next">?</span>`;
   }
@@ -842,14 +844,14 @@ function renderLabelPill(label, opts) {
   let inner;
   let titleHint = `${cat} pattern`;
   if (cat === "single") {
-    inner = `'${escapeTape(trig || "?")}'`;
+    inner = `'${esc(trig || "?")}'`;
     titleHint = `single byte detector: peaks land on '${trig}'`;
   } else if (cat === "word") {
-    inner = `&ldquo;${escapeTape(trig || "")}&rdquo;`;
+    inner = `&ldquo;${esc(trig || "")}&rdquo;`;
     titleHint = `word detector: peaks land inside '${trig}'`;
   } else if (cat === "bigram" || cat === "trigram" || cat === "4gram" || cat === "5gram" || cat === "6gram" || cat === "7gram") {
     // n-gram substring near peak
-    inner = `~${escapeTape(trig || "")}`;
+    inner = `~${esc(trig || "")}`;
     titleHint = `${cat} pattern: '${trig}' near peak`;
   } else {
     // class label (vowel / consonant / digit / punct / whitespace)
@@ -1324,15 +1326,15 @@ function _groundedAnswerHtml(report) {
   const ans = report.answer || "";
   let html = "", pos = 0;
   for (const seg of _reportTier(report, _confLevel())) {
-    if (seg.start > pos) html += _esc(ans.slice(pos, seg.start));
+    if (seg.start > pos) html += esc(ans.slice(pos, seg.start));
     const c = (typeof seg.confidence === "number") ? seg.confidence : null;
     const style = c != null ? ` style="color:${confColor(c)}"` : "";
     const gTxt = seg.grounded ? ` · grounded: ${seg.grounded}` : "";
     const title = (c != null ? `confidence ${c.toFixed(2)}${gTxt}` : gTxt.slice(3));
-    html += `<span class="cw${_groundClass(seg.grounded)}"${style} title="${_esc(title)}">${_esc(ans.slice(seg.start, seg.end))}</span>`;
+    html += `<span class="cw${_groundClass(seg.grounded)}"${style} title="${esc(title)}">${esc(ans.slice(seg.start, seg.end))}</span>`;
     pos = seg.end;
   }
-  if (pos < ans.length) html += _esc(ans.slice(pos));
+  if (pos < ans.length) html += esc(ans.slice(pos));
   return html;
 }
 
@@ -1452,7 +1454,7 @@ function _provenanceHtml(prov) {
   } else {
     for (const s of sources) {
       h += `<div class="halluc-src">
-        <div class="span">"${_esc(_clip(s.span, 120))}"</div>
+        <div class="span">"${esc(_clip(s.span, 120))}"</div>
         <div class="meta">context #${s.source_chunk} · score ${(+s.score).toFixed(3)}</div>
       </div>`;
     }
@@ -1464,9 +1466,9 @@ function _provenanceHtml(prov) {
     for (const m of matches) {
       let ps = "";
       for (const p of (m.passages || [])) {
-        ps += `<div class="passage">"${_esc(_clip(p.text, 140))}" <span class="meta">${_esc(p.corpus || "")} · ${(+p.score).toFixed(3)}</span></div>`;
+        ps += `<div class="passage">"${esc(_clip(p.text, 140))}" <span class="meta">${esc(p.corpus || "")} · ${(+p.score).toFixed(3)}</span></div>`;
       }
-      h += `<div class="halluc-src"><div class="span">"${_esc(_clip(m.span, 120))}"</div>${ps}</div>`;
+      h += `<div class="halluc-src"><div class="span">"${esc(_clip(m.span, 120))}"</div>${ps}</div>`;
     }
   }
   return h + `</div>`;
@@ -1505,7 +1507,7 @@ function _sentenceRollupHtml(report) {
     const col = c != null ? confColor(c) : "var(--dim)";
     const dot = s.grounded ? `<span class="g-dot${_groundClass(s.grounded)}" title="grounded: ${s.grounded}"></span>` : "";
     rows += `<div class="halluc-sent">
-      <span class="s-text" title="${_esc(s.text || "")}">${dot}${_esc(_clip(s.text || "", 90))}</span>
+      <span class="s-text" title="${esc(s.text || "")}">${dot}${esc(_clip(s.text || "", 90))}</span>
       <div class="halluc-bar s-bar"><div class="halluc-fill" style="width:${w}%;background:${col}"></div></div>
       <span class="s-conf">${c != null ? (c * 100).toFixed(0) + "%" : "n/a"}</span>
     </div>`;
@@ -1539,7 +1541,7 @@ function drawHallucination(report) {
     <div class="halluc-head">
       <span class="verdict-chip ${v.cls}">${v.label}</span>
       ${flag}
-      <span class="halluc-src-tag">confidence source: ${_esc(report.confidence_source || "?")}</span>
+      <span class="halluc-src-tag">confidence source: ${esc(report.confidence_source || "?")}</span>
     </div>
     <div class="halluc-why">${_hallucWhy(o)}</div>
     <div class="halluc-metrics">
@@ -1561,7 +1563,7 @@ function drawHallucination(report) {
 
 function drawHallucinationError(msg) {
   const el = $("hallucinationPanel");
-  if (el) el.innerHTML = `<div class="halluc-error">${_esc(msg)}</div>`;
+  if (el) el.innerHTML = `<div class="halluc-error">${esc(msg)}</div>`;
 }
 
 function resetHallucination() {
@@ -1777,9 +1779,6 @@ function collectSelectedAddons() {
 loadAddons();
 
 // ---- rag panel + agent panel + chat history helpers ----
-function _esc(s) {
-  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-}
 const EMPTY_PALE = "color:var(--warm);font-style:italic;padding:6px 4px";
 
 // Mode tiers must match readers/capabilities.py::TIERS. The picker enables
@@ -2141,14 +2140,6 @@ function resetRagPanel() {
   const pre  = $("ragPrefix"); if (pre)  pre.textContent = "";
   const meta = $("ragPanelMeta"); if (meta) meta.textContent = "";
 }
-function showRagEmpty(reason) {
-  const wrap = $("ragPanel"); if (!wrap) return;
-  wrap.style.display = "";
-  const hits = $("ragHits");
-  if (hits) hits.innerHTML = `<div style="${EMPTY_PALE}">${_esc(reason)}</div>`;
-  const meta = $("ragPanelMeta"); if (meta) meta.textContent = "-";
-  const pre  = $("ragPrefix"); if (pre) pre.textContent = "";
-}
 function renderRagEvent(ev) {
   const wrap = $("ragPanel"); if (!wrap) return;
   wrap.style.display = "";
@@ -2159,10 +2150,10 @@ function renderRagEvent(ev) {
     hitsEl.innerHTML = (ev.hits || []).map((h, i) => `
       <div style="background:#0a0c12;padding:4px 6px;border-radius:3px">
         <div style="display:flex;justify-content:space-between;color:var(--dim);font-size:10px">
-          <span>#${i + 1} ${_esc(h.src || "")}</span>
+          <span>#${i + 1} ${esc(h.src || "")}</span>
           <span>score ${h.score.toFixed(2)}</span>
         </div>
-        <div style="color:var(--text);margin-top:2px">${_esc(h.preview || "")}</div>
+        <div style="color:var(--text);margin-top:2px">${esc(h.preview || "")}</div>
       </div>
     `).join("");
   }
@@ -2178,7 +2169,7 @@ function showAgentEmpty(reason) {
   const wrap = $("agentPanel"); if (!wrap) return;
   wrap.style.display = "";
   const tl = $("agentTimeline");
-  if (tl) tl.innerHTML = `<div style="${EMPTY_PALE}">${_esc(reason)}</div>`;
+  if (tl) tl.innerHTML = `<div style="${EMPTY_PALE}">${esc(reason)}</div>`;
   const meta = $("agentPanelMeta"); if (meta) meta.textContent = "-";
 }
 
@@ -2305,7 +2296,7 @@ function renderChatHistory() {
     return `<div class="turn turn-${model ? "model" : "you"}${land}">
         <div class="turn-who">${model ? "model" : "you"}</div>
         <div class="turn-bubble">
-          <div class="turn-text">${_esc(m.text)}</div>
+          <div class="turn-text">${esc(m.text)}</div>
           ${model ? _turnMetricsHtml(m) : ""}
         </div>
       </div>`;
@@ -2397,18 +2388,18 @@ function appendAgentEvent(ev) {
   if (ev.kind === "turn_start") {
     row.innerHTML = `<span style="color:var(--dim)">turn ${ev.turn}</span>`;
   } else if (ev.kind === "thought") {
-    row.innerHTML = `<span style="color:var(--cool)">think</span> <span style="color:var(--text)">${_esc(ev.text)}</span>`;
+    row.innerHTML = `<span style="color:var(--cool)">think</span> <span style="color:var(--text)">${esc(ev.text)}</span>`;
   } else if (ev.kind === "action") {
-    row.innerHTML = `<span style="color:var(--warm)">tool</span> <code>${_esc(ev.tool)}</code> <span style="color:var(--dim)">${_esc(JSON.stringify(ev.args))}</span>`;
+    row.innerHTML = `<span style="color:var(--warm)">tool</span> <code>${esc(ev.tool)}</code> <span style="color:var(--dim)">${esc(JSON.stringify(ev.args))}</span>`;
   } else if (ev.kind === "observation") {
     const head = (ev.text || "").slice(0, 280);
-    row.innerHTML = `<span style="color:var(--cool)">obs</span> <span style="color:var(--text)">${_esc(head)}${ev.text && ev.text.length > 280 ? "…" : ""}</span>`;
+    row.innerHTML = `<span style="color:var(--cool)">obs</span> <span style="color:var(--text)">${esc(head)}${ev.text && ev.text.length > 280 ? "…" : ""}</span>`;
   } else if (ev.kind === "answer") {
-    row.innerHTML = `<span style="color:var(--good,#7ec47e)">answer</span> <span style="color:var(--text)">${_esc(ev.text)}</span>`;
+    row.innerHTML = `<span style="color:var(--good,#7ec47e)">answer</span> <span style="color:var(--text)">${esc(ev.text)}</span>`;
   } else if (ev.kind === "schema_err") {
-    row.innerHTML = `<span style="color:var(--hot)">err</span> <span style="color:var(--text)">${_esc(ev.error || "")}</span>`;
+    row.innerHTML = `<span style="color:var(--hot)">err</span> <span style="color:var(--text)">${esc(ev.error || "")}</span>`;
   } else if (ev.kind === "agent_meta") {
-    row.innerHTML = `<span style="color:var(--dim)">tools: ${_esc((ev.tools || []).join(", "))}</span>`;
+    row.innerHTML = `<span style="color:var(--dim)">tools: ${esc((ev.tools || []).join(", "))}</span>`;
   } else if (ev.kind === "stop") {
     if (meta) meta.textContent = `${ev.reason} · ${ev.turns} turns · ${ev.total_elapsed_s.toFixed(2)}s`;
     return;
@@ -2478,13 +2469,12 @@ const _GenThink = (() => {
     }
     return a;
   }
-  function _esc(s) { return s.replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
   function _typeChar(text, idx, after) {
     if (idx > text.length) {
       timer = setTimeout(after, _rand(HOLD_MIN_MS, HOLD_MAX_MS));
       return;
     }
-    el.innerHTML = _esc(text.slice(0, idx)) + '<span class="ai-caret"></span>';
+    el.innerHTML = esc(text.slice(0, idx)) + '<span class="ai-caret"></span>';
     let delay = CHAR_BASE_MS + Math.random() * CHAR_JITTER;
     if (Math.random() < PAUSE_CHANCE) delay += _rand(PAUSE_MIN_MS, PAUSE_MAX_MS);
     timer = setTimeout(() => _typeChar(text, idx + 1, after), delay);
@@ -3003,11 +2993,11 @@ function activateTab(name) {
     if (learningTimelineName && classroomStateL.run !== learningTimelineName) {
       const want = learningTimelineName;
       _imgMriDecide(want).then(isImage => {
-        if (!isImage && !imgMriState.active && learningTimelineName === want && classroomStateL.run !== want) loadClassroomForLearning(want);
+        if (!isImage && !imageMriL().active && learningTimelineName === want && classroomStateL.run !== want) loadClassroomForLearning(want);
       });
     }
     requestAnimationFrame(() => {
-      if (imgMriState.active) return;
+      if (imageMriL().active) return;
       [cFfnL, cTopL, cTelL, cSatL, cQuantKlL, cDecisiveL, cConfEvoL, cReadGradeL,
        cCoactL, cSurpriseL].forEach(fitCanvas);
       if (learningState.loaded) {
@@ -3450,13 +3440,6 @@ $("prompt").addEventListener("keydown", (e) => {
 });
 $("backend").addEventListener("change", _primeSync);
 
-
-// probe server for backend availability and prefill model meta
-function fmtMtime(t) {
-  try { return new Date(t * 1000).toISOString().slice(0,10); }
-  catch (e) { return ""; }
-}
-
 const _cModelMeta = {};
 
 function _qatWarningFor(opt) {
@@ -3896,7 +3879,7 @@ function renderOutputEvolution() {
   for (const s of stages) {
     const isQat = (s.label || s.name).toUpperCase().startsWith("QAT");
     const colCls = isQat ? "stage-col-qat" : "stage-col-fp32";
-    html += `<div class="col ${colCls}">${escapeHtml(s.label || s.name)}</div>`;
+    html += `<div class="col ${colCls}">${esc(s.label || s.name)}</div>`;
   }
   html += `</div>`;
   // body
@@ -3918,12 +3901,12 @@ function renderOutputEvolution() {
         const noFrames = (found.ckpt.n_frames | 0) === 0;
         const cellBody = noFrames
           ? `<div class="ckpt-cell-text"><span class="meta">no generation captured</span></div>`
-          : `<div class="ckpt-cell-text"><span class="pr">${escapeHtml(meta.prompt)}</span>${escapeHtml(found.ckpt.output_text)}</div>`;
+          : `<div class="ckpt-cell-text"><span class="pr">${esc(meta.prompt)}</span>${esc(found.ckpt.output_text)}</div>`;
         html += `
           <div class="ckpt-cell ${stageCls}" data-idx="${found.idx}">
             <div class="ckpt-cell-head">
               <span class="step-num">step ${found.ckpt.step.toLocaleString()}</span>
-              <span class="stage-tag ${stageCls}">${escapeHtml(stageTag)}</span>
+              <span class="stage-tag ${stageCls}">${esc(stageTag)}</span>
             </div>
             ${cellBody}
           </div>`;
@@ -3993,6 +3976,51 @@ async function loadTimelinesList() {
   }
 }
 
+// The Models tab's image view (image_mri.js): one instance, created on first use so the
+// script order does not matter. An image model gets this view in place of the byte panels.
+let _imageMriL = null;
+function imageMriL() {
+  if (!_imageMriL) _imageMriL = ImageMri.create("imgMri", { onContinue: _trOpenImageContinue });
+  return _imageMriL;
+}
+
+async function _imgMriDecide(name) {
+  let isImage = false;
+  const known = (typeof learningTimelinesByName !== "undefined") && learningTimelinesByName[name];
+  if (known && known.training) {
+    isImage = known.training === "image";              // the timelines list already says
+  } else {
+    try {
+      const r = await fetch(`/run/${encodeURIComponent(name)}/config?` + Date.now(), { cache: "no-store" });
+      const cfg = r.ok ? await r.json() : null;
+      isImage = !!(cfg && cfg.training === "image");
+    } catch (_e) { isImage = false; }
+  }
+  if (learningTimelineName !== name) return true;      // a newer pick won; do nothing here
+  _imgMriSetActive(isImage, name);
+  return isImage;
+}
+
+// Swap the Models tab between the byte-level panels and the image view. The picker panel
+// stays either way and says what it is showing.
+function _imgMriSetActive(on, name) {
+  const body = document.querySelector('.tab-body[data-tab="learning"]');
+  const box = document.getElementById("imgMri");
+  const first = body.querySelector(".panel");
+  Array.from(body.children).forEach(child => {
+    if (child === first || child === box) return;
+    child.style.display = on ? "none" : "";
+  });
+  const em = first.querySelector("h2 em");
+  if (!em.dataset.textDefault) em.dataset.textDefault = em.innerHTML;
+  em.innerHTML = on ? "an image model at every saved checkpoint: what it draws, how it forms, what it knows" : em.dataset.textDefault;
+  first.querySelector("p.desc").style.display = on ? "none" : "";
+  box.style.display = on ? "block" : "none";
+  if (!on) { imageMriL().hide(); return; }
+  $("learningStatus").innerHTML = `<span class="meta">image model &mdash; showing what it draws, what it can complete, and what it is learning, at every checkpoint.</span>`;
+  imageMriL().show(name);
+}
+
 function setTimelineActive(name) {
   if (!name) return;
   learningTimelineName = name;
@@ -4025,12 +4053,12 @@ function _setTimelineActiveText(name) {
 }
 
 async function ensureLearningLoaded() {
-  if (imgMriState.active) return;
+  if (imageMriL().active) return;
   if (learningState.loaded) return;
   // make sure timelines list is fresh and we have a selection
   if (!learningTimelineName) {
     const picked = await loadTimelinesList();
-    if (imgMriState.active) return;                    // an image pick landed while we waited
+    if (imageMriL().active) return;                    // an image pick landed while we waited
     if (picked && !learningTimelineName) {
       learningTimelineName = picked;
       learningTimelinePathPrefix = `/timeline/${encodeURIComponent(picked)}/`;
@@ -4040,7 +4068,7 @@ async function ensureLearningLoaded() {
   // so no text status, skeleton or panel is ever written for a picture model.
   if (learningTimelineName) {
     const isImage = await _imgMriDecide(learningTimelineName);
-    if (isImage || imgMriState.active) return;
+    if (isImage || imageMriL().active) return;
   }
   // No timeline is available yet (training hasn't landed its first hook dump).
   // Bail before the timeline.json fetch: otherwise it hits /timeline.json
@@ -4139,10 +4167,6 @@ async function ensureLearningLoaded() {
   }
 }
 
-function escapeHtml(s) {
-  return s.replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
-}
-
 async function selectCheckpoint(idx) {
   const meta = learningState.meta;
   if (!meta || idx < 0 || idx >= meta.checkpoints.length) return;
@@ -4186,7 +4210,6 @@ async function selectCheckpoint(idx) {
   renderLearning();
   renderTier2ForLearning();
 }
-
 
 function renderLearning() {
   const meta = learningState.meta;
@@ -4433,7 +4456,7 @@ async function showNeuronModal(layer, neuronId, currentActivation) {
     const ptDown = data.pytorch_loaded === false;
     const ptErr  = data.pytorch_last_error || "";
     const ptHint = ptErr
-      ? `<p class="modal-summary" style="color:var(--hot)">PyTorch backend failed to load. Server log says: <code>${escapeHtml(ptErr)}</code>. Restart the server after fixing, or click <b>load</b> in the Generation tab to retry.</p>`
+      ? `<p class="modal-summary" style="color:var(--hot)">PyTorch backend failed to load. Server log says: <code>${esc(ptErr)}</code>. Restart the server after fixing, or click <b>load</b> in the Generation tab to retry.</p>`
       : `<p class="modal-summary" style="color:var(--warm)">PyTorch backend not loaded yet. If pytorch_load_mode is "always" the server will load it on startup &mdash; restart the server. Otherwise click <b>load</b> next to the backend selector in the Generation tab.</p>`;
 
     // tab 1: overview
@@ -4585,13 +4608,13 @@ function showModal({ title, body, buttons, nonDismissable, accent, align }) {
     };
     const onKey = (e) => { if (!nonDismissable && e.key === "Escape") close(null); };
     const btnHtml = (buttons || []).map((b, i) =>
-      `<button data-i="${i}" class="${b.primary ? "go" : ""}" style="margin-left:8px">${escapeHtml(b.label)}</button>`
+      `<button data-i="${i}" class="${b.primary ? "go" : ""}" style="margin-left:8px">${esc(b.label)}</button>`
     ).join("");
     const headerStyle = accent ? ` style="border-bottom-color:${accent}"` : "";
     const titleStyle  = accent ? ` style="color:${accent}"` : "";
     const closeBtn    = nonDismissable ? "" : `<button data-close="1">×</button>`;
     box.innerHTML = `
-      <div class="modal-header"${headerStyle}><h3${titleStyle}>${escapeHtml(title || "")}</h3>${closeBtn}</div>
+      <div class="modal-header"${headerStyle}><h3${titleStyle}>${esc(title || "")}</h3>${closeBtn}</div>
       <div style="font-size:12.5px;line-height:1.6;color:var(--text)">${body || ""}</div>
       <div style="display:flex;justify-content:flex-end;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">${btnHtml}</div>
     `;
@@ -4800,11 +4823,11 @@ function _renderCapBadges(hostId, caps) {
     const statusColor = entry.status === "trained" ? "var(--data-pos)" : "var(--hot)";
     let suffix = "";
     if (entry.trainer && entry.step != null) {
-      suffix = ` <span style="color:var(--dim)">(${_esc(entry.trainer)} @${_esc(String(entry.step))})</span>`;
+      suffix = ` <span style="color:var(--dim)">(${esc(entry.trainer)} @${esc(String(entry.step))})</span>`;
     } else if (entry.trainer) {
-      suffix = ` <span style="color:var(--dim)">(${_esc(entry.trainer)})</span>`;
+      suffix = ` <span style="color:var(--dim)">(${esc(entry.trainer)})</span>`;
     }
-    return `<span class="stat" style="color:var(--text)">${_esc(t)}: <b style="color:${statusColor}">${_esc(entry.status)}</b>${suffix}</span>`;
+    return `<span class="stat" style="color:var(--text)">${esc(t)}: <b style="color:${statusColor}">${esc(entry.status)}</b>${suffix}</span>`;
   });
   host.innerHTML = parts.join("");
 }
@@ -6106,22 +6129,6 @@ function gradeEmergingPpl(record) {
   return gradeFluentPpl(record) * GRADE_EMERGING_FACTOR;
 }
 
-function gradeIndex(name) {
-  const i = GRADE_ORDER.indexOf((name || "").toLowerCase());
-  return i < 0 ? 0 : i;
-}
-
-// highest band the model is fluent at (ppl < threshold and below sanity ceiling). null if no band passes.
-function highestPassingGrade(grades, record) {
-  const fluent = gradeFluentPpl(record);
-  let best = null;
-  for (const g of GRADE_ORDER) {
-    const e = grades && grades[g];
-    if (e && typeof e.ppl === "number" && e.ppl < fluent && e.ppl < GRADE_PPL_CEILING) best = g;
-  }
-  return best;
-}
-
 function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoints, config) {
   const root = $(refs.readLevelId);
   const canvas = refs.readGradeCanvas;
@@ -6198,10 +6205,10 @@ function render_reading_level(refs, run, gradesSteps, gradesByStep, haveCheckpoi
     const corpusFull = GRADE_CORPUS_FULL[g];
     const sentLen = GRADE_SENT_LEN[g];
     const swatch = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${GRADE_BAND_COLOR[g]};margin-right:6px;vertical-align:middle"></span>`;
-    const labelCell = `<div style="text-align:right" title="${escapeHtml(corpusFull)}">
+    const labelCell = `<div style="text-align:right" title="${esc(corpusFull)}">
       <b>${swatch}${lbl}</b>
       <div class="meta" style="font-size:10px">${age}</div>
-      <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(corpus)} &middot; ${sentLen}</div>
+      <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(corpus)} &middot; ${sentLen}</div>
     </div>`;
     if (!e || typeof e.ppl !== "number") {
       html += `${labelCell}<div style="grid-column:span 2"><span class="meta">no data</span></div>`;
@@ -6362,16 +6369,6 @@ function _scoreBadge(acc) {
   return `<span class="case" style="background:#330a0a;color:#ff7d5d">NOT YET</span>`;
 }
 
-// Highest passing tier index (>= SCORE_PASS_PCT). null if none.
-function _highestPassingTier(entries, order) {
-  let best = null;
-  for (const k of order) {
-    const e = entries && entries[k];
-    if (e && typeof e.accuracy === "number" && e.accuracy >= SCORE_PASS_PCT) best = k;
-  }
-  return best;
-}
-
 function render_score_axis(axisName, refs, axisSteps, axisByStep, haveCheckpoints) {
   const meta = AXIS_META[axisName];
   if (!meta) return;
@@ -6400,7 +6397,7 @@ function render_score_axis(axisName, refs, axisSteps, axisByStep, haveCheckpoint
     const swatch = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${tierColor};margin-right:6px;vertical-align:middle"></span>`;
     const labelCell = `<div style="text-align:right">
       <b>${swatch}${lbl}</b>
-      <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(sub)}</div>
+      <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</div>
     </div>`;
     if (!e || typeof e.accuracy !== "number") {
       html += `${labelCell}<div style="grid-column:span 3"><span class="meta">no data</span></div>`;
@@ -6419,7 +6416,7 @@ function render_score_axis(axisName, refs, axisSteps, axisByStep, haveCheckpoint
   }
   html += `</div>`;
 
-  html += `<p class="desc" style="margin-top:10px">${escapeHtml(meta.blurb)}</p>`;
+  html += `<p class="desc" style="margin-top:10px">${esc(meta.blurb)}</p>`;
 
   root.innerHTML = html;
 }
@@ -6528,11 +6525,11 @@ function openConceptModal(name, conceptsSteps, conceptsByStep, latest) {
   const tierName = tier === "mastered" ? "MASTERED" : tier === "learning" ? "LEARNING" : "STRUGGLING";
   const tierBg = tier === "mastered" ? "#103025" : tier === "learning" ? "#2a2010" : "#330a0a";
   const guesses = Math.max(1, Math.round(Math.pow(2, latestV)));
-  $("conceptModalTitle").innerHTML = `${escapeHtml(name)}
+  $("conceptModalTitle").innerHTML = `${esc(name)}
     <span class="case" style="background:${tierBg};color:${tierColor};margin-left:10px">${tierName}</span>
     <span class="meta" style="margin-left:8px">${latestV.toFixed(2)} bits</span>`;
   const explainText = tier === "mastered"
-    ? `When the model sees the preamble for "${escapeHtml(name)}", the right next byte is its first guess. It needed about <b>${guesses}</b> guess(es). The association is locked in &mdash; more training won't help much here.`
+    ? `When the model sees the preamble for "${esc(name)}", the right next byte is its first guess. It needed about <b>${guesses}</b> guess(es). The association is locked in &mdash; more training won't help much here.`
     : tier === "learning"
     ? `The right answer is on the model's shortlist but isn't its top pick. It would need about <b>${guesses}</b> guesses. More exposure to this domain usually closes the gap.`
     : `The model would need about <b>${guesses}</b> guesses to land on the right byte. The association isn't there yet &mdash; either the corpus hasn't covered it enough, or the preamble is genuinely ambiguous.`;
@@ -6676,9 +6673,9 @@ function render_concepts(refs, run, conceptsSteps, conceptsByStep, haveCheckpoin
       <div style="display:flex;gap:8px;flex-wrap:wrap">`;
     for (const name of worst) {
       const v = C[name].surprise_bits;
-      html += `<span class="concept-row" data-name="${escapeHtml(name)}" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--line);border-radius:3px;background:#0a0c12;font-size:11.5px">
+      html += `<span class="concept-row" data-name="${esc(name)}" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--line);border-radius:3px;background:#0a0c12;font-size:11.5px">
         <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${conceptDotColor(v)}"></span>
-        <b>${escapeHtml(name)}</b>
+        <b>${esc(name)}</b>
         <span class="meta">${v.toFixed(2)} bits</span>
       </span>`;
     }
@@ -6704,13 +6701,13 @@ function render_concepts(refs, run, conceptsSteps, conceptsByStep, haveCheckpoin
 
     html += `<div style="text-align:right">
       <b style="color:${headColor}">${grp.name}</b>
-      <div class="meta" style="font-size:10px;margin-top:2px">${escapeHtml(grp.blurb)}</div>
+      <div class="meta" style="font-size:10px;margin-top:2px">${esc(grp.blurb)}</div>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:5px">`;
     for (const r of rows) {
-      html += `<span class="concept-row" data-name="${escapeHtml(r.name)}" title="${escapeHtml(r.name)}: ${r.v.toFixed(2)} bits &mdash; click for details" style="cursor:pointer;display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:10px;background:rgba(255,255,255,.04);font-size:10.5px">
+      html += `<span class="concept-row" data-name="${esc(r.name)}" title="${esc(r.name)}: ${r.v.toFixed(2)} bits &mdash; click for details" style="cursor:pointer;display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:10px;background:rgba(255,255,255,.04);font-size:10.5px">
         <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${conceptDotColor(r.v)}"></span>
-        ${escapeHtml(r.name)}
+        ${esc(r.name)}
       </span>`;
     }
     html += `</div>
@@ -6835,7 +6832,7 @@ function _whTile(m, v, prevV, prevStep) {
       trend = `<span style="font-size:13px;color:${trendColor}" title="vs step ${prevStep}: ${dv > 0 ? "+" : ""}${dv.toFixed(3)}">${dv > 0 ? "↑" : "↓"}</span>`;
     }
   }
-  return `<div title="${escapeHtml(m.blurb)}" style="background:rgba(255,255,255,.03);padding:8px 10px;border-left:3px solid ${tone};border-radius:4px;display:flex;flex-direction:column;gap:3px">
+  return `<div title="${esc(m.blurb)}" style="background:rgba(255,255,255,.03);padding:8px 10px;border-left:3px solid ${tone};border-radius:4px;display:flex;flex-direction:column;gap:3px">
     <div class="meta" style="font-size:10.5px;display:flex;align-items:center;gap:5px">${swatch}<span>${m.label}</span></div>
     <div style="display:flex;align-items:baseline;gap:6px">
       <b style="color:${tone};font-size:16px;line-height:1">${v == null ? "-" : m.fmt(v)}</b>${trend}
@@ -6924,8 +6921,8 @@ function render_writing_health(refs, run, writingSteps, writingByStep, haveCheck
     aux += `<div class="meta" style="margin:10px 0 4px;font-size:10.5px">latest generations (step ${latestStep})</div>`;
     aux += `<div style="display:flex;flex-direction:column;gap:6px">`;
     for (const s of latest.samples) {
-      const promptHtml = `<span class="meta" style="font-style:italic">${escapeHtml(s.prompt)}</span>`;
-      const genHtml = escapeHtml(s.generation || "");
+      const promptHtml = `<span class="meta" style="font-style:italic">${esc(s.prompt)}</span>`;
+      const genHtml = esc(s.generation || "");
       aux += `<div style="background:rgba(255,255,255,.03);padding:6px 8px;border-radius:4px;font-size:11px;line-height:1.4;white-space:pre-wrap">${promptHtml}<span style="color:var(--text)">${genHtml}</span></div>`;
     }
     aux += `</div>`;
@@ -6959,10 +6956,10 @@ function _renderCompBandRow(g, e, accLabel) {
   const corpusFull = GRADE_CORPUS_FULL[g];
   const sentLen = GRADE_SENT_LEN[g];
   const swatch = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${GRADE_BAND_COLOR[g]};margin-right:6px;vertical-align:middle"></span>`;
-  const labelCell = `<div style="text-align:right" title="${escapeHtml(corpusFull)}">
+  const labelCell = `<div style="text-align:right" title="${esc(corpusFull)}">
     <b>${swatch}${lbl}</b>
     <div class="meta" style="font-size:10px">${age}</div>
-    <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(corpus)} &middot; ${sentLen}</div>
+    <div class="meta" style="font-size:10px;font-style:italic;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(corpus)} &middot; ${sentLen}</div>
   </div>`;
   if (!e || typeof e.accuracy !== "number") {
     return `${labelCell}<div style="grid-column:span 2"><span class="meta">no ${accLabel} data</span></div>`;
@@ -8339,8 +8336,6 @@ const trainState = {
 };
 
 function _trEl(id) { return document.getElementById(id); }
-function _trEsc(s) { return String(s).replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])); }
-
 function _trModelByName(n) {
   return trainState.discovery.models.find(m => m.name === n) || null;
 }
@@ -8354,31 +8349,31 @@ function _trBuildInput(a) {
   // collapsing on narrow viewports.
   const inputBase = "background:#0a0c12;border:1px solid var(--line);color:var(--text);padding:3px 6px;font:inherit;border-radius:2px;width:100%;box-sizing:border-box;min-width:0";
   if (t === "bool") {
-    return `<input type="checkbox" data-arg="${_trEsc(name)}" ${def ? "checked" : ""}>`;
+    return `<input type="checkbox" data-arg="${esc(name)}" ${def ? "checked" : ""}>`;
   }
   if (t === "text") {
-    return `<textarea data-arg="${_trEsc(name)}" rows="2" style="${inputBase};padding:4px 6px;resize:vertical">${_trEsc(def)}</textarea>`;
+    return `<textarea data-arg="${esc(name)}" rows="2" style="${inputBase};padding:4px 6px;resize:vertical">${esc(def)}</textarea>`;
   }
   if (t === "str" && Array.isArray(a.choices)) {
     const ch = a.choice_help || null;
     const opts = ['<option value="">- pick -</option>']
       .concat(a.choices.map(c => {
-        const tip = ch && ch[c] ? ` title="${_trEsc(ch[c])}"` : "";
-        return `<option value="${_trEsc(c)}"${tip} ${c === def ? "selected" : ""}>${_trEsc(c)}</option>`;
+        const tip = ch && ch[c] ? ` title="${esc(ch[c])}"` : "";
+        return `<option value="${esc(c)}"${tip} ${c === def ? "selected" : ""}>${esc(c)}</option>`;
       }))
       .join("");
-    return `<select data-arg="${_trEsc(name)}" style="${inputBase}">${opts}</select>`;
+    return `<select data-arg="${esc(name)}" style="${inputBase}">${opts}</select>`;
   }
   if (t === "image_set") {
     return `<div class="imgf-sets" data-img-sets>${_imgSetRowsHtml(trainState.discovery.image_sets || [], def)}</div>` +
-           `<input type="hidden" data-arg="${_trEsc(name)}" data-arg-kind="image_set" value="${_trEsc(def)}">`;
+           `<input type="hidden" data-arg="${esc(name)}" data-arg-kind="image_set" value="${esc(def)}">`;
   }
   if (t === "codec") {
     const codecs = trainState.discovery.codecs || [];
     const opts = [`<option value="" ${!def ? "selected" : ""}>fit a new codec on these pictures (recommended)</option>`]
-      .concat(codecs.map(c => `<option value="${_trEsc(c.name)}" ${c.name === def ? "selected" : ""}>${_trEsc(c.name)}</option>`))
+      .concat(codecs.map(c => `<option value="${esc(c.name)}" ${c.name === def ? "selected" : ""}>${esc(c.name)}</option>`))
       .join("");
-    return `<select data-arg="${_trEsc(name)}" data-arg-kind="codec" style="${inputBase}">${opts}</select>`;
+    return `<select data-arg="${esc(name)}" data-arg-kind="codec" style="${inputBase}">${opts}</select>`;
   }
   if (t === "corpus") {
     const all = trainState.discovery.corpora || [];
@@ -8391,12 +8386,12 @@ function _trBuildInput(a) {
     });
     if (filtered.length === 0) {
       const where = source === "bundled"
-        ? `<code>trainers/${_trEsc(selectedPluginId || "<bundle>")}/corpus/&lt;name&gt;_train.bin</code>`
+        ? `<code>trainers/${esc(selectedPluginId || "<bundle>")}/corpus/&lt;name&gt;_train.bin</code>`
         : `<code>data/corpus/&lt;name&gt;_train.bin</code>`;
       const what = source === "bundled"
         ? "this bundle's own corpus folder"
         : (source === "shared" ? "the shared corpus folder (data/corpus/)" : "any corpus folder");
-      return `<p class="train-no-corpus-error">No training data file found in ${what}. <a class="train-corpus-lib-link" data-open-corpus-lib>Download one from the corpus library</a>, or drop a <code>&lt;name&gt;_train.bin</code> file at ${where}, then click <i>refresh</i>.</p><input type="hidden" data-arg="${_trEsc(name)}" value="">`;
+      return `<p class="train-no-corpus-error">No training data file found in ${what}. <a class="train-corpus-lib-link" data-open-corpus-lib>Download one from the corpus library</a>, or drop a <code>&lt;name&gt;_train.bin</code> file at ${where}, then click <i>refresh</i>.</p><input type="hidden" data-arg="${esc(name)}" value="">`;
     }
     // Collapsed checkbox picker. The hidden input carries the joined "+"
     // stem list (multicorpus handles weighting); the summary echoes it.
@@ -8405,27 +8400,27 @@ function _trBuildInput(a) {
     );
     const initial = filtered.filter(c => selectedSet.has(c.stem)).map(c => c.stem);
     const boxes = filtered.map(c =>
-      `<label class="corpus-opt"><input type="checkbox" value="${_trEsc(c.stem)}" ${selectedSet.has(c.stem) ? "checked" : ""}><span>${_trEsc(c.label)}</span></label>`
+      `<label class="corpus-opt"><input type="checkbox" value="${esc(c.stem)}" ${selectedSet.has(c.stem) ? "checked" : ""}><span>${esc(c.label)}</span></label>`
     ).join("");
-    return `<details class="corpus-picker"><summary data-corpus-summary>${initial.length ? _trEsc(initial.join(" + ")) : "pick training data"}</summary>` +
+    return `<details class="corpus-picker"><summary data-corpus-summary>${initial.length ? esc(initial.join(" + ")) : "pick training data"}</summary>` +
            `<div class="corpus-list">${boxes}<div class="corpus-note">check several to mix &mdash; sampling is size-weighted. blank = reuse original on resume.</div></div></details>` +
-           `<input type="hidden" data-arg="${_trEsc(name)}" data-arg-kind="corpus" value="${_trEsc(initial.join("+"))}">`;
+           `<input type="hidden" data-arg="${esc(name)}" data-arg-kind="corpus" value="${esc(initial.join("+"))}">`;
   }
   if (t === "model_name") {
     // text models only: an image model continues from the Images action, which pins its
     // pictures, frame and codec; the text trainer would build the wrong model from it
     const textModels = (trainState.discovery.models || []).filter(m => m.training !== "image");
     const opts = ['<option value="">- pick a model -</option>']
-      .concat(textModels.map(m => `<option value="${_trEsc(m.name)}" ${m.name === def ? "selected" : ""}>${_trEsc(m.name)}</option>`))
+      .concat(textModels.map(m => `<option value="${esc(m.name)}" ${m.name === def ? "selected" : ""}>${esc(m.name)}</option>`))
       .join("");
-    return `<select data-arg="${_trEsc(name)}" data-arg-kind="model_name" style="${inputBase}">${opts}</select>`;
+    return `<select data-arg="${esc(name)}" data-arg-kind="model_name" style="${inputBase}">${opts}</select>`;
   }
   if (t === "model_step") {
-    return `<select data-arg="${_trEsc(name)}" data-arg-kind="model_step" data-depends-on="${_trEsc(a.depends_on || "")}" style="${inputBase}"><option value="">- pick model first -</option></select>`;
+    return `<select data-arg="${esc(name)}" data-arg-kind="model_step" data-depends-on="${esc(a.depends_on || "")}" style="${inputBase}"><option value="">- pick model first -</option></select>`;
   }
   const itype = (t === "int" || t === "float") ? "number" : "text";
   const step  = t === "float" ? ' step="any"' : (t === "int" ? ' step="1"' : "");
-  return `<input type="${itype}" data-arg="${_trEsc(name)}" value="${_trEsc(def)}"${step} style="${inputBase}">`;
+  return `<input type="${itype}" data-arg="${esc(name)}" value="${esc(def)}"${step} style="${inputBase}">`;
 }
 
 function _trArgEl(name) {
@@ -8581,8 +8576,6 @@ const TRAINER_SCHEMA = {
     // ---- plugin-specific architecture knobs (rendered when the plugin's
     //      manifest opts them in via defaults) ----
     { name: "variant",         type: "str",                   label: "variant tag",             help: "single-token suffix appended to the model dir name (e.g. 'sparse', 'qat'). leave blank for no variant." },
-    { name: "n_predict",       type: "int",                   label: "MTP heads (n_predict)",   help: "multi-token-prediction head count; 1 = vanilla, 2 = byte-t+2 head, 4 = 800M-style." },
-    { name: "mtp_aux_weight",  type: "float",                 label: "MTP aux weight",          help: "loss weight on the auxiliary MTP heads (heads 1..N-1). 0 = MTP heads untrained." },
     { name: "wsd_decay_frac",  type: "float",                 label: "WSD decay fraction",      help: "fraction of total steps spent in decay phase. typical 0.1." },
     { name: "wsd_decay_kind",  type: "str",                   label: "WSD decay shape",         help: "shape of the LR decay tail.", choices: ["sqrt","linear","cosine"] },
     { name: "hidden",          type: "int",                   label: "hidden width",            help: "transformer hidden dim. plugin-set; rarely edited." },
@@ -9448,14 +9441,6 @@ function _trUpdateStepCascades() {
   });
 }
 
-function _trFmtBytes(n) {
-  if (n == null) return "?";
-  if (n < 1024) return n + " B";
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
-  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
-  return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
-}
-
 function _trFmtAge(mtime) {
   if (mtime == null) return "?";
   const dt = new Date(mtime * 1000);
@@ -9475,21 +9460,21 @@ function _trUpdateCorpusMeta() {
   trainCorpusMetaState.inflight = true;
   box.dataset.loaded = "0";
   box.style.display = "block";
-  box.innerHTML = `<span style="color:var(--dim)">hashing corpus <b>${_trEsc(stem)}</b> ...</span>`;
+  box.innerHTML = `<span style="color:var(--dim)">hashing corpus <b>${esc(stem)}</b> ...</span>`;
   fetch(`/corpus/${encodeURIComponent(stem)}/usage`).then(r => r.json()).then(d => {
     trainCorpusMetaState.inflight = false;
     if (trainCorpusMetaState.stem !== stem) return;
-    if (d.error) { box.innerHTML = `<span style="color:var(--hot)">${_trEsc(d.error)}</span>`; return; }
+    if (d.error) { box.innerHTML = `<span style="color:var(--hot)">${esc(d.error)}</span>`; return; }
     if (d.mixed) { box.innerHTML = _trCorpusMixHtml(d); box.dataset.loaded = "1"; return; }
     const tr = d.train, va = d.val;
     const nMatches = (d.models || []).length;
     const matchLabel = nMatches === 0
       ? '<span style="color:var(--dim)">no models trained on this corpus yet</span>'
-      : `<span style="color:var(--data-pos)">shared with ${nMatches} model${nMatches === 1 ? "" : "s"}</span>: ${(d.models || []).map(m => _trEsc(m.name)).join(", ")}`;
+      : `<span style="color:var(--data-pos)">shared with ${nMatches} model${nMatches === 1 ? "" : "s"}</span>: ${(d.models || []).map(m => esc(m.name)).join(", ")}`;
     let html = `<div style="color:var(--text);margin-bottom:4px">corpus</div>`;
-    html += `<div><b>train</b> ${_trEsc(stem)}_train.bin &middot; ${_trFmtBytes(tr.bytes)} &middot; <span style="color:var(--accent)">${_trEsc(tr.sha256.substring(0, 12))}</span> &middot; ${_trFmtAge(tr.mtime)}</div>`;
+    html += `<div><b>train</b> ${esc(stem)}_train.bin &middot; ${fmtBytes(tr.bytes)} &middot; <span style="color:var(--accent)">${esc(tr.sha256.substring(0, 12))}</span> &middot; ${_trFmtAge(tr.mtime)}</div>`;
     if (va) {
-      html += `<div><b>val</b> ${_trEsc(stem)}_val.bin &middot; ${_trFmtBytes(va.bytes)} &middot; <span style="color:var(--accent)">${_trEsc(va.sha256.substring(0, 12))}</span> &middot; ${_trFmtAge(va.mtime)}</div>`;
+      html += `<div><b>val</b> ${esc(stem)}_val.bin &middot; ${fmtBytes(va.bytes)} &middot; <span style="color:var(--accent)">${esc(va.sha256.substring(0, 12))}</span> &middot; ${_trFmtAge(va.mtime)}</div>`;
     } else {
       html += `<div style="color:var(--warm)"><b>val</b> none on disk &middot; val loss skipped</div>`;
     }
@@ -9499,7 +9484,7 @@ function _trUpdateCorpusMeta() {
     box.dataset.loaded = "1";
   }).catch(e => {
     trainCorpusMetaState.inflight = false;
-    box.innerHTML = `<span style="color:var(--hot)">corpus meta failed: ${_trEsc(String(e))}</span>`;
+    box.innerHTML = `<span style="color:var(--hot)">corpus meta failed: ${esc(String(e))}</span>`;
   });
 }
 
@@ -9508,16 +9493,16 @@ function _trCorpusMixHtml(d) {
   const nMatches = (d.models || []).length;
   const matchLabel = nMatches === 0
     ? '<span style="color:var(--dim)">no models trained on these corpora yet</span>'
-    : `<span style="color:var(--data-pos)">shared with ${nMatches} model${nMatches === 1 ? "" : "s"}</span>: ${(d.models || []).map(m => _trEsc(m.name)).join(", ")}`;
+    : `<span style="color:var(--data-pos)">shared with ${nMatches} model${nMatches === 1 ? "" : "s"}</span>: ${(d.models || []).map(m => esc(m.name)).join(", ")}`;
   let html = `<div style="color:var(--text);margin-bottom:4px">corpus mix &middot; ${members.length} sources</div>`;
   for (const m of members) {
     if (!m.train) {
-      html += `<div style="color:var(--hot)"><b>${_trEsc(m.stem)}</b> &middot; not found on disk</div>`;
+      html += `<div style="color:var(--hot)"><b>${esc(m.stem)}</b> &middot; not found on disk</div>`;
       continue;
     }
     const pct = Math.round((m.weight || 0) * 100);
     const valTag = m.val ? "val ✓" : '<span style="color:var(--warm)">no val</span>';
-    html += `<div><b>${_trEsc(m.stem)}</b> &middot; ${pct}% &middot; ${_trFmtBytes(m.train.bytes)} &middot; <span style="color:var(--accent)">${_trEsc(m.train.sha256.substring(0, 12))}</span> &middot; ${valTag}</div>`;
+    html += `<div><b>${esc(m.stem)}</b> &middot; ${pct}% &middot; ${fmtBytes(m.train.bytes)} &middot; <span style="color:var(--accent)">${esc(m.train.sha256.substring(0, 12))}</span> &middot; ${valTag}</div>`;
   }
   html += `<div style="margin-top:4px">${matchLabel}</div>`;
   html += `<div style="margin-top:4px;color:var(--dim);font-size:10px">weights are size-proportional; the trainer samples per-example across sources</div>`;
@@ -9711,7 +9696,6 @@ const ARG_VISIBLE_WHEN = {
   min_lr:         () => _trArgVal("lr_schedule") !== "constant",
   warmup_steps:   () => _trArgVal("lr_schedule") !== "constant",
   quant_mode:     () => !!_corePluginsArgs().qat_enabled,
-  mtp_aux_weight: () => parseInt(_trArgVal("n_predict"), 10) > 1,
 };
 
 function _trUpdateKnobVisibility() {
@@ -9857,7 +9841,7 @@ function _ckptOpenPruneModal(model) {
   if (!modal) return;
   modal._pruneModel = model;
   document.getElementById("ckptPruneSummary").innerHTML =
-    `Model: <code>${_trEsc(model)}</code>`;
+    `Model: <code>${esc(model)}</code>`;
   document.getElementById("ckptPruneKeepEvery").value = _CKPT_PRUNE_KEEP_EVERY;
   document.getElementById("ckptPruneKeepLast").value  = _CKPT_PRUNE_KEEP_LAST;
   document.getElementById("ckptPrunePlan").innerHTML  = "Run a preview to see what would be deleted.";
@@ -9942,7 +9926,7 @@ function _trOpenForkModal(source) {
     suggested = suggested + i;
   }
   document.getElementById("forkModelSummary").innerHTML =
-    `Source: <code>${_trEsc(source)}</code> &nbsp;·&nbsp; latest checkpoint: <code>${latest != null ? "step_" + latest : "(none)"}</code>`;
+    `Source: <code>${esc(source)}</code> &nbsp;·&nbsp; latest checkpoint: <code>${latest != null ? "step_" + latest : "(none)"}</code>`;
   const nameInput = document.getElementById("forkModelNewName");
   nameInput.value = suggested;
   document.getElementById("forkModelStatus").textContent = "";
@@ -10045,7 +10029,7 @@ function _trOpenGrowModal(source) {
   modal._growSource = source;
   modal._growOptions = null;
   document.getElementById("growModelSummary").innerHTML =
-    `Source: <code>${_trEsc(source)}</code>`;
+    `Source: <code>${esc(source)}</code>`;
   document.getElementById("growModelStep").innerHTML = "";
   document.getElementById("growModelTarget").innerHTML = "<option>loading…</option>";
   document.getElementById("growModelParams").textContent = "";
@@ -10080,7 +10064,7 @@ function _trOpenGrowModal(source) {
       // seq is orthogonal to size, so "keep size" is a valid target when the
       // user only wants a longer context.
       const opts = out.targets.map(t =>
-        `<option value="${_trEsc(t.size)}">${_trEsc(t.size)} — ${t.layers}L/${t.hidden}h/${t.ffn}f/${t.heads}heads</option>`);
+        `<option value="${esc(t.size)}">${esc(t.size)} — ${t.layers}L/${t.hidden}h/${t.ffn}f/${t.heads}heads</option>`);
       opts.push(`<option value="">(keep size — grow context only)</option>`);
       tgtSel.innerHTML = opts.join("");
       const seqSel = document.getElementById("growModelSeq");
@@ -10221,7 +10205,6 @@ function _trPollGrowStatus(name) {
   });
 }
 
-
 function _trAutoPickBundledCorpus() {
   const p = trainState.selected;
   if (!p) return;
@@ -10312,13 +10295,13 @@ function _coreTrainersRender() {
     const mode = (groupCounts[p.group] > 1) ? "radio" : "toggle";
     const open = coreTrainersState.detailId === p.id;
     return `<div class="core-plugin-box${sel ? " is-selected" : ""}"
-                 data-id="${_trEsc(p.id)}"
-                 data-group="${_trEsc(p.group)}"
+                 data-id="${esc(p.id)}"
+                 data-group="${esc(p.group)}"
                  data-mode="${mode}"
                  role="button" tabindex="0">
       <div class="core-plugin-name">
-        <input type="checkbox" ${sel ? "checked" : ""} aria-label="${_trEsc(p.label)}" />
-        <span>${_trEsc(p.label)}</span>
+        <input type="checkbox" ${sel ? "checked" : ""} aria-label="${esc(p.label)}" />
+        <span>${esc(p.label)}</span>
         <button type="button" class="core-plugin-info">${open ? "hide details" : "see details"}</button>
       </div>
     </div>`;
@@ -10327,7 +10310,7 @@ function _coreTrainersRender() {
     const members = items.filter(p => p.group === g);
     const pick = members.length > 1 ? `<span class="core-group-pick">pick one</span>` : "";
     return `<div class="core-group">
-      <div class="core-group-head">${_trEsc(g)}${pick}</div>
+      <div class="core-group-head">${esc(g)}${pick}</div>
       <div class="core-group-cards">${members.map(card).join("")}</div>
     </div>`;
   }).join("");
@@ -10335,9 +10318,9 @@ function _coreTrainersRender() {
   if (detail) {
     const argsStr = Object.entries(detail.args || {}).map(([k, v]) => `${k}=${v}`).join("  ");
     html += `<div class="core-plugin-detail">
-      <b>${_trEsc(detail.label)}</b> <span class="core-plugin-group">${_trEsc(detail.group)}</span>
-      <div class="core-plugin-desc">${_trEsc(detail.description)}</div>
-      ${argsStr ? `<div class="core-plugin-args">${_trEsc(argsStr)}</div>` : ""}
+      <b>${esc(detail.label)}</b> <span class="core-plugin-group">${esc(detail.group)}</span>
+      <div class="core-plugin-desc">${esc(detail.description)}</div>
+      ${argsStr ? `<div class="core-plugin-args">${esc(argsStr)}</div>` : ""}
     </div>`;
   }
   grid.innerHTML = html;
@@ -10409,7 +10392,6 @@ function _corePluginsArgs() {
   return out;
 }
 
-
 // Size-derived capability line for the picker. manifest.teaches (a capability
 // tier keyword) wins when set; otherwise headline param count picks the list.
 const IDEAL_FOR_TIERS = [
@@ -10453,7 +10435,7 @@ function _trRenderManifestSummary(m) {
   const chips = [];
   const push = (label, value) => {
     if (value == null || value === "") return;
-    chips.push(`<span class="stat" style="color:var(--dim)">${_trEsc(label)} <b style="color:var(--text)">${_trEsc(String(value))}</b></span>`);
+    chips.push(`<span class="stat" style="color:var(--dim)">${esc(label)} <b style="color:var(--text)">${esc(String(value))}</b></span>`);
   };
   push("ideal for", _trIdealFor(m));
   if (layers || hidden || ffn || heads) {
@@ -10465,10 +10447,10 @@ function _trRenderManifestSummary(m) {
   push("steps",   d.total_steps);
   push("qat",     d.qat_enabled === true ? "on" : (d.qat_enabled === false ? "off" : null));
   if (m.engine_export_format) push("engine", m.engine_export_format);
-  const head = `<div style="margin-bottom:4px"><b style="color:var(--text)">${_trEsc(m.name || "")}</b></div>`;
+  const head = `<div style="margin-bottom:4px"><b style="color:var(--text)">${esc(m.name || "")}</b></div>`;
   const row  = `<div style="display:flex;flex-wrap:wrap;gap:6px 10px">${chips.join("")}</div>`;
   const full = m.description
-    ? `<div title="${_trEsc(m.description)}" style="color:var(--dim);font-size:10px;margin-top:4px">hover for full manifest description</div>`
+    ? `<div title="${esc(m.description)}" style="color:var(--dim);font-size:10px;margin-top:4px">hover for full manifest description</div>`
     : "";
   return head + row + full;
 }
@@ -10523,8 +10505,8 @@ function _imgSetRowsHtml(sets, current) {
   return sets.map(x => {
     const pct = x.images ? Math.round(100 * x.captions / x.images) : 0;
     const on = x.name === current;
-    return `<label class="imgf-set${on ? " on" : ""}"><input type="radio" name="imgf_set" value="${_trEsc(x.name)}" ${on ? "checked" : ""}>` +
-      `<span class="imgf-set-name">${_trEsc(x.name)}</span><span class="imgf-set-n">${Number(x.images).toLocaleString()} photos</span>` +
+    return `<label class="imgf-set${on ? " on" : ""}"><input type="radio" name="imgf_set" value="${esc(x.name)}" ${on ? "checked" : ""}>` +
+      `<span class="imgf-set-name">${esc(x.name)}</span><span class="imgf-set-n">${Number(x.images).toLocaleString()} photos</span>` +
       `<span class="imgf-bar" title="${pct}% captioned"><i style="width:${pct}%"></i></span><span class="imgf-set-cap">${Number(x.captions).toLocaleString()} captions</span></label>`;
   }).join("");
 }
@@ -10703,7 +10685,7 @@ function _imgfIntro(current) {
   const intro = _trEl("trainFormIntro");
   if (!intro) return;
   intro.innerHTML = current
-    ? `<b>${_trEsc(current.name)}</b> &middot; ${Number(current.images).toLocaleString()} pictures &middot; ${Number(current.captions).toLocaleString()} captions`
+    ? `<b>${esc(current.name)}</b> &middot; ${Number(current.images).toLocaleString()} pictures &middot; ${Number(current.captions).toLocaleString()} captions`
     : "";
 }
 
@@ -10713,7 +10695,7 @@ function _trRenderImageForm(p, argsEl) {
   const input = (n) => byName[n] ? _trBuildInput(byName[n]) : "";
   const placed = new Set(["name", "image_set", "size", "height", "width", "out_scale", "description", "resume"]);
   const advanced = fields.filter(a => !placed.has(a.name) && !a.uiOnly);
-  const advGrid = advanced.map(a => `<div class="imgf-field" title="${_trEsc(a.help || "")}"><label>${_trEsc(a.label || a.name)}</label>${_trBuildInput(a)}</div>`).join("");
+  const advGrid = advanced.map(a => `<div class="imgf-field" title="${esc(a.help || "")}"><label>${esc(a.label || a.name)}</label>${_trBuildInput(a)}</div>`).join("");
   const sets = trainState.discovery.image_sets || [];
   const current = sets.find(x => x.name === _trArgVal("image_set")) || null;
 
@@ -10784,7 +10766,7 @@ function _imgfLoadResumeOptions() {
     _imgfResumeModels = (d && d.models) || [];
     sel.innerHTML = `<option value="">new model</option>` + _imgfResumeModels.map(m => {
       const last = (m.steps || [])[m.steps.length - 1];
-      return `<option value="${_trEsc(m.name)}">continue ${_trEsc(m.name)} &middot; step ${Number(last || 0).toLocaleString()}</option>`;
+      return `<option value="${esc(m.name)}">continue ${esc(m.name)} &middot; step ${Number(last || 0).toLocaleString()}</option>`;
     }).join("");
     const pending = trainState._imgfPendingResume;
     if (pending && _imgfResumeModels.some(m => m.name === pending)) {
@@ -10806,7 +10788,7 @@ function _imgfResumeChanged() {
   if (info) {
     const last = m && (m.steps || [])[m.steps.length - 1];
     info.innerHTML = name
-      ? `continues <b>${_trEsc(name)}</b>${last ? ` from step ${Number(last).toLocaleString()}` : ""}${m && m.height ? ` &middot; ${m.height}&times;${m.width} px` : ""} &middot; its pictures, frame, codec and size are kept; <i>total steps</i> below is the new end`
+      ? `continues <b>${esc(name)}</b>${last ? ` from step ${Number(last).toLocaleString()}` : ""}${m && m.height ? ` &middot; ${m.height}&times;${m.width} px` : ""} &middot; its pictures, frame, codec and size are kept; <i>total steps</i> below is the new end`
       : continuing ? (_imgfResumeModels.length ? "pick the model to continue" : "no saved image model yet: train one first") : "";
   }
   _trUpdateComposedName();
@@ -10844,7 +10826,7 @@ function _trRenderForm() {
   _imgfDescLine(false);
   const introEl = _trEl("trainFormIntro");
   if (introEl) {
-    const ideal = _trEsc(_trIdealFor(p.manifest));
+    const ideal = esc(_trIdealFor(p.manifest));
     introEl.innerHTML = trainState.flow === "image"
       ? `Three things to fill in: <b>your pictures</b>, a <b>model name</b> and a <b>model size</b>. Everything else has a working default &mdash; tick <i>show all settings</i> to see it. <span style="color:var(--hot)">*</span> required &middot; hover <b>?</b> for help`
       : `ideal for <b>${ideal}</b> &middot; <span style="color:var(--hot)">*</span> required`;
@@ -10907,9 +10889,9 @@ function _trRenderForm() {
   <div class="trArgsGrid">`;
   for (const a of _trArgsForPlugin(p)) {
     const req      = a.required ? '<span style="color:var(--hot)"> *</span>' : "";
-    const labelTxt = a.label ? _trEsc(a.label) : _trEsc(a.name);
+    const labelTxt = a.label ? esc(a.label) : esc(a.name);
     const advBadge = a.advanced ? `<span class="adv-badge">ADV</span>` : "";
-    const helpText = a.help ? _trEsc(a.help) : "";
+    const helpText = a.help ? esc(a.help) : "";
     const hint     = helpText
       ? `<span class="hint" tabindex="0" aria-label="${helpText}"><span class="hint-mark">?</span><span class="hint-pop">${helpText}</span></span>`
       : "";
@@ -10920,9 +10902,9 @@ function _trRenderForm() {
     const wide     = (a.type === "text" || a.type === "path") ? " wide" : "";
     const featured = a.featured ? " featured" : "";
     if (a.type === "bool") {
-      html += `<div class="cell bool wide${featured}" data-cell="${_trEsc(a.name)}">${_trBuildInput(a)}<label>${labelTxt}${req}</label>${advBadge}${hint}${learn}</div>`;
+      html += `<div class="cell bool wide${featured}" data-cell="${esc(a.name)}">${_trBuildInput(a)}<label>${labelTxt}${req}</label>${advBadge}${hint}${learn}</div>`;
     } else {
-      html += `<div class="cell${wide}${featured}" data-cell="${_trEsc(a.name)}"><label>${labelTxt}${req} ${advBadge}${hint}${learn}</label>${_trBuildInput(a)}</div>`;
+      html += `<div class="cell${wide}${featured}" data-cell="${esc(a.name)}"><label>${labelTxt}${req} ${advBadge}${hint}${learn}</label>${_trBuildInput(a)}</div>`;
     }
   }
   html += `</div>`;
@@ -11005,7 +10987,7 @@ function _trRenderStatus() {
   if (!el) return;
   const colors = { idle: "var(--dim)", running: "var(--warm)", ok: "var(--data-pos)", failed: "var(--hot)", stopped: "var(--dim)" };
   const c  = colors[s.status] || "var(--dim)";
-  const id = s.plugin_id ? ` <b>${_trEsc(s.plugin_id)}</b>` : "";
+  const id = s.plugin_id ? ` <b>${esc(s.plugin_id)}</b>` : "";
   // Distinguish bench mode from real training so the user isn't confused by
   // "running" while a throwaway auto-tune probe is measuring memory. Bench
   // and real training are the same runner state (only one can be active),
@@ -11201,11 +11183,11 @@ function _capLoadOptions() {
     const styles = box.querySelector("[data-cap-styles]");
     const model = box.querySelector("[data-cap-model]");
     if (prov && !prov.options.length) {
-      prov.innerHTML = d.providers.map(p => `<option value="${_trEsc(p.id)}">${_trEsc(p.name)}${p.kind === "local" ? " (local)" : ""}</option>`).join("");
+      prov.innerHTML = d.providers.map(p => `<option value="${esc(p.id)}">${esc(p.name)}${p.kind === "local" ? " (local)" : ""}</option>`).join("");
       if (d.current.provider) prov.value = d.current.provider;
     }
     if (styles && !styles.children.length) {
-      styles.innerHTML = d.styles.map(x => `<label title="${_trEsc(x.prompt)}"><input type="radio" name="cap_style" data-cap-style value="${_trEsc(x.id)}" ${x.id === d.defaults.style ? "checked" : ""}>${_trEsc(x.label)}</label>`).join("");
+      styles.innerHTML = d.styles.map(x => `<label title="${esc(x.prompt)}"><input type="radio" name="cap_style" data-cap-style value="${esc(x.id)}" ${x.id === d.defaults.style ? "checked" : ""}>${esc(x.label)}</label>`).join("");
     }
     if (model && !model.value && d.current.model) model.placeholder = `configured: ${d.current.model} (needs a VISION model)`;
     if (d.state && d.state.status === "running") _capPoll(box);
@@ -11236,7 +11218,7 @@ function _capListModels(box) {
     .then(r => r.json())
     .then(d => {
       const models = (d && d.models) || [];
-      if (list) list.innerHTML = models.map(m => `<option value="${_trEsc(typeof m === "string" ? m : (m.id || m.name || ""))}">`).join("");
+      if (list) list.innerHTML = models.map(m => `<option value="${esc(typeof m === "string" ? m : (m.id || m.name || ""))}">`).join("");
       _capSay(box, models.length ? `${models.length} models listed - start typing in the model box` : (d && d.error) || "no models returned", models.length ? "var(--data-pos)" : "var(--hot)");
     })
     .catch(e => _capSay(box, "could not list models: " + e, "var(--hot)"));
@@ -11254,7 +11236,7 @@ function _capPreview(box) {
       const img = box.querySelector("[data-cap-thumb]");
       const txt = box.querySelector("[data-cap-preview-text]");
       if (img) img.src = d.thumbnail;
-      if (txt) txt.innerHTML = `${_trEsc(d.caption)}<br><span style="color:var(--dim)">${_trEsc(d.model || "")} &middot; ${d.seconds}s &middot; preview only</span>`;
+      if (txt) txt.innerHTML = `${esc(d.caption)}<br><span style="color:var(--dim)">${esc(d.model || "")} &middot; ${d.seconds}s &middot; preview only</span>`;
       if (out) out.style.display = "flex";
       _capSay(box, "one picture described", "var(--data-pos)");
     })
@@ -11291,7 +11273,7 @@ function _capPoll(box) {
     if (prog) prog.style.display = (running || d.total) ? "block" : "none";
     if (bar && d.total) bar.style.width = `${Math.round(100 * d.done / d.total)}%`;
     if (samples && d.samples && d.samples.length) {
-      samples.innerHTML = d.samples.slice(-3).map(x => `<div><span style="color:var(--text)">${_trEsc(x.name)}</span>: ${_trEsc(x.caption)}</div>`).join("");
+      samples.innerHTML = d.samples.slice(-3).map(x => `<div><span style="color:var(--text)">${esc(x.name)}</span>: ${esc(x.caption)}</div>`).join("");
     }
     if (running) {
       const rate = d.started_at && d.done ? (d.done / Math.max(1, (Date.now() / 1000) - d.started_at)) : 0;
@@ -11390,14 +11372,14 @@ function _trRenderPicker() {
     sel.innerHTML = `<option value="">loading trainers&hellip;</option>`;
     if (hint) hint.style.display = "none";
   } else if (list.length === 0) {
-    sel.innerHTML = `<option value="">- no ${_trEsc(trainState.flow)} trainers -</option>`;
+    sel.innerHTML = `<option value="">- no ${esc(trainState.flow)} trainers -</option>`;
     if (hint) {
       hint.style.display = "inline";
       hint.textContent = `drop a trainer into trainers/ (single .py or bundle folder with trainer.py) with kind:"trainer", flow:"${trainState.flow}"`;
     }
   } else {
     sel.innerHTML = '<option value="">- pick a trainer -</option>' +
-      list.map(p => `<option value="${_trEsc(p.id)}">${_trEsc(p.manifest.name || p.id)}</option>`).join("");
+      list.map(p => `<option value="${esc(p.id)}">${esc(p.manifest.name || p.id)}</option>`).join("");
     if (hint) hint.style.display = "none";
     if (cur && list.some(p => p.id === cur)) sel.value = cur;
   }
@@ -11443,7 +11425,7 @@ function _exRender() {
     return;
   }
   sel.innerHTML = '<option value="">- pick a model -</option>' +
-    models.map(m => `<option value="${_trEsc(m.name)}">${_trEsc(m.name)}</option>`).join("");
+    models.map(m => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
   if (cur && models.some(m => m.name === cur)) sel.value = cur;
   _exPopulateSteps();
 }
@@ -11557,299 +11539,48 @@ function _synthSyncStartLabel() {
 // run. Synth shows live teacher output instead; export is a one-shot.
 const TRAIN_METRICS_FLOWS = ["scratch", "continue", "image", "rag"];
 // ---------------------------------------------------------------
-// Images flow: the live view of an image run on the Training tab. The byte-model
-// panels below (register fluency, comprehension, concepts, lens drift) mean nothing
-// for a model whose output is pixels, so they are hidden and this replaces them.
-// Reads /images/live/<name>: progress.json (which stage the trainer is in, how far,
-// on which device; written from the first second, long before train.csv has a row),
-// the checkpoints on disk, the latest probe, and the run log tail.
+// Images flow: the live view of an image run on the Training tab replaces the byte-model
+// panels below (image_live.js owns the polling and the rendering). This decides WHICH run
+// is live, from the runner and from the picked model's config.
 // ---------------------------------------------------------------
-const imgLiveState = { active: false, name: null, data: null, csv: null, busy: false, lastFetch: 0 };
-const IMG_LIVE_TRAINER_ID = "native/image_trainer";
-const IMG_LIVE_POLL_RUNNING_MS = 2500;
-const IMG_LIVE_POLL_IDLE_MS = 10000;
-const IMG_LIVE_STAGES = [["decode", "decode pictures"], ["codec", "fit codec"], ["encode", "encode corpus"], ["train", "train"]];
-// Shared by the Models tab and the Training tab's live view: photo tiles at a fixed size,
-// heat maps that never stretch, the click-to-enlarge overlay.
-const IMRI_SHARED_STYLE = `<style>
-  .imri-photo { display:block; max-width:100%; height:auto; border:1px solid var(--line); border-radius:3px; background:#0a0c12; cursor:zoom-in; image-rendering:auto; }
-  .imri-heat { display:block; flex:none; }
-  .imri-scale { display:inline-flex; align-items:center; gap:6px; font-size:10px; color:var(--dim); }
-  .imri-scale i { display:inline-block; width:72px; height:8px; border-radius:2px; }
-  .imri-lightbox { position:fixed; inset:0; background:rgba(0,0,0,.86); display:flex; align-items:center; justify-content:center; z-index:9999; cursor:zoom-out; }
-  .imri-lightbox img { max-width:96vw; max-height:96vh; image-rendering:auto; border:1px solid var(--line); border-radius:4px; background:#0a0c12; }
-</style>`;
+let _imgLiveView = null;
 
-const IMG_LIVE_STYLE = `<style>
-  .imgl { display:flex; flex-direction:column; gap:10px; }
-  .imgl .panel .body { display:flex; flex-direction:column; gap:10px; }
-  .imgl-right { margin-left:auto; display:flex; gap:10px; align-items:center; font-size:11px; }
-  .imgl-chip { font-size:10px; font-weight:700; padding:2px 7px; border-radius:3px; letter-spacing:.04em; }
-  .imgl-gpu { background:rgba(93,255,155,.15); color:var(--data-pos); border:1px solid var(--data-pos); }
-  .imgl-cpu { background:rgba(255,93,143,.15); color:var(--hot); border:1px solid var(--hot); }
-  .imgl-note { background:rgba(93,184,255,.12); color:var(--accent); border:1px solid var(--accent); font-weight:600; }
-  .imgl-row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
-  .imgl-row > div { display:flex; flex-direction:column; gap:6px; }
-  .imgl-stages { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px; }
-  .imgl-stage { background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:8px 10px; display:flex; flex-direction:column; gap:6px; min-width:0; }
-  .imgl-stage-h { display:flex; justify-content:space-between; gap:8px; font-size:11px; color:var(--dim); white-space:nowrap; overflow:hidden; }
-  .imgl-stage-h b { color:var(--text); }
-  .imgl-stage-h span { overflow:hidden; text-overflow:ellipsis; }
-  .imgl-stage.running { border-color:var(--warm); }
-  .imgl-stage.running .imgl-stage-h b { color:var(--warm); }
-  .imgl-stage.done .imgl-stage-h span, .imgl-stage.skipped .imgl-stage-h span { color:var(--data-pos); }
-  .imgl-stage.failed { border-color:var(--hot); }
-  .imgl-bar { height:5px; background:#11141d; border-radius:3px; overflow:hidden; }
-  .imgl-bar i { display:block; height:100%; background:var(--accent); transition:width .4s; }
-  .imgl-stage.done .imgl-bar i, .imgl-stage.skipped .imgl-bar i { background:var(--data-pos); opacity:.7; }
-  .imgl-stage.running .imgl-bar i { background:var(--warm); }
-  .imgl-msg { font-size:12px; color:var(--text); }
-  .imgl-fail { font-size:12px; color:var(--hot); background:rgba(255,93,143,.08); border:1px solid var(--hot); border-radius:4px; padding:8px 10px; white-space:pre-wrap; }
-  .imgl-saved { font-size:11px; color:var(--dim); display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .imgl-continue { background:#0a0c12; border:1px solid var(--accent); color:var(--accent); border-radius:4px; padding:4px 10px; cursor:pointer; font:inherit; font-size:11px; font-weight:600; }
-  .imgl-kpis { display:flex; gap:10px; flex-wrap:wrap; }
-  .imgl-kpi { background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:8px 12px; min-width:120px; }
-  .imgl-kpi .v { font-size:18px; font-weight:700; color:var(--text); }
-  .imgl-kpi .k { font-size:10.5px; color:var(--dim); }
-  .imgl-of { font-size:11px; color:var(--dim); font-weight:400; }
-  .imgl-chart svg { width:100%; height:170px; display:block; background:#0a0c12; border:1px solid var(--line); border-radius:3px; }
-  .imgl-legend { display:flex; gap:12px; font-size:10.5px; color:var(--dim); }
-  .imgl-legend i { display:inline-block; width:10px; height:3px; vertical-align:middle; margin-right:4px; }
-  .imgl-figs { display:flex; flex-direction:column; gap:6px; }
-  .imgl-figs img { max-width:100%; border:1px solid var(--line); border-radius:3px; background:#0a0c12; }
-  .imgl-figs h4 { margin:0; font-size:11px; color:var(--dim); font-weight:600; }
-  .imgl-log { margin:0; font:11px monospace; color:var(--dim); background:#0a0c12; border:1px solid var(--line); border-radius:3px; padding:8px; max-height:220px; overflow:auto; white-space:pre-wrap; }
-</style>` + IMRI_SHARED_STYLE;
-
-// Mirrors save.compose_name(name, size) so the view can find the run's model dir
-// from the runner's args before config.json exists.
-function _imgLiveRunName(args) {
-  if (!args) return null;
-  if (args.resume) return String(args.resume);
-  if (!args.name || !args.size) return null;
-  const slug = _trSlugify(String(args.name)), size = String(args.size);
-  if (!slug) return null;
-  return (slug === size || slug.endsWith("_" + size) || slug.endsWith(size)) ? slug : slug + "_" + size;
+function imgLiveL() {
+  if (!_imgLiveView) {
+    _imgLiveView = ImageLive.create("imgLive", {
+      slugify: _trSlugify,
+      fmtParams: _trFmtParams,
+      runArgs: () => (trainState.running && trainState.running.plugin_id === ImageLive.TRAINER_ID && trainState.running.args) || {},
+      onActive: on => { const sec = $("trainMetricsSection"); if (sec) sec.style.display = on ? "none" : ""; },
+      onContinue: name => _trOpenImageContinue(name),
+      onOpenBrain: name => {
+        setTimelineActive(name);                     // decide image-vs-text before the tab loads anything
+        const sel = $("timelinePicker");
+        if (sel && Array.from(sel.options).some(o => o.value === name)) sel.value = name;
+        activateTab("learning");
+      },
+    });
+  }
+  return _imgLiveView;
 }
 
 function _imgLiveTick() {
   const run = trainState.running || {};
-  const isImgRun = run.plugin_id === IMG_LIVE_TRAINER_ID && !!run.args;
+  const view = imgLiveL();
+  const isImgRun = run.plugin_id === ImageLive.TRAINER_ID && !!run.args;
   const cfgImage = !!(trainModelCfg && trainModelCfg.training === "image" && trainSelectedRun && trainModelCfgName === trainSelectedRun);
-  let name = isImgRun ? _imgLiveRunName(run.args) : null;
+  let name = isImgRun ? view.runName(run.args) : null;
   if (!name && cfgImage) name = trainSelectedRun;
-  if (!name && trainState.flow === "image" && run.status !== "running") name = imgLiveState.name;
+  if (!name && trainState.flow === "image" && run.status !== "running") name = view.name;
   const on = !!name && (isImgRun || cfgImage || (trainState.flow === "image" && run.status !== "running"));
-  _imgLiveSetActive(on, name);
-  if (on) _imgLiveLoad();
-}
-
-function _imgLiveSetActive(on, name) {
-  const box = $("imgLive");
-  if (!box) return;
-  if (on && name !== imgLiveState.name) {
-    imgLiveState.name = name; imgLiveState.data = null; imgLiveState.csv = null; imgLiveState.lastFetch = 0;
-    _imgLiveRender();
-  }
-  if (on === imgLiveState.active) return;
-  imgLiveState.active = on;
-  box.style.display = on ? "block" : "none";
-  const sec = $("trainMetricsSection");
-  if (sec) sec.style.display = on ? "none" : "";
-  if (!on) { imgLiveState.name = null; imgLiveState.data = null; imgLiveState.csv = null; }
-}
-
-function _imgLiveLoad() {
-  const name = imgLiveState.name;
-  if (!name || imgLiveState.busy) return;
-  const now = Date.now();
-  const hot = !imgLiveState.data || imgLiveState.data.running;
-  if (now - imgLiveState.lastFetch < (hot ? IMG_LIVE_POLL_RUNNING_MS : IMG_LIVE_POLL_IDLE_MS)) return;
-  imgLiveState.busy = true; imgLiveState.lastFetch = now;
-  Promise.all([
-    fetch(`/images/live/${encodeURIComponent(name)}?` + now, { cache: "no-store" }).then(r => r.ok ? r.json() : null).catch(() => null),
-    fetch(`/run/${encodeURIComponent(name)}/csv?` + now, { cache: "no-store" }).then(r => r.ok ? r.text() : "").catch(() => ""),
-  ]).then(([d, csv]) => {
-    imgLiveState.busy = false;
-    if (!imgLiveState.active || imgLiveState.name !== name) return;
-    if (d && d.ok) imgLiveState.data = d;
-    imgLiveState.csv = _imgLiveParseCsv(csv);
-    _imgLiveRender();
-  }).catch(() => { imgLiveState.busy = false; });
-}
-
-function _imgLiveParseCsv(text) {
-  const out = { train: [], val: [] };
-  if (!text) return out;
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) return out;
-  const ix = Object.fromEntries(lines[0].split(",").map((h, i) => [h.trim(), i]));
-  for (const ln of lines.slice(1)) {
-    const c = ln.split(",");
-    const step = parseInt(c[ix.step], 10), loss = parseFloat(c[ix.loss]);
-    if (!isFinite(step) || !isFinite(loss)) continue;
-    const row = { step, loss, lr: parseFloat(c[ix.lr]), gn: parseFloat(c[ix.grad_norm]), tps: parseFloat(c[ix.tok_per_s]) };
-    if ((c[ix.split] || "").trim().endsWith("val")) out.val.push(row); else out.train.push(row);
-  }
-  // an older run's rows may sit ahead in the same file; keep the last run (steps restart)
-  let start = 0;
-  for (let i = 1; i < out.train.length; i++) if (out.train[i].step < out.train[i - 1].step) start = i;
-  out.train = out.train.slice(start);
-  if (out.train.length) out.val = out.val.filter(r => r.step >= out.train[0].step);
-  return out;
-}
-
-function _imgLiveFmtDur(s) {
-  if (s == null || !isFinite(s)) return "";
-  s = Math.max(0, Math.round(s));
-  if (s < 60) return s + "s";
-  if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s";
-  return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
-}
-
-function _imgLiveFmtRate(r) { return r >= 10 ? Math.round(r).toLocaleString() : r.toFixed(1); }
-
-function _imgLiveRender() {
-  const box = $("imgLive");
-  if (!box) return;
-  const name = imgLiveState.name || "";
-  const d = imgLiveState.data;
-  if (!d) {
-    box.innerHTML = IMG_LIVE_STYLE + `<div class="imgl"><div class="panel"><h2>image run <em>${_trEsc(name)}</em></h2><div class="body"><div class="meta">waiting for the run to report&hellip;</div></div></div></div>`;
-    return;
-  }
-  const p = d.progress || null;
-  const state = p ? p.state : (d.running ? "running" : "idle");
-  const stateColor = { running: "var(--warm)", done: "var(--data-pos)", stopped: "var(--dim)", failed: "var(--hot)" }[state] || "var(--dim)";
-  const device = p && p.device;
-  const devChip = !device ? "" : device === "cpu"
-    ? `<span class="imgl-chip imgl-cpu" title="no GPU was available to this run">CPU</span>`
-    : `<span class="imgl-chip imgl-gpu" title="codec fit, corpus encode and training run on the GPU. Decoding JPEGs is CPU work by nature; it is the first stage only.">GPU &middot; ${_trEsc(device)}</span>`;
-  const elapsed = p ? _imgLiveFmtDur((p.ended || Date.now() / 1000) - p.started) : "";
-  // how the run computes: the precision it measured fastest, the attention path, compiled or not
-  const pn = (p && p.notes) || {};
-  const speedChips = [
-    pn.precision ? `<span class="imgl-chip imgl-note" title="autocast precision this run computes in (auto picks the half precision the GPU measures fastest; the run log has the rates)${pn.ns_dtype ? `; Muon orthogonalizes in ${_trEsc(pn.ns_dtype)}` : ""}">${_trEsc(pn.precision)}</span>` : "",
-    pn.attention && pn.attention !== "sdpa" ? `<span class="imgl-chip imgl-note" title="attention written out in half precision instead of sdpa's fp32 fallback: 1.8x faster and half the memory on Apple GPUs">explicit attention</span>` : "",
-    pn.compiled ? `<span class="imgl-chip imgl-note" title="the training forward runs through torch.compile (measured 1.54x on an M2)">compiled</span>` : "",
-  ].join("");
-
-  const stages = IMG_LIVE_STAGES.map(([key, label]) => {
-    const s = (p && p.stages && p.stages[key]) || { state: "pending" };
-    let detail = "&mdash;", fill = 0, cls = s.state;
-    if (s.state === "done") { detail = `&#10003; ${_imgLiveFmtDur(s.seconds)}`; fill = 100; }
-    else if (s.state === "skipped") { detail = "reused"; fill = 100; }
-    else if (s.state === "running") {
-      fill = s.total ? 100 * s.done / s.total : 0;
-      detail = `${Number(s.done || 0).toLocaleString()} / ${Number(s.total || 0).toLocaleString()}`
-        + (s.rate ? ` &middot; ${_imgLiveFmtRate(s.rate)}/s` : "")
-        + (s.eta_s != null && state === "running" ? ` &middot; ${_imgLiveFmtDur(s.eta_s)} left` : "");
-      if (state !== "running") cls = state === "failed" ? "failed" : "pending";
-    }
-    return `<div class="imgl-stage ${cls}"><div class="imgl-stage-h"><b>${label}</b><span>${detail}</span></div><div class="imgl-bar"><i style="width:${fill.toFixed(1)}%"></i></div></div>`;
-  }).join("");
-
-  const tr = (p && p.stages && p.stages.train) || {};
-  const notes = (p && p.notes) || {};
-  const csv = imgLiveState.csv || { train: [], val: [] };
-  const last = csv.train.length ? csv.train[csv.train.length - 1] : null;
-  const lastVal = csv.val.length ? csv.val[csv.val.length - 1] : null;
-  const seq = notes.seq || (d.geometry && d.geometry.seq) || 0;
-  const kpi = (v, k, title) => `<div class="imgl-kpi" title="${_trEsc(title || "")}"><div class="v">${v}</div><div class="k">${k}</div></div>`;
-  const training = tr.state && tr.state !== "pending";
-  let kpis = "";
-  if (training) {
-    kpis += kpi(`${Number(tr.done || 0).toLocaleString()}<span class="imgl-of"> / ${Number(tr.total || 0).toLocaleString()}</span>`, "step", "training steps done");
-    if (last) kpis += kpi(last.loss.toFixed(3), "loss", "masked-fill loss on the training batch. Lower is better; it should fall steadily.");
-    if (lastVal) kpis += kpi(lastVal.loss.toFixed(3), `val loss<span class="imgl-of"> @ ${lastVal.step.toLocaleString()}</span>`, "the same loss on held-out pictures");
-    if (tr.step_s) kpis += kpi(tr.step_s >= 10 ? tr.step_s.toFixed(0) + "s" : tr.step_s.toFixed(2) + "s", "per step", "wall-clock seconds per optimizer step over the last log window (one step = one batch of pictures)");
-    if (last && seq) kpis += kpi(_imgLiveFmtRate(last.tps / seq), "pictures / s", "training throughput");
-    if (last && isFinite(last.lr)) kpis += kpi(last.lr.toExponential(1), "learning rate", "");
-    if (tr.eta_s != null && state === "running") kpis += kpi(_imgLiveFmtDur(tr.eta_s), "time left", "from the current step rate");
-    if (notes.fill_accuracy != null) kpis += kpi((100 * notes.fill_accuracy).toFixed(1) + "%", `fill accuracy<span class="imgl-of"> @ ${Number(notes.probe_step).toLocaleString()}</span>`, "of hidden cells the model fills in exactly, on held-out pictures (the checkpoint probe)");
-    if (notes.grad_accum > 1) kpis += kpi(`${notes.micro_batch}<span class="imgl-of"> &times; ${notes.grad_accum}</span>`, "pictures per forward", "the whole batch did not fit in memory in one forward, so each step is several smaller forwards with the gradients added up. Same batch, same result, slower.");
-    if (notes.params) kpis += kpi(_trFmtParams(notes.params), "parameters", "");
-    if (notes.records) kpis += kpi(Number(notes.records).toLocaleString(), "training pictures", "records in the corpus");
-  }
-
-  const ck = d.checkpoint_steps || [];
-  const runArgs = (trainState.running && trainState.running.plugin_id === IMG_LIVE_TRAINER_ID && trainState.running.args) || {};
-  const ckEvery = parseInt(runArgs.ckpt_every, 10) || 0;
-  const nextIn = ckEvery && training ? ckEvery - ((tr.done || 0) % ckEvery) : 0;
-  const ago = d.last_checkpoint_at ? _imgLiveFmtDur(Date.now() / 1000 - d.last_checkpoint_at) + " ago" : "";
-  const saved = ck.length
-    ? `<b style="color:var(--data-pos)">model saved</b> &middot; ${ck.length} checkpoint${ck.length === 1 ? "" : "s"} in models/${_trEsc(name)}/ &middot; last at step ${Number(ck[ck.length - 1]).toLocaleString()}${ago ? ` (${ago})` : ""}${state === "running" && nextIn ? ` &middot; next save in ${nextIn.toLocaleString()} steps` : ""}`
-    : training ? `<b style="color:var(--warm)">not saved yet</b>${ckEvery ? ` &middot; first checkpoint at step ${ckEvery.toLocaleString()}` : ""}` : `<span>nothing to save yet &middot; the model is created after the corpus is encoded</span>`;
-
-  let panels = "";
-  if (training) {
-    const svg = _imriSvgLine([
-      { name: "train", color: IMRI_COLORS[1], points: csv.train.map(r => [r.step, r.loss]) },
-      { name: "val", color: IMRI_COLORS[3], points: csv.val.map(r => [r.step, r.loss]) },
-    ]);
-    const lp = d.latest_probe;
-    const probeEvery = parseInt(runArgs.probe_every, 10) || 0;
-    const firstAt = probeEvery > 0 ? Math.min(probeEvery, ckEvery || probeEvery) : ckEvery;
-    let probe = `<div class="meta">the first pictures appear at step ${firstAt ? firstAt.toLocaleString() : "?"}${probeEvery ? ` and every ${probeEvery.toLocaleString()} steps after (the <i>pictures every</i> setting)` : " (the first checkpoint)"}.</div>`;
-    if (lp && lp.step != null) {
-      const u = f => `/images/mri/${encodeURIComponent(name)}/${lp.step}/${f}?${lp.step}`;
-      const F = f => (lp.files || []).includes(f);
-      const nPlanes = lp.planes || (d.geometry && d.geometry.planes) || 1;
-      const passes = (lp.pass_committed || []).length;
-      const nSamp = 8 + ((lp.caption_samples || []).length);
-      const [lgh, lgw] = lp.grid || [0, 0];
-      const formation = Array.isArray(lp.commit_pass_map) && lgh && lgw
-        ? _imriCellHeat(_imriRows(lp.commit_pass_map, lgh, lgw), { lo: 1, hi: lp.formation_passes || passes || 8, cell: 10, fmt: v => "pass " + v })
-        : (F("formation.png") ? _imriPhoto(u("formation.png"), lp, 2, "formation order") : "");
-      _imriWireLightbox();
-      probe = `<div class="imgl-figs">`
-        + (F("samples.png") ? `<h4>drawn from nothing &middot; same seeds every probe &middot; click a picture to enlarge</h4>${_imriPhoto(u("samples.png"), lp, nSamp, "samples")}` : "")
-        + (F("passes.png") ? `<h4>how one picture forms &middot; ${passes ? passes + " passes, " : ""}grey cells still undecided</h4>${_imriPhoto(u("passes.png"), lp, passes || 8, "decode passes")}` : "")
-        + ((formation || F("planes.png")) ? `<div class="imgl-row">`
-          + (formation ? `<div><h4>which pass decided each cell</h4>${formation}${_imriScale("pass 1", "last pass")}</div>` : "")
-          + (F("planes.png") ? `<div><h4>coarse to fine &middot; 1, 2, &hellip; ${nPlanes} planes</h4>${_imriPhoto(u("planes.png"), lp, nPlanes, "coarse to fine")}</div>` : "")
-          + `</div>` : "")
-        + (F("fill.png") ? `<h4>held-out pictures: original &middot; half hidden &middot; the model's fill</h4>${_imriPhoto(u("fill.png"), lp, 3, "fill test")}` : "")
-        + `<div class="meta">probe at step ${Number(lp.step).toLocaleString()}${lp.fill_accuracy != null ? ` &middot; fill accuracy ${(100 * lp.fill_accuracy).toFixed(1)}%` : ""}${lp.codes_used != null ? ` &middot; ${lp.codes_used} / 255 codes in use` : ""}${lp.colour_match != null ? ` &middot; colour match ${(100 * lp.colour_match).toFixed(0)}%` : ""}${lp.detail_ratio != null ? ` &middot; detail ${(100 * Math.min(1, lp.detail_ratio)).toFixed(0)}% of the codec ceiling` : ""} &middot; <a href="#" data-imgl-open>full brain view &rsaquo;</a></div></div>`;
-    }
-    panels = `<div class="grid r2">
-      <div class="panel"><h2>loss <em>train and held-out, by step</em></h2><div class="body"><div class="imgl-chart">${svg}</div><div class="imgl-legend"><span><i style="background:${IMRI_COLORS[1]}"></i>train</span><span><i style="background:${IMRI_COLORS[3]}"></i>held-out</span></div></div></div>
-      <div class="panel"><h2>what it draws now <em>${lp && lp.step != null ? "checkpoint " + Number(lp.step).toLocaleString() : "waiting for a checkpoint"}</em></h2><div class="body">${probe}</div></div>
-    </div>`;
-  }
-  const tail = (d.log_tail || []);
-  const log = tail.length ? `<div class="panel"><h2>run log <em>last lines</em></h2><div class="body"><pre class="imgl-log">${_trEsc(tail.join("\n"))}</pre></div></div>` : "";
-
-  box.innerHTML = IMG_LIVE_STYLE + `<div class="imgl">
-    <div class="panel">
-      <h2>image run <em>${_trEsc(name)}</em><span class="imgl-right">${devChip}${speedChips}<b style="color:${stateColor}">${_trEsc(state)}</b>${elapsed ? `<span class="meta">${elapsed}</span>` : ""}</span></h2>
-      <div class="body">
-        ${state === "failed" ? `<div class="imgl-fail">${_trEsc(p.message || "the run failed; see the run log")}</div>` : ""}
-        <div class="imgl-stages">${stages}</div>
-        ${p && p.message && state !== "failed" ? `<div class="imgl-msg">${_trEsc(p.message)}</div>` : ""}
-        <div class="imgl-saved">${saved}${ck.length && state !== "running" ? `<button type="button" class="imgl-continue" data-imgl-continue title="open the Training tab with this model picked to continue">continue this model &rsaquo;</button>` : ""}</div>
-        ${kpis ? `<div class="imgl-kpis">${kpis}</div>` : ""}
-      </div>
-    </div>
-    ${panels}
-    ${log}
-  </div>`;
-  const cont = box.querySelector("[data-imgl-continue]");
-  if (cont) cont.addEventListener("click", () => _trOpenImageContinue(name));
-  const open = box.querySelector("[data-imgl-open]");
-  if (open) open.addEventListener("click", e => {
-    e.preventDefault();
-    setTimelineActive(name);                         // decide image-vs-text before the tab loads anything
-    const sel = $("timelinePicker");
-    if (sel && Array.from(sel.options).some(o => o.value === name)) sel.value = name;
-    activateTab("learning");
-  });
+  view.setActive(on, name);
+  if (on) view.load();
 }
 
 function _trToggleMetrics(flow) {
   const sec = $("trainMetricsSection");
   if (!sec) return;
-  if (imgLiveState.active) { sec.style.display = "none"; return; }
+  if (imgLiveL().active) { sec.style.display = "none"; return; }
   const running = trainState.running && trainState.running.status === "running";
   sec.style.display = (running || TRAIN_METRICS_FLOWS.includes(flow)) ? "" : "none";
 }
@@ -11866,8 +11597,8 @@ function _synthRenderSamples(samples) {
   const stick = out.scrollHeight - out.scrollTop - out.clientHeight < SYNTH_SCROLL_STICK_PX;
   out.innerHTML = samples.map(s =>
     `<div style="border-bottom:1px solid var(--line);padding:6px 0">` +
-    `<div style="color:var(--accent);font-size:10px;margin-bottom:2px">${_trEsc(s.id)}</div>` +
-    `${_trEsc(s.response)}</div>`).join("");
+    `<div style="color:var(--accent);font-size:10px;margin-bottom:2px">${esc(s.id)}</div>` +
+    `${esc(s.response)}</div>`).join("");
   if (stick) out.scrollTop = out.scrollHeight;
 }
 
@@ -11916,12 +11647,12 @@ function _trUpdateTeacherGate() {
 }
 
 function _synthSeedRow(s, child) {
-  const name = _trEsc(child ? (s.tier || s.display_name || s.id) : (s.display_name || s.id));
-  const cat = _trEsc(s.category || "");
-  const lic = _trEsc(s.license || "");
-  const grp = _trEsc(s.group || "");
+  const name = esc(child ? (s.tier || s.display_name || s.id) : (s.display_name || s.id));
+  const cat = esc(s.category || "");
+  const lic = esc(s.license || "");
+  const grp = esc(s.group || "");
   return `<label class="synth-seed-row${child ? " child" : ""}">
-    <input type="checkbox" class="synth-seed-cb" data-id="${_trEsc(s.id)}" data-group="${grp}">
+    <input type="checkbox" class="synth-seed-cb" data-id="${esc(s.id)}" data-group="${grp}">
     <span>${name}</span>
     <span class="meta">${s.count || 0} ${cat ? "&middot; " + cat : ""} ${lic ? "&middot; " + lic : ""}</span>
   </label>`;
@@ -11957,8 +11688,8 @@ function _synthRenderSeeds(list) {
       SEED_TIER_ORDER.indexOf(a.tier) - SEED_TIER_ORDER.indexOf(b.tier));
     const total = kids.reduce((n, s) => n + (s.count || 0), 0);
     html.push(`<label class="synth-seed-row group">
-      <input type="checkbox" class="synth-group-cb" data-group="${_trEsc(g)}">
-      <span>${_trEsc(g)}</span>
+      <input type="checkbox" class="synth-group-cb" data-group="${esc(g)}">
+      <span>${esc(g)}</span>
       <span class="meta">${total}</span>
     </label>`);
     kids.forEach(s => html.push(_synthSeedRow(s, true)));
@@ -12167,9 +11898,9 @@ function _authorRenderGenres(spec) {
   const host = $("authorGenreList");
   if (!host) return;
   host.innerHTML = (spec.genres || []).map(g =>
-    `<label class="author-genre-row" title="${_trEsc(g.brief || "")}">
-      <input type="checkbox" class="author-genre-cb" data-id="${_trEsc(g.id)}" checked>
-      <span>${_trEsc(g.label || g.id)}</span>
+    `<label class="author-genre-row" title="${esc(g.brief || "")}">
+      <input type="checkbox" class="author-genre-cb" data-id="${esc(g.id)}" checked>
+      <span>${esc(g.label || g.id)}</span>
       <span class="meta">${Math.round((g.weight || 0) * 100)}% of target</span>
     </label>`).join("");
   const floor = $("authorNgramFloor");
@@ -12191,9 +11922,9 @@ function _authorRenderImportResult(d) {
   const fileRows = (d.files || []).map(f => {
     const reasons = Object.keys(f.rejected || {});
     const rejLine = reasons.length
-      ? reasons.map(k => `${_trEsc(k)} x${f.rejected[k]}`).join(", ")
+      ? reasons.map(k => `${esc(k)} x${f.rejected[k]}`).join(", ")
       : "none";
-    return `<div style="margin-top:6px"><b>${_trEsc(f.file)}</b>: ${f.accepted} accepted` +
+    return `<div style="margin-top:6px"><b>${esc(f.file)}</b>: ${f.accepted} accepted` +
            `<br><span style="color:var(--dim)">rejected: ${rejLine}</span></div>`;
   }).join("");
   const ratioPct = ((d.ngram_ratio === undefined ? 1 : d.ngram_ratio) * 100).toFixed(1);
@@ -12204,7 +11935,7 @@ function _authorRenderImportResult(d) {
       `Widen the source material before building; do not train on this as it stands.</div>`
     : `<div style="margin-top:8px;color:var(--dim)">wording variety: <b>${ratioPct}%</b> (floor ${floorPct}%)</div>`;
   box.innerHTML =
-    `<div><b>${d.accepted_total}</b> record(s) imported into job <code>${_trEsc(d.job_id)}</code></div>` +
+    `<div><b>${d.accepted_total}</b> record(s) imported into job <code>${esc(d.job_id)}</code></div>` +
     fileRows + ratioLine +
     `<div class="author-handoff" style="margin-top:10px"><b>Next step</b>: this job is now selected as the ` +
     `destination above. Enter a corpus name below and click <b>Build corpus</b>, which packs the accepted ` +
@@ -12341,7 +12072,7 @@ function _authorRenderStats(s) {
     ["em dashes rewritten", (a.em_dash_rewritten || 0).toLocaleString()],
     ["batches failed", (s.failed || 0).toLocaleString()],
   ].map(p =>
-    `<span class="author-stat"><b>${_trEsc(String(p[1]))}</b> <span>${p[0]}</span></span>`).join("");
+    `<span class="author-stat"><b>${esc(String(p[1]))}</b> <span>${p[0]}</span></span>`).join("");
   if (warn) {
     if (a.ngram_below_floor) {
       warn.style.display = "block";
@@ -12393,8 +12124,8 @@ function _authorLoadSamples() {
       const stick = out.scrollHeight - out.scrollTop - out.clientHeight < SYNTH_SCROLL_STICK_PX;
       out.innerHTML = d.samples.map(s =>
         `<div style="border-bottom:1px solid var(--line);padding:6px 0">` +
-        `<div style="color:var(--accent);font-size:10px;margin-bottom:2px">${_trEsc(s.id)}</div>` +
-        `${_trEsc(s.response || "")}</div>`).join("");
+        `<div style="color:var(--accent);font-size:10px;margin-bottom:2px">${esc(s.id)}</div>` +
+        `${esc(s.response || "")}</div>`).join("");
       if (stick) out.scrollTop = out.scrollHeight;
     })
     .catch(() => {});
@@ -12493,10 +12224,10 @@ function _authorBuild() {
       if (box) {
         box.style.display = "block";
         box.innerHTML = "<b>What to do next</b><ol>" +
-          (d.next_steps || []).map(s => `<li>${_trEsc(s)}</li>`).join("") +
-          `</ol><div style="margin-top:8px;color:var(--dim)">zip sha256 <code>${_trEsc(d.zip_sha256)}</code><br>` +
-          `train bin sha256 <code>${_trEsc(m.train_sha256 || "")}</code><br>` +
-          `val bin sha256 <code>${_trEsc(m.val_sha256 || "")}</code></div>`;
+          (d.next_steps || []).map(s => `<li>${esc(s)}</li>`).join("") +
+          `</ol><div style="margin-top:8px;color:var(--dim)">zip sha256 <code>${esc(d.zip_sha256)}</code><br>` +
+          `train bin sha256 <code>${esc(m.train_sha256 || "")}</code><br>` +
+          `val bin sha256 <code>${esc(m.val_sha256 || "")}</code></div>`;
       }
       _distRenderAudit(d.audit);
       _trPoll();
@@ -13420,7 +13151,7 @@ function _teacherFillModelList(models) {
   let html = `<option value="">${TEACHER_MODEL_LIST_LABEL}</option>`;
   if (uniq.length) {
     html += `<optgroup label="${TEACHER_MODEL_GROUP}">`
-      + uniq.map(m => `<option value="${_trEsc(m)}"${m === cur ? " selected" : ""}>${_trEsc(m)}</option>`).join("")
+      + uniq.map(m => `<option value="${esc(m)}"${m === cur ? " selected" : ""}>${esc(m)}</option>`).join("")
       + "</optgroup>";
   }
   html += `<option value="${TEACHER_MODEL_CUSTOM}"${cur && !inList ? " selected" : ""}>custom...</option>`;
@@ -14283,7 +14014,6 @@ function _activeTrainingName() {
   return r.model || r.name || "the active run";
 }
 
-
 // ---- Corpus library (apt-style downloader for data/corpus/) ----
 const corpusLibState = {
   catalog: null,        // last successful response
@@ -14342,7 +14072,7 @@ function _corpusTopicOf(c) {
   return "knowledge";
 }
 
-function _corpusFmtBytes(n) {
+function fmtBytes(n) {
   if (n == null) return "?";
   if (n < 1024) return n + " B";
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
@@ -14375,8 +14105,8 @@ function _corpusProgressBarHtml(p) {
     ? `<div style="flex:1;height:3px;background:#0a0c12;border-radius:2px;overflow:hidden;min-width:80px"><div style="width:${pct}%;height:100%;background:var(--warm);transition:width .3s"></div></div>`
     : `<div style="flex:1;height:3px;background:repeating-linear-gradient(90deg,var(--warm) 0 8px,#0a0c12 8px 16px);background-size:32px 100%;animation:cprogslide 1s linear infinite;border-radius:2px;min-width:80px"></div>`;
   return bar +
-    `<span style="white-space:nowrap;color:var(--warm)">${kind} ${_corpusFmtBytes(wrote)}` +
-    `${total ? ` / ${_corpusFmtBytes(total)} (${pct}%)` : ""}</span>`;
+    `<span style="white-space:nowrap;color:var(--warm)">${kind} ${fmtBytes(wrote)}` +
+    `${total ? ` / ${fmtBytes(total)} (${pct}%)` : ""}</span>`;
 }
 
 function _corpusActiveDownloads(data) {
@@ -14572,7 +14302,7 @@ function _corpusRowHtml(c) {
                     : (c.format === "native")     ? !!c.native_available
                     : !!c.train_url;
     const isUser    = c.is_user_source;
-    const sizeLabel = c.size_train != null ? _corpusFmtBytes(c.size_train) : null;
+    const sizeLabel = c.size_train != null ? fmtBytes(c.size_train) : null;
     const progress  = c.progress;
     const downloading = corpusLibState.installing.has(c.stem) || !!progress;
 
@@ -15038,7 +14768,7 @@ function _corpusMixPickedHtml() {
     const bits = [
       `<b>${_corpusEsc(c.label)}</b>`,
       `<span class="mix-dim">${_corpusEsc(stem)}</span>`,
-      `<span class="corpus-tag t-dim">${size != null ? _corpusFmtBytes(size) : "size unknown"}</span>`,
+      `<span class="corpus-tag t-dim">${size != null ? fmtBytes(size) : "size unknown"}</span>`,
       `<span class="corpus-tag t-info">${_corpusEsc(top ? top.label : _corpusTopicOf(c))}</span>`,
       `<span class="corpus-tag t-dim">${_corpusEsc(fam ? fam.label : _corpusFamilyOf(c))}</span>`,
     ];
@@ -15050,7 +14780,7 @@ function _corpusMixPickedHtml() {
       todo = `<div class="mix-todo">This corpus is not published yet, so it cannot be downloaded. Untick it and pick another, or the mix will fail at launch.</div>`;
     } else {
       bits.push(`<span class="corpus-tag t-warm">needs downloading</span>`);
-      todo = `<div class="mix-todo">Not on this machine yet. It downloads ${size != null ? "about " + _corpusFmtBytes(size) : "an unknown amount"} into data/corpus/ when you press "download missing" below (or install on its own row). Training cannot start until it is there.</div>`;
+      todo = `<div class="mix-todo">Not on this machine yet. It downloads ${size != null ? "about " + fmtBytes(size) : "an unknown amount"} into data/corpus/ when you press "download missing" below (or install on its own row). Training cannot start until it is there.</div>`;
     }
     return `<div class="mix-pick">${bits.join(" ")}${todo}</div>`;
   }).join("");
@@ -15075,8 +14805,8 @@ function _corpusMixConsequenceHtml() {
     const eta = mbs > 0 ? _corpusMixFmtSecs(bytes / (mbs * CORPUS_MIX_UNIT_BYTES.MB)) : null;
     lines.push(
       `<div class="mix-note">Download needed: ${missing.length} ${missing.length === 1 ? "corpus" : "corpora"} ` +
-      `(${missing.map(c => _corpusEsc(c.stem)).join(", ")}), about ${_corpusFmtBytes(bytes)}.</div>`,
-      `<div class="mix-note">Disk needed: about ${_corpusFmtBytes(bytes)} free under data/corpus/. The download refuses to start if there is not enough room and tells you how much is missing.</div>`,
+      `(${missing.map(c => _corpusEsc(c.stem)).join(", ")}), about ${fmtBytes(bytes)}.</div>`,
+      `<div class="mix-note">Disk needed: about ${fmtBytes(bytes)} free under data/corpus/. The download refuses to start if there is not enough room and tells you how much is missing.</div>`,
       `<div class="mix-note">Estimated time: ${eta ? eta + ` at ${mbs.toFixed(1)} MB/s` : "unknown until a download measures your connection. Fill in the speed control above for an estimate."}.</div>`
     );
   }
@@ -15101,8 +14831,8 @@ function _corpusMixPlanHtml() {
     `<td>${_corpusEsc(s.label || s.stem)}</td>` +
     `<td>${_corpusEsc(s.topic || "no topic")}</td>` +
     `<td>${s.weight == null ? "?" : (s.weight * 100).toFixed(1) + "%"}</td>` +
-    `<td>${_corpusFmtBytes(s.bytes_drawn)}</td>` +
-    `<td>${_corpusFmtBytes(s.bytes_available)}</td>` +
+    `<td>${fmtBytes(s.bytes_drawn)}</td>` +
+    `<td>${fmtBytes(s.bytes_available)}</td>` +
     `<td>${s.epochs == null ? "?" : (+s.epochs).toFixed(2)}` +
     `${over(s) ? ' <span class="corpus-tag t-warm">at/over cap</span>' : ""}</td>` +
     `</tr>`).join("");
@@ -15115,7 +14845,7 @@ function _corpusMixPlanHtml() {
     `<table class="mix-table"><thead><tr>` +
     `<th>corpus</th><th>topic</th><th>weight</th><th>bytes drawn</th><th>bytes available</th><th>epochs</th>` +
     `</tr></thead><tbody>${rows || `<tr><td colspan="6">planner returned no sources</td></tr>`}</tbody></table>`,
-    `<div class="mix-note">Total drawn: ${_corpusFmtBytes(p.bytes_planned)} of the ${_corpusFmtBytes(target)} you asked for.</div>`,
+    `<div class="mix-note">Total drawn: ${fmtBytes(p.bytes_planned)} of the ${fmtBytes(target)} you asked for.</div>`,
     `<div class="mix-note">"epochs" is how many times the model would read that corpus end to end. ${cap > 0 ? `Your cap is ${cap}.` : "No cap set here, so the planner used the server's saved cap."}${overCount ? ` ${overCount} ${overCount === 1 ? "source is" : "sources are"} at or over it: shrink the target, raise the cap, or add another corpus.` : ""}</div>`,
     `<div class="mix-head">Planner warnings</div>`,
     warnings || `<div class="mix-note">None. The planner reported no warnings.</div>`,
@@ -15292,9 +15022,9 @@ function _corpusMixProgressHtml() {
     const bar = pct != null
       ? `<span class="mix-bar"><i style="width:${pct}%"></i></span>`
       : `<span class="mix-bar"><i style="width:100%;opacity:.35"></i></span>`;
-    const of = p.total ? ` / ${_corpusFmtBytes(p.total)} (${pct}%)` : " (total size not reported by the source)";
+    const of = p.total ? ` / ${fmtBytes(p.total)} (${pct}%)` : " (total size not reported by the source)";
     return `<div class="mix-prog">${bar}<span>${_corpusEsc(c.stem)} ${_corpusEsc(p.kind || "train")}: ` +
-           `${_corpusFmtBytes(p.bytes)}${of} &middot; ${_corpusMixFmtSecs(elapsed)} elapsed</span></div>`;
+           `${fmtBytes(p.bytes)}${of} &middot; ${_corpusMixFmtSecs(elapsed)} elapsed</span></div>`;
   }).join("");
   return head + rows + `<div class="mix-note">Leave this open or close it: the download runs on the server and keeps going either way.</div>`;
 }
@@ -15801,14 +15531,14 @@ function _renderSysSpecs(s) {
   const gpuLines = (s.gpus || []).map(g => {
     const tag = g.integrated ? "integrated" : "discrete";
     const vram = g.vram_total ? " &middot; " + fmtBytes(g.vram_total) + " VRAM" : "";
-    return `<div>${escapeHtml(g.name || g.vendor || "GPU")} <span style="color:var(--dim)">(${tag}${vram})</span></div>`;
+    return `<div>${esc(g.name || g.vendor || "GPU")} <span style="color:var(--dim)">(${tag}${vram})</span></div>`;
   }).join("") || `<div style="color:var(--dim)">no GPU detected</div>`;
   const m = s.measured;
   const measuredLine = (m && m.tok_per_s)
-    ? `<div style="color:var(--data-pos);margin-top:4px">auto-tuned: batch ${m.best_batch || m.max_batch} &middot; ${Math.round(m.tok_per_s).toLocaleString()} tok/s &middot; ${(m.mem_ceiling_gb || 0).toFixed(1)} GB measured (${escapeHtml(m.device || "?")})</div>`
+    ? `<div style="color:var(--data-pos);margin-top:4px">auto-tuned: batch ${m.best_batch || m.max_batch} &middot; ${Math.round(m.tok_per_s).toLocaleString()} tok/s &middot; ${(m.mem_ceiling_gb || 0).toFixed(1)} GB measured (${esc(m.device || "?")})</div>`
     : "";
   view.innerHTML = `
-    <div>${escapeHtml(p.system || "?")} ${escapeHtml(p.release || "")} (${escapeHtml(p.machine || "?")}) &middot; Python ${escapeHtml(p.python || "?")}</div>
+    <div>${esc(p.system || "?")} ${esc(p.release || "")} (${esc(p.machine || "?")}) &middot; Python ${esc(p.python || "?")}</div>
     <div>${cpu.count_logical || "?"} logical cores${cpu.count_physical ? " (" + cpu.count_physical + " physical)" : ""} &middot; ${fmtBytes(mem.total_bytes)} RAM</div>
     ${gpuLines}
     ${measuredLine}
@@ -15967,7 +15697,7 @@ async function showBuildNoticesIfAny() {
   } catch (_) { return; }
   if (!notices.length) return;
   const items = notices.map(n =>
-    `<p style="margin:0 0 10px">${escapeHtml(n.message)}</p>`
+    `<p style="margin:0 0 10px">${esc(n.message)}</p>`
   ).join("");
   const body = `<div style="font-size:13px;line-height:1.55">${items}</div>`;
   const maxBuild = notices.reduce((m, n) => Math.max(m, n.build || 0), 0);
@@ -16697,7 +16427,7 @@ async function ensureWikiLoaded() {
     $("wikiEntry").innerHTML = doc.body_html || "";
     wikiState.loaded = true;
   } catch (e) {
-    $("wikiEntry").innerHTML = `<div class="wiki-empty">failed to load wiki: ${escapeHtml(String(e))}</div>`;
+    $("wikiEntry").innerHTML = `<div class="wiki-empty">failed to load wiki: ${esc(String(e))}</div>`;
   } finally {
     wikiState.loading = false;
   }
@@ -16711,7 +16441,7 @@ function renderWikiToc() {
     return;
   }
   wrap.innerHTML = wikiState.sections.map(s =>
-    `<div class="wiki-subtab wiki-toc-level${s.level}" data-slug="${escapeHtml(s.slug)}">${escapeHtml(s.title)}</div>`
+    `<div class="wiki-subtab wiki-toc-level${s.level}" data-slug="${esc(s.slug)}">${esc(s.title)}</div>`
   ).join("");
   wrap.querySelectorAll(".wiki-subtab").forEach(el => {
     el.addEventListener("click", () => {
@@ -16775,7 +16505,7 @@ async function loadVersions() {
         valStyle = `color:${meta.color};font-weight:600`;
       }
     }
-    return `<a href="#" data-vkey="${escapeHtml(k)}" style="color:var(--soft);text-decoration:none;border-bottom:1px dotted var(--line);cursor:pointer">${escapeHtml(label)} <span style="${valStyle}">${escapeHtml(displayVal)}</span></a>`;
+    return `<a href="#" data-vkey="${esc(k)}" style="color:var(--soft);text-decoration:none;border-bottom:1px dotted var(--line);cursor:pointer">${esc(label)} <span style="${valStyle}">${esc(displayVal)}</span></a>`;
   }
   try {
     const r = await fetch("/versions");
@@ -16839,7 +16569,7 @@ function _showVersionModal(title, version, body) {
     document.getElementById("versionInfoClose").addEventListener("click", () => backdrop.classList.add("hidden"));
   }
   const titleEl = document.getElementById("versionInfoTitle");
-  titleEl.innerHTML = `${escapeHtml(title)} <span style="color:var(--accent);font-weight:500;margin-left:8px">${escapeHtml(String(version))}</span>`;
+  titleEl.innerHTML = `${esc(title)} <span style="color:var(--accent);font-weight:500;margin-left:8px">${esc(String(version))}</span>`;
   document.getElementById("versionInfoBody").textContent = body;
   backdrop.classList.remove("hidden");
 }
@@ -16936,7 +16666,6 @@ const _AI = (() => {
     return a;
   }
 
-  function _esc(s) { return s.replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
 
   function _ensure() {
     if (backdrop) return;
@@ -16969,7 +16698,7 @@ const _AI = (() => {
       typerTimer = setTimeout(after, _rand(HOLD_MIN_MS, HOLD_MAX_MS));
       return;
     }
-    bodyEl.innerHTML = _esc(text.slice(0, idx)) + '<span class="ai-caret"></span>';
+    bodyEl.innerHTML = esc(text.slice(0, idx)) + '<span class="ai-caret"></span>';
     let delay = CHAR_BASE_MS + Math.random() * CHAR_JITTER;
     if (Math.random() < PAUSE_CHANCE) delay += _rand(PAUSE_MIN_MS, PAUSE_MAX_MS);
     typerTimer = setTimeout(() => _typeChar(text, idx + 1, after), delay);
@@ -17131,7 +16860,6 @@ window.ai_fail = _AI.fail;
   window._emptyStateRefresh = refresh;
 })();
 
-
 // ---- Distillation tab ----
 // One question this tab must always answer: WHERE do these teacher calls land,
 // and is that machine already busy? /teacher/target_status answers it and the
@@ -17242,12 +16970,12 @@ function _distRenderTarget(d) {
   if (note) {
     if (d.contention && d.run) {
       const started = _distFmtAgo(d.run.started_at);
-      note.innerHTML = `<strong>${_trEsc(d.run.name || d.run.plugin_id || "unnamed run")}</strong>` +
-        `${d.run.size ? " (" + _trEsc(d.run.size) + ")" : ""} has been training here` +
-        `${started ? " for " + _trEsc(started.replace(" ago", "")) : ""}. Teacher calls share the machine.`;
+      note.innerHTML = `<strong>${esc(d.run.name || d.run.plugin_id || "unnamed run")}</strong>` +
+        `${d.run.size ? " (" + esc(d.run.size) + ")" : ""} has been training here` +
+        `${started ? " for " + esc(started.replace(" ago", "")) : ""}. Teacher calls share the machine.`;
       note.style.display = "block";
     } else if (d.training_active === null) {
-      note.innerHTML = `Teacher runs on <strong>${_trEsc(d.host || "another machine")}</strong>; ` +
+      note.innerHTML = `Teacher runs on <strong>${esc(d.host || "another machine")}</strong>; ` +
         `its load is not visible from here.`;
       note.style.display = "block";
     } else {
@@ -17292,10 +17020,10 @@ function _distShowConfirm(d, run) {
   const r = d.run || {};
   const started = _distFmtAgo(r.started_at);
   body.innerHTML =
-    `<div><span class="dist-confirm-run">${_trEsc(r.name || r.plugin_id || "A training run")}</span>` +
-    `${r.size ? " (" + _trEsc(r.size) + ")" : ""} has been training on ` +
-    `<strong>${_trEsc(d.host || "this machine")}</strong>` +
-    `${started ? " for " + _trEsc(started.replace(" ago", "")) : ""}, and the teacher runs there too.</div>` +
+    `<div><span class="dist-confirm-run">${esc(r.name || r.plugin_id || "A training run")}</span>` +
+    `${r.size ? " (" + esc(r.size) + ")" : ""} has been training on ` +
+    `<strong>${esc(d.host || "this machine")}</strong>` +
+    `${started ? " for " + esc(started.replace(" ago", "")) : ""}, and the teacher runs there too.</div>` +
     `<ul>` +
     `<li>Both slow down; the run keeps its work.</li>` +
     `<li>Teacher calls may time out under load.</li>` +
@@ -17348,17 +17076,17 @@ function _distRenderAudit(audit) {
   if (host) {
     host.innerHTML = (audit.checks || []).map(c =>
       `<div class="dist-audit-check ${c.passed ? "pass" : "fail"}">
-         <span class="dist-audit-name">${_trEsc(c.label)}</span>
+         <span class="dist-audit-name">${esc(c.label)}</span>
          <span class="dist-audit-value">${_distFmtCheck(c)}</span>
-         <span class="dist-audit-bound">${_trEsc(_distFmtBound(c))}</span>
-         <span class="dist-audit-why">${_trEsc(c.why || "")}</span>
+         <span class="dist-audit-bound">${esc(_distFmtBound(c))}</span>
+         <span class="dist-audit-why">${esc(c.why || "")}</span>
        </div>`).join("");
   }
   const detail = $("distAuditDetail");
   if (detail) {
     const arts = Object.keys(audit.artifacts || {});
     const artLine = arts.length
-      ? arts.map(k => `${_trEsc(k)} &times;${audit.artifacts[k]}`).join(", ")
+      ? arts.map(k => `${esc(k)} &times;${audit.artifacts[k]}`).join(", ")
       : "none found";
     detail.innerHTML =
       `${audit.total_user_turns.toLocaleString()} user turns ` +
@@ -17397,7 +17125,7 @@ function _distJobName(j) {
 function _distFillJobPickers() {
   const jobs = synthState.jobs || [];
   const opts = jobs.map(j =>
-    `<option value="${_trEsc(j.job_id)}">${_trEsc(_distJobName(j))} (${(j.completed || 0).toLocaleString()} records)</option>`).join("");
+    `<option value="${esc(j.job_id)}">${esc(_distJobName(j))} (${(j.completed || 0).toLocaleString()} records)</option>`).join("");
   DIST_JOB_PICKERS.forEach(pick => {
     const sel = $(pick.id);
     if (!sel) return;
@@ -17481,19 +17209,19 @@ function _distRenderJobs() {
 function _distJobRow(j) {
   const cats = (j.categories || []).join(", ");
   const ago = _distFmtAgo(j.updated_at);
-  const id = _trEsc(j.job_id);
+  const id = esc(j.job_id);
   // view stays available on a running job: watching records land is the point.
   const acts = (j.running ? ["view"] : ["view", "use", "ren", "del"]).map(a =>
         `<button type="button" class="action dist-job-${a}" data-act="${a}" data-id="${id}">` +
         `${DIST_JOB_ACT_LABEL[a]}</button>`).join("")
     + (j.running ? '<span class="dist-job-run">running</span>' : "");
   return `<div class="dist-job${j.running ? " running" : ""}" data-job="${id}">`
-    + `<span class="dist-job-main"><span class="dist-job-name">${_trEsc(_distJobName(j))}</span>`
+    + `<span class="dist-job-main"><span class="dist-job-name">${esc(_distJobName(j))}</span>`
     + `<span class="dist-job-id">${id}</span></span>`
     + `<span class="dist-job-facts"><span><b data-records>${(j.completed || 0).toLocaleString()}</b> records</span>`
     + `<span><b data-bytes>${_fmtBytes(j.bytes || 0)}</b> on disk</span>`
-    + (cats ? `<span>${_trEsc(cats)}</span>` : "")
-    + (ago ? `<span>written ${_trEsc(ago)}</span>` : "")
+    + (cats ? `<span>${esc(cats)}</span>` : "")
+    + (ago ? `<span>written ${esc(ago)}</span>` : "")
     + `</span><span class="dist-job-acts">${acts}</span></div>`;
 }
 
@@ -17547,7 +17275,7 @@ function _distViewLoad() {
     .then(d => {
       distView.busy = false;
       if (!d || d.error) {
-        if (body) body.innerHTML = `<div class="dist-view-empty">could not read this corpus: ${_trEsc((d && d.error) || "failed")}</div>`;
+        if (body) body.innerHTML = `<div class="dist-view-empty">could not read this corpus: ${esc((d && d.error) || "failed")}</div>`;
         return;
       }
       distView.total = d.total || 0;
@@ -17556,7 +17284,7 @@ function _distViewLoad() {
     })
     .catch(e => {
       distView.busy = false;
-      if (body) body.innerHTML = `<div class="dist-view-empty">${_trEsc(_backendErrMsg(e))}</div>`;
+      if (body) body.innerHTML = `<div class="dist-view-empty">${esc(_backendErrMsg(e))}</div>`;
     });
 }
 
@@ -17585,16 +17313,16 @@ function _distViewRender(rows) {
 
 function _distViewCard(r, n) {
   const tags = [r.genre, r.voice].filter(Boolean)
-    .map(t => `<span class="dist-rec-tag">${_trEsc(t)}</span>`).join("");
+    .map(t => `<span class="dist-rec-tag">${esc(t)}</span>`).join("");
   const turns = Array.isArray(r.turns) && r.turns.length
     ? r.turns.map(t => {
         const asst = (t.role || "") === "assistant";
-        return `<span class="dist-rec-turn${asst ? " asst" : ""}"><b>${_trEsc(t.role || "?")}</b> ${_trEsc(t.text || "")}</span>`;
+        return `<span class="dist-rec-turn${asst ? " asst" : ""}"><b>${esc(t.role || "?")}</b> ${esc(t.text || "")}</span>`;
       }).join("")
-    : `<span class="dist-rec-turn">${_trEsc(r.text || "")}</span>`;
+    : `<span class="dist-rec-turn">${esc(r.text || "")}</span>`;
   return `<div class="dist-rec-card"><div class="dist-rec-head">`
     + `<span class="dist-rec-n">#${n.toLocaleString()}</span>`
-    + (r.id ? `<span class="dist-rec-id">${_trEsc(r.id)}</span>` : "")
+    + (r.id ? `<span class="dist-rec-id">${esc(r.id)}</span>` : "")
     + tags + `</div>${turns}</div>`;
 }
 
@@ -17644,7 +17372,7 @@ function _distOutcomeErrors(s) {
   const keys = Object.keys(sum).sort((a, b) => sum[b] - sum[a]);
   if (!keys.length) return "";
   return `<div class="dist-outcome-errs">` + keys.slice(0, 6).map(k =>
-    `<span class="dist-outcome-err"><b>${sum[k]}&times;</b> ${_trEsc(k)}</span>`).join("") +
+    `<span class="dist-outcome-err"><b>${sum[k]}&times;</b> ${esc(k)}</span>`).join("") +
     (keys.length > 6 ? `<span class="dist-outcome-err">+${keys.length - 6} more</span>` : "") +
     `</div>`;
 }
@@ -17663,11 +17391,11 @@ function _distRenderOutcome(mode, s, planned, noun, jobId) {
           (failed ? `, ${failed.toLocaleString()} calls failed` : "") + `.`;
   } else if (kind === "aborted") {
     why = `The run stopped itself. ` +
-          (s.last_error ? `Last error: <b>${_trEsc(s.last_error)}</b>. ` : "") +
+          (s.last_error ? `Last error: <b>${esc(s.last_error)}</b>. ` : "") +
           `${kept.toLocaleString()} ${noun} written before it died are still on disk and can be built or resumed.`;
   } else if (kind === "empty") {
     why = `Not one record survived. ` +
-          (s.last_error ? `Last error: <b>${_trEsc(s.last_error)}</b>. `
+          (s.last_error ? `Last error: <b>${esc(s.last_error)}</b>. `
                         : `Every call either failed or was rejected by the quality gate. `) +
           `Check the teacher in Settings, then start again.`;
   } else if (kind === "partial") {
@@ -17683,7 +17411,7 @@ function _distRenderOutcome(mode, s, planned, noun, jobId) {
   host.className = `dist-outcome is-${spec.cls}`;
   host.innerHTML = `<div class="dist-outcome-head"><span class="dist-outcome-dot"></span>`
     + `<span class="dist-outcome-title">${spec.head}</span>`
-    + `<span class="dist-outcome-job">${_trEsc(_distJobNameById(jobId || ""))}</span></div>`
+    + `<span class="dist-outcome-job">${esc(_distJobNameById(jobId || ""))}</span></div>`
     + `<div class="dist-outcome-why">${why}</div>`
     + _distOutcomeErrors(s);
 }
@@ -17789,7 +17517,6 @@ function _distJobPost(url, body) {
     .then(_synthLoadJobs)
     .catch(() => {});
 }
-
 
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".dist-mode").forEach(b =>
@@ -17979,8 +17706,8 @@ function _ivLoadPacks() {
       // Unavailable verticals stay visible but disabled: the roadmap is useful,
       // pretending a vertical works when it has no seeds is not.
       sel.innerHTML = d.packs.map(p =>
-        `<option value="${_trEsc(p.vertical)}"${p.available ? "" : " disabled"}>` +
-        `${_trEsc(p.label)}${p.available ? ` (${p.seed_count.toLocaleString()} seeds)` : " - no seeds yet"}` +
+        `<option value="${esc(p.vertical)}"${p.available ? "" : " disabled"}>` +
+        `${esc(p.label)}${p.available ? ` (${p.seed_count.toLocaleString()} seeds)` : " - no seeds yet"}` +
         `</option>`).join("");
       let want = null;
       try { want = localStorage.getItem(INTERVIEW_VERTICAL_STORE); } catch (e) {}
@@ -18018,8 +17745,8 @@ function _ivSetVertical(vertical) {
   const anySaved = pack.groups.some(g => saved.has(g.id));
   host.innerHTML = pack.groups.map(g =>
     `<label class="dist-topic-row">
-       <input type="checkbox" class="dist-topic-cb" data-id="${_trEsc(g.id)}"${(anySaved ? saved.has(g.id) : true) ? " checked" : ""}>
-       <span>${_trEsc(g.label)}</span>
+       <input type="checkbox" class="dist-topic-cb" data-id="${esc(g.id)}"${(anySaved ? saved.has(g.id) : true) ? " checked" : ""}>
+       <span>${esc(g.label)}</span>
        <span class="n">${g.count}</span>
      </label>`).join("");
   host.querySelectorAll(".dist-topic-cb").forEach(cb =>
@@ -18040,9 +17767,9 @@ function _ivRenderGenres(spec) {
   const dialogue = (spec.genres || []).filter(g => g.schema === "turns");
   host.innerHTML = dialogue.map(g =>
     `<label class="author-genre-row">
-       <input type="checkbox" class="interview-genre-cb" data-id="${_trEsc(g.id)}"${g.id === "conversation" ? " checked" : ""}>
-       <span>${_trEsc(g.id)}</span>
-       <span class="meta">${_trEsc((g.brief || "").slice(0, 90))}&hellip;</span>
+       <input type="checkbox" class="interview-genre-cb" data-id="${esc(g.id)}"${g.id === "conversation" ? " checked" : ""}>
+       <span>${esc(g.id)}</span>
+       <span class="meta">${esc((g.brief || "").slice(0, 90))}&hellip;</span>
      </label>`).join("");
   host.querySelectorAll(".interview-genre-cb").forEach(cb =>
     cb.addEventListener("change", _ivCost));
@@ -18192,7 +17919,7 @@ function _ivRenderStats(s) {
     ["calls that failed", (c.failed || 0).toLocaleString()],
     ["kept short after a failure", (c.salvaged || 0).toLocaleString()],
     ["estimated time left", _ivEta(s.eta_hours)],
-  ].map(p => `<span class="author-stat"><b>${_trEsc(String(p[1]))}</b> <span>${p[0]}</span></span>`).join("");
+  ].map(p => `<span class="author-stat"><b>${esc(String(p[1]))}</b> <span>${p[0]}</span></span>`).join("");
 
   if (warn) {
     // Two different warnings, and the shortfall one matters more: it means the
@@ -18203,7 +17930,7 @@ function _ivRenderStats(s) {
     if (shortKeys.length) {
       warn.style.display = "block";
       warn.innerHTML = `Ran out of distinct questions: ` +
-        shortKeys.map(k => `<b>${_trEsc(k)}</b> short by ${short[k]}`).join(", ") +
+        shortKeys.map(k => `<b>${esc(k)}</b> short by ${short[k]}`).join(", ") +
         `. The teacher stopped producing new openers for those genres, so fewer conversations ` +
         `were generated than you asked for. Asking for more will not help &mdash; widen the ` +
         `<code>situations</code> list for those genres in <code>corpus_spec.json</code>, or run ` +
@@ -18295,9 +18022,9 @@ function _ivRenderErrors(d) {
   // with the rejected count beside it.
   if (count) count.textContent = `${(d.total || rows.length).toLocaleString()} in this corpus`;
   const html = rows.map(r =>
-    `<div class="dist-err-row"><span class="dist-err-id">${_trEsc(r.id || "?")}</span>` +
+    `<div class="dist-err-row"><span class="dist-err-id">${esc(r.id || "?")}</span>` +
     `<span class="dist-err-when">${_distAgo(r.ts)}</span>` +
-    `<span class="dist-err-text">${_trEsc(r.error || "")}</span></div>`).join("");
+    `<span class="dist-err-text">${esc(r.error || "")}</span></div>`).join("");
   if (out.dataset.sig === html.length + ":" + (rows[0].id || "")) return;
   out.dataset.sig = html.length + ":" + (rows[0].id || "");
   out.innerHTML = html;
@@ -18384,13 +18111,13 @@ function _ivCallRow(c, live, ref) {
   // a timeout instead of as a silence.
   let reply = `<span class="dist-call-tag">&larr; got</span>` +
               `<span class="dist-call-bytes">${_fmtBytes(c.got_bytes || 0)}</span>` +
-              `<span class="dist-call-text">${_trEsc(c.got || "")}</span>`;
+              `<span class="dist-call-text">${esc(c.got || "")}</span>`;
   if (live) {
     reply = `<span class="dist-call-tag">&larr; got</span><span class="dist-call-bytes"></span>` +
             `<span class="dist-call-waiting">${wait ? "reply is arriving&hellip;" : "nothing back yet&hellip;"}</span>`;
   } else if (c.error) {
     reply = `<span class="dist-call-tag">&times; failed</span><span class="dist-call-bytes"></span>` +
-            `<span class="dist-err-text">${_trEsc(c.error)}</span>`;
+            `<span class="dist-err-text">${esc(c.error)}</span>`;
   }
   // Split, not just a total: time spent waiting for the first word separates a
   // teacher that is busy from one that is slow, and only the stream knows it.
@@ -18400,13 +18127,13 @@ function _ivCallRow(c, live, ref) {
   return `<div class="dist-call${live ? " is-live" : ""}${c.error ? " is-failed" : ""}"` +
     ` data-started="${Date.now() - ms}" data-wait="${wait}">` +
     `<span class="dist-call-dot"></span>` +
-    `<span class="dist-call-head"><span class="dist-call-kind">${_trEsc(c.kind || "call")}</span>` +
-    `<span class="dist-call-id">${_trEsc(c.id || "")}</span>${split}</span>` +
+    `<span class="dist-call-head"><span class="dist-call-kind">${esc(c.kind || "call")}</span>` +
+    `<span class="dist-call-id">${esc(c.id || "")}</span>${split}</span>` +
     `<span class="dist-call-ms">${_ivMs(ms)}</span>` +
     _ivCallBar(wait, ms, ref) +
     `<div class="dist-call-io"><span class="dist-call-tag">&rarr; sent</span>` +
     `<span class="dist-call-bytes">${_fmtBytes(c.sent_bytes || 0)}</span>` +
-    `<span class="dist-call-text">${_trEsc(c.sent || "")}</span>${reply}</div></div>`;
+    `<span class="dist-call-text">${esc(c.sent || "")}</span>${reply}</div></div>`;
 }
 
 // Two segments on one track: the wait for the first word, then the reply
@@ -18479,7 +18206,7 @@ function _ivRenderGateHits(a) {
   const blocked = (a.rejects || {})["banned phrase"] || 0;
   if (count) count.textContent = `${blocked.toLocaleString()} conversations thrown away`;
   hits.innerHTML = rows.map(([phrase, n]) =>
-    `<span class="dist-outcome-err">${_trEsc(phrase)} <b>${n.toLocaleString()}</b></span>`).join("");
+    `<span class="dist-outcome-err">${esc(phrase)} <b>${n.toLocaleString()}</b></span>`).join("");
 }
 
 const TEACHER_BANNED = "/teacher/authoring/banned";
@@ -18557,21 +18284,21 @@ function _ivConvoCard(s, idx) {
   const bytes = turns.reduce((a, t) => a + _IV_BYTES.encode(t.text || "").length, 0);
   const replies = turns.filter(t => t.role === "assistant").length;
   const chips = [s.genre, s.voice].filter(Boolean)
-    .map(t => `<span class="dist-convo-chip">${_trEsc(t)}</span>`).join("");
+    .map(t => `<span class="dist-convo-chip">${esc(t)}</span>`).join("");
   const body = rest.map(t => {
     const n = _IV_BYTES.encode(t.text || "").length;
     const asst = t.role === "assistant";
     return `<div class="dist-convo-turn${asst ? " asst" : ""}">` +
            `<span class="dist-convo-who">${asst ? "teacher" : "person"}` +
            `<span class="dist-convo-len">${n} B</span></span>` +
-           `<span class="dist-convo-text">${_trEsc(t.text || "")}</span></div>`;
+           `<span class="dist-convo-text">${esc(t.text || "")}</span></div>`;
   }).join("");
   return `<div class="dist-convo${idx === 0 ? " fresh" : ""}">`
     + `<div class="dist-convo-head">${chips}`
     + `<span class="dist-convo-facts">${replies} ${replies === 1 ? "reply" : "replies"}`
     + ` &middot; ${bytes.toLocaleString()} B</span></div>`
     + `<div class="dist-convo-seed"><span class="dist-convo-seed-tag">seed</span>`
-    + `<span class="dist-convo-text">${_trEsc(seed.text || "")}</span></div>`
+    + `<span class="dist-convo-text">${esc(seed.text || "")}</span></div>`
     + body + `</div>`;
 }
 
@@ -18601,7 +18328,7 @@ function _ivBuild() {
       if (box) {
         box.style.display = "block";
         box.innerHTML = "<b>What to do next</b><ol>" +
-          (d.next_steps || []).map(x => `<li>${_trEsc(x)}</li>`).join("") + "</ol>";
+          (d.next_steps || []).map(x => `<li>${esc(x)}</li>`).join("") + "</ol>";
       }
       _distRenderAudit(d.audit);
       _trPoll();
@@ -18646,839 +18373,3 @@ document.addEventListener("DOMContentLoaded", () => {
     _ivPollStart();
   });
 });
-
-// ============================================================
-// GENERATION TAB: IMAGES PANEL
-// ============================================================
-// Generates from a trained image model through POST /images/generate. One
-// endpoint, every mode; the source photo (variation / inpaint / expand) is read
-// in the browser and sent as base64, the answer is a PNG shown in place.
-
-const imgGenState = { models: [], busy: false };
-
-function _imgGenEl(id) { return document.getElementById(id); }
-
-function _imgGenLoadModels() {
-  return fetch("/images/models").then(r => r.json()).then(d => {
-    imgGenState.models = (d && d.models) || [];
-    const sel = _imgGenEl("imgGenModel");
-    const count = _imgGenEl("imgGenCount");
-    if (!sel) return;
-    const cur = sel.value;
-    if (!imgGenState.models.length) {
-      sel.innerHTML = '<option value="">- no image models yet: train one in the Training tab -</option>';
-    } else {
-      sel.innerHTML = imgGenState.models.map(m =>
-        `<option value="${_trEsc(m.name)}">${_trEsc(m.name)} (${m.height}x${m.width})</option>`).join("");
-      if (cur && imgGenState.models.some(m => m.name === cur)) sel.value = cur;
-    }
-    if (count) count.textContent = imgGenState.models.length ? `${imgGenState.models.length} model${imgGenState.models.length === 1 ? "" : "s"}` : "";
-    _imgGenFillSteps();
-  }).catch(() => {});
-}
-
-function _imgGenFillSteps() {
-  const sel = _imgGenEl("imgGenModel");
-  const steps = _imgGenEl("imgGenStep");
-  if (!sel || !steps) return;
-  const m = imgGenState.models.find(x => x.name === sel.value);
-  const list = m ? m.steps.slice().sort((a, b) => b - a) : [];
-  steps.innerHTML = list.map((s, i) => `<option value="${s}">${s}${i === 0 ? " (latest)" : ""}</option>`).join("");
-}
-
-function _imgGenModeChanged() {
-  const mode = (_imgGenEl("imgGenMode") || {}).value || "text";
-  const row = _imgGenEl("imgGenSourceRow");
-  const needsSource = ["variation", "inpaint", "expand"].includes(mode);
-  if (row) row.style.display = needsSource ? "flex" : "none";
-  const show = (id, on) => { const el = _imgGenEl(id); if (el) el.style.display = on ? "" : "none"; };
-  show("imgGenStrengthWrap", mode === "variation");
-  show("imgGenExpandWrap", mode === "expand");
-  show("imgGenRectWrap", mode === "inpaint");
-  const prompt = _imgGenEl("imgGenPrompt");
-  if (prompt) prompt.disabled = mode === "unconditional";
-}
-
-function _imgGenReadSource() {
-  const input = _imgGenEl("imgGenSource");
-  const file = input && input.files && input.files[0];
-  if (!file) return Promise.resolve(null);
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("could not read the photo"));
-    reader.readAsDataURL(file);
-  });
-}
-
-function _imgGenRun() {
-  if (imgGenState.busy) return;
-  const status = _imgGenEl("imgGenStatus");
-  const say = (msg, color) => { if (status) { status.textContent = msg; status.style.color = color || "var(--dim)"; } };
-  const model = (_imgGenEl("imgGenModel") || {}).value;
-  if (!model) { say("train an image model first (Training tab -> Train an image model)", "var(--hot)"); return; }
-  const mode = (_imgGenEl("imgGenMode") || {}).value || "text";
-  const num = (id, dflt) => { const v = parseFloat((_imgGenEl(id) || {}).value); return isFinite(v) ? v : dflt; };
-  _imgGenReadSource().then(source => {
-    if (["variation", "inpaint", "expand"].includes(mode) && !source) {
-      say("pick a source photo for this mode", "var(--hot)"); return;
-    }
-    const body = {
-      model, mode,
-      step: parseInt((_imgGenEl("imgGenStep") || {}).value, 10) || undefined,
-      caption: (_imgGenEl("imgGenPrompt") || {}).value || "",
-      image: source || undefined,
-      strength: num("imgGenStrength", 0.6),
-      expand: num("imgGenExpand", 0.6),
-      rect: [num("imgGenX0", 0.25), num("imgGenY0", 0.25), num("imgGenX1", 0.75), num("imgGenY1", 0.75)],
-      passes: Math.round(num("imgGenPasses", 8)),
-      temperature: num("imgGenTemp", 1.0),
-      seed: Math.round(num("imgGenSeed", 0)),
-    };
-    imgGenState.busy = true;
-    const btn = _imgGenEl("imgGenRun");
-    if (btn) btn.disabled = true;
-    say(`generating (${body.passes} passes) ...`, "var(--warm)");
-    return fetch("/images/generate", { method: "POST", headers: { "Content-Type": "application/json" },
-                                       body: JSON.stringify(body) })
-      .then(r => r.json())
-      .then(d => {
-        if (!d.ok) { say(d.error || "generation failed", "var(--hot)"); return; }
-        const src = "data:image/png;base64," + d.png;
-        const img = _imgGenEl("imgGenOut");
-        const wrap = _imgGenEl("imgGenOutWrap");
-        const save = _imgGenEl("imgGenSave");
-        if (img) img.src = src;
-        if (save) { save.href = src; save.download = `${d.model}_step${d.step}_${d.mode}_seed${body.seed}.png`; }
-        if (wrap) wrap.style.display = "flex";
-        say(`${d.height}x${d.width} in ${d.seconds}s on ${d.device} - ${d.regenerated} of ${d.code_bytes} cells generated over ${d.passes} passes`, "var(--data-pos)");
-      });
-  }).catch(e => say("failed: " + (e && e.message || e), "var(--hot)"))
-    .finally(() => { imgGenState.busy = false; const btn = _imgGenEl("imgGenRun"); if (btn) btn.disabled = false; });
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-  const panel = _imgGenEl("imgGenPanel");
-  if (!panel) return;
-  const model = _imgGenEl("imgGenModel");
-  const mode = _imgGenEl("imgGenMode");
-  const run = _imgGenEl("imgGenRun");
-  if (model) model.addEventListener("change", _imgGenFillSteps);
-  if (mode) mode.addEventListener("change", _imgGenModeChanged);
-  if (run) run.addEventListener("click", _imgGenRun);
-  panel.addEventListener("toggle", () => { if (panel.open) _imgGenLoadModels(); });
-  _imgGenModeChanged();
-  _imgGenLoadModels();
-});
-
-// ============================================================
-// MODELS TAB: IMAGE MODEL VIEW
-// ============================================================
-// Replaces the byte-level panels when the picked model is an image model. Data is
-// image_probe's per-checkpoint dump (GET /images/mri/<model>): samples from the
-// same seeds at every step, a fill test on real pictures, fill accuracy per plane,
-// loss by how much is hidden, codebook usage, attention focus per layer, and the
-// pictures behind each. Polls while a run is training this model.
-
-const imgMriState = { active: false, model: null, data: null, step: null, timer: null, running: false,
-                      follow: true, playing: false, playTimer: null, sample: 0, fillPic: 0, imgs: {},
-                      prompt: { model: null, state: null, timer: null, photo: null, photoName: "" } };
-const IMG_MRI_PLAY_MS = 1200;
-const IMG_MRI_PROMPT_POLL_MS = 1500;
-const LAYER_COLS_JS = 8;                      // image_probe.LAYER_COLS: tiles per row in layers.png / attention.png
-const IMG_MRI_POLL_MS = 4000;
-const IMG_MRI_STYLE = `<style>
-  .imri { display:flex; flex-direction:column; gap:10px; }
-  .imri .panel .body { display:flex; flex-direction:column; gap:10px; }
-  .imri-head { display:flex; gap:14px; flex-wrap:wrap; align-items:center; font-size:11.5px; color:var(--dim); }
-  .imri-head b { color:var(--text); }
-  .imri-live { color:var(--warm); font-weight:600; }
-  .imri-continue { margin-left:auto; background:#0a0c12; border:1px solid var(--accent); color:var(--accent); border-radius:4px; padding:5px 12px; cursor:pointer; font:inherit; font-size:12px; font-weight:600; }
-  .imri h2 { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .imri-strip { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; }
-  .imri-strip button { flex:none; background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:4px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:3px; }
-  .imri-strip button.on { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
-  .imri-strip img { height:52px; width:auto; image-rendering:auto; display:block; }
-  .imri-strip span { font-size:10px; color:var(--dim); }
-  .imri-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:12px; }
-  .imri-fig { display:flex; flex-direction:column; gap:5px; }
-  .imri-fig img { max-width:100%; border:1px solid var(--line); border-radius:3px; background:#0a0c12; image-rendering:auto; }
-  .imri-fig h4 { margin:0; font-size:11.5px; color:var(--text); font-weight:600; }
-  .imri-fig .cols { display:flex; gap:0; font-size:10px; color:var(--dim); }
-  .imri-fig .cols span { flex:1; text-align:center; }
-  .imri-kpis { display:flex; gap:10px; flex-wrap:wrap; }
-  .imri-kpi { background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:8px 12px; min-width:130px; }
-  .imri-kpi .v { font-size:18px; font-weight:700; color:var(--text); }
-  .imri-kpi .k { font-size:10.5px; color:var(--dim); }
-  .imri-chart svg { width:100%; height:150px; display:block; background:#0a0c12; border:1px solid var(--line); border-radius:3px; }
-  .imri-legend { display:flex; gap:10px; flex-wrap:wrap; font-size:10.5px; color:var(--dim); }
-  .imri-legend i { display:inline-block; width:10px; height:3px; vertical-align:middle; margin-right:4px; }
-  .imri-scrub { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:11px; color:var(--dim); }
-  .imri-scrub input[type=range] { flex:1 1 200px; min-width:120px; }
-  .imri-scrub button { background:#0a0c12; border:1px solid var(--line); color:var(--text); border-radius:3px; padding:3px 9px; cursor:pointer; font:inherit; }
-  .imri-scrub button.on { border-color:var(--accent); color:var(--accent); }
-  .imri-film { display:flex; flex-direction:column; gap:6px; }
-  .imri-film canvas { max-width:100%; border:1px solid var(--line); border-radius:3px; background:#0e1016; cursor:pointer; display:block; }
-  .imri-film .pick { display:flex; gap:10px; align-items:center; font-size:11px; color:var(--dim); flex-wrap:wrap; }
-  .imri-film select { background:#11141d; border:1px solid var(--line); color:var(--text); padding:2px 6px; font:inherit; border-radius:3px; }
-  .imri-prompt { display:flex; flex-direction:column; gap:8px; }
-  .imri-prompt textarea { width:100%; box-sizing:border-box; background:#11141d; border:1px solid var(--line); color:var(--text); padding:6px 8px; font:inherit; border-radius:3px; resize:vertical; }
-  .imri-prompt .ctl { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:11px; color:var(--dim); }
-  .imri-prompt .ctl input[type=number] { width:64px; background:#11141d; border:1px solid var(--line); color:var(--text); padding:3px 6px; font:inherit; border-radius:3px; }
-  .imri-prompt .ctl button { background:#0a0c12; border:1px solid var(--line); color:var(--text); border-radius:3px; padding:4px 10px; cursor:pointer; font:inherit; }
-  .imri-prompt .ctl button.primary { border-color:var(--accent); color:var(--accent); font-weight:600; }
-  .imri-prompt .results { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
-  .imri-prompt .res { flex:none; display:flex; flex-direction:column; gap:3px; align-items:center; background:#0a0c12; border:1px solid var(--line); border-radius:4px; padding:5px; }
-  .imri-prompt .res.on { border-color:var(--accent); }
-  .imri-prompt .res img { width:120px; height:120px; display:block; border-radius:2px; }
-  .imri-prompt .res img.small { width:60px; height:60px; }
-  .imri-prompt .res span { font-size:10px; color:var(--dim); }
-  .imri-section { font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin:8px 0 -4px 2px; font-weight:700; }
-  .imri-section span { text-transform:none; letter-spacing:0; font-weight:400; margin-left:8px; }
-  .imri-heatwrap { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
-  .imri-side { display:flex; flex-direction:column; gap:6px; flex:1 1 160px; min-width:140px; font-size:10.5px; color:var(--dim); }
-  .imri-chart.small svg { height:120px; }
-  .imri-grid-3 { grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); }
-</style>` + IMRI_SHARED_STYLE;
-const IMRI_COLORS = ["#5dff9b", "#5db8ff", "#ffae5d", "#ff5d8f", "#c77dff", "#ffe45d", "#5dffe4", "#ff7a5d"];
-
-function _imriSvgLine(series, opts) {
-  // series: [{name, color, points: [[x, y], ...]}]; one shared x (step) axis.
-  const W = 600, H = 150, L = 42, R = 10, T = 10, B = 22;
-  const pts = series.flatMap(s => s.points);
-  if (!pts.length) return `<svg viewBox="0 0 ${W} ${H}"><text x="${W / 2}" y="${H / 2}" fill="#6f7480" font-size="11" text-anchor="middle">no data yet</text></svg>`;
-  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs);
-  let y0 = opts && opts.y0 !== undefined ? opts.y0 : Math.min(...ys), y1 = opts && opts.y1 !== undefined ? opts.y1 : Math.max(...ys);
-  if (y1 === y0) { y1 = y0 + 1; }
-  const sx = x => x1 === x0 ? (L + (W - L - R) / 2) : L + (x - x0) / (x1 - x0) * (W - L - R);
-  const sy = y => T + (1 - (y - y0) / (y1 - y0)) * (H - T - B);
-  const fmt = v => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
-  let out = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
-  for (const f of [0, 0.5, 1]) {
-    const y = T + f * (H - T - B);
-    out += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="#1e2330" stroke-width="1"/>`;
-    out += `<text x="${L - 4}" y="${y + 3}" fill="#6f7480" font-size="9" text-anchor="end">${fmt(y1 - f * (y1 - y0))}</text>`;
-  }
-  const xname = (opts && opts.xname) || "step";
-  out += `<text x="${L}" y="${H - 6}" fill="#6f7480" font-size="9">${xname} ${x0.toLocaleString()}</text>`;
-  out += `<text x="${W - R}" y="${H - 6}" fill="#6f7480" font-size="9" text-anchor="end">${x1.toLocaleString()}</text>`;
-  for (const s of series) {
-    if (!s.points.length) continue;
-    const d = s.points.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ");
-    out += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
-    const last = s.points[s.points.length - 1];
-    out += `<circle cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="3" fill="${s.color}"/>`;
-  }
-  return out + `</svg>`;
-}
-
-function _imriBars(values, labels, color) {
-  const W = 600, H = 150, L = 10, B = 22, T = 10;
-  if (!values || !values.length) return `<svg viewBox="0 0 ${W} ${H}"><text x="${W / 2}" y="${H / 2}" fill="#6f7480" font-size="11" text-anchor="middle">no data yet</text></svg>`;
-  const max = Math.max(1e-9, ...values);
-  const bw = (W - 2 * L) / values.length;
-  let out = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
-  values.forEach((v, i) => {
-    const h = (v / max) * (H - T - B);
-    out += `<rect x="${(L + i * bw + 2).toFixed(1)}" y="${(H - B - h).toFixed(1)}" width="${(bw - 4).toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" opacity="0.85"/>`;
-    out += `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${H - 7}" fill="#6f7480" font-size="9" text-anchor="middle">${labels[i]}</text>`;
-    out += `<text x="${(L + i * bw + bw / 2).toFixed(1)}" y="${(H - B - h - 3).toFixed(1)}" fill="#a6b0bf" font-size="9" text-anchor="middle">${v.toFixed(2)}</text>`;
-  });
-  return out + `</svg>`;
-}
-
-async function _imgMriDecide(name) {
-  let isImage = false;
-  const known = (typeof learningTimelinesByName !== "undefined") && learningTimelinesByName[name];
-  if (known && known.training) {
-    isImage = known.training === "image";              // the timelines list already says
-  } else {
-    try {
-      const r = await fetch(`/run/${encodeURIComponent(name)}/config?` + Date.now(), { cache: "no-store" });
-      const cfg = r.ok ? await r.json() : null;
-      isImage = !!(cfg && cfg.training === "image");
-    } catch (_e) { isImage = false; }
-  }
-  if (learningTimelineName !== name) return true;      // a newer pick won; do nothing here
-  _imgMriSetActive(isImage, name);
-  return isImage;
-}
-
-function _imgMriSetActive(on, name) {
-  const body = document.querySelector('.tab-body[data-tab="learning"]');
-  const box = document.getElementById("imgMri");
-  if (!body || !box) return;
-  const first = body.querySelector(".panel");
-  Array.from(body.children).forEach(child => {
-    if (child === first || child === box) return;
-    child.style.display = on ? "none" : "";
-  });
-  // The picker panel stays, but says what it is showing: no byte-model copy on a picture model.
-  const em = first && first.querySelector("h2 em");
-  if (em) {
-    if (!em.dataset.textDefault) em.dataset.textDefault = em.innerHTML;
-    em.innerHTML = on ? "an image model at every saved checkpoint: what it draws, how it forms, what it knows" : em.dataset.textDefault;
-  }
-  const desc = first && first.querySelector("p.desc");
-  if (desc) desc.style.display = on ? "none" : "";
-  box.style.display = on ? "block" : "none";
-  imgMriState.active = on;
-  if (imgMriState.timer) { clearTimeout(imgMriState.timer); imgMriState.timer = null; }
-  if (!on) { _imgMriPlay(false); imgMriState.model = null; imgMriState.data = null; return; }
-  if (imgMriState.model !== name) { _imgMriPlay(false); imgMriState.model = name; imgMriState.data = null; imgMriState.step = null; imgMriState.follow = true; imgMriState.imgs = {}; }
-  const status = $("learningStatus");
-  if (status) status.innerHTML = `<span class="meta">image model &mdash; showing what it draws, what it can complete, and what it is learning, at every checkpoint.</span>`;
-  _imgMriLoad();
-}
-
-function _imgMriLoad() {
-  const name = imgMriState.model;
-  if (!name || !imgMriState.active) return;
-  Promise.all([
-    fetch(`/images/mri/${encodeURIComponent(name)}?` + Date.now(), { cache: "no-store" }).then(r => r.json()),
-    fetch("/trainers").then(r => r.json()).catch(() => null),
-  ]).then(([d, tr]) => {
-    if (!imgMriState.active || imgMriState.model !== name) return;
-    imgMriState.data = d && d.ok ? d : null;
-    const run = tr && tr.running;
-    imgMriState.running = !!(run && run.status === "running" && run.args && run.args.name &&
-      (`${String(run.args.name).toLowerCase().replace(/[^a-z0-9]+/g, "_")}_${run.args.size}` === name || run.args.resume === name));
-    _imgMriRender();
-    if (imgMriState.running) imgMriState.timer = setTimeout(_imgMriLoad, IMG_MRI_POLL_MS);
-  }).catch(() => {});
-}
-
-function _imriB64ToBytes(b64) {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-// The same-seed samples' codes at a checkpoint, as one Uint8Array per sample.
-function _imriSampleCodes(s) {
-  if (!s || !s.sample_codes_b64 || !s.code_bytes) return null;
-  if (!s._codes) {
-    const all = _imriB64ToBytes(s.sample_codes_b64);
-    const n = Math.floor(all.length / s.code_bytes);
-    s._codes = Array.from({ length: n }, (_, i) => all.subarray(i * s.code_bytes, (i + 1) * s.code_bytes));
-  }
-  return s._codes;
-}
-
-// Churn between two checkpoints: which cells of the same-seed samples changed. map = share
-// of samples whose cell changed (any plane), per plane and overall change fractions, and a
-// per-sample cell mask for outlining.
-function _imriChurn(prev, cur) {
-  const a = _imriSampleCodes(prev), b = _imriSampleCodes(cur);
-  if (!a || !b) return null;
-  const n = Math.min(a.length, b.length), cb = cur.code_bytes, planes = cur.planes || 1, cell = Math.floor(cb / planes);
-  if (!n || !cell) return null;
-  const map = new Float32Array(cell), perPlane = new Array(planes).fill(0), changed = [];
-  let all = 0;
-  for (let i = 0; i < n; i++) {
-    const ch = new Uint8Array(cell);
-    for (let k = 0; k < cb; k++) {
-      if (a[i][k] !== b[i][k]) { all++; perPlane[Math.floor(k / cell)]++; ch[k % cell] = 1; }
-    }
-    for (let c = 0; c < cell; c++) if (ch[c]) map[c]++;
-    changed.push(ch);
-  }
-  for (let c = 0; c < cell; c++) map[c] /= n;
-  return { map, perPlane: perPlane.map(v => v / (n * cell)), all: all / (n * cb), changed, n };
-}
-
-function _imriRows(flat, gh, gw) {
-  const rows = [];
-  for (let y = 0; y < gh; y++) rows.push(Array.from(flat.slice(y * gw, (y + 1) * gw)));
-  return rows;
-}
-
-// Fixed-cell heat map, never stretched: every cell is `cell` css px square, so a 16x16
-// grid is a small crisp square and a 12x12 head grid reads as a table. `kind`: "heat"
-// (blue low -> orange high), "div" (green positive, red negative, symmetric about 0).
-// `lo`/`hi` pin the scale (a pass count, a 0..1 share); otherwise the data's range.
-function _imriCellHeat(rows, opts) {
-  opts = opts || {};
-  if (!rows || !rows.length || !rows[0].length) return `<span class="meta">${_trEsc(opts.empty || "no data yet")}</span>`;
-  const nr = rows.length, nc = rows[0].length;
-  const cell = opts.cell || Math.max(8, Math.min(16, Math.floor(224 / Math.max(nr, nc))));
-  const rowLabel = opts.rowLabel || null, colLabel = opts.colLabel || null;
-  const L = rowLabel ? 30 : 1, T = 1, B = colLabel ? 16 : 1, R = 1;
-  const W = L + nc * cell + R, H = T + nr * cell + B;
-  const flat = rows.flat().filter(v => typeof v === "number" && isFinite(v));
-  if (!flat.length) return `<span class="meta">${_trEsc(opts.empty || "no data yet")}</span>`;
-  let lo = opts.lo !== undefined ? opts.lo : Math.min(...flat), hi = opts.hi !== undefined ? opts.hi : Math.max(...flat);
-  if (opts.kind === "div") { hi = Math.max(1e-6, ...flat.map(Math.abs)); lo = -hi; }
-  if (hi <= lo) hi = lo + 1;
-  const col = v => {
-    if (opts.kind === "div") { const t = Math.max(-1, Math.min(1, v / hi)); return t >= 0 ? `rgba(93,255,155,${(0.12 + 0.88 * t).toFixed(2)})` : `rgba(255,93,143,${(0.12 - 0.88 * t).toFixed(2)})`; }
-    const t = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
-    return `rgb(${Math.round(40 + 215 * t)},${Math.round(90 + 70 * t)},${Math.round(230 - 210 * t)})`;
-  };
-  const fmt = opts.fmt || (v => Number(v).toFixed(2));
-  let out = `<svg class="imri-heat" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
-  rows.forEach((r, i) => {
-    if (rowLabel) out += `<text x="${L - 3}" y="${T + i * cell + cell / 2 + 3}" fill="#6f7480" font-size="9" text-anchor="end">${rowLabel(i)}</text>`;
-    r.forEach((v, j) => {
-      const label = (rowLabel ? rowLabel(i) + " " : "") + (colLabel ? colLabel(j) : `row ${i + 1}, col ${j + 1}`);
-      out += `<rect x="${L + j * cell}" y="${T + i * cell}" width="${cell - 1}" height="${cell - 1}" fill="${typeof v === "number" && isFinite(v) ? col(v) : "#1e2330"}"><title>${label}: ${typeof v === "number" ? fmt(v) : "?"}</title></rect>`;
-    });
-  });
-  if (colLabel) for (let j = 0; j < nc; j++) out += `<text x="${L + j * cell + cell / 2}" y="${H - 4}" fill="#6f7480" font-size="9" text-anchor="middle">${colLabel(j)}</text>`;
-  return out + `</svg>`;
-}
-
-// The legend under a heat: a gradient bar with the two ends named.
-function _imriScale(loText, hiText, kind) {
-  const grad = kind === "div" ? "linear-gradient(90deg, rgb(255,93,143), #1e2330, rgb(93,255,155))" : "linear-gradient(90deg, rgb(40,90,230), rgb(255,160,20))";
-  return `<span class="imri-scale"><span>${loText}</span><i style="background:${grad}"></i><span>${hiText}</span></span>`;
-}
-
-// Diverging heat kept as a name for older call sites.
-function _imriDivHeat(rows, title) { return _imriCellHeat(rows, { kind: "div", empty: title }); }
-
-// A probe png shown at a fixed tile size. New probes hold the frame itself per tile (THUMB
-// 320, nothing resampled) and are shown at IMRI_CSS_TILE, so they stay sharp on a 2x
-// display; older 96 px probes show at 96, which is all the pixels they have. `cols` is the
-// png's tile count across, which fixes the css width so the browser never stretches it.
-// Click opens the png at full size.
-const IMRI_CSS_TILE = 160;
-function _imriTileCss(s) { return Math.min(IMRI_CSS_TILE, (s && s.thumb) || 96); }
-function _imriPhoto(url, s, cols, alt) {
-  const thumb = (s && s.thumb) || 96, gap = (s && s.gap) || 4, css = _imriTileCss(s);
-  const w = Math.round((cols * thumb + (cols + 1) * gap) * css / thumb);
-  return `<img class="imri-photo" src="${url}" alt="${_trEsc(alt || "")}" style="width:${w}px" data-full="${url}" title="click to enlarge">`;
-}
-
-function _imriLightbox(url) {
-  const old = document.querySelector(".imri-lightbox");
-  if (old) old.remove();
-  const box = document.createElement("div");
-  box.className = "imri-lightbox";
-  box.innerHTML = `<img src="${url}" alt="">`;
-  box.addEventListener("click", () => box.remove());
-  document.body.appendChild(box);
-}
-let _imriLightboxWired = false;
-function _imriWireLightbox() {
-  if (_imriLightboxWired) return;
-  _imriLightboxWired = true;
-  document.addEventListener("click", e => {
-    const img = e.target && e.target.closest ? e.target.closest("img.imri-photo") : null;
-    if (img) { e.preventDefault(); _imriLightbox(img.dataset.full || img.src); }
-  });
-  document.addEventListener("keydown", e => { if (e.key === "Escape") { const lb = document.querySelector(".imri-lightbox"); if (lb) lb.remove(); } });
-}
-
-function _imriImage(url, cb) {
-  const cache = imgMriState.imgs;
-  let img = cache[url];
-  if (img && img.complete && img.naturalWidth) { cb(img); return; }
-  if (!img) { img = new Image(); cache[url] = img; img.src = url; }
-  img.addEventListener("load", () => cb(img), { once: true });
-}
-
-// A filmstrip: one tile out of one probe png per frame, left to right, drawn at IMRI_FILM_TILE
-// css px on a canvas sized for the display's pixel ratio (crisp on 2x). `frames` are
-// {s: step record, col, row, label?}; `outlines[i]` (a gh*gw cell mask) outlines the cells
-// that changed since the frame before. Click a frame to jump to its checkpoint.
-const IMRI_FILM_TILE = 112, IMRI_FILM_GAP = 4;
-function _imriFilmstrip(canvas, frames, name, file, gh, gw, outlines) {
-  const T = IMRI_FILM_TILE, G = IMRI_FILM_GAP, n = frames.length;
-  const dpr = window.devicePixelRatio || 1;
-  const Wc = n * (T + G) + G, Hc = T + 2 * G + 14;
-  canvas.width = Math.round(Wc * dpr); canvas.height = Math.round(Hc * dpr);
-  canvas.style.width = Wc + "px"; canvas.style.height = Hc + "px";
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = "#0e1016";
-  ctx.fillRect(0, 0, Wc, Hc);
-  frames.forEach((f, i) => {
-    const s = f.s, x = G + i * (T + G);
-    ctx.fillStyle = "#6f7480"; ctx.font = "9px sans-serif"; ctx.textAlign = "center";
-    ctx.fillText(f.label || String(s.step), x + T / 2, Hc - 3);
-    if (!(s.files || []).includes(file)) return;
-    const st = s.thumb || 96, sg = s.gap || 4;
-    _imriImage(`/images/mri/${encodeURIComponent(name)}/${s.step}/${file}?${s.step}`, img => {
-      ctx.drawImage(img, sg + f.col * (st + sg), sg + f.row * (st + sg), st, st, x, G, T, T);
-      if (outlines && outlines[i] && gh && gw) {
-        ctx.strokeStyle = "rgba(255,174,93,0.95)"; ctx.lineWidth = 1;
-        const cw = T / gw, chh = T / gh;
-        for (let c = 0; c < gh * gw; c++) if (outlines[i][c]) ctx.strokeRect(x + (c % gw) * cw + 0.5, G + Math.floor(c / gw) * chh + 0.5, cw - 1, chh - 1);
-      }
-      if (!f.label && s.step === imgMriState.step) { ctx.strokeStyle = "#5db8ff"; ctx.lineWidth = 2; ctx.strokeRect(x + 1, G + 1, T - 2, T - 2); }
-    });
-  });
-  canvas.onclick = e => {
-    const rect = canvas.getBoundingClientRect();
-    const i = Math.floor(((e.clientX - rect.left) * (Wc / rect.width) - G) / (T + G));
-    if (i >= 0 && i < n && !frames[i].label) { imgMriState.follow = false; imgMriState.step = frames[i].s.step; _imgMriRender(); }
-  };
-}
-
-
-function _imgMriStepTo(idx) {
-  const steps = (imgMriState.data && imgMriState.data.steps) || [];
-  if (!steps.length) return;
-  idx = Math.max(0, Math.min(steps.length - 1, idx));
-  imgMriState.step = steps[idx].step;
-  imgMriState.follow = idx === steps.length - 1 && imgMriState.follow;
-  _imgMriRender();
-}
-
-function _imgMriPlay(on) {
-  if (imgMriState.playTimer) { clearInterval(imgMriState.playTimer); imgMriState.playTimer = null; }
-  imgMriState.playing = on;
-  if (!on) return;
-  const steps = (imgMriState.data && imgMriState.data.steps) || [];
-  let idx = steps.findIndex(s => s.step === imgMriState.step);
-  if (idx >= steps.length - 1) idx = -1;
-  imgMriState.follow = false;
-  imgMriState.playTimer = setInterval(() => {
-    const all = (imgMriState.data && imgMriState.data.steps) || [];
-    idx++;
-    if (idx >= all.length) { _imgMriPlay(false); _imgMriRender(); return; }
-    imgMriState.step = all[idx].step;
-    _imgMriRender();
-  }, IMG_MRI_PLAY_MS);
-}
-
-function _imgMriRender() {
-  const outer = document.getElementById("imgMri");
-  const d = imgMriState.data;
-  if (!outer) return;
-  _imriWireLightbox();
-  // Two children: the main view is rebuilt on every refresh; the prompt panel is built once
-  // per model so typing in it survives the polls while a run is training.
-  let box = document.getElementById("imgMriMain");
-  if (!box) {
-    outer.innerHTML = `<div id="imgMriMain"></div><div id="imgMriPrompt"></div>`;
-    box = document.getElementById("imgMriMain");
-  }
-  if (!d) { box.innerHTML = IMG_MRI_STYLE + `<div class="panel"><div class="body meta">could not load this model's image probe.</div></div>`; return; }
-  const steps = d.steps || [];
-  const name = d.model;
-  _imgMriPromptMount(name, (d.checkpoint_steps || []).length > 0);
-  if (!steps.length) {
-    box.innerHTML = IMG_MRI_STYLE + `<div class="imri"><div class="panel"><h2>${_trEsc(name)} <em>image model</em></h2><div class="body meta">` +
-      `${d.checkpoint_steps && d.checkpoint_steps.length ? `${d.checkpoint_steps.length} checkpoints, none probed yet` : "no probe yet"} &mdash; the probe runs every <i>pictures every</i> steps and at every checkpoint${imgMriState.running ? " (training now)" : ""}.</div></div></div>`;
-    return;
-  }
-  if (imgMriState.follow || imgMriState.step === null || !steps.some(s => s.step === imgMriState.step)) imgMriState.step = steps[steps.length - 1].step;
-  const cur = steps.find(s => s.step === imgMriState.step) || steps[steps.length - 1];
-  const g = d.geometry || {};
-  const planes = cur.planes || g.planes || 1;
-  const layers = cur.layers || (cur.attention_entropy_per_layer || []).length || 0;
-  const url = (step, f) => `/images/mri/${encodeURIComponent(name)}/${step}/${f}?${step}`;
-  const has = (s, f) => (s.files || []).includes(f);
-  const num = v => typeof v === "number" && isFinite(v);
-  const series = (key, color, label, pick) => ({ name: label, color, points: steps.map(s => [s.step, pick ? pick(s) : s[key]]).filter(q => num(q[1])) });
-  const kpi = (v, k, title) => `<div class="imri-kpi" title="${_trEsc(title || "")}"><div class="v">${v}</div><div class="k">${k}</div></div>`;
-  const pct = v => num(v) ? (v * 100).toFixed(1) + "%" : "&mdash;";
-  const photo = (file, cols, alt, fallback) => has(cur, file) ? _imriPhoto(url(cur.step, file), cur, cols, alt) : `<span class="meta">${fallback || "not in this probe"}</span>`;
-  const section = (title, sub) => `<div class="imri-section">${title}${sub ? ` <span>${sub}</span>` : ""}</div>`;
-  const legend = html => `<div class="imri-legend">${html}</div>`;
-  const needVal = "needs held-out pictures (a val bin)";
-  const curIdx = steps.findIndex(s => s.step === cur.step);
-  const prev = curIdx > 0 ? steps[curIdx - 1] : null;
-  const [gh, gw] = cur.grid || [0, 0];
-  const tileCols = Math.min(LAYER_COLS_JS, layers || LAYER_COLS_JS);
-
-  // -- over training -------------------------------------------------------------------
-  const acc = series("fill_accuracy", IMRI_COLORS[0], "all");
-  const perPlane = Array.from({ length: planes }, (_, p) => ({
-    name: `plane ${p}${p === 0 ? " (structure)" : p === planes - 1 ? " (detail)" : ""}`, color: IMRI_COLORS[(p + 1) % IMRI_COLORS.length],
-    points: steps.map(s => [s.step, (s.fill_accuracy_per_plane || [])[p]]).filter(q => num(q[1])),
-  }));
-  const ratios = ["0.25", "0.5", "0.75", "1.0"];
-  const byRatio = ratios.map((r, i) => ({ name: `${Math.round(parseFloat(r) * 100)}% hidden`, color: IMRI_COLORS[i % IMRI_COLORS.length],
-    points: steps.map(s => [s.step, (s.loss_by_hidden_fraction || {})[r]]).filter(q => num(q[1])) }));
-  const ent = cur.attention_entropy_per_layer || [];
-  const heads = cur.attention_entropy_per_head || [];
-  const agree = cur.lens_agreement_per_layer || [];
-  const lensAcc = cur.lens_accuracy_per_layer || [];
-  const norms = cur.residual_norm_per_layer || [];
-  const cal = cur.calibration || [];
-  const passesN = (cur.pass_committed || []).length;
-  const novelty = cur.novelty_per_sample || [];
-  const layerIdx = arr => arr.map((v, i) => [i + 1, v]);
-  const commit = cur.commit_layer;
-  const churn = prev ? _imriChurn(prev, cur) : null;
-  const churnSeries = steps.slice(1).map((s, i) => { const c = _imriChurn(steps[i], s); return c ? { step: s.step, c } : null; }).filter(Boolean);
-  const churnAll = { name: "all planes", color: IMRI_COLORS[2], points: churnSeries.map(x => [x.step, x.c.all]) };
-  const churnPlanes = Array.from({ length: planes }, (_, p) => ({ name: `plane ${p}`, color: IMRI_COLORS[(p + 3) % IMRI_COLORS.length], points: churnSeries.map(x => [x.step, x.c.perPlane[p]]).filter(q => num(q[1])) }));
-  const firstMap = steps.find(s => Array.isArray(s.loss_map) && s.loss_map.length);
-  const improved = firstMap && Array.isArray(cur.loss_map) && cur.loss_map.length === firstMap.loss_map.length && cur !== firstMap && gh && gw
-    ? _imriRows(cur.loss_map.map((v, i) => firstMap.loss_map[i] - v), gh, gw) : null;
-  const nSamples = Math.min(8, (_imriSampleCodes(cur) || []).length || 8);
-  const captionN = (cur.caption_samples || []).length;
-  // how it forms: the pass each plane commits in, what forms first, how far attention reaches
-  const commitPlanes = cur.commit_pass_per_plane || [];
-  const commitSeries = Array.from({ length: planes }, (_, p) => ({ name: `plane ${p}`, color: IMRI_COLORS[(p + 1) % IMRI_COLORS.length],
-    points: steps.map(s => [s.step, (s.commit_pass_per_plane || [])[p]]).filter(q => num(q[1])) })).filter(s => s.points.length);
-  const structure = { name: "structure", color: IMRI_COLORS[1], points: steps.map(s => [s.step, (s.fill_accuracy_per_plane || [])[0]]).filter(q => num(q[1])) };
-  const colour = series("colour_match", IMRI_COLORS[3], "colour");
-  const detail = { name: "detail", color: IMRI_COLORS[2], points: steps.map(s => [s.step, num(s.detail_ratio) ? Math.min(1, s.detail_ratio) : NaN]).filter(q => num(q[1])) };
-  const reach = cur.attention_distance_per_layer || [];
-  const meanOf = a => (a && a.length) ? a.reduce((x, y) => x + y, 0) / a.length : NaN;
-  const reachSeries = series("attention_distance_mean", IMRI_COLORS[6], "mean reach", s => meanOf(s.attention_distance_per_layer));
-  // maps drawn from the numbers (crisp at any size), the pngs only as a fallback
-  const formationRows = Array.isArray(cur.commit_pass_map) && gh && gw ? _imriRows(cur.commit_pass_map, gh, gw) : null;
-  const lossRows = Array.isArray(cur.loss_map) && gh && gw ? _imriRows(cur.loss_map, gh, gw) : null;
-  const confRows = Array.isArray(cur.confidence_map) && gh && gw ? _imriRows(cur.confidence_map, gh, gw) : null;
-  const nPass = cur.formation_passes || passesN || 8;
-
-  box.innerHTML = IMG_MRI_STYLE + `<div class="imri">
-    <div class="panel">
-      <h2>${_trEsc(name)} <em>image model &middot; ${g.height || "?"}&times;${g.width || "?"} px &middot; ${g.image_code_bytes || "?"} bytes/picture &middot; ${planes} planes &middot; ${layers || "?"} layers${imgMriState.running ? ' &middot; <span class="imri-live">training now</span>' : ""}</em>${!imgMriState.running && (d.checkpoint_steps || []).length ? `<button type="button" class="imri-continue" data-imri-continue title="open the Training tab with this model picked to continue from its last checkpoint">continue training &rsaquo;</button>` : ""}</h2>
-      <div class="body">
-        <div class="imri-head"><span>pictures: <b>${_trEsc(d.image_set || "?")}</b></span><span>codec: <b>${_trEsc(d.codec || "?")}</b></span><span>probes: <b>${steps.length}</b></span><span>showing step <b>${cur.step.toLocaleString()}</b></span></div>
-        <div class="imri-strip" data-imri-strip>${steps.map(s => `<button type="button" data-imri-step="${s.step}" class="${s.step === cur.step ? "on" : ""}" title="step ${s.step}">${has(s, "samples.png") ? `<img src="${url(s.step, "samples.png")}" alt="">` : ""}<span>${s.step.toLocaleString()}</span></button>`).join("")}</div>
-        <div class="imri-scrub"><button type="button" data-imri-prev title="previous probe">&#9664;</button>
-          <input type="range" data-imri-range min="0" max="${steps.length - 1}" value="${curIdx}" title="scrub through the probes">
-          <button type="button" data-imri-next title="next probe">&#9654;</button>
-          <button type="button" data-imri-play class="${imgMriState.playing ? "on" : ""}">${imgMriState.playing ? "&#10074;&#10074; pause" : "&#9654; play"}</button>
-          <label><input type="checkbox" data-imri-follow ${imgMriState.follow ? "checked" : ""}> follow latest</label>
-          <span>probe ${curIdx + 1} of ${steps.length}${prev ? ` &middot; since step ${prev.step.toLocaleString()}` : ""}</span></div>
-        <div class="imri-kpis">
-          ${kpi(pct(cur.fill_accuracy), "fill accuracy", "of hidden cells filled in exactly, half the picture hidden, on held-out pictures")}
-          ${kpi(pct(cur.mean_confidence), "confidence", "the model's own probability on its picks for hidden cells")}
-          ${kpi(num(cur.expected_calibration_error) ? (cur.expected_calibration_error * 100).toFixed(1) + "<span style='font-size:11px;color:var(--dim)'> pts</span>" : "&mdash;", "calibration error", "gap between confidence and accuracy; 0 means it knows what it knows")}
-          ${kpi(num(cur.novelty_mean) ? pct(cur.novelty_mean) : "&mdash;", "novelty", "cells of a sample that differ from the closest training picture; 0% is a copy")}
-          ${kpi(commit ? `${commit}<span style="font-size:11px;color:var(--dim)"> / ${layers}</span>` : "&mdash;", "decides at layer", "first layer whose picture already matches the final answer on 90% of hidden cells")}
-          ${kpi(num(cur.codes_used) ? `${cur.codes_used}<span style="font-size:11px;color:var(--dim)">/255</span>` : "&mdash;", "codes in use", "a collapse shows as a handful")}
-          ${kpi(ent.length ? meanOf(ent).toFixed(2) : "&mdash;", "attention spread", "0 focused, 1 uniform, averaged over layers")}
-          ${kpi(churn ? pct(1 - churn.all) : "&mdash;", "settled since last", "share of the same-seed samples' cells unchanged since the previous probe; rising toward 100% is convergence")}
-          ${kpi(num(cur.colour_match) ? pct(cur.colour_match) : "&mdash;", "colour match", "how closely the samples' palette matches the held-out pictures; 100% is the same palette")}
-          ${kpi(num(cur.detail_ratio) ? pct(Math.min(1, cur.detail_ratio)) : "&mdash;", "detail", "sharpness of the samples against the codec's own reconstructions, the most detail a sample can have")}
-        </div>
-      </div>
-    </div>
-
-    ${section("what it draws", "same seeds at every probe, so one draw evolves")}
-    <div class="panel">
-      <div class="body">
-        <div class="imri-fig">${photo("samples.png", nSamples + captionN, "samples")}
-        ${legend(`<span>${nSamples} from nothing${captionN ? `; then from held-out captions: ${cur.caption_samples.map(c => `&ldquo;${_trEsc(c)}&rdquo;`).join(", ")}` : ""}</span>`)}</div>
-        ${has(cur, "nearest.png") ? `<div class="imri-fig"><h4>closest training picture to each sample &middot; copying or inventing?</h4>${photo("nearest.png", nSamples, "nearest training pictures")}
-          ${legend(novelty.map(v => `<span>${pct(v)} new</span>`).join(""))}</div>` : ""}
-      </div>
-    </div>
-    <div class="panel">
-      <h2>one draw through training <em>the same seed at every probe &middot; orange outlines: cells that changed since the probe before</em></h2>
-      <div class="body"><div class="imri-film">
-        <div class="pick"><span>sample</span><select data-imri-sample>${Array.from({ length: nSamples }, (_, i) => `<option value="${i}" ${i === imgMriState.sample ? "selected" : ""}>${i + 1}</option>`).join("")}</select><span>click a frame to jump to that probe</span></div>
-        <canvas data-imri-film-samples></canvas>
-        <div class="pick"><span>held-out picture</span><select data-imri-fillpic>${[0, 1, 2, 3].map(i => `<option value="${i}" ${i === imgMriState.fillPic ? "selected" : ""}>${i + 1}</option>`).join("")}</select><span>its completion at every probe (original at the left)</span></div>
-        <canvas data-imri-film-fill></canvas>
-      </div></div>
-    </div>
-
-    ${section("how a picture forms", "one sample, pass by pass")}
-    <div class="panel">
-      <div class="body"><div class="imri-fig">${photo("passes.png", passesN || nPass, "decode passes")}
-        ${passesN ? legend(cur.pass_committed.map((n, i) => `<span>pass ${i + 1}: ${n} cells${num((cur.pass_confidence || [])[i]) ? `, ${pct(cur.pass_confidence[i])} sure` : ""}</span>`).join("")) : ""}
-        ${legend(`<span>grey cells are still undecided. The most confident cells are committed first and each pass sees the last one's decisions; a model that has learned structure commits the layout early and the detail late.</span>`)}</div></div>
-    </div>
-    <div class="imri-grid">
-      <div class="panel"><h2>the order it forms <em>which pass decided each cell</em></h2>
-        <div class="body"><div class="imri-heatwrap">${formationRows ? _imriCellHeat(formationRows, { lo: 1, hi: nPass, fmt: v => "pass " + v }) : photo("formation.png", 2, "formation order")}
-          <div class="imri-side">${_imriScale("pass 1", `pass ${nPass}`)}<span class="meta">blue cells were decided in the first passes, orange in the last. Structure should go blue before detail does.</span></div></div>
-        ${commitPlanes.length ? `<div class="imri-chart small">${_imriBars(commitPlanes, commitPlanes.map((_, p) => "plane " + p), IMRI_COLORS[2])}</div>${legend(`<span>mean commit pass per plane (of ${nPass}); plane 0 is structure, the last plane detail</span>`)}` : ""}
-        ${commitSeries.length > 0 && commitSeries[0].points.length > 1 ? `<div class="imri-chart small">${_imriSvgLine(commitSeries, { y0: 1, y1: Math.max(2, nPass) })}</div>${legend(commitSeries.map(s => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join("") + `<span>over training: the structure plane should commit earlier as the model learns</span>`)}` : ""}</div></div>
-      <div class="panel"><h2>coarse to fine <em>the first sample from 1, 2, &hellip; ${planes} planes</em></h2>
-        <div class="body"><div class="imri-fig"><div class="cols" style="max-width:${(planes * _imriTileCss(cur) + (planes + 1) * 4)}px">${Array.from({ length: planes }, (_, i) => `<span>${i + 1} plane${i ? "s" : ""}</span>`).join("")}</div>${photo("planes.png", planes, "coarse to fine")}
-        ${legend(`<span>each residual plane adds one byte per cell: the left tile is plane 0 alone (layout), the right tile the whole picture. The difference across the row is the detail the model still has to learn.</span>`)}</div></div></div>
-      <div class="panel"><h2>churn <em>what is still changing</em></h2>
-        <div class="body">${churn && gh && gw ? `<div class="imri-heatwrap">${_imriCellHeat(_imriRows(churn.map, gh, gw), { lo: 0, hi: 1, fmt: v => pct(v) + " of samples changed" })}
-          <div class="imri-side">${_imriScale("settled", "still moving")}<span class="meta">each cell: share of the ${churn.n} same-seed samples whose code there changed since step ${prev.step.toLocaleString()}. Structure settles first; a region that keeps flickering late is one the model has not learned.</span></div></div>` : `<span class="meta">needs two probes</span>`}
-        ${churnSeries.length ? `<div class="imri-chart small">${_imriSvgLine([churnAll, ...churnPlanes], { y0: 0, y1: 1 })}</div>${legend(`<span><i style="background:${churnAll.color}"></i>cells changed since the previous probe</span>` + churnPlanes.map(p => `<span><i style="background:${p.color}"></i>${p.name}</span>`).join("") + `<span>falling toward 0 is convergence; a jump is a phase change</span>`)}` : ""}</div></div>
-      <div class="panel"><h2>where it improved <em>loss per cell, first probe minus now</em></h2>
-        <div class="body">${improved ? `<div class="imri-heatwrap">${_imriCellHeat(improved, { kind: "div", fmt: v => (v >= 0 ? "easier by " : "harder by ") + Math.abs(v).toFixed(3) })}
-          <div class="imri-side">${_imriScale("harder", "easier", "div")}<span class="meta">since step ${firstMap.step.toLocaleString()}. Solid green everywhere is learning; a red centre with green edges means it learned borders and backgrounds before subjects.</span></div></div>` : `<span class="meta">needs two probes with held-out pictures</span>`}</div></div>
-    </div>
-
-    ${section("inside the model", "held-out pictures, half the cells hidden")}
-    <div class="imri-grid">
-      <div class="panel"><h2>can it complete a real picture</h2>
-        <div class="body"><div class="imri-fig"><div class="cols" style="max-width:${3 * _imriTileCss(cur) + 16}px"><span>original</span><span>hidden</span><span>filled</span></div>${photo("fill.png", 3, "fill test", needVal)}</div></div></div>
-      <div class="panel"><h2>how sure it is <em>and whether that is earned</em></h2>
-        <div class="body"><div class="imri-heatwrap">${confRows ? _imriCellHeat(confRows, { lo: 0, hi: 1, fmt: v => pct(v) + " sure" }) : photo("confidence.png", 4, "confidence map", needVal)}
-          <div class="imri-side">${_imriScale("unsure", "sure")}<span class="meta">the model's probability on its pick for each hidden cell of the first held-out picture (known cells count as certain)</span></div></div>
-        ${cal.length ? `<div class="imri-chart small">${_imriBars(cal.map(b => num(b.accuracy) ? b.accuracy : 0), cal.map(b => `${Math.round(b.lo * 100)}&ndash;${Math.round(b.hi * 100)}%`), IMRI_COLORS[4])}</div>${legend(`<span>accuracy of the cells in each confidence band (${cal.map(b => b.n).join(" / ")} cells). Calibrated means the bars climb with the bands.</span>`)}` : ""}</div></div>
-      <div class="panel"><h2>through the layers <em>what it would draw if it stopped at layer 1, 2, &hellip; ${layers || ""}</em></h2>
-        <div class="body"><div class="imri-fig">${photo("layers.png", tileCols, "logit lens", needVal)}
-        ${legend(`<span>the residual after each block, read through the model's own output head. Where the final picture first appears is where the decision is made${commit ? ` (layer ${commit})` : ""}.</span>`)}</div>
-        ${agree.length ? `<div class="imri-chart small">${_imriSvgLine([{ name: "agreement with final", color: IMRI_COLORS[1], points: layerIdx(agree) }, { name: "accuracy", color: IMRI_COLORS[0], points: layerIdx(lensAcc) }], { y0: 0, y1: 1, xname: "layer" })}</div>${legend(`<span><i style="background:${IMRI_COLORS[1]}"></i>agreement with the final layer</span><span><i style="background:${IMRI_COLORS[0]}"></i>accuracy against the real picture</span>`)}` : ""}</div></div>
-      <div class="panel"><h2>where it struggles <em>and how much each layer carries</em></h2>
-        <div class="body"><div class="imri-heatwrap">${lossRows ? _imriCellHeat(lossRows, { fmt: v => "loss " + v.toFixed(2) }) : photo("cell_loss.png", 2, "loss per cell", needVal)}
-          <div class="imri-side">${_imriScale("easy", "hard")}<span class="meta">loss per cell over the held-out pictures${num(cur.centre_loss) ? `: centre ${cur.centre_loss.toFixed(2)} vs edge ${cur.edge_loss.toFixed(2)}` : ""}</span></div></div>
-        ${norms.length ? `<div class="imri-chart small">${_imriBars(norms, norms.map((_, i) => "L" + (i + 1)), IMRI_COLORS[2])}</div>${legend(`<span>mean residual norm after each block. A healthy net grows it steadily; a flat tail means late layers add little.</span>`)}` : ""}</div></div>
-      <div class="panel"><h2>where it looks <em>from the centre cell, one map per layer</em></h2>
-        <div class="body"><div class="imri-fig">${photo("attention.png", tileCols, "attention", needVal)}</div>
-        ${ent.length ? `<div class="imri-chart small">${_imriBars(ent, ent.map((_, i) => "L" + (i + 1)), "#5db8ff")}</div>${legend(`<span>attention spread per layer &mdash; lower is more focused</span>`)}` : ""}</div></div>
-      <div class="panel"><h2>attention by head <em>focused (blue) to uniform (orange)</em></h2>
-        <div class="body"><div class="imri-heatwrap">${_imriCellHeat(heads, { lo: 0, hi: 1, cell: 14, rowLabel: i => "L" + (i + 1), colLabel: j => "h" + j, empty: needVal })}
-          <div class="imri-side"><span class="meta">heads specialise as the model learns: a trained net shows a mix of sharp local heads and broad context heads; all-orange has not yet learned where to look.</span></div></div></div></div>
-      <div class="panel"><h2>how far it looks <em>attention reach per layer, in cells</em></h2>
-        <div class="body">${reach.length ? `<div class="imri-chart small">${_imriBars(reach, reach.map((_, i) => "L" + (i + 1)), IMRI_COLORS[6])}</div>` : `<span class="meta">${needVal}</span>`}
-        ${reachSeries.points.length > 1 ? `<div class="imri-chart small">${_imriSvgLine([reachSeries])}</div>` : ""}
-        ${legend(`<span>attention-weighted distance from a cell to the cells it reads, over heads${gh && gw ? ` (grid ${gh}&times;${gw}; a uniform head reads ~${(0.52 * Math.hypot(gh, gw)).toFixed(1)} cells away)` : ""}. Untrained attention reads far; trained texture layers settle near 1-2 cells while a few layers stay global.</span>`)}</div></div>
-    </div>
-
-    ${section("over training", `${steps.length} probes`)}
-    <div class="imri-grid imri-grid-3">
-      <div class="panel"><h2>what forms first <em>structure, colour, detail</em></h2>
-        <div class="body"><div class="imri-chart small">${_imriSvgLine([structure, colour, detail], { y0: 0, y1: 1 })}</div>
-        ${legend(`<span><i style="background:${structure.color}"></i>structure: plane-0 fill accuracy</span><span><i style="background:${colour.color}"></i>colour match</span><span><i style="background:${detail.color}"></i>detail vs the codec ceiling</span>`)}</div></div>
-      <div class="panel"><h2>fill accuracy <em>per plane</em></h2>
-        <div class="body"><div class="imri-chart small">${_imriSvgLine([acc, ...perPlane], { y0: 0, y1: 1 })}</div>
-        ${legend(`<span><i style="background:${IMRI_COLORS[0]}"></i>all</span>` + perPlane.map(p => `<span><i style="background:${p.color}"></i>${_trEsc(p.name)}</span>`).join(""))}</div></div>
-      <div class="panel"><h2>loss by how much is hidden</h2>
-        <div class="body"><div class="imri-chart small">${_imriSvgLine(byRatio)}</div>
-        ${legend(byRatio.map(p => `<span><i style="background:${p.color}"></i>${p.name}</span>`).join(""))}</div></div>
-      <div class="panel"><h2>confidence <em>sure, and right to be?</em></h2>
-        <div class="body"><div class="imri-chart small">${_imriSvgLine([series("mean_confidence", IMRI_COLORS[4], "confidence"), series("expected_calibration_error", IMRI_COLORS[3], "calibration error")], { y0: 0, y1: 1 })}</div>
-        ${legend(`<span><i style="background:${IMRI_COLORS[4]}"></i>confidence</span><span><i style="background:${IMRI_COLORS[3]}"></i>calibration error (lower is better)</span>`)}</div></div>
-      <div class="panel"><h2>novelty <em>copying or inventing</em></h2>
-        <div class="body"><div class="imri-chart small">${_imriSvgLine([series("novelty_mean", IMRI_COLORS[5], "novelty")], { y0: 0, y1: 1 })}</div>
-        ${legend(`<span>share of a sample's cells that differ from its closest training picture; falling toward 0 is memorisation</span>`)}</div></div>
-      <div class="panel"><h2>decision depth <em>which layer settles the answer</em></h2>
-        <div class="body"><div class="imri-chart small">${_imriSvgLine([series("commit_layer", IMRI_COLORS[1], "decides at layer")], { y0: 0, y1: Math.max(1, layers) })}</div>
-        ${legend(`<span>early on the last layers do all the work; as the net learns, the answer forms earlier</span>`)}</div></div>
-      <div class="panel"><h2>codes in use <em>a collapse shows as a handful</em></h2>
-        <div class="body"><div class="imri-chart small">${_imriSvgLine([series("codes_used", IMRI_COLORS[2], "codes")], { y0: 0, y1: 255 })}</div></div></div>
-      <div class="panel"><h2>codec ceiling <em>the codec's own reconstruction</em></h2>
-        <div class="body"><div class="imri-fig">${photo("recon.png", 4, "codec reconstruction", needVal)}
-        ${legend(`<span>the model cannot draw sharper than this; blur here is the codec's, not the model's</span>`)}</div></div></div>
-    </div>
-  </div>`;
-
-  // scrubber + films (event handlers live on the elements; the strip buttons use delegation)
-  const q = sel => box.querySelector(sel);
-  const cont = q("[data-imri-continue]");
-  if (cont) cont.addEventListener("click", () => _trOpenImageContinue(name));
-  const range = q("[data-imri-range]");
-  if (range) range.addEventListener("input", () => { imgMriState.follow = false; _imgMriStepTo(parseInt(range.value, 10)); });
-  const prevBtn = q("[data-imri-prev]"), nextBtn = q("[data-imri-next]"), playBtn = q("[data-imri-play]"), follow = q("[data-imri-follow]");
-  if (prevBtn) prevBtn.addEventListener("click", () => { imgMriState.follow = false; _imgMriStepTo(curIdx - 1); });
-  if (nextBtn) nextBtn.addEventListener("click", () => { imgMriState.follow = false; _imgMriStepTo(curIdx + 1); });
-  if (playBtn) playBtn.addEventListener("click", () => { _imgMriPlay(!imgMriState.playing); _imgMriRender(); });
-  if (follow) follow.addEventListener("change", () => { imgMriState.follow = follow.checked; if (follow.checked) _imgMriStepTo(steps.length - 1); });
-  const sampleSel = q("[data-imri-sample]"), fillSel = q("[data-imri-fillpic]");
-  if (sampleSel) sampleSel.addEventListener("change", () => { imgMriState.sample = parseInt(sampleSel.value, 10) || 0; _imgMriRender(); });
-  if (fillSel) fillSel.addEventListener("change", () => { imgMriState.fillPic = parseInt(fillSel.value, 10) || 0; _imgMriRender(); });
-  const filmS = q("[data-imri-film-samples]"), filmF = q("[data-imri-film-fill]");
-  if (filmS) {
-    const outlines = steps.map((s, i) => { if (!i) return null; const c = _imriChurn(steps[i - 1], s); return c && c.changed[imgMriState.sample] ? c.changed[imgMriState.sample] : null; });
-    _imriFilmstrip(filmS, steps.map(s => ({ s, col: imgMriState.sample, row: 0 })), name, "samples.png", gh, gw, outlines);
-  }
-  if (filmF) {
-    // the original once (left), then the completion at every probe
-    const frames = [{ s: cur, col: 0, row: imgMriState.fillPic, label: "original" }].concat(steps.map(s => ({ s, col: 2, row: imgMriState.fillPic })));
-    _imriFilmstrip(filmF, frames, name, "fill.png", gh, gw, null);
-  }
-}
-
-
-// ---- prompt it: the same words at every checkpoint ------------------------------------
-function _imgMriPromptMount(name, hasCheckpoints) {
-  const host = document.getElementById("imgMriPrompt");
-  if (!host) return;
-  const ps = imgMriState.prompt;
-  if (ps.model === name && host.firstChild) { _imgMriPromptRender(); return; }
-  if (ps.timer) { clearTimeout(ps.timer); ps.timer = null; }
-  ps.model = name; ps.state = null; ps.photo = null; ps.photoName = "";
-  host.innerHTML = `<div class="imri"><div class="panel">
-    <h2>prompt it <em>the same words at every checkpoint &middot; and how much the words steer</em></h2>
-    <div class="body"><div class="imri-prompt">
-      <textarea data-imp-text rows="2" placeholder="describe a picture &mdash; the model draws it at each saved checkpoint, same seed, so you see the words take hold over training"></textarea>
-      <div class="ctl">
-        <label>seed <input type="number" data-imp-seed value="0"></label>
-        <label>passes <input type="number" data-imp-passes value="8" min="1" max="64"></label>
-        <label style="cursor:pointer">photo <input type="file" accept="image/*" data-imp-file style="width:170px"></label><span data-imp-photo></span>
-        <button type="button" data-imp-one ${hasCheckpoints ? "" : "disabled"}>draw at this checkpoint</button>
-        <button type="button" class="primary" data-imp-all ${hasCheckpoints ? "" : "disabled"}>draw at every checkpoint</button>
-        <button type="button" data-imp-stop style="display:none">stop</button>
-        <span data-imp-status class="meta"></span>
-      </div>
-      <div data-imp-results></div>
-    </div></div></div></div>`;
-  const q = sel => host.querySelector(sel);
-  q("[data-imp-file]").addEventListener("change", e => {
-    const f = e.target.files && e.target.files[0];
-    if (!f) { ps.photo = null; ps.photoName = ""; q("[data-imp-photo]").textContent = ""; return; }
-    const reader = new FileReader();
-    reader.onload = () => { ps.photo = String(reader.result); ps.photoName = f.name; q("[data-imp-photo]").textContent = `${f.name} attached: variation of it, guided by the words`; };
-    reader.readAsDataURL(f);
-  });
-  q("[data-imp-one]").addEventListener("click", () => _imgMriPromptStart([imgMriState.step]));
-  q("[data-imp-all]").addEventListener("click", () => _imgMriPromptStart(null));
-  q("[data-imp-stop]").addEventListener("click", () => { fetch(`/images/mri/${encodeURIComponent(name)}/prompt/stop`, { method: "POST" }).catch(() => {}); });
-  _imgMriPromptRender();
-}
-
-function _imgMriPromptStart(steps) {
-  const host = document.getElementById("imgMriPrompt");
-  const ps = imgMriState.prompt, name = ps.model;
-  if (!host || !name) return;
-  const q = sel => host.querySelector(sel);
-  const caption = (q("[data-imp-text]").value || "").trim();
-  const body = { caption, seed: parseInt(q("[data-imp-seed]").value, 10) || 0, passes: parseInt(q("[data-imp-passes]").value, 10) || 8,
-                 mode: ps.photo ? "variation" : "text", image: ps.photo || undefined, steps: steps && steps[0] != null ? steps : undefined };
-  if (!caption && !ps.photo) { q("[data-imp-status]").textContent = "type some words (or attach a photo) first"; return; }
-  q("[data-imp-status]").textContent = "starting…";
-  fetch(`/images/mri/${encodeURIComponent(name)}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
-    .then(r => r.json()).then(d => {
-      if (!d.ok) { q("[data-imp-status]").textContent = d.error || "could not start"; return; }
-      ps.state = d.state; _imgMriPromptRender(); _imgMriPromptPoll();
-    }).catch(e => { q("[data-imp-status]").textContent = "failed: " + e; });
-}
-
-function _imgMriPromptPoll() {
-  const ps = imgMriState.prompt, name = ps.model;
-  if (ps.timer) { clearTimeout(ps.timer); ps.timer = null; }
-  if (!name) return;
-  fetch(`/images/mri/${encodeURIComponent(name)}/prompt/status?` + Date.now(), { cache: "no-store" }).then(r => r.json()).then(d => {
-    if (imgMriState.prompt.model !== name) return;
-    ps.state = d.state || null;
-    _imgMriPromptRender();
-    if (ps.state && ps.state.status === "running") ps.timer = setTimeout(_imgMriPromptPoll, IMG_MRI_PROMPT_POLL_MS);
-  }).catch(() => {});
-}
-
-function _imgMriPromptRender() {
-  const host = document.getElementById("imgMriPrompt");
-  const ps = imgMriState.prompt;
-  if (!host) return;
-  const q = sel => host.querySelector(sel);
-  const st = ps.state, status = q("[data-imp-status]"), out = q("[data-imp-results]"), stop = q("[data-imp-stop]");
-  if (!status || !out) return;
-  const running = !!(st && st.status === "running");
-  if (stop) stop.style.display = running ? "" : "none";
-  ["[data-imp-one]", "[data-imp-all]"].forEach(sel => { const b = q(sel); if (b) b.disabled = running; });
-  if (!st || st.status === "idle") { status.textContent = ""; out.innerHTML = ""; return; }
-  const results = st.results || [];
-  const total = (st.steps || []).length;
-  status.textContent = running ? `drawing ${results.length} / ${total} checkpoints… (two pictures each: with the words and without)`
-    : st.status === "failed" ? `failed: ${st.error}` : `${results.length} checkpoint${results.length === 1 ? "" : "s"} &middot; seed ${st.seed} &middot; ${st.passes} passes${st.caption ? ` &middot; "${st.caption}"` : ""}`.replace(/&middot;/g, "·");
-  const pct = v => (v * 100).toFixed(0) + "%";
-  const steer = results.map(r => [r.step, r.steering]);
-  out.innerHTML = `<div class="results">${results.map(r => `<div class="res ${r.step === imgMriState.step ? "on" : ""}" data-imp-step="${r.step}" title="step ${r.step}: with the words (large), without them (small), same seed">
-      <img src="data:image/png;base64,${r.png}" alt="with words"><img class="small" src="data:image/png;base64,${r.uncond_png}" alt="without words">
-      <span>step ${Number(r.step).toLocaleString()}${st.caption ? ` &middot; words moved ${pct(r.steering)}` : ""}</span></div>`).join("")}</div>
-    ${st.caption && results.length > 1 ? `<div class="imri-chart">${_imriSvgLine([{ name: "steering", color: IMRI_COLORS[6], points: steer }], { y0: 0, y1: 1 })}</div>
-    <div class="imri-legend"><span><i style="background:${IMRI_COLORS[6]}"></i>caption influence: share of cells the words changed against the same seed without them. Rising over training means the model is learning to listen; flat near 0 means the captions it trained on did not teach it these words.</span></div>` : ""}`;
-  out.querySelectorAll("[data-imp-step]").forEach(el => el.addEventListener("click", () => { imgMriState.follow = false; imgMriState.step = parseInt(el.dataset.impStep, 10); _imgMriRender(); }));
-}
-
-document.addEventListener("click", (e) => {
-  if (!e.target || !e.target.closest) return;
-  const btn = e.target.closest("[data-imri-step]");
-  if (!btn || !imgMriState.active) return;
-  imgMriState.step = parseInt(btn.dataset.imriStep, 10);
-  _imgMriRender();
-});
-

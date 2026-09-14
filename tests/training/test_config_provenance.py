@@ -149,3 +149,27 @@ def test_hand_owned_keys_stay_out_of_the_synced_set():
     assert "model_type" not in RUN_ARG_KEYS
     assert "description" not in RUN_ARG_KEYS
     assert "name" not in RUN_ARG_KEYS
+
+
+def test_the_experiment_levers_are_recorded(tmp_path, monkeypatch):
+    """The measured case: exp_wm_0905 ran with carried state across the chunk seam, its
+    lower half frozen and whole-conversation windows, and its config recorded the August
+    fork source's state_carry=off with the other two absent. Those flags decide what a
+    window contains and what gradient crosses it, so a config without them describes a
+    different experiment."""
+    p = _cfg(tmp_path, monkeypatch, dict(BASE_ARGS, state_carry="off"))
+    _sync_run_args("m", dict(SFT_ARGS, state_carry="chunks", freeze_blocks=14,
+                             align_stride=4096, carry_grad_clip=0.5))
+    ta = json.loads(p.read_text())["training_args"]
+    assert ta["state_carry"] == "chunks"
+    assert ta["freeze_blocks"] == 14
+    assert ta["align_stride"] == 4096
+    assert ta["carry_grad_clip"] == 0.5
+
+
+def test_the_pinned_val_bin_is_recorded(tmp_path, monkeypatch):
+    """Validation follows the heaviest mix member unless pinned, so two runs comparable
+    only because both pinned the same bin must both say so."""
+    p = _cfg(tmp_path, monkeypatch, BASE_ARGS)
+    _sync_run_args("m", dict(SFT_ARGS, val_bin="mixed_chat"))
+    assert json.loads(p.read_text())["training_args"]["val_bin"] == "mixed_chat"

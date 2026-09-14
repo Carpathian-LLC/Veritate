@@ -148,7 +148,8 @@ class PagedAdamW(torch.optim.Optimizer):
             self._bind_state()
 
     def close(self):
-        if self._owns_dir and os.path.isdir(self._state_dir):
+        # a construction the argument checks refused still gets a __del__
+        if getattr(self, "_owns_dir", False) and os.path.isdir(self._state_dir):
             shutil.rmtree(self._state_dir, ignore_errors=True)
             self._owns_dir = False
 

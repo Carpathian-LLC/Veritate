@@ -93,11 +93,6 @@ def save_state(root_dir, files, remote_branch=None):
 # ------------------------------------------------------------------------------------
 # Hashing
 
-def sha256_bytes(b):
-    h = hashlib.sha256()
-    h.update(b)
-    return h.hexdigest()
-
 
 def sha256_file(path):
     """Streaming sha256 of a file on disk. Returns None if file doesn't exist."""
@@ -262,8 +257,3 @@ def default_action_for_state(file_state):
     }.get(file_state, ACTION_SKIP)
 
 
-def action_is_destructive(action, file_state):
-    """Returns True if the action would overwrite user changes that haven't been
-    explicitly accepted. Used by callers to require an extra confirmation."""
-    if action in (ACTION_FORCE, ACTION_DELETE): return True
-    return action == ACTION_UPDATE and file_state in (STATE_MODIFIED, STATE_CONFLICT)

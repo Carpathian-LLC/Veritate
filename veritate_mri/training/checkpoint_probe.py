@@ -117,16 +117,6 @@ REASONING_TIERS = ["recall", "pattern", "deduction1", "deduction_n"]
 SCORE_PASS      = 0.80   # tier passes when accuracy >= this
 SCORE_EMERGING  = 0.50   # tier is "emerging" between this and SCORE_PASS
 
-GRADE_SOURCES = {
-    "prek":    [(39784, "real_mother_goose"),         (24108, "the_three_bears")],
-    "k":       [(19994, "more_english_fairy_tales"),  (7439,  "english_fairy_tales")],
-    "elem":    [(146,   "little_princess"),           (479,   "little_lord_fauntleroy")],
-    "middle":  [(76,    "huckleberry_finn"),          (113,   "pinocchio")],
-    "hs":      [(1260,  "jane_eyre"),                 (768,   "wuthering_heights")],
-    "college": [(205,   "walden"),                    (1404,  "federalist_papers")],
-    "phd":     [],
-}
-
 CONCEPT_TOP_K_PER_LAYER = 3
 
 # memory fingerprint probe. runs on every generation dump. matches the offline

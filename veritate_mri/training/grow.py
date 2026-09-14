@@ -88,41 +88,6 @@ IDENTITY_ZERO_SUFFIXES = ("attn.proj.weight", "ff.down.weight")
 # Functions
 
 
-def ffn_widths(state_dict):
-    """Per-layer FFN width, keyed by layer index, for layers that carry an up/down pair."""
-    out = {}
-    for k, v in state_dict.items():
-        if k.endswith(UP_SUFFIX):
-            out[int(k.split(".")[1])] = int(v.shape[0])
-    return out
-
-
-def widen_state_dict(state_dict, target_ffn, generator=None):
-    """Widen every dense FFN to target_ffn, preserving the function exactly.
-
-    New up rows are freshly initialized; new down columns are zero, so the layer
-    output is unchanged at the widen step. Layers already at or above target, and
-    layers with no up/down pair (product-key memory, MoE), are left alone.
-    """
-    sd = dict(state_dict)
-    widened = []
-    for layer, width in sorted(ffn_widths(sd).items()):
-        if width >= target_ffn:
-            continue
-        up_key, down_key = f"blocks.{layer}{UP_SUFFIX}", f"blocks.{layer}{DOWN_SUFFIX}"
-        if down_key not in sd:
-            continue
-        up, down = sd[up_key], sd[down_key]
-        extra = target_ffn - width
-        new_up = torch.empty(extra, up.shape[1], dtype=up.dtype, device=up.device)
-        new_up.normal_(mean=0.0, std=INIT_STD, generator=generator)
-        sd[up_key] = torch.cat([up, new_up], dim=0).contiguous()
-        new_down = torch.zeros(down.shape[0], extra, dtype=down.dtype, device=down.device)
-        sd[down_key] = torch.cat([down, new_down], dim=1).contiguous()
-        widened.append(layer)
-    return sd, widened
-
-
 def widen_model(model, target_ffn, generator=None):
     """Widen a LIVE model's dense FFNs in place, preserving the function.
 
@@ -173,11 +138,6 @@ def val_has_flattened(val_losses, window=FLAT_WINDOW, rel_gain=FLAT_REL_GAIN):
     if prior <= 0:
         return False
     return (prior - recent) / prior < rel_gain
-
-
-def stage_compute(params, steps):
-    """Relative compute for a stage: params x steps. Growth only wins on this sum."""
-    return float(params) * float(steps)
 
 
 def _dup_map(old, new):

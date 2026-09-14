@@ -9,11 +9,10 @@
 #   it lacks `pos_emb.weight`. Used both as a warm-start target for canonical
 #   ckpts and as the inference class for any RoPE-only checkpoint without an
 #   MTP head.
-# - For the variant with an MTP head (the 800M training plugin), see
-#   `trainers/veritate_800m/trainer.py::Veritate800M`. This file is the no-MTP
-#   sibling; both share the same block API (`attn.qkv`, `attn.proj`, `ff.up`,
-#   `ff.down`, `n1`, `n2`) so the MRI's per-block forward hooks attach the
-#   same way.
+# - The multi-byte-head variant (Veritate800M) left the tree with trainers/ on
+#   2026-08-18; its checkpoints are refused by the loader and served through the
+#   C engine. This file keeps the block API (`attn.qkv`, `attn.proj`, `ff.up`,
+#   `ff.down`, `n1`, `n2`) so the MRI's per-block forward hooks attach the same way.
 # - extend_rope(new_max_seq) rebuilds the rope cache to accommodate decode
 #   beyond the training seq.
 # veritate_core/model_rope.py
@@ -123,8 +122,7 @@ class VeritateRoPE(nn.Module):
     """Veritate with RoPE positions, no MTP head.
 
     State-dict layout matches canonical Veritate everywhere except `pos_emb.weight`
-    (absent here). Same block API as `Veritate800M` (no MTP), so the MRI's
-    per-block forward hooks attach unchanged.
+    (absent here). Same block API, so the MRI's per-block forward hooks attach unchanged.
     """
 
     def __init__(self, vocab, hidden, layers, ffn, heads, seq,
