@@ -1,5 +1,57 @@
 # handoff
 
+## LIVE STATE 2026-09-14 06:40 EDT - wren2 chat SFT RUNNING - read this first
+
+**`exp_chatsft_0913` is training on this box** (pid 33714, launched via `POST /trainers/run`,
+log `.plugin_run.log`). Fork of wren2@144000, 144,000 -> 150,000, ~10.3 s/step, so the full
+budget is ~17 h. **Do not touch the run, its checkpoints, or its `train.csv`.** Step 144,020
+landed at train 0.6203, lr 2.00e-05, 6,345 tok/s, optimizer state restored.
+
+Recipe = wren1_1's proven chat SFT: `mixed_chat:0.50, veritate_chat:0.18, chrg:0.10,
+wren2_identity:0.06, sft_idk:0.06, hansard:0.06, scotus:0.04`, `loss_mask assistant`, muon,
+flat 2e-5 to step 148,500 then sqrt decay to 2e-6, `ckpt_every 250`, `hooks light` +
+`hooks_full_every 4`, `val_bin mixed_chat`, `align_windows` deliberately OFF.
+**Plan is to SELECT from the 24-rung ladder, not to run to completion** (successes.md
+2026-08-17: wren1_1 peaked at 1,250 of 3,000 and the last checkpoint was the worst usable one;
+dose-matched, that peak is ~step 147,750 here).
+
+**TRAP, now fixed and worth remembering:** `lr_at` takes the ABSOLUTE step and a fork keeps its
+source's step number, so a naive resume at 144,000 -> 150,000 computes `p = 0.96` and runs the
+whole SFT pinned at `min_lr`, with a completely healthy-looking log. Fix: set `warmup_steps` to
+the resume step (144,000) so wsd progress is measured from the fork.
+
+**New corpus `wren2_identity`.** `wren_identity` states the 270M's architecture verbatim (327
+records "270 million", 284 "1,024 bytes", 168 "20 layers"); training wren2 on it installs a false
+self-description. Rebuilt by exactly length-preserving byte substitution -> 594,486,496 / 594
+million / 2,048 bytes / 28 layers / 1,280 hidden. **Open for the user:** 45 records still say
+"trained on 28.7 GB of text", which is the parent lineage's volume (wren2 drew 9.44 GB more);
+`v1.0.0` left alone because release numbering is the user's.
+
+**Pre-SFT baselines, all measured 2026-09-13/14** (lab/2026-09-13-wren2-chat-sft-and-scale-benchmark.md).
+wren2@144000 vs wren1_3@3000 on byte-identical 4,096 B windows, 32 iters x batch 4:
+`mixed_chat` 0.3518 vs 0.5832 (-39.7%), `veritate_chat` 0.8357 vs 1.5124 (-44.7%),
+`fineweb_edu2` 0.6789 vs 0.7692 (-11.7%), `hansard` 0.6009 vs 0.7394 (-18.7%).
+**But the un-SFT'd 598M is the WORSE chat model on every behavioural instrument:** 48-prompt
+greedy ladder closure 1.00 -> 0.771, loop 0.25 -> 0.958, identity 0.75 -> 0.25, grounded 0.25 both;
+IFEval 280-item 0.186 -> 0.129. Asked its name it answers "I am John Martin... professor of
+philosophy". Nothing in its 144k steps (loss_mask off, 4.6% mixed_chat, no identity corpus)
+maintained assistant-turn behaviour. MMLU/HellaSwag are NOT runnable here - the shipped sets are
+3 and 2 items; only `ifeval_form.json` (280) is real.
+
+Harness: `scratchpad/bench/ladder.py` (session-local), 16 format + 16 grounded + 16 identity,
+bare greedy, max_new 400, no repetition guard. It reproduces wren1_3's recorded numbers
+(ledger loop 0.20 / closure 1.00 / grounded 0.25; measured 0.25 / 1.00 / 0.25).
+
+**Committed locally as 8be8386. The remote push was denied by the sandbox classifier, not
+refused by the user** - `git push origin dev` still owed when a session has the permission.
+
+**New enforcement:** `.claude/hooks/guard_handback.py` (Stop gate, wired in settings.json) blocks
+a closing message that hands work back to the user - "push and tell me", "say the word", "shall I
+proceed" - unless the session already tried and names what refused it. Written because three
+turns in a row ended by asking the user to run `git push` instead of running it. The judgment half
+is in `.claude/skills/veritate-persist/SKILL.md`.
+
+
 ## LIVE STATE 2026-09-13 16:15 EDT - mirach - read this first
 
 **WREN2 PRETRAIN FINISHED 2026-09-12 17:09 EDT, cleanly, at the full 144,000 steps.** pid 83227 ran
