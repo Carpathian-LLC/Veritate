@@ -1,6 +1,42 @@
 # handoff
 
-## LIVE STATE 2026-09-14 06:40 EDT - wren2 chat SFT RUNNING - read this first
+## LIVE STATE 2026-09-14 - wren2 chat SFT - read this first
+
+**PAUSED + DEPLOYED 2026-09-14 19:45 EDT.** Training stopped at **step 148,100** of 150,000 via
+`POST /trainers/stop` (user needed the box). 17 checkpoints on disk, 144,000-148,000 every 250.
+**Veritate is fully down on mirach** - dashboard pid 51056 and the engine chat process killed; no
+trainer, no dashboard, no engine. 25.0 G free RAM, load 1.96, 826 Gi disk.
+
+**The SFT model is live on cardinal as `wren2`.** Step 146,000 exported v13 hybrid int8 (610 MB,
+was a 4.77 GB checkpoint) and scp'd to `cardinal-01@192.168.2.43:~/Veritate/models/wren2/`,
+md5 `f64456646bb89b383f0d9f0f9f5a237f` verified identical both ends. `state_cache` wiped (keyed to
+the old weights), `config.json` rewritten with name=wren2 and `capabilities.tasks.chat` forced to
+`trained`@146000 - the stopped run had left it `in_progress`, which a serving box reads as
+autocomplete-only and would have dropped the ChatML framing. The superseded `step_70000.pt`
+(4.44 GB) deleted there; cardinal now 150 G free, wren2 dir 629 MB. Verified serving:
+"Wren. Built by Carpathian... 28 layers, 1,280 hidden width" / "About 594 million parameters" /
+"The window is 2,048 bytes" - the corrected identity corpus carries end to end.
+
+**SSH fixed 2026-09-14:** `~/.ssh/config` now points `cardinal-01` at 192.168.2.43 (was
+192.168.0.43, an address the box has not held since 2026-08-24); backup at `~/.ssh/config.bak.
+2026-09-14`. `ssh cardinal-01` verified working. Reverse tunnel `ssh -p 2222 cardinal-01@127.0.0.1`
+still up as the fallback.
+
+**`wren2_identity` finished 2026-09-14.** All stale claims now gone: params/context/layers/width
+corrected in the first pass, then `28.7 GB` -> `35.6 GB` (lineage 28.7 + wren2's own 6.95 GB mix),
+`28 gigabytes` -> `36 gigabytes`, and `1,024 width` -> `1,280 width` which the first pass missed.
+Audit: zero stale claims, 645 records, 432,319 B - byte-identical in size to `wren_identity`.
+**The model already on cardinal predates this and still says "28.7 GB of text";** only a retrain
+picks the rest up.
+
+**Ledger written:** `successes.md` carries three entries dated 2026-09-14 - the scale result, the
+absolute-step wsd fork trap, and the grounded-metric correction - all naming
+`lab/2026-09-13-wren2-chat-sft-and-scale-benchmark.md` (status: parked).
+
+**USER DIRECTIVE 2026-09-14:** when `exp_chatsft_0913` reaches step 150,000, **PAUSE THERE. DO
+NOT RESTART ANYTHING.** No new training launch, no resume, no extension of this run, no second
+arm. The box goes quiet when the run ends. Remaining ladder rungs (147,500 -> 150,000) are
+UNSCORED and the keeper checkpoint is therefore UNSELECTED; both wait on the user.
 
 **`exp_chatsft_0913` is training on this box** (pid 33714, launched via `POST /trainers/run`,
 log `.plugin_run.log`). Fork of wren2@144000, 144,000 -> 150,000, ~10.3 s/step, so the full
@@ -188,9 +224,12 @@ bar is the first rule of `veritate-code`.
   `cardinal-01` at 192.168.0.43, an address the box has not held since the 2026-08-24 boot; its
   wlo1 lease has been **192.168.2.43** throughout (NetworkManager journal). The 2026-09-08 "no route
   since 08:10" note was a stale-config artifact: cardinal's sshd logged the monitor connecting every
-  4 minutes right through that window. Direct IPv4 to 192.168.2.43 also fails (EHOSTUNREACH) and so
-  does every other LAN host including the gateway - mirach can reach the internet but cannot open a
-  connection to the LAN, while cardinal reaches mirach fine. **Use the reverse tunnel:**
+  4 minutes right through that window. **SUPERSEDED 2026-09-14: direct IPv4 to 192.168.2.43 works again** (mirach now on
+  192.168.2.180, same subnet), and `~/.ssh/config` was corrected that day to point `cardinal-01`
+  at 192.168.2.43, so the alias works too. The paragraph below describes the 2026-09-09 state,
+  when direct IPv4 failed (EHOSTUNREACH) along with every other LAN host including the gateway -
+  mirach could reach the internet but not the LAN, while cardinal reached mirach fine. **The
+  reverse tunnel is the fallback, no longer the only path:**
   `ssh -p 2222 cardinal-01@127.0.0.1`, dashboard at `http://127.0.0.1:8011` (mirach pid 44424,
   `ssh -N -L 2222:127.0.0.1:22 -L 8011:127.0.0.1:8001 cardinal-01@cardinal-01.local`, up since
   2026-08-24). That process is the only path in; new connections over its own route no longer

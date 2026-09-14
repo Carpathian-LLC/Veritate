@@ -187,6 +187,17 @@ Needle copy 1.00/0.83 @190B/475B; bare identity 3/3 name + 3/3 maker; grounded a
 **chat80m: the first conversing byte model**
 Three phases (pretrain 1.695→0.942, midtrain →0.681, SFT →0.647), ~9h GPU, ~470M tokens. Converses; factual recall fails (compute wall).
 
+**Growing 270M -> 598M bought compression everywhere and persona/retrieval after SFT, but not fluency discipline (2026-09-14)**
+wren2@144000 vs its own parent wren1_3@3000 on byte-identical 4,096 B windows (both resolve seq x n_chunks = 4,096, loader seed 1, `evaluate()` resets the draw - the one exact comparison on this platform): `mixed_chat` **0.3518 vs 0.5832 (-39.7%)**, `veritate_chat` 0.8357 vs 1.5124 (-44.7%), `fineweb_edu2` 0.6789 vs 0.7692 (-11.7%), `hansard` 0.6009 vs 0.7394 (-18.7%).
+**The un-SFT'd 598M is the WORSE chat model on every behavioural instrument**: 48-prompt greedy ladder closure 1.000 -> 0.771, loop 0.250 -> 0.958, identity 0.750 -> 0.250; IFEval 280-item 0.186 -> 0.129. It answered "what is your name?" with "I am John Martin... professor of philosophy". Cause is its own config, not damage: 144k steps at `loss_mask off` on a mix that was 4.6% `mixed_chat` with no identity corpus, so no gradient maintained assistant-turn behaviour.
+**1,000 steps of the wren1_1 chat SFT recovered it past the 270M on knowledge, not on fluency.** Best rung (146,000 of `exp_chatsft_0913`): closure 0.938, loop 0.438, grounded 0.312, identity 0.812 against the 270M's 1.000 / 0.250 / 0.250 / 0.750. Equal-weight composite still favours the 270M (0.688 vs 0.656) and the whole gap is looping and closure. Run paused at 148,100 of 150,000 before the wsd decay tail, so whether annealing closes it is UNMEASURED. Lab: 2026-09-13-wren2-chat-sft-and-scale-benchmark.
+
+**A late-run fork silently pins its whole SFT at min_lr (2026-09-14)**
+`lr_at` takes the ABSOLUTE step and `total_steps` is absolute, while `fork_model` keeps the source's step number. Resuming a 144,000-step model to 150,000 with `warmup_steps 100` gives `p = (144001-100)/(150000-100) = 0.959`, already past the wsd stable phase, so the run trains at the bottom of the decay tail with a completely healthy-looking log. Fix, documented knobs only: **set `warmup_steps` to the resume step**, which makes `p` run 0 -> 1 across the fork. Verified against the function: flat 2.000e-05 to step 148,500, then sqrt decay to 2.000e-06 at 150,000.
+
+**A grounded-retrieval metric must score first mention, not distractor absence (2026-09-14)**
+Scoring "gold present AND distractor absent" marked "Kestrel Ltd was founded in 1987, and its rival Harrow Ltd was founded in 1994" WRONG, and reported grounded collapsing 0.250 -> 0.062 across an SFT. Against a model whose dominant defect is verbatim restatement that rule measures looping, not retrieval - and injected context roughly doubles restatement on this platform (2026-08-17). First-mention-wins on the same stored replies reads 0.375 -> 0.312, i.e. flat. Keep the strict rule as a second column: it is a restatement gauge. Regrade from saved replies rather than re-decoding.
+
 ## corpus and infra benchmarks
 
 **Curated Python byte corpus at scale**
