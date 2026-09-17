@@ -26,6 +26,7 @@ import traceback
 import uuid
 
 from flask import Response, current_app, request
+from readers import bin as binr
 from readers import checkpoints, models, paths
 from runtime import logs as logmod
 
@@ -237,8 +238,11 @@ def _trim(answer):
 
 
 def is_local_model(name):
+    """Servable from this box. Either kind of weights counts: a serving box holds the
+    exported bin and no checkpoint (610 MB int8 against a 4.8 GB .pt), and _ensure_c
+    needs only the bin."""
     return bool(name) and name != CLOUD_ID and models.exists(name) \
-        and checkpoints.latest_step(name) is not None
+        and (checkpoints.latest_step(name) is not None or binr.exists(name))
 
 
 def _default_local_backend(name):
@@ -246,7 +250,6 @@ def _default_local_backend(name):
     engine when the model has a usable .bin and the engine binary is built (fast,
     CPU subprocess, matches the dashboard and /generate), else the pytorch brain
     for non-exportable trunks (recurrent/RoPE/MTP)."""
-    from readers import bin as binr
     return "c" if binr.exists(name) and os.path.isfile(paths.engine_binary_path()) else "pytorch"
 
 
@@ -264,8 +267,6 @@ def _ensure_pytorch(cfg, name):
 
 
 def _ensure_c(cfg, name):
-    from readers import bin as binr
-
     from .backends_routes import _spawn_c_subprocess, warm_is_pinned, warm_select
     if not binr.exists(name):
         raise FileNotFoundError(f"{name} has no veritate.bin; export it or use the pytorch engine")

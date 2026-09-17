@@ -83,3 +83,53 @@ def test_v1_models_sorted_newest_first(monkeypatch):
     """Entries are ordered newest-first by created, matching /pytorch-models."""
     data = _client(monkeypatch, ROWS).get("/v1/models").get_json()["data"]
     assert [e["id"] for e in data] == ["new_model", "old_model"]
+
+
+# ------------------------------------------------------------------------------------
+# Discovery: an engine-only model must be listed.
+#
+# _model_rows() skipped any model without a PyTorch checkpoint, so a serving box that
+# holds only the exported veritate.bin advertised nothing. That is the normal shape of
+# a deployment to a weak box: 610 MB of int8 bin instead of a 4.8 GB .pt. Deleting the
+# superseded checkpoint on cardinal-01 (2026-09-14) made the deployed model invisible
+# to the picker while the C engine had it loaded and serving.
+
+def _rows_with(monkeypatch, steps, bins):
+    """_model_rows() over stubbed readers. steps/bins map name -> step or bin presence."""
+    from readers import bin as binr
+    from readers import capabilities as caps_reader
+    from readers import checkpoints as ck
+    from readers import config as cfg_reader
+    from readers import models as models_reader
+    from routes import hybrid_routes
+
+    monkeypatch.setattr(models_reader, "list_models", lambda: sorted(steps))
+    monkeypatch.setattr(ck, "latest_step", lambda n: steps[n])
+    monkeypatch.setattr(ck, "path_for", lambda n, s: f"/nonexistent/{n}/{s}.pt")
+    monkeypatch.setattr(binr, "exists", lambda n: bins[n])
+    monkeypatch.setattr(cfg_reader, "load", lambda n: {"n_params_total": 1, "shape": {"hidden": 8, "layers": 2}})
+    monkeypatch.setattr(cfg_reader, "description", lambda n: "")
+    monkeypatch.setattr(caps_reader, "read", lambda n: {})
+    monkeypatch.setattr(hybrid_routes, "_default_local_backend", lambda n: "c" if bins[n] else "pytorch")
+
+    app = Flask(__name__)
+    with app.test_request_context():
+        return {r["name"]: r for r in models_routes._model_rows()}
+
+
+def test_engine_only_model_is_listed(monkeypatch):
+    """A model with veritate.bin and no .pt is a served model, not an absent one."""
+    rows = _rows_with(monkeypatch,
+                      steps={"engine_only": None, "pytorch_only": 5, "no_weights": None},
+                      bins={"engine_only": True, "pytorch_only": False, "no_weights": False})
+    assert "engine_only" in rows, "engine-only model dropped from discovery"
+    assert rows["engine_only"]["engine"] == "c"
+    assert "pytorch_only" in rows
+
+
+def test_model_with_neither_weights_is_skipped(monkeypatch):
+    """config.json alone is a directory, not a model."""
+    rows = _rows_with(monkeypatch,
+                      steps={"no_weights": None, "pytorch_only": 5},
+                      bins={"no_weights": False, "pytorch_only": False})
+    assert "no_weights" not in rows

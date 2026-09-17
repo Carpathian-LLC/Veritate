@@ -2,6 +2,42 @@
 
 ## LIVE STATE 2026-09-14 - wren2 chat SFT - read this first
 
+**RESUMED 2026-09-17 08:5x EDT.** `exp_chatsft_0913` is training again, 148,000 -> 150,000
+(~1,900 steps, ~5.7 h at 10.3 s/step), same args, optimizer state restored. **This run finally
+enters the wsd decay tail at 148,500**, which is the measurement the 2026-09-14 pause left open:
+looping was the one axis still falling (0.542 -> 0.521 -> 0.458 -> 0.438) and annealing is where
+this platform's runs usually earn their last gains. Watcher: `scratchpad/sft_watch.sh` (session
+bound) emits val rows, checkpoints, log errors, a 15-min stall alarm, and one terminal line on
+exit - it speaks whether the run finishes, crashes or stalls.
+
+**Watching a long run needs TWO watchers, not one.** A Monitor caps at 30 minutes here whatever
+`persistent` is set to, so across a 5.7 h run it expires repeatedly and every gap between
+expiries is a blind spot in which a crash reports nothing - and silence is indistinguishable
+from health. Pair it: a Monitor on `sft_watch.sh` for live val/checkpoint/stall events, plus a
+background sentinel (`while pgrep -f 'veritate_traine[r]'; do sleep 60; done` + a final report)
+which has no expiry and fires exactly once whichever way the run ends. Re-arm the Monitor on its
+expiry notice; the sentinel is what guarantees the terminal state is never missed.
+
+Freed first: the Z-Image / Carpathian-Imagine server (pid 82223) held **9.67 GB** after 11 days
+of accumulated model loads. Killing it took free RAM 24.7 -> 42.6 G and swap 18.8 -> 3.1 G.
+`/Library/LaunchDaemons/com.carpathian.imagine.plist` has `KeepAlive: true` and respawns it in
+~10 s, but the respawned process is an empty Flask app at 40 MB with no weights, so it costs
+nothing. Permanently stopping it needs `sudo launchctl bootout system/com.carpathian.imagine`
+(sudo wants a password).
+
+**Carpathian chat exports reviewed 2026-09-17 and REJECTED for training** (`~/Downloads/
+chat-logs.jsonl` 49 convs, `public-chat-logs.jsonl` 175). 224 conversations, 1.4 MB. (1) All 640
+assistant turns are Osprey 1.0/2.0 output, so training under `loss_mask=assistant` is model-prose
+consolidation - the wren1_3 2026-08-24 collapse shape. (2) Filler openers **164 per 1,000**
+assistant turns against the gate's 5.0 ceiling, 32 conversations opening on the identical
+"Hello! How can..."; `public-chat-logs` also fails unique user turns at 0.934 vs 0.95. (3)
+Languages are noise not capability: 195/224 Latin, then 9 Cyrillic / 7 Arabic / 5 CJK / 4
+Hiragana / 4 Greek, 1.2% of assistant chars. **Keep the 710 USER turns** - real unscripted
+register ("STOP OVER COMPLICATING IT!!! NO CODE COMMENTS AT ALL") that `veritate_chat` is thin on
+because it is self-authored. Use them as an eval prompt set and as authoring templates, not as a
+corpus. All 224 are `unrated`; the user says ratings are being captured going forward, which
+would change the verdict on the assistant side.
+
 **PAUSED + DEPLOYED 2026-09-14 19:45 EDT.** Training stopped at **step 148,100** of 150,000 via
 `POST /trainers/stop` (user needed the box). 17 checkpoints on disk, 144,000-148,000 every 250.
 **Veritate is fully down on mirach** - dashboard pid 51056 and the engine chat process killed; no

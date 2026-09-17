@@ -13,6 +13,9 @@ import os
 
 from flask import current_app, request
 from readers import (
+    bin as binr,
+)
+from readers import (
     capabilities as caps_reader,
 )
 from readers import (
@@ -39,26 +42,33 @@ OWNER = "veritate"
 # Functions
 
 def _model_rows():
-    """Models with at least one checkpoint, newest first. Shared source for
-    /pytorch-models and /v1/models so discovery + shape live in one place."""
+    """Models with weights the box can serve - a checkpoint, an exported bin, or both -
+    newest first. Shared source for /pytorch-models and /v1/models so discovery + shape
+    live in one place.
+
+    A serving box legitimately holds the bin alone: an int8 export is 610 MB where the
+    checkpoint it came from is 4.8 GB, and only the trainer needs the .pt. Requiring a
+    checkpoint hid a deployed model from the picker while the C engine served it.
+    `step` is 0 for a bin-only model - it has no checkpoint to number."""
     from .hybrid_routes import _default_local_backend
     out = []
     cfg = current_app.config
     cur_model = cfg.get("BRAIN_MODEL") or cfg.get("DEFAULT_MODEL")
     for name in models.list_models():
         step = checkpoints.latest_step(name)
-        if step is None:
+        if step is None and not binr.exists(name):
             continue
         try: mcfg = cfg_reader.load(name) or {}
         except Exception: mcfg = {}
         plugin = (mcfg.get("plugin") or "").strip()
         n_params = mcfg.get("n_params_total")
         shape = mcfg.get("shape") or {}
-        try: mtime = os.path.getmtime(checkpoints.path_for(name, step))
+        weights = checkpoints.path_for(name, step) if step is not None else paths.bin_path(name)
+        try: mtime = os.path.getmtime(weights)
         except OSError: mtime = 0
         out.append({
             "name":        name,
-            "step":        int(step),
+            "step":        int(step or 0),
             "is_current":  name == cur_model,
             "plugin":      plugin,
             "n_params":    int(n_params) if n_params else None,
