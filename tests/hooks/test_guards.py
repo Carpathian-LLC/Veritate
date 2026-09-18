@@ -17,6 +17,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -235,6 +236,67 @@ def test_subagents_and_workflows_are_refused():
 def test_agent_guard_ignores_other_tools():
     """The guard keys on Agent and Workflow alone."""
     assert hook("guard_agents.py", {"tool_name": "Bash", "tool_input": {"command": "ls"}})[0] == ALLOW
+
+
+FORK = ('curl -s -X POST localhost:8010/models/fork '
+        '-d \'{{"source": "wren2_0", "new_name": "{name}"}}\'')
+
+
+def fleet(cmd):
+    return hook("guard_fleet.py", {"tool_name": "Bash", "tool_input": {"command": cmd}})
+
+
+def suggested(msg):
+    """The fleet name a refusal tells you to use instead."""
+    hit = re.search(r"use: (wren\d+_\d+)", msg)
+    assert hit, msg
+    return hit.group(1)
+
+
+def test_a_scratch_name_never_reaches_a_fork():
+    """exp_* is not a run name (user, 2026-09-17). The refusal names the rung to use."""
+    code, msg = fleet(FORK.format(name="exp_carpchat_0917"))
+    assert code == BLOCK
+    assert "not a wren fleet name" in msg
+    assert suggested(msg).startswith("wren2_")
+
+
+def test_the_suggested_rung_is_accepted():
+    """Whatever the guard tells you to use has to pass the guard."""
+    assert fleet(FORK.format(name=suggested(fleet(FORK.format(name="exp_x_0101"))[1])))[0] == ALLOW
+
+
+def test_skipping_a_rung_is_refused():
+    """The number bumps by one. A gap hides a run that is not written down anywhere."""
+    lineage, rung = suggested(fleet(FORK.format(name="exp_x_0101"))[1]).split("_")
+    code, msg = fleet(FORK.format(name=f"{lineage}_{int(rung) + 5}"))
+    assert code == BLOCK
+    assert "does not bump" in msg
+
+
+def test_a_model_on_disk_is_the_same_run_continuing():
+    """Resuming wren2_0 under its own name is not a new rung and is left alone."""
+    run = ('curl -s -X POST localhost:8010/trainers/run '
+           '-d \'{"id": "veritate", "args": {"name": "wren2_0", "resume": "wren2_0"}}\'')
+    assert fleet(run)[0] == ALLOW
+
+
+def test_a_name_posted_from_a_file_is_still_seen():
+    """The launch payload is normally a file: curl -d @payload.json."""
+    path = os.path.join(REPO_ROOT, "tests", "hooks", "_fleet_payload.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"id": "veritate", "args": {"name": "exp_carpchat_0917", "resume": "wren2_0"}}, fh)
+    try:
+        code, msg = fleet(f"curl -s -X POST localhost:8010/trainers/run -d @{path}")
+    finally:
+        os.remove(path)
+    assert code == BLOCK
+    assert "exp_carpchat_0917" in msg
+
+
+def test_fleet_guard_ignores_commands_that_launch_nothing():
+    """A name in unrelated json is not a run."""
+    assert fleet("echo '{\"name\": \"exp_whatever\"}'")[0] == ALLOW
 
 
 EDIT_WIKI_CSS = [{"type": "tool_use", "name": "Edit",

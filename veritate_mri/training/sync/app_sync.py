@@ -94,6 +94,9 @@ _REPO_URL_ENV     = "VERITATE_REPO_URL"
 # no env override still resolves an update source instead of going dead.
 _REPO_URL_DEFAULT = "https://github.com/Carpathian-LLC/Veritate"
 GITHUB_API_BASE   = "https://api.github.com"
+# What GitHub answers for a ref it cannot resolve: 404, or 422 "no commit found
+# for ref". Any other status is a transport or quota problem, not a missing branch.
+GITHUB_REF_MISSING_CODES = (404, 422)
 # Source-tarball path GitHub serves for a branch, appended to the repo base URL.
 GITHUB_BRANCH_TARBALL_FMT = "{base}/archive/refs/heads/{branch}.tar.gz"
 
@@ -225,18 +228,30 @@ def _local_head_sha():
     return None
 
 
-def _active_branch():
-    """Branch the updater should actually track. In a git checkout the locally
-    checked-out branch wins: developers may be testing on a branch and must
-    not be prompted to overwrite it with a different one. Falls back to the
-    channel branch only when no `.git/HEAD` is present (tarball install)."""
-    return _local_git_branch() or _channel_branch()
+def _tracked_branch():
+    """Branch the updater follows, resolved against the remote. In a git checkout
+    the locally checked-out branch wins - developers may be testing on a branch
+    and must not be prompted to overwrite it with a different one - but only
+    while the remote still has that branch; otherwise the channel branch does.
+
+    A checkout left on a branch that was deleted upstream has no update path
+    without that second half: GitHub serves the archive URL of an unresolvable
+    ref with the DEFAULT branch's tarball, so a pull silently lands main under
+    the old name, and every compare against the missing ref 404s, which reads as
+    "up to date" and leaves the update button permanently disabled.
+
+    Costs one API call, so only check_update and pull_update call it; both record
+    the answer in state and status() reads it back with _reported_branch()."""
+    local = _local_git_branch()
+    if local and not _remote_branch_sha(local)[1]:
+        return local
+    return _channel_branch()
 
 
-def _active_channel():
-    """Channel name corresponding to the active branch. Returns None for
-    branches that don't map to a known channel (e.g. feature/PR branches)."""
-    return BRANCH_TO_CHANNEL.get(_active_branch())
+def _reported_branch():
+    """Branch to display: the one the last check resolved, else the local guess.
+    Never touches the network - status() is polled once a minute per open tab."""
+    return (_state() or {}).get("remote_branch") or _local_git_branch() or _channel_branch()
 
 
 def _normalize_github_url(url):
@@ -303,15 +318,21 @@ def _repo_slug():
 
 
 def _remote_branch_sha(branch):
-    """Commit SHA at the tip of the remote `branch`, or None.
+    """Commit SHA at the tip of the remote `branch`, as `(sha, missing)`.
 
-    This is what a tarball actually contains. `pull_update` records it so a later
-    check has a real base to compare against: a tarball extract writes files but
-    creates no commit, so `.git/HEAD` never advances and comparing against it
+    `missing` is True only when GitHub answered that the ref does not resolve; a
+    transport failure or a rate limit returns `(None, False)`, so an offline box
+    never concludes a branch was deleted upstream. The commits endpoint is what
+    answers that question honestly: `/branches/<name>` 301s an unknown branch
+    onto the default one and urllib follows the redirect.
+
+    The sha is what a tarball actually contains. `pull_update` records it so a
+    later check has a real base to compare against: a tarball extract writes files
+    but creates no commit, so `.git/HEAD` never advances and comparing against it
     reports the same `behind` count forever, however many times the user updates."""
     slug = _repo_slug()
     if not slug:
-        return None
+        return None, False
     req = urllib.request.Request(f"{GITHUB_API_BASE}/repos/{slug}/commits/{branch}",
                                  method="GET")
     req.add_header("User-Agent", "veritate-http-updater/1")
@@ -319,9 +340,11 @@ def _remote_branch_sha(branch):
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECS,
                                      context=net.ssl_context()) as resp:
-            return (json.loads(resp.read().decode("utf-8")) or {}).get("sha") or None
+            return (json.loads(resp.read().decode("utf-8")) or {}).get("sha") or None, False
+    except urllib.error.HTTPError as e:
+        return None, e.code in GITHUB_REF_MISSING_CODES
     except Exception:
-        return None
+        return None, False
 
 
 def _compare_base(git_checkout, branch):
@@ -660,8 +683,8 @@ def local_edits(skip_dirs=None, incoming=None):
 def status():
     url_base = _repo_url_base()
     last = _state()
-    active_branch = _active_branch()
-    active_channel = _active_channel()
+    active_branch = _reported_branch()
+    active_channel = BRANCH_TO_CHANNEL.get(active_branch)
     return {
         "is_repo":          True,
         "channel":          _channel(),
@@ -700,7 +723,7 @@ def check_update():
     own commit", so it is only the fallback: for tarball installs (no `.git`),
     or when the compare can't be reached. HEAD the tarball either way to keep
     the ETag baseline and `head_short` fresh."""
-    branch = _active_branch()
+    branch = _tracked_branch()
     url = _tarball_url(branch)
     etag, last_modified, err = _etag_cached(url)
     if err:
@@ -833,7 +856,7 @@ def pull_update(reload=False, force=False, ignore_training=False):
             logmod.warn("http-updater", msg)
             return {"ok": False, "error": msg, "training_active": True}
 
-    branch = _active_branch()
+    branch = _tracked_branch()
     url = _tarball_url(branch)
     tmp_fd, tmp_path = tempfile.mkstemp(prefix=TARBALL_TMP_PREFIX, suffix=TARBALL_TMP_SUFFIX)
     os.close(tmp_fd)
@@ -906,7 +929,7 @@ def pull_update(reload=False, force=False, ignore_training=False):
             # recomputes `behind` against `.git/HEAD` -- which a tarball never
             # advances -- and overwrites the 0 below with the same stale count,
             # so the panel reads "N behind" again seconds after a good update.
-            "pulled_commit":        _remote_branch_sha(branch),
+            "pulled_commit":        _remote_branch_sha(branch)[0],
             "update_available":     False,
             "behind":               0,
             "etag":                 post_etag,
@@ -1007,7 +1030,7 @@ def start():
     _THREAD = t
     logmod.info(
         "http-updater",
-        f"channel={_channel()} tracking_branch={_active_branch()} "
+        f"channel={_channel()} tracking_branch={_reported_branch()} "
         f"local_branch={_local_git_branch() or '(none)'} "
         f"url={_repo_url_base() or '(unset)'}"
     )

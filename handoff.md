@@ -1491,3 +1491,51 @@ Pre-committed falsifiers and the no-control-arm caveat: `lab/2026-09-17-carpathi
 **The control arm is not optional for a positive result.** 800 steps at a re-warmed 1e-5 can
 move the ladder on their own. Nothing attributes a change to `carpathian_chat` until an
 identical 800 steps runs on the mix WITHOUT it.
+
+**4. cardinal's install is now named `wren2_0`, not `wren2` (2026-09-17 22:36).** The bin shipped
+earlier tonight landed in `~/Veritate/models/wren2/` with `config.json` name `wren2`, which is why
+the user could not find `wren2_0` in cardinal's dropdown - engine-only discovery lists the model
+DIR, so the 150,000 weights were showing under the pretrain's name. Moved to
+`~/Veritate/models/wren2_0/`; `name` -> `wren2_0`, `training_args.output_dir` -> the new path, and
+`capabilities.tasks.chat` corrected from step 146,000 to 150,000 @ 2026-09-17T18:36:33Z (it was
+the 2026-09-14 hand-forced value and the bin is four rungs newer). Engine repointed with
+`POST /c-config`; `/c-models` shows `* wren2_0` current, `/backends` `model_dir wren2_0`, and a
+ChatML probe answers "594,486,496 parameters. 28 layers, 1,280 hidden width, 2,048 bytes context
+window." and stops on `<|im_end|>`. bin md5 unchanged, `59a0a1d9...`, 1,188,973,312 B.
+Nothing else on cardinal referenced `models/wren2` (sleep disabled, `sleep_models` empty), and
+`C_MODEL` starts null at boot there, so no stored setting broke.
+
+**The dashboard URL is the tunnel, not the LAN.** cardinal binds `0.0.0.0:8001` and holds
+192.168.2.43, but from mirach both 22 and 8001 are unreachable ("No route to host", ARP entry
+present, mDNS ping times out). Browser on mirach: **http://127.0.0.1:8011** - the existing
+`ssh -N -L 2222:127.0.0.1:22 -L 8011:127.0.0.1:8001` tunnel (pid 86964, session-independent but
+NOT respawned by anything; if it dies it must be rebuilt from cardinal's side).
+
+**NAMING (user, 2026-09-17): the carpathian SFT in flight becomes `wren2_1`.** `exp_carpchat_0917`
+-> `models/wren2_1` when the run finishes, so it does not collide with `wren2_0`. NOT done yet -
+the run is live (pid 62747) and its dir must not be touched until it exits.
+
+## cardinal update button - fixed in code 2026-09-17, needs a restart + a push
+
+The button was dead because the updater followed a branch the remote no longer has.
+Cardinal's checkout sits on `master` (deleted upstream at the rename to `main`), and
+`_active_branch()` let the local branch win unconditionally, so: GitHub served the
+`master` archive URL with the DEFAULT branch's tarball (that is how the box got "synced
+master (585 files)" while main's source landed), and `compare/<head>...master` 404'd,
+which the caller reads as "local is the source of truth" -> behind 0 -> `updatePullBtn`
+disabled. The box was 40 commits behind `dev` the whole time.
+
+Fix (`veritate_mri/training/sync/app_sync.py`): `_tracked_branch()` keeps the local branch
+only while the remote still has it, else the channel branch; `_remote_branch_sha()` now
+returns `(sha, missing)` with `missing` true only on 404/422, so offline or rate-limited
+never retargets a box; `status()` reads `_reported_branch()` from state and makes no
+network call. Tests `tests/mri/test_updater_branch.py`, documentation.md updater section.
+
+State on the box: the patched file is DEPLOYED to cardinal (backup
+`~/app_sync.py.bak.2026-09-17`), verified in place with cardinal's own interpreter -
+tracked branch `dev`, behind 40. **The running dashboard still holds the old module: it
+needs `POST /lifecycle/restart` (or any restart) before the button changes.**
+
+Order matters: push the fix to `dev` BEFORE updating cardinal. The pull overwrites
+`app_sync.py` with whatever `dev` carries, so updating first re-installs the unfixed
+updater and the button dies again at the next check.
