@@ -1450,3 +1450,44 @@ OPEN, none of it blocking:
   the sandbox classifier, not by the user.
 - The batch-16 `val_eval` re-run produced no rows (it was killed for stealing cores from the
   trainer). It gates nothing.
+
+## LIVE STATE 2026-09-17 22:45 - identity prose stripped, cardinal on the fp16 export, carpathian SFT running
+
+**1. The identity corpora no longer philosophise.** User: "THATS BAD!! REMOVE THE DUMB LAST
+PART!" then "remove those dumb statements please. I hate that kind of prose". 62 distinct
+sentences of the self-negating register deleted whole from `wren2_identity` and `wren_identity`
+(train and val). 432,319 -> 249,665 B, 646 -> 455 records; **190 records lost their assistant
+turn entirely** because it was nothing but that register. Builder:
+`scratchpad/strip_identity_prose.py`, removal list inline. Facts kept, prose cut, nothing
+rewritten. **These bins are gitignored - there is no original to restore.**
+
+**The served model is NOT fixed by this.** cardinal@150,000 still answers "Are you conscious?"
+with "Fixed weights, no persistent state, no internal experience. Text goes in, patterns get
+matched, text comes out. That is the whole system." A corpus edit changes future training, not
+trained weights. The prose changes only when wren2 is SFT'd again on the corrected corpus -
+which the run below is the first to do.
+
+**2. cardinal serves the user's own fp16 C export.** `models/wren2_0/veritate.bin`, v13 hybrid,
+1,188,973,312 B, md5 `59a0a1d91b8666e1fcd3a560dd446e38` verified identical both ends. Old 610 MB
+int8 (step 146,000) backed up to `/tmp/wren2_old_int8_146000.bin` on cardinal. `state_cache`
+wiped (keyed to weights). config.json now reads step 150,000 with the keeper-rung ladder numbers.
+Dashboard restarted, all three engine children respawned, verified serving.
+**Speed cost, not yet paid back:** fp16 measures 15.17 ms/byte against int8's 10.42 on that box
+(successes.md 2026-08-23), so cardinal is ~1.46x slower than it was. An int8 re-export of
+wren2_0@149,500 would take both the better rung and the speed back.
+
+**SSH: direct IPv4 to 192.168.2.43 is DOWN again** ("No route to host" from 192.168.2.180, same
+subnet; mDNS resolves fine). The reverse tunnel is the working path:
+`ssh -p 2222 cardinal-01@127.0.0.1`, `scp -P 2222`. Tunnel was already up this session.
+cardinal's `dash_watchdog.sh` runs from cron every minute, so killing the dashboard there is safe.
+
+**3. RUNNING: `exp_carpchat_0917`**, 150,000 -> 150,800, ~2.5 h from 22:40.
+wren2_0@150,000 + 490 KB of filtered English Carpathian traffic at 0.04 (4.28 epochs).
+Launched 22:09, stopped at 150,090, relaunched 22:40 so it would read the corrected identity
+corpus - `np.memmap` holds the old inode through an `os.replace`, so no edit reaches a run in
+flight. Watcher: `scratchpad/carp_watch.sh` -> `carp_watch.log`.
+Pre-committed falsifiers and the no-control-arm caveat: `lab/2026-09-17-carpathian-traffic-sft.md`.
+
+**The control arm is not optional for a positive result.** 800 steps at a re-warmed 1e-5 can
+move the ladder on their own. Nothing attributes a change to `carpathian_chat` until an
+identical 800 steps runs on the mix WITHOUT it.
