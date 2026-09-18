@@ -52,7 +52,7 @@
       tab: "wiki",
       target: ['.tab[data-tab="wiki"]'],
       title: "4. Wiki",
-      body: "Build notes and platform docs. After any update, check here for what changed and anything you need to do.",
+      body: "The platform reference: every component, contract and setting, with a filterable contents rail. The Training tab's learn-more links land here.",
     },
     {
       tab: "logs",

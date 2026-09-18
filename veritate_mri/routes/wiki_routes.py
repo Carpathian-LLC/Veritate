@@ -18,21 +18,44 @@ from readers import wiki as wiki_reader
 # ------------------------------------------------------------------------------------
 # Constants
 
+# Mirrors veritate_mri/web/wiki.css so a `learn more` tab looks like the dashboard
+# it was opened from: same palette, prose in a proportional face, code in mono.
 _WIKI_PAGE_CSS = (
-    ":root{color-scheme:dark}"
-    "body{margin:0;background:#0e1116;color:#c9d1d9;"
-    "font:15px/1.6 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}"
-    ".wrap{max-width:760px;margin:0 auto;padding:2.5rem 1.5rem 4rem}"
-    "h1,h2,h3{color:#f0f6fc;line-height:1.25}"
-    "h1{font-size:1.6rem;border-bottom:1px solid #21262d;padding-bottom:.4rem}"
-    "a{color:#58a6ff}"
-    "code{background:#161b22;padding:.1em .35em;border-radius:4px;font-size:.9em}"
-    "pre{background:#161b22;padding:1rem;border-radius:6px;overflow-x:auto}"
-    "pre code{background:none;padding:0}"
-    "table{border-collapse:collapse;width:100%}"
-    "th,td{border:1px solid #21262d;padding:.4rem .6rem;text-align:left}"
-    "blockquote{border-left:3px solid #30363d;margin:0;padding:.2rem 1rem;color:#8b949e}"
-    ".src{color:#6e7681;font-size:.8rem;margin-top:2.5rem;border-top:1px solid #21262d;padding-top:.8rem}"
+    ":root{color-scheme:dark;--bg:#08090c;--line:#1e2330;--text:#d6d8db;--dim:#6f7480;"
+    "--soft:#9aa4b5;--accent:#6aa6ff;--warm:#ffae5d}"
+    "*{box-sizing:border-box}"
+    "body{margin:0;background:var(--bg);color:var(--text);"
+    "font:13.5px/1.7 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}"
+    ".wrap{max-width:78ch;margin:0 auto;padding:36px 22px 64px}"
+    "h1,h2,h3,h4{letter-spacing:0}"
+    "h1{color:#fff;font-size:21px;font-weight:600;margin:0 0 6px;padding-bottom:12px;"
+    "border-bottom:1px solid var(--line)}"
+    "h2{color:#fff;font-size:16px;font-weight:600;margin:38px 0 4px;padding-top:16px;"
+    "border-top:1px solid var(--line)}"
+    "h3{color:var(--accent);font-size:13.5px;font-weight:600;margin:24px 0 2px}"
+    # The page is one section, so its own heading is the page title whatever level it is.
+    ".wrap>:first-child{color:#fff;font-size:21px;font-weight:600;margin:0 0 6px;"
+    "padding-bottom:12px;border-bottom:1px solid var(--line);border-top:none;padding-top:0}"
+    "h4{color:var(--soft);font-size:12.5px;font-weight:600;margin:16px 0 2px}"
+    "p{margin:10px 0}ul,ol{margin:10px 0;padding-left:20px}li{margin:4px 0}"
+    "strong{color:#fff;font-weight:600}em{color:var(--soft);font-style:italic}"
+    "a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}"
+    "hr{border:none;border-top:1px solid var(--line);margin:20px 0}"
+    "code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--warm);"
+    "background:#0a0c12;border-radius:3px;padding:1px 4px}"
+    "pre{background:#06070a;border:1px solid var(--line);border-radius:4px;padding:12px 14px;"
+    "overflow-x:auto;margin:12px 0}"
+    "pre code{background:none;padding:0;color:var(--text);font-size:12px}"
+    "blockquote{margin:14px 0;padding:8px 14px;border-left:2px solid var(--accent);"
+    "background:rgba(106,166,255,.06);color:var(--soft);border-radius:0 3px 3px 0}"
+    "table{width:100%;border-collapse:collapse;margin:14px 0;"
+    "font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px}"
+    "th{color:var(--accent);font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;"
+    "padding:6px 10px;border-bottom:1px solid var(--line)}"
+    "td{padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--soft)}"
+    ".wiki-xref-path{color:var(--dim);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px}"
+    ".src{color:var(--dim);font-size:10px;letter-spacing:.14em;text-transform:uppercase;margin-top:44px;"
+    "border-top:1px solid var(--line);padding-top:12px}"
 )
 
 # ------------------------------------------------------------------------------------

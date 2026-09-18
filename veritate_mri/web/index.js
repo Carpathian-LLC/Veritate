@@ -3031,7 +3031,7 @@ function activateTab(name) {
   } else if (name === "wiki") {
     stopTrainPolling();
     trainStreamStop();
-    ensureWikiLoaded();
+    if (window.Wiki) window.Wiki.load();
   } else {
     stopTrainPolling();
     trainStreamStop();
@@ -16404,51 +16404,6 @@ function trainStreamStop() {
   if (_trainStreamEvt) { _trainStreamEvt.close(); _trainStreamEvt = null; }
   const status = $("trainStreamStatus");
   if (status) status.textContent = "";
-}
-
-// ---- wiki ----
-const wikiState = {
-  loaded:   false,
-  loading:  false,
-  sections: [],
-};
-
-async function ensureWikiLoaded() {
-  if (wikiState.loaded || wikiState.loading) return;
-  wikiState.loading = true;
-  showSkeleton("wikiSubtabs", "lines", 3);
-  showSkeleton("wikiEntry",   "blocks", 3);
-  try {
-    const [tocRes, docRes] = await Promise.all([fetch("/wiki"), fetch("/wiki/doc")]);
-    const toc = await tocRes.json();
-    const doc = await docRes.json();
-    wikiState.sections = toc.sections || [];
-    renderWikiToc();
-    $("wikiEntry").innerHTML = doc.body_html || "";
-    wikiState.loaded = true;
-  } catch (e) {
-    $("wikiEntry").innerHTML = `<div class="wiki-empty">failed to load wiki: ${esc(String(e))}</div>`;
-  } finally {
-    wikiState.loading = false;
-  }
-}
-
-function renderWikiToc() {
-  const wrap = $("wikiSubtabs");
-  if (!wrap) return;
-  if (!wikiState.sections.length) {
-    wrap.innerHTML = `<div class="wiki-empty">documentation.md has no sections.</div>`;
-    return;
-  }
-  wrap.innerHTML = wikiState.sections.map(s =>
-    `<div class="wiki-subtab wiki-toc-level${s.level}" data-slug="${esc(s.slug)}">${esc(s.title)}</div>`
-  ).join("");
-  wrap.querySelectorAll(".wiki-subtab").forEach(el => {
-    el.addEventListener("click", () => {
-      const target = document.getElementById(el.dataset.slug);
-      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  });
 }
 
 async function loadVersions() {

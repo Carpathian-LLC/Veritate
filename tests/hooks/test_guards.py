@@ -237,9 +237,41 @@ def test_agent_guard_ignores_other_tools():
     assert hook("guard_agents.py", {"tool_name": "Bash", "tool_input": {"command": "ls"}})[0] == ALLOW
 
 
+EDIT_WIKI_CSS = [{"type": "tool_use", "name": "Edit",
+                  "input": {"file_path": f"{REPO_ROOT}/veritate_mri/web/wiki.css"}}]
+TOOK_A_LOOK   = [{"type": "tool_use", "name": "Bash",
+                  "input": {"command": "chrome --headless --screenshot=out.png page.html"}}]
+
+
+def test_changing_a_dashboard_surface_without_rendering_it_is_refused(tmp_path):
+    """A turn that edits veritate_mri/web/ and never renders the page cannot end."""
+    code, msg = hook("guard_unlooked_ui.py", {"transcript_path": transcript(tmp_path, [EDIT_WIKI_CSS])})
+    assert code == BLOCK
+    assert "wiki.css" in msg
+
+
+def test_a_rendered_surface_is_allowed(tmp_path):
+    """A screenshot in the same turn is the evidence the gate asks for."""
+    t = transcript(tmp_path, [EDIT_WIKI_CSS, TOOK_A_LOOK])
+    assert hook("guard_unlooked_ui.py", {"transcript_path": t})[0] == ALLOW
+
+
+def test_surface_gate_ignores_non_web_edits(tmp_path):
+    """Python and kernels have tests; only the web surface needs a picture."""
+    t = transcript(tmp_path, [EDIT_SOURCE])
+    assert hook("guard_unlooked_ui.py", {"transcript_path": t})[0] == ALLOW
+
+
+def test_surface_gate_cannot_loop(tmp_path):
+    """stop_hook_active short-circuits so the gate can never wedge a session."""
+    t = transcript(tmp_path, [EDIT_WIKI_CSS])
+    assert hook("guard_unlooked_ui.py", {"transcript_path": t, "stop_hook_active": True})[0] == ALLOW
+
+
 def test_every_guard_fails_open_on_unparseable_input():
     """Malformed stdin must never block work in any guard."""
-    for name in ("guard_write.py", "guard_schedule.py", "guard_agents.py", "frustration_to_rule.py", "persist.py"):
+    for name in ("guard_write.py", "guard_schedule.py", "guard_agents.py", "frustration_to_rule.py",
+                     "persist.py", "guard_unlooked_ui.py"):
         p = subprocess.run([sys.executable, os.path.join(HOOKS, name)],
                            input="not json", capture_output=True, text=True,
                            env={**os.environ, "CLAUDE_PROJECT_DIR": REPO_ROOT}, cwd=REPO_ROOT)

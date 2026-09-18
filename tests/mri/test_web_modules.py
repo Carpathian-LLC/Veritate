@@ -25,7 +25,8 @@ from conftest import REPO_ROOT
 
 WEB = os.path.join(REPO_ROOT, "veritate_mri", "web")
 # self-contained modules: one window.<Name> export, nothing read from index.js
-STANDALONE = ("image_mri.js", "generation_images.js", "image_live.js", "tutorial.js", "prune.js")
+STANDALONE = ("image_mri.js", "generation_images.js", "image_live.js", "tutorial.js", "prune.js",
+              "wiki.js")
 INDEX_ONLY = ("imgMriState", "_imriSvgLine", "IMRI_SHARED_STYLE", "imgGenPanel", "_imgGenRun",
               "imgLiveState", "_imgLiveParseCsv", "IMG_LIVE_STAGES", "_imgLiveRender")
 
@@ -83,6 +84,26 @@ def test_the_generation_tab_has_the_kind_switch_and_the_image_layout():
         assert f'id="{el}"' in html, el
     css = _read("generation_images.css")
     assert '.tab-body[data-tab="generation"].is-images' in css
+
+
+def test_the_wiki_tab_has_no_container_the_module_never_fills():
+    """Every id in the Wiki tab is written by wiki.js: an empty box is a design defect."""
+    html = _read("index.html")
+    tab = html[html.index('<div class="tab-body" data-tab="wiki">'):]
+    tab = tab[:tab.index("<!-- shared dropdown content")]
+    ids = re.findall(r'id="([^"]+)"', tab)
+    assert set(ids) == {"wikiFilter", "wikiToc", "wikiArticle", "wikiNavEmpty"}
+    module = _read("wiki.js")
+    for el in ids:
+        assert f'"{el}"' in module, el
+
+
+def test_index_js_reaches_the_wiki_only_through_its_export():
+    """Wiki rendering lives in the module; index.js holds no wiki state or markup."""
+    src = _read("index.js")
+    assert "window.Wiki.load()" in src
+    for sym in ("wikiState", "renderWikiToc", "ensureWikiLoaded", "wikiSubtabs"):
+        assert sym not in src, sym
 
 
 def test_the_fast_mode_picker_offers_only_modes_a_model_can_serve():

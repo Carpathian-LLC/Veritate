@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="/static/tutorial.css">
 <link rel="stylesheet" href="/static/prune.css">
 <link rel="stylesheet" href="/static/rag_train.css">
+<link rel="stylesheet" href="/static/wiki.css">
 </head>
 <body>
 
@@ -2328,13 +2329,14 @@
 <div class="tab-body" data-tab="wiki">
 
   <div class="panel">
-    <h2>wiki <em>build notes, experiments, and project log</em></h2>
-    <div class="body">
-      <div id="wikiSubtabs" class="wiki-subtabs"></div>
-      <div class="wiki-layout">
-        <div class="wiki-list" id="wikiList"></div>
-        <div class="wiki-entry" id="wikiEntry"><div class="wiki-empty">Pick an entry on the left.</div></div>
-      </div>
+    <h2>wiki <em>documentation.md, the single platform reference</em></h2>
+    <div class="body wiki-layout">
+      <nav class="wiki-nav">
+        <input id="wikiFilter" class="wiki-filter" type="search" placeholder="filter sections" autocomplete="off">
+        <div id="wikiToc" class="wiki-toc"></div>
+        <div id="wikiNavEmpty" class="wiki-nav-empty" style="display:none">no section matches.</div>
+      </nav>
+      <article id="wikiArticle" class="wiki-article"></article>
     </div>
   </div>
 
@@ -2830,6 +2832,7 @@
 <script src="/static/tutorial.js"></script>
 <script src="/static/prune.js"></script>
 <script src="/static/rag_train.js"></script>
+<script src="/static/wiki.js"></script>
 <script>
 /* Extensions gate. Self-contained: unique IDs, no overlap with index.js.
    Drives the toggle + a single Extensions menu that collapses installed
