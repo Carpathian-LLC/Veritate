@@ -2,7 +2,7 @@
 
 ## LIVE STATE 2026-09-14 - wren2 chat SFT - read this first
 
-**RESUMED 2026-09-17 08:5x EDT.** `exp_chatsft_0913` is training again, 148,000 -> 150,000
+**RESUMED 2026-09-17 08:5x EDT.** `wren2_0` is training again, 148,000 -> 150,000
 (~1,900 steps, ~5.7 h at 10.3 s/step), same args, optimizer state restored. **This run finally
 enters the wsd decay tail at 148,500**, which is the measurement the 2026-09-14 pause left open:
 looping was the one axis still falling (0.542 -> 0.521 -> 0.458 -> 0.438) and annealing is where
@@ -69,12 +69,12 @@ picks the rest up.
 absolute-step wsd fork trap, and the grounded-metric correction - all naming
 `lab/2026-09-13-wren2-chat-sft-and-scale-benchmark.md` (status: parked).
 
-**USER DIRECTIVE 2026-09-14:** when `exp_chatsft_0913` reaches step 150,000, **PAUSE THERE. DO
+**USER DIRECTIVE 2026-09-14:** when `wren2_0` reaches step 150,000, **PAUSE THERE. DO
 NOT RESTART ANYTHING.** No new training launch, no resume, no extension of this run, no second
 arm. The box goes quiet when the run ends. Remaining ladder rungs (147,500 -> 150,000) are
 UNSCORED and the keeper checkpoint is therefore UNSELECTED; both wait on the user.
 
-**`exp_chatsft_0913` is training on this box** (pid 33714, launched via `POST /trainers/run`,
+**`wren2_0` is training on this box** (pid 33714, launched via `POST /trainers/run`,
 log `.plugin_run.log`). Fork of wren2@144000, 144,000 -> 150,000, ~10.3 s/step, so the full
 budget is ~17 h. **Do not touch the run, its checkpoints, or its `train.csv`.** Step 144,020
 landed at train 0.6203, lr 2.00e-05, 6,345 tok/s, optimizer state restored.
@@ -1421,3 +1421,32 @@ Goal: wren2 (500M hybrid flagship) serves int8 on cardinal-01. CORRECTED after o
 4. use_act_ckpt=False measurement still queued for the next pretrain launch.
 5. **Arm the sleep controller? (proposal, 2026-08-21)** E4 validated the mechanism and the controller bugs found on cardinal are fixed, so it can go live on the Mac whenever approved. Proposed settings: `sleep_enabled true`, `sleep_models ["wren1_5"]` (serve from @700), keep defaults except `sleep_max_steps 100` — the measured forgetting ceiling was ~700 total steps at 5e-6, and E4 spent that budget, so nightly doses must stay small until the 7-day retention quiz (2026-08-27) shows whether the bpb cost persists or anneals. Not armed; user call. (Also: git push wanted — engine SIGILL fix, sleep controller + fixes, retention tool, and the web sleep box are all local-only; cardinal update after that push.)
 6. Overnight-run checkpoint disk: models/wren1_5/checkpoints holds step_0..800 (9 files ≈ 19 GB). Selection is made (@700); thinning is a user call.
+
+## LIVE STATE 2026-09-17 - wren2 chat SFT COMPLETE, run renamed `wren2_0`
+
+The SFT finished at **150,000 of 150,000**, clean: 25 checkpoints, 0 partial files, 0 errors,
+lr landed exactly on `min_lr` 2.000000e-06.
+
+**RENAMED: `exp_chatsft_0913` is now `models/wren2_0`** (user instruction, 2026-09-17: fleet
+models always carry a wren name). Directory moved, `config.json` `name`/`training_args.name`/
+`training_args.resume` rewritten, and every reference in `successes.md`, `failures.md`,
+`handoff.md` and `lab/` substituted. Old logs and this session's scratchpad still say
+`exp_chatsft_0913` - same run. The number follows `wren_base -> wren1_0` exactly: `wren2_0`
+is wren2's first chat SFT. Model discovery is directory-based (`readers/models.py`), so the
+`mv` plus the config rewrite was the whole rename; nothing else referenced it.
+
+**Keeper rung: `wren2_0@149,500`** - composite 0.693 (closure 0.958, loop 0.188, grounded
+0.188, identity 0.812) against the 270M control wren1_3@3000's 0.688. Parity overall inside
+the rule-30 noise floor, with a clear persona/anti-looping win and a real grounded-retrieval
+regression the decay tail caused.
+
+OPEN, none of it blocking:
+- **cardinal still serves the 146,000 export** as `wren2` (610 MB int8 hybrid bin, C engine).
+  149,500 is the better rung on every axis but grounded; re-export and redeploy is a decision,
+  not a bug.
+- **24 losing checkpoints** still on disk under `models/wren2_0/checkpoints`. Thinning is a
+  user call, nothing has been deleted.
+- **`git push origin dev`** still owed; the local commits are clean, the push was refused by
+  the sandbox classifier, not by the user.
+- The batch-16 `val_eval` re-run produced no rows (it was killed for stealing cores from the
+  trainer). It gates nothing.
